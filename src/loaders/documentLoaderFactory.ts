@@ -13,6 +13,7 @@ import { BaseDocumentLoader } from "@langchain/core/document_loaders/base";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
 import { GithubRepoLoader } from "@langchain/community/document_loaders/web/github";
+import * as cheerio from "cheerio";
 import { Logger } from "../utils/logger";
 
 /**
@@ -24,19 +25,19 @@ class TextLoader extends BaseDocumentLoader {
   constructor(private filePath: string) {
     super();
   }
-  
+
   async load(): Promise<LangChainDocument[]> {
     const text = await fs.readFile(this.filePath, "utf-8");
     return [
-      new LangChainDocument({ 
-        pageContent: text, 
-        metadata: { source: this.filePath } 
+      new LangChainDocument({
+        pageContent: text,
+        metadata: { source: this.filePath }
       })
     ];
   }
 }
 
-export type SupportedFileType = "pdf" | "markdown" | "html" | "text" | "github";
+export type SupportedFileType = "pdf" | "markdown" | "html" | "text" | "github" | "web";
 
 export interface LoaderOptions {
   /** File path to load (or GitHub repo URL for github type) */
@@ -116,8 +117,8 @@ export class DocumentLoaderFactory {
       // Detect file type first (before validation, as GitHub URLs don't need file validation)
       const fileType = options.fileType || this.detectFileType(filePath);
 
-      // Validate file exists (skip for GitHub URLs)
-      if (fileType !== "github") {
+      // Validate file exists (skip for GitHub URLs and Web URLs)
+      if (fileType !== "github" && fileType !== "web") {
         await this.validateFile(filePath);
       }
 
@@ -125,9 +126,9 @@ export class DocumentLoaderFactory {
 
       this.logger.debug("Detected file type", { fileName, fileType });
 
-      // Get file size (skip for GitHub URLs as they're not local files)
+      // Get file size (skip for GitHub URLs and Web URLs as they're not local files)
       let fileSize = 0;
-      if (fileType !== "github") {
+      if (fileType !== "github" && fileType !== "web") {
         const stats = await fs.stat(filePath);
         fileSize = stats.size;
       }
@@ -150,6 +151,9 @@ export class DocumentLoaderFactory {
           break;
         case "github":
           documents = await this.loadGitHub(filePath, options);
+          break;
+        case "web":
+          documents = await this.loadWebPage(filePath, options);
           break;
         default:
           throw new Error(`Unsupported file type: ${fileType}`);
@@ -237,15 +241,15 @@ export class DocumentLoaderFactory {
         failedCount: failed.length,
         failures: failed,
       });
-      
+
       // Check if any failures are critical (rate limits, auth errors, etc.)
-      const hasCriticalError = failed.some(f => 
-        f.error.includes("rate limit") || 
+      const hasCriticalError = failed.some(f =>
+        f.error.includes("rate limit") ||
         f.error.includes("403") ||
         f.error.includes("401") ||
         f.error.includes("API")
       );
-      
+
       // If all documents failed OR there's a critical error, throw
       if (successful.length === 0 || (hasCriticalError && failed.length === filePathsOrOptions.length)) {
         const errorMessage = failed.map(f => `${f.path}: ${f.error}`).join("; ");
@@ -275,6 +279,10 @@ export class DocumentLoaderFactory {
     if (this.isGitHubUrl(filePath)) {
       return true;
     }
+    // Check if it's a generic Web URL
+    if (this.isWebUrl(filePath)) {
+      return true;
+    }
     // Check file extension
     const ext = path.extname(filePath).toLowerCase();
     return this.getSupportedExtensions().includes(ext);
@@ -290,6 +298,18 @@ export class DocumentLoaderFactory {
     // - github.company.com/owner/repo (GitHub Enterprise)
     // - any custom GitHub Enterprise domain
     return /^https?:\/\/[a-zA-Z0-9.-]+\/[\w-]+\/[\w.-]+/.test(url);
+  }
+
+  /**
+   * Check if a path is a generic Web URL
+   */
+  public static isWebUrl(url: string): boolean {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.protocol === "http:" || urlObj.protocol === "https:";
+    } catch {
+      return false;
+    }
   }
 
   // ==================== Private Methods ====================
@@ -312,6 +332,11 @@ export class DocumentLoaderFactory {
     // Check if it's a GitHub URL
     if (DocumentLoaderFactory.isGitHubUrl(filePath)) {
       return "github";
+    }
+
+    // Check if it's a generic Web URL
+    if (DocumentLoaderFactory.isWebUrl(filePath)) {
+      return "web";
     }
 
     const ext = path.extname(filePath).toLowerCase();
@@ -351,7 +376,6 @@ export class DocumentLoaderFactory {
     });
 
     try {
-      // @ts-ignore - LangChain v1 type compat
       const documents = await loader.load();
 
       this.logger.debug("PDF loaded", {
@@ -432,7 +456,6 @@ export class DocumentLoaderFactory {
       // Use CheerioWebBaseLoader with custom HTML content
       // Note: We need to use a workaround since CheerioWebBaseLoader expects URLs
       // We'll create a simple document directly
-      const cheerio = require("cheerio");
       const $ = cheerio.load(htmlContent);
 
       // Extract text content, removing script and style tags
@@ -530,11 +553,11 @@ export class DocumentLoaderFactory {
       // Extract base URL and API URL for GitHub Enterprise support
       const urlObj = new URL(repoUrl);
       const baseUrl = `${urlObj.protocol}//${urlObj.host}`;
-      
+
       // Determine API URL based on host
       // For GitHub.com, use api.github.com
       // For GitHub Enterprise, use the same host with /api/v3
-      const apiUrl = urlObj.host === "github.com" 
+      const apiUrl = urlObj.host === "github.com"
         ? "https://api.github.com"
         : `${baseUrl}/api/v3`;
 
@@ -609,6 +632,70 @@ export class DocumentLoaderFactory {
         stack: error instanceof Error ? error.stack : undefined,
         repoUrl,
         branch: options.branch,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Load a public web page
+   * Includes security checks to reject pages requiring authentication
+   */
+  private async loadWebPage(
+    url: string,
+    options: LoaderOptions
+  ): Promise<LangChainDocument[]> {
+    this.logger.debug("Loading web page", { url });
+
+    try {
+      // 1. Security Check: Verify URL is accessible without auth
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'RAGnarok-VSCode-Extension/1.0'
+        }
+      });
+
+      // Check status code
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(`Authentication required (Status ${response.status})`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch URL (Status ${response.status})`);
+      }
+
+      // Check for login redirects
+      const finalUrl = response.url;
+      if (finalUrl.includes('login') || finalUrl.includes('signin') || finalUrl.includes('auth')) {
+        throw new Error('Redirected to potential login page');
+      }
+
+      // Check content for password fields
+      const html = await response.text();
+      if (html.includes('type="password"') || html.includes('type=\'password\'')) {
+        throw new Error('Page contains password field, likely requires login');
+      }
+
+      // 2. Load content using CheerioWebBaseLoader
+      const loader = new CheerioWebBaseLoader(url, {
+        selector: options.selector as any
+      });
+
+      const documents = await loader.load();
+
+      this.logger.info("Web page loaded successfully", {
+        url,
+        documentCount: documents.length,
+        title: documents[0]?.metadata?.title
+      });
+
+      return documents;
+
+    } catch (error) {
+      this.logger.error("Failed to load web page", {
+        error: error instanceof Error ? error.message : String(error),
+        url
       });
       throw error;
     }

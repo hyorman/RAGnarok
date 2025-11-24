@@ -9,6 +9,7 @@
 import * as vscode from 'vscode';
 import { z } from 'zod';
 import { Logger } from '../utils/logger';
+import { CONFIG } from '../utils/constants';
 
 // Zod schema for query plan
 const SubQuerySchema = z.object({
@@ -44,6 +45,9 @@ export interface QueryPlannerOptions {
 
   /** Enable LLM-based planning (requires LM API access) */
   useLLM?: boolean;
+
+  /** LLM model family to use (e.g. 'gpt-4o') */
+  modelFamily?: string;
 }
 
 /**
@@ -140,7 +144,17 @@ Provide your analysis as valid JSON:`;
   ): Promise<QueryPlan | null> {
     try {
       // Get VS Code Language Model
-      const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+      const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+      const modelFamily = options.modelFamily || config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o');
+
+      let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: modelFamily });
+
+      // Fallback: if specific model not found, try any copilot model
+      if (models.length === 0) {
+        this.logger.warn(`Model family ${modelFamily} not found, trying any Copilot model`);
+        models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+      }
+
       if (models.length === 0) {
         this.logger.debug('No language models available');
         return null;
@@ -230,7 +244,7 @@ Provide your analysis as valid JSON:`;
     let explanation: string;
 
     if (hasComparison) {
-      // Comparison query 
+      // Comparison query
       complexity = 'complex';
       strategy = 'parallel';
 

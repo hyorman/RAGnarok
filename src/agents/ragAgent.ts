@@ -41,6 +41,9 @@ export interface RAGAgentOptions {
 
   /** Default topK */
   topK?: number;
+
+  /** LLM model family */
+  modelFamily?: string;
 }
 
 export interface RetrievalResult {
@@ -317,6 +320,7 @@ export class RAGAgent {
       maxSubQueries: options.maxIterations,
       defaultTopK: options.topK,
       useLLM: options.useLLM,
+      modelFamily: options.modelFamily,
     });
   }
 
@@ -540,6 +544,7 @@ export class RAGAgent {
       useLLM: options.useLLM ?? false,
       retrievalStrategy: options.retrievalStrategy ?? RetrievalStrategy.HYBRID,
       topK: options.topK ?? 5,
+      modelFamily: options.modelFamily || 'gpt-4o',
     };
   }
 

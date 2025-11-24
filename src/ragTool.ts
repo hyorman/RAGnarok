@@ -294,6 +294,7 @@ export class RAGTool {
     useLLM?: boolean;
     retrievalStrategy?: RetrievalStrategy;
     workspaceContext?: string;
+    modelFamily?: string;
   } {
     return {
       topK: params.topK ?? config.get<number>(CONFIG.TOP_K, 5),
@@ -302,6 +303,7 @@ export class RAGTool {
       confidenceThreshold: config.get<number>(CONFIG.AGENTIC_CONFIDENCE_THRESHOLD, 0.7),
       useLLM: config.get<boolean>(CONFIG.AGENTIC_USE_LLM, false),
       retrievalStrategy: retrievalStrategy,
+      modelFamily: config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o'),
     };
   }
 

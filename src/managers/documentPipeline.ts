@@ -383,7 +383,7 @@ export class DocumentPipeline {
     }
 
     // Try to load existing store or create new one
-    let vectorStore = await this.vectorStoreFactory.loadStore(topicId);
+    const vectorStore = await this.vectorStoreFactory.loadStore(topicId);
 
     if (vectorStore) {
       // Add to existing store (embeddings generated here via our wrapper)

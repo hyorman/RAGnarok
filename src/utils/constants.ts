@@ -40,6 +40,7 @@ export const CONFIG = {
  */
 export const DEFAULTS = {
   LOCAL_MODEL_PATH: "",
+  EMBEDDING_MODEL: "Xenova/all-MiniLM-L6-v2",
 } as const;
 
 /**
