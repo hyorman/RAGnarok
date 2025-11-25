@@ -69,3 +69,4 @@ node_modules/**
 # Utility dependencies
 !node_modules/semver/**
 !node_modules/async-mutex/**
+!node_modules/cheerio/**
