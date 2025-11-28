@@ -229,15 +229,25 @@ export class VectorStoreFactory {
     try {
       this.storeCache.delete(topicId);
 
-      // Drop the LanceDB table
+      // Drop the LanceDB table if it exists
       const db = await connect(this.lanceDbUri);
-      await db.dropTable(topicId);
 
+      const tableNames = await db.tableNames();
+      if (tableNames.includes(topicId)) {
+        await db.dropTable(topicId);
+        this.logger.info("LanceDB table dropped", { topicId });
+      } else {
+        this.logger.warn("LanceDB table not found (already deleted or missing)", { topicId });
+      }
+
+      // Delete metadata file
       const metadataPath = this.getMetadataPath(topicId);
       try {
         await fs.unlink(metadataPath);
+        this.logger.debug("Metadata file deleted", { topicId });
       } catch {
         // Metadata file might not exist
+        this.logger.debug("Metadata file not found (already deleted or missing)", { topicId });
       }
       this.logger.info("Vector store deleted successfully", { topicId });
     } catch (error) {
