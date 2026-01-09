@@ -98,6 +98,11 @@ export interface RAGQueryResult {
   topicMatched: 'exact' | 'similar' | 'fallback';
   requestedTopic?: string;
   availableTopics?: string[];
+  // Model switching information
+  modelSwitched?: {
+    from: string;
+    to: string;
+  };
   // Agentic RAG results
   agenticMetadata?: {
     mode: 'simple' | 'agentic';

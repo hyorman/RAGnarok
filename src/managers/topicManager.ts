@@ -502,7 +502,13 @@ export class TopicManager {
         throw new Error("TopicManager not initialized");
       }
 
-      await this.ensureEmbeddingModelCompatibility(topicId);
+      const modelSwitched = await this.ensureEmbeddingModelCompatibility(topicId);
+
+      // If model was switched, clear the cached store to force reload with new embeddings
+      if (modelSwitched) {
+        this.vectorStoreCache.delete(topicId);
+        this.logger.debug("Cleared cached vector store after model switch", { topicId });
+      }
 
       // Check cache first
       const cachedStore = this.vectorStoreCache.get(topicId);
@@ -530,36 +536,84 @@ export class TopicManager {
   }
 
   /**
-   * Prevent mixing embeddings generated with incompatible models
+   * Ensure embedding model compatibility by auto-switching to the topic's model if needed
+   * Returns true if a model switch occurred, false otherwise
    */
-  private async ensureEmbeddingModelCompatibility(topicId: string): Promise<void> {
+  private async ensureEmbeddingModelCompatibility(topicId: string): Promise<boolean> {
     if (!this.vectorStoreFactory) {
-      return;
+      return false;
     }
 
     const metadata = await this.vectorStoreFactory.getStoreMetadata(topicId);
     if (!metadata?.embeddingModel) {
-      return;
+      return false;
     }
 
     const currentModel = this.embeddingService.getCurrentModel();
     if (metadata.embeddingModel === currentModel) {
-      return;
+      return false;
     }
 
     const topicName = this.topicsIndex?.topics[topicId]?.name ?? topicId;
 
-    this.logger.warn("Embedding model mismatch detected for topic", {
+    this.logger.info("Auto-switching embedding model for topic compatibility", {
       topicId,
       topicName,
-      storedModel: metadata.embeddingModel,
-      currentModel,
+      fromModel: currentModel,
+      toModel: metadata.embeddingModel,
     });
 
-    const message = `Topic "${topicName}" was indexed with embedding model "${metadata.embeddingModel}", but the current setting is "${currentModel}". ` +
-      `Switch back to "${metadata.embeddingModel}" or recreate the topic with the new model before running queries.`;
+    try {
+      // Auto-switch to the topic's embedding model
+      await this.embeddingService.initialize(metadata.embeddingModel);
 
-    throw new Error(message);
+      this.logger.info("Embedding model switched successfully", {
+        topicId,
+        topicName,
+        model: metadata.embeddingModel,
+      });
+
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      this.logger.error("Failed to auto-switch embedding model", {
+        topicId,
+        topicName,
+        targetModel: metadata.embeddingModel,
+        error: errorMessage,
+      });
+
+      // Throw a clear error explaining what happened and how to fix it
+      throw new Error(
+        `Topic "${topicName}" requires embedding model "${metadata.embeddingModel}", ` +
+        `but failed to load it: ${errorMessage}. ` +
+        `Please ensure the model is available or recreate the topic with a different model.`
+      );
+    }
+  }
+
+  /**
+   * Get the embedding model used by a topic's vector store
+   * Returns null if topic doesn't exist or has no vector store metadata
+   */
+  public async getTopicEmbeddingModel(topicId: string): Promise<string | null> {
+    this.logger.debug("Getting topic embedding model", { topicId });
+
+    try {
+      if (!this.vectorStoreFactory) {
+        return null;
+      }
+
+      const metadata = await this.vectorStoreFactory.getStoreMetadata(topicId);
+      return metadata?.embeddingModel || null;
+    } catch (error) {
+      this.logger.error("Failed to get topic embedding model", {
+        error: error instanceof Error ? error.message : String(error),
+        topicId,
+      });
+      return null;
+    }
   }
 
   /**

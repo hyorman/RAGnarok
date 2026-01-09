@@ -94,6 +94,18 @@ export class RAGTool {
       // Find the topic with intelligent matching
       const topicMatch = await this.findBestMatchingTopic(params.topic);
 
+      // Check if topic requires a different embedding model and notify user if auto-switching
+      const topicEmbeddingModel = await topicManager.getTopicEmbeddingModel(topicMatch.topic.id);
+      const currentModel = this.embeddingService.getCurrentModel();
+      const modelSwitchRequired = topicEmbeddingModel && topicEmbeddingModel !== currentModel;
+      
+      if (modelSwitchRequired) {
+        logger.info(`Topic "${topicMatch.topic.name}" requires embedding model "${topicEmbeddingModel}", will auto-switch from "${currentModel}"`);
+        // Clear agent cache for this topic since the vector store will be reloaded with different embeddings
+        // The actual model switch happens in getVectorStore -> ensureEmbeddingModelCompatibility
+        this.clearAgentCache(topicMatch.topic.id);
+      }
+
       // Check if topic has any documents
       const stats = await topicManager.getTopicStats(topicMatch.topic.id);
       if (!stats || stats.documentCount === 0) {
@@ -188,6 +200,7 @@ export class RAGTool {
         topicMatched: topicMatch.matchType,
         requestedTopic: topicMatch.matchType !== 'exact' ? params.topic : undefined,
         availableTopics: topicMatch.availableTopics,
+        modelSwitched: modelSwitchRequired ? { from: currentModel, to: topicEmbeddingModel! } : undefined,
         agenticMetadata,
         results: ragResult.results.map((result: any) => ({
           text: result.document.pageContent,
