@@ -127,9 +127,10 @@ export class VectorStoreFactory {
     }
   }
 
-  public async loadStore(topicId: string): Promise<VectorStore | null> {
-    this.logger.info("Loading vector store", { topicId });
+  public async loadStore(topicId: string, customStorageDir?: string): Promise<VectorStore | null> {
+    this.logger.info("Loading vector store", { topicId, customStorageDir: customStorageDir || "default" });
 
+    // Note: Verify cache key handling if same topic ID exists in both (though getVectorStore handles this)
     const cachedStore = this.storeCache.get(topicId);
     if (cachedStore) {
       this.logger.debug("Returning cached store", { topicId });
@@ -137,12 +138,17 @@ export class VectorStoreFactory {
     }
 
     try {
+      // Determine URI
+      const targetLanceDbUri = customStorageDir
+        ? path.join(customStorageDir, "lancedb")
+        : this.lanceDbUri;
+
       // Connect to LanceDB database
-      const db = await connect(this.lanceDbUri);
+      const db = await connect(targetLanceDbUri);
       const tableNames = await db.tableNames();
 
       if (!tableNames.includes(topicId)) {
-        this.logger.debug("Table not found", { topicId });
+        this.logger.debug("Table not found", { topicId, uri: targetLanceDbUri });
         return null;
       }
 

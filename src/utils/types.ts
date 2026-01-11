@@ -12,6 +12,11 @@ export enum RetrievalStrategy {
   BM25 = 'bm25',
 }
 
+/**
+ * Topic source - indicates where the topic originates from
+ */
+export type TopicSource = 'local' | 'common';
+
 export interface Topic {
   id: string;
   name: string;
@@ -19,6 +24,8 @@ export interface Topic {
   createdAt: number;
   updatedAt: number;
   documentCount: number;
+  /** Source of the topic - 'local' (default) or 'common' (read-only shared database) */
+  source?: TopicSource;
 }
 
 export interface Document {
@@ -113,5 +120,22 @@ export interface RAGQueryResult {
     queryComplexity?: 'simple' | 'moderate' | 'complex';
     confidence?: number;
   };
+}
+
+/**
+ * Exported topic data format for import/export functionality
+ * Used when exporting a topic to a .rag file (ZIP archive)
+ */
+export interface ExportedTopicData {
+  /** Format version for future compatibility */
+  version: string;
+  /** Topic metadata (without source field - always becomes 'local' on import) */
+  topic: Omit<Topic, 'source'>;
+  /** Document metadata array */
+  documents: Document[];
+  /** Embedding model used to generate vectors */
+  embeddingModel: string;
+  /** Export timestamp */
+  exportedAt: number;
 }
 
