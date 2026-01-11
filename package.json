@@ -2,7 +2,7 @@
   "name": "ragnarok",
   "displayName": "RAGnarōk - Local RAG for Copilot",
   "description": "Retrieval-Augmented Generation extension for VSCode with local sentence transformers and semantic chunking",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "publisher": "hyorman",
   "icon": "assets/icon.png",
   "license": "MIT",
