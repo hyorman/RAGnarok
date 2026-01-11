@@ -180,6 +180,14 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         }
 
+        // Handle Common Database Path change
+        if (event.affectsConfiguration(`${CONFIG.ROOT}.${CONFIG.COMMON_DATABASE_PATH}`)) {
+          logger.info("Common database path configuration changed");
+          await topicManager.loadCommonDatabase();
+          treeDataProvider.refresh();
+          vscode.window.showInformationMessage("Common database reloaded");
+        }
+
         const affectsTreeViewConfig = treeViewConfigPaths.some((configPath) =>
           event.affectsConfiguration(configPath)
         );
