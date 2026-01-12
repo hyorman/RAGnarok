@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Mutex } from 'async-mutex';
+import { EventEmitter } from 'events';
 // Alias LangChain math helpers to avoid name collisions with class methods
 import { cosineSimilarity as langchainCosineSimilarity, euclideanDistance as langchainEuclideanDistance, innerProduct as langchainInnerProduct } from '@langchain/core/utils/math';
 import { CONFIG, DEFAULTS } from '../utils/constants';
@@ -93,6 +94,27 @@ export class EmbeddingService {
   // Cache bundled model root (if present in packaged extension)
   private bundledModelsRoot: string | null = null;
   private bundledModelsRootChecked: boolean = false;
+
+  // Event emitter for model changes
+  private static readonly _onModelChanged = new EventEmitter();
+
+  /**
+   * Event that fires when the embedding model changes.
+   * Listeners can subscribe to refresh UI or update dependent components.
+   */
+  public static readonly onModelChanged = {
+    /**
+     * Register a listener for model change events
+     * @param listener Callback that receives the new model name
+     * @returns A disposable to unregister the listener
+     */
+    subscribe(listener: (newModel: string) => void): vscode.Disposable {
+      EmbeddingService._onModelChanged.on('modelChanged', listener);
+      return new vscode.Disposable(() => {
+        EmbeddingService._onModelChanged.off('modelChanged', listener);
+      });
+    }
+  };
 
   private constructor() {
     this.logger = new Logger('EmbeddingService');
@@ -318,13 +340,15 @@ export class EmbeddingService {
     const available: AvailableModel[] = [];
     const downloaded = new Set(await this.listDownloadedRemoteModels());
     const bundled = new Set(await this.listBundledModels());
+    const localModels = new Set(await this.listLocalModels());
 
     for (const name of EmbeddingService.CURATED_MODELS) {
       const isBundled = bundled.has(name);
+      const isLocal = localModels.has(name);
       available.push({
         name,
-        source: isBundled ? 'local' : 'curated',
-        downloaded: downloaded.has(name) || isBundled,
+        source: isBundled || isLocal ? 'local' : 'curated',
+        downloaded: downloaded.has(name) || isBundled || isLocal,
       });
     }
 
@@ -336,10 +360,9 @@ export class EmbeddingService {
       available.push({ name, source: 'local', downloaded: true });
     }
 
-    const localModels = await this.listLocalModels();
     for (const name of localModels) {
-      if (available.some((m) => m.name === name && m.source === 'curated')) {
-        continue; // Avoid duplicates when the bundled model matches curated default
+      if (available.some((m) => m.name === name)) {
+        continue; // Avoid duplicates when the local model matches a curated or bundled model
       }
       available.push({ name, source: 'local', downloaded: true });
     }
@@ -518,9 +541,16 @@ export class EmbeddingService {
           }
         );
 
+        const previousModel = this.currentModel;
         this.currentModel = modelName;
         this.lastSuccessfulModel = modelName;
         this.logger.info(`Embedding model initialized successfully: ${modelName}`);
+
+        // Notify listeners if the model actually changed
+        if (previousModel !== modelName) {
+          this.logger.debug(`Model changed from "${previousModel}" to "${modelName}", firing event`);
+          EmbeddingService._onModelChanged.emit('modelChanged', modelName);
+        }
 
         // Success - exit retry loop
         return;

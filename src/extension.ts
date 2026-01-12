@@ -36,6 +36,7 @@ export async function activate(context: vscode.ExtensionContext) {
       showCollapseAll: true,
     });
     context.subscriptions.push(treeView);
+    context.subscriptions.push(treeDataProvider); // Dispose model change subscription
 
     // Register commands
     await CommandHandler.registerCommands(context, treeDataProvider);

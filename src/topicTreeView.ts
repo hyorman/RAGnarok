@@ -13,7 +13,7 @@ import { EmbeddingService, type AvailableModel } from "./embeddings/embeddingSer
 const logger = new Logger("TopicTreeView");
 
 export class TopicTreeDataProvider
-  implements vscode.TreeDataProvider<TopicTreeItem>
+  implements vscode.TreeDataProvider<TopicTreeItem>, vscode.Disposable
 {
   private _onDidChangeTreeData: vscode.EventEmitter<
     TopicTreeItem | undefined | null | void
@@ -24,10 +24,22 @@ export class TopicTreeDataProvider
 
   private topicManager: Promise<TopicManager>;
   private embeddingService: EmbeddingService;
+  private modelChangeSubscription: vscode.Disposable;
 
   constructor() {
     this.topicManager = TopicManager.getInstance();
     this.embeddingService = EmbeddingService.getInstance();
+
+    // Subscribe to model change events to auto-refresh the tree view
+    this.modelChangeSubscription = EmbeddingService.onModelChanged.subscribe((newModel: string) => {
+      logger.debug(`Model changed to "${newModel}", refreshing tree view`);
+      this.refresh();
+    });
+  }
+
+  dispose(): void {
+    this.modelChangeSubscription.dispose();
+    this._onDidChangeTreeData.dispose();
   }
 
   refresh(): void {
@@ -315,7 +327,7 @@ export class TopicTreeItem extends vscode.TreeItem {
         return `Embedding Models:`;
       case "local-model":
         // Show a download indicator for curated models that have not been pulled yet
-        return `${configData.source === "curated" && !configData.downloaded ? "🔻 " : "🔸"}${configData.display ?? value}`;
+        return `${configData.source === "curated" && !configData.downloaded ? "🔴 " : "🟢 "}${configData.display ?? value}`;
       case "max-iterations":
         return `Max Iterations: ${value}`;
       case "confidence-threshold":

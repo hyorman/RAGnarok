@@ -591,6 +591,17 @@ export class TopicManager {
       return;
     }
 
+    // Check if the stored model is available (downloaded/local)
+    const availableModels = await this.embeddingService.listAvailableModels();
+    const isModelAvailable = availableModels.some(
+      (m) => m.name === metadata.embeddingModel && (m.downloaded || m.source === 'local')
+    );
+
+    if (isModelAvailable) {
+      // Model is available, proceed (VectorStoreFactory will handle loading the correct model)
+      return;
+    }
+
     const topicName = this.topicsIndex?.topics[topicId]?.name ?? topicId;
 
     this.logger.warn("Embedding model mismatch detected for topic", {
@@ -601,7 +612,8 @@ export class TopicManager {
     });
 
     const message = `Topic "${topicName}" was indexed with embedding model "${metadata.embeddingModel}", but the current setting is "${currentModel}". ` +
-      `Switch back to "${metadata.embeddingModel}" or recreate the topic with the new model before running queries.`;
+      `The model "${metadata.embeddingModel}" is not currently available/downloaded. ` +
+      `Please switch back to "${metadata.embeddingModel}" in settings to download it, or recreate the topic.`;
 
     throw new Error(message);
   }

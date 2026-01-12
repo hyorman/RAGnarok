@@ -20,6 +20,7 @@ import { connect } from "@lancedb/lancedb";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Embeddings } from "@langchain/core/embeddings";
 import { Document as LangChainDocument } from "@langchain/core/documents";
+import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { Logger } from "../utils/logger";
 
 export interface VectorStoreConfig {
@@ -112,7 +113,7 @@ export class VectorStoreFactory {
 
       const store = await LanceDB.fromDocuments(
         normalizedDocs,
-        this.embeddings,
+        this.createEmbeddings(this.embeddingModel),
         {
           uri: this.lanceDbUri,
           tableName: config.topicId
@@ -152,11 +153,32 @@ export class VectorStoreFactory {
         return null;
       }
 
+      // Read metadata to know which model was used
+      const metadata = await this.getStoreMetadata(topicId);
+      // If we have metadata with a model, use it. Otherwise fall back to factory default.
+      const modelToUse = metadata?.embeddingModel || this.embeddingModel;
+
+      this.logger.debug("Loading vector store", {
+        topicId,
+        model: modelToUse
+      });
+
+      if (modelToUse !== this.embeddingModel) {
+        this.logger.info("Switching embedding model for topic load", {
+          topicId,
+          configuredModel: this.embeddingModel,
+          topicModel: modelToUse
+        });
+      }
+
+      // Initialize with specific model for this topic
+      const embeddings = this.createEmbeddings(modelToUse);
+
       // Open existing table
       const table = await db.openTable(topicId);
 
       // Create vector store from existing table (per LangChain docs)
-      const store = new LanceDB(this.embeddings, { table });
+      const store = new LanceDB(embeddings, { table });
 
       this.storeCache.set(topicId, store);
       this.logger.info("Vector store loaded successfully", { topicId });
@@ -345,5 +367,9 @@ export class VectorStoreFactory {
 
   private getMetadataPath(topicId: string): string {
     return path.join(this.storageDir, `vector-${topicId}-metadata.json`);
+  }
+
+  private createEmbeddings(modelName: string): TransformersEmbeddings {
+    return new TransformersEmbeddings({ modelName });
   }
 }
