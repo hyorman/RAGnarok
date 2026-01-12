@@ -14,6 +14,7 @@ src/**
 # Configuration files
 .gitignore
 .yarnrc
+.github/**
 **/tsconfig.json
 **/tsconfig.test.json
 **/.tsconfig.json
