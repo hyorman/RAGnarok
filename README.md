@@ -184,6 +184,37 @@ Cmd/Ctrl+Shift+P → RAG: Remove GitHub Token
 
 Select a host to remove its stored token.
 
+#### 2d. Export and Import Topics
+
+**Export a Topic:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Export Topic
+```
+
+Or select a topic in the tree view and select the export icon. This creates a portable archive containing:
+- Topic metadata (name, description)
+- Vector embeddings and documents
+- Model configuration
+
+Exported topics can be shared with teammates or imported into other workspaces.
+
+**Import a Topic:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Import Topic
+```
+
+Or click the import icon in the tree view title bar. Select an exported topic archive to restore it into your workspace.
+
+**Rename a Topic:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Rename Topic
+```
+
+Or select a topic in the tree view and click the edit icon.
+
 **How to Create a GitHub PAT:**
 
 1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
@@ -199,6 +230,31 @@ Select a host to remove its stored token.
 - ✅ Automatic token selection based on repository URL
 - ✅ No need to enter token every time you add a repository
 
+#### 2e. Using Common/Shared Databases
+
+RAGnarōk supports read-only access to shared team knowledge bases via the `ragnarok.commonDatabasePath` setting.
+
+**Setup:**
+
+1. Export topics from a source workspace
+2. Place exported topic archives in a shared location (network drive, shared folder)
+3. Configure `ragnarok.commonDatabasePath` to point to this folder:
+
+```json
+{
+  "ragnarok.commonDatabasePath": "/path/to/shared/rag-databases"
+}
+```
+
+**Benefits:**
+
+- ✅ Share curated knowledge bases across teams
+- ✅ Read-only topics prevent accidental modification
+- ✅ Centralized documentation and policy storage
+- ✅ Works with any file-sharing system
+
+**Note**: Topics from common database path appear in the tree view but cannot be deleted or modified.
+
 #### 3. Query with Copilot
 
 ```
@@ -213,6 +269,32 @@ The RAG tool will:
 3. Perform hybrid retrieval
 4. Return ranked results with context
 
+### Maintenance Commands
+
+**Clear Model Cache:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Clear Model Cache
+```
+
+Removes cached embedding models. Useful when switching models or troubleshooting.
+
+**Clear Database:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Clear Database
+```
+
+⚠️ **Warning**: Deletes all topics and documents. This action cannot be undone.
+
+**Refresh Topics:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Refresh Topics
+```
+
+Reloads the topic tree view. Useful after importing topics or external changes.
+
 ---
 
 ## ⚙️ Configuration
@@ -221,6 +303,9 @@ The RAG tool will:
 
 ```json
 {
+  // Path to local Transformers.js embedding model folder
+  "ragnarok.localModelPath": "",
+
   // Number of results to return
   "ragnarok.topK": 5,
 
@@ -229,11 +314,12 @@ The RAG tool will:
 
   // Chunk overlap for context preservation
   "ragnarok.chunkOverlap": 50,
-  // Optional absolute/tilde path to a local Transformers.js model directory
-  "ragnarok.localModelPath": "",
 
-  // Retrieval strategy
-  "ragnarok.retrievalStrategy": "hybrid"
+  // Retrieval strategy: hybrid, vector, ensemble, bm25
+  "ragnarok.retrievalStrategy": "hybrid",
+
+  // Path to shared/common RAG database (read-only topics)
+  "ragnarok.commonDatabasePath": ""
 }
 ```
 
@@ -246,10 +332,7 @@ The RAG tool will:
   // Enable agentic RAG with query planning
   "ragnarok.useAgenticMode": true,
 
-  // Use LLM for query planning (requires Copilot)
-  "ragnarok.agenticUseLLM": false,
-
-  // Maximum refinement iterations
+  // Maximum refinement iterations (1-10)
   "ragnarok.agenticMaxIterations": 3,
 
   // Confidence threshold (0-1) for stopping iteration
@@ -258,10 +341,13 @@ The RAG tool will:
   // Enable iterative refinement
   "ragnarok.agenticIterativeRefinement": true,
 
-  // LLM model for planning (when agenticUseLLM is true) — models provided via VS Code Copilot/LM API
+  // Use LLM (Copilot) for intelligent query planning (requires Copilot)
+  "ragnarok.agenticUseLLM": false,
+
+  // LLM model: gpt-4o, gpt-4o-mini, gpt-3.5-turbo (when agenticUseLLM is true)
   "ragnarok.agenticLLMModel": "gpt-4o",
 
-  // Include workspace context in queries
+  // Include workspace context (selected code, active file, imports, symbols)
   "ragnarok.agenticIncludeWorkspaceContext": true
 }
 ```
