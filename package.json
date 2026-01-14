@@ -2,7 +2,7 @@
   "name": "ragnarok",
   "displayName": "RAGnarōk - Local RAG for Copilot",
   "description": "Retrieval-Augmented Generation extension for VSCode with local sentence transformers and semantic chunking",
-  "version": "0.2.6",
+  "version": "0.2.8",
   "publisher": "hyorman",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -149,6 +149,12 @@
           "default": true,
           "markdownDescription": "**Include workspace context:** Pass selected code, active file, imports, and symbols to Copilot (like #codebase).\n\n**Includes:**\n- Selected code (max 1000 chars)\n- File imports and symbols\n- Workspace name\n\n**Privacy:** Only relative paths, no sensitive data\n\n⚠️ _Only applies when LLM Mode is enabled_",
           "order": 16
+        },
+        "ragnarok.commonDatabasePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "**Path to a shared/common RAG database folder.** Topics from this path are read-only and cannot be deleted or modified. Useful for team-shared knowledge bases.\n\n**Format:** Absolute path to a folder containing exported RAG database files.",
+          "order": 17
         }
       }
     },
@@ -209,6 +215,24 @@
         "title": "Remove GitHub Token",
         "category": "RAG",
         "icon": "$(trash)"
+      },
+      {
+        "command": "ragnarok.exportTopic",
+        "title": "Export Topic",
+        "category": "RAG",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "ragnarok.importTopic",
+        "title": "Import Topic",
+        "category": "RAG",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "ragnarok.renameTopic",
+        "title": "Rename Topic",
+        "category": "RAG",
+        "icon": "$(edit)"
       }
     ],
     "viewsContainers": {
@@ -243,9 +267,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "ragnarok.refreshTopics",
+          "command": "ragnarok.importTopic",
           "when": "view == ragTopics",
           "group": "navigation@2"
+        },
+        {
+          "command": "ragnarok.refreshTopics",
+          "when": "view == ragTopics",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -260,9 +289,19 @@
           "group": "inline@2"
         },
         {
-          "command": "ragnarok.deleteTopic",
+          "command": "ragnarok.exportTopic",
           "when": "view == ragTopics && viewItem == topic",
           "group": "inline@3"
+        },
+        {
+          "command": "ragnarok.deleteTopic",
+          "when": "view == ragTopics && viewItem == topic",
+          "group": "inline@4"
+        },
+        {
+          "command": "ragnarok.renameTopic",
+          "when": "view == ragTopics && viewItem == topic",
+          "group": "inline@5"
         }
       ]
     },
@@ -351,6 +390,8 @@
     "glob": "^10.4.5",
     "@types/glob": "^7.2.0",
     "@eslint/js": "^9.39.1",
+    "@types/adm-zip": "^0.5.7",
+    "@types/archiver": "^7.0.0",
     "@types/chai": "^5.2.3",
     "@types/cheerio": "^0.22.35",
     "@types/mocha": "^10.0.10",
@@ -375,6 +416,8 @@
     "@langchain/community": "^1.0.0",
     "@langchain/core": "^1.0.0",
     "@langchain/textsplitters": "^1.0.0",
+    "adm-zip": "^0.5.16",
+    "archiver": "^7.0.1",
     "async-mutex": "^0.5.0",
     "cheerio": "^1.1.2",
     "ignore": "^5.3.2",

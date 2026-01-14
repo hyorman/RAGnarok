@@ -14,6 +14,7 @@ src/**
 # Configuration files
 .gitignore
 .yarnrc
+.github/**
 **/tsconfig.json
 **/tsconfig.test.json
 **/.tsconfig.json
@@ -70,3 +71,17 @@ node_modules/**
 !node_modules/semver/**
 !node_modules/async-mutex/**
 !node_modules/cheerio/**
+
+# Archive handling for import/export
+!node_modules/archiver/**
+!node_modules/adm-zip/**
+!node_modules/archiver-utils/**
+!node_modules/compress-commons/**
+!node_modules/crc-32/**
+!node_modules/crc32-stream/**
+!node_modules/zip-stream/**
+!node_modules/readable-stream/**
+!node_modules/buffer-crc32/**
+!node_modules/lazystream/**
+!node_modules/normalize-path/**
+!node_modules/lodash/**

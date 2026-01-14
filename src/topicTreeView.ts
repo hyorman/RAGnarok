@@ -13,7 +13,7 @@ import { EmbeddingService, type AvailableModel } from "./embeddings/embeddingSer
 const logger = new Logger("TopicTreeView");
 
 export class TopicTreeDataProvider
-  implements vscode.TreeDataProvider<TopicTreeItem>
+  implements vscode.TreeDataProvider<TopicTreeItem>, vscode.Disposable
 {
   private _onDidChangeTreeData: vscode.EventEmitter<
     TopicTreeItem | undefined | null | void
@@ -24,10 +24,22 @@ export class TopicTreeDataProvider
 
   private topicManager: Promise<TopicManager>;
   private embeddingService: EmbeddingService;
+  private modelChangeSubscription: vscode.Disposable;
 
   constructor() {
     this.topicManager = TopicManager.getInstance();
     this.embeddingService = EmbeddingService.getInstance();
+
+    // Subscribe to model change events to auto-refresh the tree view
+    this.modelChangeSubscription = EmbeddingService.onModelChanged.subscribe((newModel: string) => {
+      logger.debug(`Model changed to "${newModel}", refreshing tree view`);
+      this.refresh();
+    });
+  }
+
+  dispose(): void {
+    this.modelChangeSubscription.dispose();
+    this._onDidChangeTreeData.dispose();
   }
 
   refresh(): void {
@@ -315,7 +327,7 @@ export class TopicTreeItem extends vscode.TreeItem {
         return `Embedding Models:`;
       case "local-model":
         // Show a download indicator for curated models that have not been pulled yet
-        return `${configData.source === "curated" && !configData.downloaded ? "🔻 " : "🔸"}${configData.display ?? value}`;
+        return `${configData.source === "curated" && !configData.downloaded ? "🔴 " : "🟢 "}${configData.display ?? value}`;
       case "max-iterations":
         return `Max Iterations: ${value}`;
       case "confidence-threshold":
@@ -345,12 +357,14 @@ export class TopicTreeItem extends vscode.TreeItem {
     switch (type) {
       case "topic":
         const topic = data as Topic;
+        const isCommon = topic.source === 'common';
         this.tooltip = topic.description || topic.name;
-        this.description = `${topic.documentCount} document${
-          topic.documentCount !== 1 ? "s" : ""
-        }`;
-        this.contextValue = "topic";
-        this.iconPath = new vscode.ThemeIcon("folder");
+        this.description = isCommon
+          ? `${topic.documentCount} document${topic.documentCount !== 1 ? "s" : ""} (read-only)`
+          : `${topic.documentCount} document${topic.documentCount !== 1 ? "s" : ""}`;
+        // Use different contextValue for common topics to hide modify actions in menus
+        this.contextValue = isCommon ? "topic-common" : "topic";
+        this.iconPath = new vscode.ThemeIcon(isCommon ? "folder-library" : "folder");
         break;
 
       case "document":

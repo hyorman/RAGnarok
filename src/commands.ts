@@ -11,6 +11,7 @@ import { TopicTreeDataProvider } from "./topicTreeView";
 import { COMMANDS } from "./utils/constants";
 import { Logger } from "./utils/logger";
 import { GitHubTokenManager } from "./utils/githubTokenManager";
+import { Topic } from "./utils/types";
 
 const logger = new Logger("CommandHandler");
 
@@ -77,6 +78,16 @@ export class CommandHandler {
       ),
       vscode.commands.registerCommand(COMMANDS.REMOVE_GITHUB_TOKEN, () =>
         handler.removeGithubToken()
+      ),
+      // Import/Export commands
+      vscode.commands.registerCommand(COMMANDS.EXPORT_TOPIC, (item?: any) =>
+        handler.exportTopic(item)
+      ),
+      vscode.commands.registerCommand(COMMANDS.IMPORT_TOPIC, () =>
+        handler.importTopic()
+      ),
+      vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: any) =>
+        handler.renameTopic(item)
       )
     );
   }
@@ -97,6 +108,85 @@ export class CommandHandler {
     } catch (err) {
       logger.error('Failed to set embedding model', err);
       vscode.window.showErrorMessage(`Failed to set embedding model: ${err}`);
+    }
+  }
+
+  /**
+   * Rename a topic
+   */
+  private async renameTopic(item?: any): Promise<void> {
+    try {
+      let topicToRename;
+
+      // If called from tree view with item
+      if (item && item.topic) {
+        topicToRename = item.topic;
+      } else {
+        // Called from command palette - show picker
+        const topics = await this.topicManager.getAllTopics();
+
+        if (topics.length === 0) {
+          vscode.window.showInformationMessage("No topics available to rename.");
+          return;
+        }
+
+        const selected = await vscode.window.showQuickPick(
+          topics.map((t: any) => ({
+            label: t.name,
+            description: `${t.documentCount} document(s)`,
+            detail: t.description,
+            topic: t,
+          })),
+          {
+            placeHolder: "Select a topic to rename",
+          }
+        );
+
+        if (!selected) {
+          return;
+        }
+
+        topicToRename = selected.topic;
+      }
+
+      // Check if topic is from common database (read-only)
+      if (this.topicManager.isCommonTopic(topicToRename.id)) {
+        vscode.window.showWarningMessage(
+          `Cannot rename "${topicToRename.name}" - topics from common database are read-only.`
+        );
+        return;
+      }
+
+      const newName = await vscode.window.showInputBox({
+        prompt: "Enter new topic name",
+        value: topicToRename.name,
+        validateInput: (value) => {
+          if (!value || value.trim().length === 0) {
+            return "Topic name cannot be empty";
+          }
+          if (value.trim().toLowerCase() === topicToRename.name.toLowerCase()) {
+            return "New name matches existing name";
+          }
+          return null;
+        },
+      });
+
+      if (!newName) {
+        return;
+      }
+
+      logger.info(`Renaming topic: ${topicToRename.name} to ${newName}`);
+      await this.topicManager.updateTopic(topicToRename.id, {
+        name: newName.trim(),
+      });
+
+      vscode.window.showInformationMessage(
+        `Topic renamed to "${newName.trim()}" successfully!`
+      );
+      this.treeDataProvider.refresh();
+    } catch (error) {
+      logger.error(`Failed to rename topic: ${error}`);
+      vscode.window.showErrorMessage(`Failed to rename topic: ${error}`);
     }
   }
 
@@ -182,6 +272,14 @@ export class CommandHandler {
         topicToDelete = selected.topic;
       }
 
+      // Check if topic is from common database (read-only)
+      if (this.topicManager.isCommonTopic(topicToDelete.id)) {
+        vscode.window.showWarningMessage(
+          `Cannot delete "${topicToDelete.name}" - topics from common database are read-only.`
+        );
+        return;
+      }
+
       const confirmation = await vscode.window.showWarningMessage(
         `Are you sure you want to delete topic "${topicToDelete.name}"? This will also delete all associated documents and embeddings.`,
         { modal: true },
@@ -250,6 +348,14 @@ export class CommandHandler {
         selectedTopic = selected.topic;
       }
 
+      // Check if topic is from common database (read-only)
+      if (this.topicManager.isCommonTopic(selectedTopic.id)) {
+        vscode.window.showWarningMessage(
+          `Cannot add documents to "${selectedTopic.name}" - topics from common database are read-only.`
+        );
+        return;
+      }
+      
       // Ask whether the user wants to select files or folders.
       // Some platforms/OS dialogs don't handle mixed file+folder mode well,
       // so present a choice and open the dialog in the selected mode.
@@ -868,6 +974,140 @@ export class CommandHandler {
     } catch (error) {
       logger.error(`Failed to remove GitHub token: ${error}`);
       vscode.window.showErrorMessage(`Failed to remove GitHub token: ${error}`);
+    }
+  }
+
+  /**
+   * Export a topic to a .rag file
+   */
+  private async exportTopic(item?: any): Promise<void> {
+    try {
+      let topicToExport;
+
+      // If called from tree view with item
+      if (item && item.topic) {
+        topicToExport = item.topic;
+      } else {
+        // Called from command palette - show picker
+        const topics = this.topicManager.getAllTopics().filter(
+          (t) => t.source !== 'common'  // Only show local topics for export
+        );
+
+        if (topics.length === 0) {
+          vscode.window.showInformationMessage(
+            "No local topics available to export."
+          );
+          return;
+        }
+
+        const selected = await vscode.window.showQuickPick(
+          topics.map((t) => ({
+            label: t.name,
+            description: `${t.documentCount} document(s)`,
+            detail: t.description,
+            topic: t,
+          })),
+          {
+            placeHolder: "Select a topic to export",
+          }
+        );
+
+        if (!selected) {
+          return;
+        }
+
+        topicToExport = selected.topic;
+      }
+
+      // Check if topic is from common database
+      if (this.topicManager.isCommonTopic(topicToExport.id)) {
+        vscode.window.showWarningMessage(
+          `Cannot export "${topicToExport.name}" - topics from common database cannot be exported.`
+        );
+        return;
+      }
+
+      // Show save dialog
+      const saveUri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(`${topicToExport.name.replace(/[^a-zA-Z0-9]/g, '_')}.rag`),
+        filters: {
+          "RAG Topic Archive": ["rag"],
+        },
+        saveLabel: "Export Topic",
+      });
+
+      if (!saveUri) {
+        return;
+      }
+
+      logger.info(`Exporting topic: ${topicToExport.name} to ${saveUri.fsPath}`);
+
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Exporting "${topicToExport.name}"...`,
+          cancellable: false,
+        },
+        async () => {
+          await this.topicManager.exportTopic(topicToExport.id, saveUri.fsPath);
+        }
+      );
+
+      vscode.window.showInformationMessage(
+        `Topic "${topicToExport.name}" exported successfully!`
+      );
+      logger.info(`Topic exported: ${topicToExport.id}`);
+    } catch (error) {
+      logger.error(`Failed to export topic: ${error}`);
+      vscode.window.showErrorMessage(`Failed to export topic: ${error}`);
+    }
+  }
+
+  /**
+   * Import a topic from a .rag file
+   */
+  private async importTopic(): Promise<void> {
+    try {
+      // Show open dialog
+      const fileUris = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: {
+          "RAG Topic Archive": ["rag"],
+        },
+        openLabel: "Import Topic",
+      });
+
+      if (!fileUris || fileUris.length === 0) {
+        return;
+      }
+
+      const archivePath = fileUris[0].fsPath;
+      logger.info(`Importing topic from: ${archivePath}`);
+
+      let importedTopic: Topic | undefined;
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Importing topic...",
+          cancellable: false,
+        },
+        async () => {
+          importedTopic = await this.topicManager.importTopic(archivePath);
+        }
+      );
+
+      if (importedTopic) {
+        vscode.window.showInformationMessage(
+          `Topic "${importedTopic.name}" imported successfully!`
+        );
+        this.treeDataProvider.refresh();
+        logger.info(`Topic imported: ${importedTopic.id}`);
+      }
+    } catch (error) {
+      logger.error(`Failed to import topic: ${error}`);
+      vscode.window.showErrorMessage(`Failed to import topic: ${error}`);
     }
   }
 }

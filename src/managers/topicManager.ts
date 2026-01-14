@@ -8,9 +8,12 @@
 
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
+import * as fsSync from "fs";
 import * as path from "path";
+import archiver from "archiver";
+import AdmZip from "adm-zip";
 import { VectorStore } from "@langchain/core/vectorstores";
-import { Topic, TopicsIndex, Document as TopicDocument } from "../utils/types";
+import { Topic, TopicsIndex, Document as TopicDocument, ExportedTopicData, TopicSource } from "../utils/types";
 import {
   DocumentPipeline,
   PipelineOptions,
@@ -20,7 +23,10 @@ import { VectorStoreFactory } from "../stores/vectorStoreFactory";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { Logger } from "../utils/logger";
-import { EXTENSION } from "../utils/constants";
+import { EXTENSION, CONFIG } from "../utils/constants";
+
+/** Current export format version */
+const EXPORT_FORMAT_VERSION = "1.0";
 
 export interface CreateTopicOptions {
   name: string;
@@ -65,6 +71,11 @@ export class TopicManager {
 
   // Cache for topic documents
   private topicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
+
+  // Common database support
+  private commonTopicsIndex: TopicsIndex | null = null;
+  private commonTopicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
+  private commonDatabasePath: string | null = null;
 
   private constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -147,9 +158,13 @@ export class TopicManager {
         this.topicsIndex!.modelName
       );
 
+      // Load common database if configured
+      await this.loadCommonDatabase();
+
       this.isInitialized = true;
       this.logger.info("TopicManager initialized successfully", {
         topicCount: Object.keys(this.topicsIndex?.topics || {}).length,
+        commonTopicCount: Object.keys(this.commonTopicsIndex?.topics || {}).length,
         embeddingModel: this.topicsIndex?.modelName,
       });
     } catch (error) {
@@ -352,34 +367,57 @@ export class TopicManager {
   }
 
   /**
-   * Get a topic by ID
+   * Get a topic by ID (from local or common database)
    */
   public getTopic(topicId: string): Topic | null {
-    if (!this.topicsIndex) {
-      return null;
+    // Check local topics first
+    if (this.topicsIndex?.topics[topicId]) {
+      return { ...this.topicsIndex.topics[topicId], source: 'local' as TopicSource };
     }
-    return this.topicsIndex.topics[topicId] || null;
+    // Check common topics
+    if (this.commonTopicsIndex?.topics[topicId]) {
+      return { ...this.commonTopicsIndex.topics[topicId], source: 'common' as TopicSource };
+    }
+    return null;
   }
 
   /**
-   * Get all topics
+   * Get all topics (local + common merged)
    */
   public getAllTopics(): Topic[] {
-    if (!this.topicsIndex) {
-      return [];
-    }
-    return Object.values(this.topicsIndex.topics);
+    const localTopics = this.topicsIndex
+      ? Object.values(this.topicsIndex.topics).map(t => ({ ...t, source: 'local' as TopicSource }))
+      : [];
+
+    const commonTopics = this.commonTopicsIndex
+      ? Object.values(this.commonTopicsIndex.topics).map(t => ({ ...t, source: 'common' as TopicSource }))
+      : [];
+
+    return [...localTopics, ...commonTopics];
   }
 
   /**
-   * Get documents for a specific topic
+   * Check if a topic is from the common database (read-only)
+   */
+  public isCommonTopic(topicId: string): boolean {
+    return this.commonTopicsIndex?.topics[topicId] !== undefined;
+  }
+
+  /**
+   * Get documents for a specific topic (local or common)
    */
   public getTopicDocuments(topicId: string): TopicDocument[] {
-    const documents = this.topicDocuments.get(topicId);
-    if (!documents) {
-      return [];
+    // Check local documents first
+    const localDocs = this.topicDocuments.get(topicId);
+    if (localDocs) {
+      return Array.from(localDocs.values());
     }
-    return Array.from(documents.values());
+    // Check common documents
+    const commonDocs = this.commonTopicDocuments.get(topicId);
+    if (commonDocs) {
+      return Array.from(commonDocs.values());
+    }
+    return [];
   }
 
   /**
@@ -512,7 +550,13 @@ export class TopicManager {
       }
 
       // Load from disk
-      const store = await this.vectorStoreFactory.loadStore(topicId);
+      let store;
+      if (this.isCommonTopic(topicId) && this.commonDatabasePath) {
+        this.logger.debug("Loading vector store from common database", { topicId });
+        store = await this.vectorStoreFactory.loadStore(topicId, this.commonDatabasePath);
+      } else {
+        store = await this.vectorStoreFactory.loadStore(topicId);
+      }
 
       if (store) {
         this.vectorStoreCache.set(topicId, store);
@@ -547,6 +591,17 @@ export class TopicManager {
       return;
     }
 
+    // Check if the stored model is available (downloaded/local)
+    const availableModels = await this.embeddingService.listAvailableModels();
+    const isModelAvailable = availableModels.some(
+      (m) => m.name === metadata.embeddingModel && (m.downloaded || m.source === 'local')
+    );
+
+    if (isModelAvailable) {
+      // Model is available, proceed (VectorStoreFactory will handle loading the correct model)
+      return;
+    }
+
     const topicName = this.topicsIndex?.topics[topicId]?.name ?? topicId;
 
     this.logger.warn("Embedding model mismatch detected for topic", {
@@ -557,7 +612,8 @@ export class TopicManager {
     });
 
     const message = `Topic "${topicName}" was indexed with embedding model "${metadata.embeddingModel}", but the current setting is "${currentModel}". ` +
-      `Switch back to "${metadata.embeddingModel}" or recreate the topic with the new model before running queries.`;
+      `The model "${metadata.embeddingModel}" is not currently available/downloaded. ` +
+      `Please switch back to "${metadata.embeddingModel}" in settings to download it, or recreate the topic.`;
 
     throw new Error(message);
   }
@@ -573,17 +629,33 @@ export class TopicManager {
         return null;
       }
 
-      const topic = this.topicsIndex.topics[topicId];
+      let topic = this.topicsIndex.topics[topicId];
+      let databaseDir = this.getDatabaseDir();
+      let isCommon = false;
+
+      // If not in local, check common
+      if (!topic && this.commonTopicsIndex && this.commonTopicsIndex.topics[topicId]) {
+        topic = this.commonTopicsIndex.topics[topicId];
+        if (this.commonDatabasePath) {
+          databaseDir = this.commonDatabasePath;
+          isCommon = true;
+        }
+      }
+
       if (!topic) {
         return null;
       }
 
       // Get document count
-      const documentCount = this.topicDocuments.get(topicId)?.size || 0;
+      const documents = isCommon
+        ? this.commonTopicDocuments.get(topicId)
+        : this.topicDocuments.get(topicId);
+
+      const documentCount = documents?.size || 0;
 
       // Load vector store metadata
       const metadataPath = path.join(
-        this.getDatabaseDir(),
+        databaseDir,
         `vector-${topicId}-metadata.json`
       );
 
@@ -724,6 +796,338 @@ export class TopicManager {
     TopicManager.agentCacheCleanupCallback = null;
 
     this.logger.info("TopicManager disposed");
+  }
+
+  // ==================== Export/Import Methods ====================
+
+  /**
+   * Export a topic to a .rag archive file (ZIP format with DEFLATE compression)
+   */
+  public async exportTopic(topicId: string, exportPath: string): Promise<void> {
+    this.logger.info("Exporting topic", { topicId, exportPath });
+
+    try {
+      if (!this.topicsIndex) {
+        throw new Error("TopicManager not initialized");
+      }
+
+      // Only allow exporting local topics
+      if (this.isCommonTopic(topicId)) {
+        throw new Error("Cannot export topics from common database");
+      }
+
+      const topic = this.topicsIndex.topics[topicId];
+      if (!topic) {
+        throw new Error(`Topic not found: ${topicId}`);
+      }
+
+      const documents = this.getTopicDocuments(topicId);
+      const databaseDir = this.getDatabaseDir();
+
+      // Create export metadata
+      const exportData: ExportedTopicData = {
+        version: EXPORT_FORMAT_VERSION,
+        topic: { ...topic },
+        documents,
+        embeddingModel: this.topicsIndex.modelName,
+        exportedAt: Date.now(),
+      };
+
+      // Create ZIP archive
+      const output = fsSync.createWriteStream(exportPath);
+      const archive = archiver('zip', { zlib: { level: 9 } });
+
+      const archivePromise = new Promise<void>((resolve, reject) => {
+        output.on('close', resolve);
+        archive.on('error', reject);
+      });
+
+      archive.pipe(output);
+
+      // Add topic metadata
+      archive.append(JSON.stringify(exportData, null, 2), { name: 'topic.json' });
+
+      // Add vector store files (LanceDB tables are directories with .lance extension)
+      const lanceDbDir = path.join(databaseDir, 'lancedb', `${topicId}.lance`);
+      try {
+        await fs.access(lanceDbDir);
+        archive.directory(lanceDbDir, `lancedb/${topicId}.lance`);
+      } catch {
+        this.logger.debug("No LanceDB directory found for topic", { topicId, path: lanceDbDir });
+      }
+
+      // Add vector metadata file
+      const vectorMetadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
+      try {
+        await fs.access(vectorMetadataPath);
+        archive.file(vectorMetadataPath, { name: `vector-${topicId}-metadata.json` });
+      } catch {
+        this.logger.debug("No vector metadata file found for topic", { topicId });
+      }
+
+      await archive.finalize();
+      await archivePromise;
+
+      this.logger.info("Topic exported successfully", { topicId, exportPath });
+    } catch (error) {
+      this.logger.error("Failed to export topic", {
+        error: error instanceof Error ? error.message : String(error),
+        topicId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Import a topic from a .rag archive file
+   */
+  public async importTopic(archivePath: string): Promise<Topic> {
+    this.logger.info("Importing topic", { archivePath });
+
+    try {
+      if (!this.topicsIndex) {
+        throw new Error("TopicManager not initialized");
+      }
+
+      // Use adm-zip for extraction
+      const zip = new AdmZip(archivePath);
+      const entries = zip.getEntries();
+
+      // Find and parse topic.json
+      const topicEntry = entries.find((e: AdmZip.IZipEntry) => e.entryName === 'topic.json');
+      if (!topicEntry) {
+        throw new Error("Invalid archive: topic.json not found");
+      }
+
+      const exportData: ExportedTopicData = JSON.parse(topicEntry.getData().toString('utf8'));
+
+      // Log if embedding model differs - actual compatibility check happens at query time
+      const currentModel = this.embeddingService.getCurrentModel();
+      if (exportData.embeddingModel !== currentModel) {
+        this.logger.warn("Imported topic uses different embedding model", {
+          importedModel: exportData.embeddingModel,
+          currentModel,
+          note: "Switch to the imported model before querying this topic",
+        });
+      }
+
+      // Generate new topic ID to avoid conflicts
+      const newTopicId = this.generateTopicId();
+      const originalTopicId = exportData.topic.id;
+
+      // Create new topic with imported data
+      const newTopic: Topic = {
+        ...exportData.topic,
+        id: newTopicId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        source: 'local',
+      };
+
+      // Check for name conflicts
+      const existingTopic = Object.values(this.topicsIndex.topics).find(
+        t => t.name.toLowerCase() === newTopic.name.toLowerCase()
+      );
+      if (existingTopic) {
+        newTopic.name = `${newTopic.name} (imported)`;
+      }
+
+      // Extract LanceDB files with new topic ID
+      const databaseDir = this.getDatabaseDir();
+
+      // Target directory should always match what VectorStoreFactory expects (now checking .lance)
+      const targetDirName = `${newTopicId}.lance`;
+      const lanceDbDir = path.join(databaseDir, 'lancedb', targetDirName);
+      await fs.mkdir(lanceDbDir, { recursive: true });
+
+      for (const entry of entries) {
+        // Handle standard .lance extension
+        if (entry.entryName.startsWith(`lancedb/${originalTopicId}.lance/`)) {
+          const relativePath = entry.entryName.replace(`lancedb/${originalTopicId}.lance/`, '');
+          // Skip directories (they are created recursively by mkdir)
+          if (entry.isDirectory) continue;
+
+          const targetPath = path.join(lanceDbDir, relativePath);
+          await fs.mkdir(path.dirname(targetPath), { recursive: true });
+          await fs.writeFile(targetPath, entry.getData());
+        }
+        // Handle legacy/no-extension format
+        else if (entry.entryName.startsWith(`lancedb/${originalTopicId}/`)) {
+          const relativePath = entry.entryName.replace(`lancedb/${originalTopicId}/`, '');
+          // Skip directories
+          if (entry.isDirectory) continue;
+
+          const targetPath = path.join(lanceDbDir, relativePath);
+          await fs.mkdir(path.dirname(targetPath), { recursive: true });
+          await fs.writeFile(targetPath, entry.getData());
+        }
+      }
+
+      // Extract and update vector metadata
+      const vectorMetadataEntry = entries.find((e: AdmZip.IZipEntry) => e.entryName === `vector-${originalTopicId}-metadata.json`);
+      if (vectorMetadataEntry) {
+        const metadata = JSON.parse(vectorMetadataEntry.getData().toString('utf8'));
+        metadata.topicId = newTopicId;
+        const newMetadataPath = path.join(databaseDir, `vector-${newTopicId}-metadata.json`);
+        await fs.writeFile(newMetadataPath, JSON.stringify(metadata, null, 2));
+      }
+
+      // Update document IDs and topic references
+      const newDocuments = exportData.documents.map(doc => ({
+        ...doc,
+        id: this.generateDocumentId(),
+        topicId: newTopicId,
+      }));
+
+      // Save to index
+      this.topicsIndex.topics[newTopicId] = newTopic;
+      this.topicsIndex.lastUpdated = Date.now();
+      await this.saveTopicsIndex();
+
+      // Save documents
+      const documentsMap = new Map<string, TopicDocument>();
+      for (const doc of newDocuments) {
+        documentsMap.set(doc.id, doc);
+      }
+      this.topicDocuments.set(newTopicId, documentsMap);
+      await this.saveTopicDocuments(newTopicId);
+
+      this.logger.info("Topic imported successfully", {
+        originalId: originalTopicId,
+        newId: newTopicId,
+        name: newTopic.name,
+        documentCount: newDocuments.length,
+      });
+
+      return newTopic;
+    } catch (error) {
+      this.logger.error("Failed to import topic", {
+        error: error instanceof Error ? error.message : String(error),
+        archivePath,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Load topics from common database path (read-only)
+   */
+  public async loadCommonDatabase(): Promise<void> {
+    const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+    const commonPath = config.get<string>(CONFIG.COMMON_DATABASE_PATH);
+
+    if (!commonPath) {
+      this.logger.debug("No common database path configured");
+      this.commonTopicsIndex = null;
+      this.commonTopicDocuments.clear();
+      this.commonDatabasePath = null;
+      return;
+    }
+
+    try {
+      // Verify path exists
+      await fs.access(commonPath);
+      this.commonDatabasePath = commonPath;
+
+      // Check for topics.json
+      const indexPath = path.join(commonPath, EXTENSION.TOPICS_INDEX_FILENAME);
+      try {
+        await fs.access(indexPath);
+      } catch {
+        this.logger.warn("Common database path exists but missing topics.json", { path: commonPath });
+        vscode.window.showWarningMessage(`Common database path found, but missing "${EXTENSION.TOPICS_INDEX_FILENAME}". Is the path correct?`);
+        this.commonTopicsIndex = null;
+        this.commonTopicDocuments.clear();
+        return;
+      }
+
+      // Load topics index from common path
+      const data = await fs.readFile(indexPath, 'utf-8');
+      this.commonTopicsIndex = JSON.parse(data);
+
+      this.logger.info("Common database loaded", {
+        path: commonPath,
+        topicCount: Object.keys(this.commonTopicsIndex?.topics || {}).length,
+      });
+
+      // Load document metadata for each common topic
+      if (this.commonTopicsIndex) {
+        // Check for name conflicts with local topics BEFORE fully loading
+        const localTopicNames = new Set(
+          Object.values(this.topicsIndex?.topics || {}).map(t => t.name.toLowerCase())
+        );
+
+        const conflicts: string[] = [];
+
+        for (const topic of Object.values(this.commonTopicsIndex.topics)) {
+          if (localTopicNames.has(topic.name.toLowerCase())) {
+            conflicts.push(topic.name);
+          }
+        }
+
+        if (conflicts.length > 0) {
+          const conflictList = conflicts.slice(0, 3).join(", ") + (conflicts.length > 3 ? "..." : "");
+          const message = `Cannot load common database due to name conflicts. Local topics [${conflictList}] already exist. Please rename your local topics first.`;
+
+          this.logger.warn("Common database load aborted due to name conflicts", { conflicts });
+          vscode.window.showErrorMessage(message);
+
+          // Abort loading
+          this.commonTopicsIndex = null;
+          this.commonTopicDocuments.clear();
+          this.commonDatabasePath = null;
+          return;
+        }
+
+        // No conflicts, proceed to load documents
+        for (const topicId of Object.keys(this.commonTopicsIndex.topics)) {
+          await this.loadCommonTopicDocuments(topicId);
+        }
+      }
+    } catch (error) {
+      this.logger.warn("Failed to load common database", {
+        path: commonPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      vscode.window.showErrorMessage(`Failed to load common database: ${error instanceof Error ? error.message : String(error)}`);
+      this.commonTopicsIndex = null;
+      this.commonTopicDocuments.clear();
+      this.commonDatabasePath = null;
+    }
+  }
+
+  /**
+   * Load document metadata for a common topic
+   */
+  private async loadCommonTopicDocuments(topicId: string): Promise<void> {
+    if (!this.commonDatabasePath) return;
+
+    try {
+      const documentsPath = path.join(this.commonDatabasePath, `topic-${topicId}-documents.json`);
+      const data = await fs.readFile(documentsPath, 'utf-8');
+      const documentsArray: TopicDocument[] = JSON.parse(data);
+
+      const documentsMap = new Map<string, TopicDocument>();
+      for (const doc of documentsArray) {
+        documentsMap.set(doc.id, doc);
+      }
+
+      this.commonTopicDocuments.set(topicId, documentsMap);
+    } catch (error) {
+      if ((error as any).code === 'ENOENT') {
+         this.logger.warn("Document file missing for common topic", { topicId, error: "File not found" });
+      } else {
+         this.logger.error("Failed to load documents for common topic", { topicId, error });
+      }
+      this.commonTopicDocuments.set(topicId, new Map());
+    }
+  }
+
+  /**
+   * Get common database path if configured
+   */
+  public getCommonDatabasePath(): string | null {
+    return this.commonDatabasePath;
   }
 
   // ==================== Private Methods ====================

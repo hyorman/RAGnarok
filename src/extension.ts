@@ -36,6 +36,7 @@ export async function activate(context: vscode.ExtensionContext) {
       showCollapseAll: true,
     });
     context.subscriptions.push(treeView);
+    context.subscriptions.push(treeDataProvider); // Dispose model change subscription
 
     // Register commands
     await CommandHandler.registerCommands(context, treeDataProvider);
@@ -178,6 +179,14 @@ export async function activate(context: vscode.ExtensionContext) {
               `RAGnarōk: Failed to update embedding model: ${errorMessage}`
             );
           }
+        }
+
+        // Handle Common Database Path change
+        if (event.affectsConfiguration(`${CONFIG.ROOT}.${CONFIG.COMMON_DATABASE_PATH}`)) {
+          logger.info("Common database path configuration changed");
+          await topicManager.loadCommonDatabase();
+          treeDataProvider.refresh();
+          vscode.window.showInformationMessage("Common database reloaded");
         }
 
         const affectsTreeViewConfig = treeViewConfigPaths.some((configPath) =>

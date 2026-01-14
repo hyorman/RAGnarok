@@ -33,6 +33,8 @@ export const CONFIG = {
   AGENTIC_USE_LLM: "agenticUseLLM",
   AGENTIC_LLM_MODEL: "agenticLLMModel",
   AGENTIC_INCLUDE_WORKSPACE: "agenticIncludeWorkspaceContext",
+  // Common database configuration
+  COMMON_DATABASE_PATH: "commonDatabasePath",
 } as const;
 
 /**
@@ -59,6 +61,10 @@ export const COMMANDS = {
   ADD_GITHUB_TOKEN: "ragnarok.addGithubToken",
   LIST_GITHUB_TOKENS: "ragnarok.listGithubTokens",
   REMOVE_GITHUB_TOKEN: "ragnarok.removeGithubToken",
+  // Import/Export
+  EXPORT_TOPIC: "ragnarok.exportTopic",
+  IMPORT_TOPIC: "ragnarok.importTopic",
+  RENAME_TOPIC: "ragnarok.renameTopic",
 } as const;
 
 /**
