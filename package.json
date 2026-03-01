@@ -421,7 +421,7 @@
     "cheerio": "^1.1.2",
     "ignore": "^7.0.5",
     "apache-arrow": "^18.1.0",
-    "pdf-parse": "2.4.5"
+    "pdf-parse": "^1.1.1"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",
@@ -445,6 +445,9 @@
   },
   "overrides": {
     "diff": "8.0.3",
-    "serialize-javascript": "7.0.3"
+    "serialize-javascript": "7.0.3",
+    "@langchain/community": {
+      "pdf-parse": "$pdf-parse"
+    }
   }
 }
