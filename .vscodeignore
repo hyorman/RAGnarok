@@ -85,3 +85,6 @@ node_modules/**
 !node_modules/lazystream/**
 !node_modules/normalize-path/**
 !node_modules/lodash/**
+
+# Glob (required by archiver-utils at runtime)
+!node_modules/glob/**
