@@ -2,7 +2,7 @@
   "name": "ragnarok",
   "displayName": "RAGnarōk - Local RAG for Copilot",
   "description": "Retrieval-Augmented Generation extension for VSCode with local sentence transformers and semantic chunking",
-  "version": "0.2.8",
+  "version": "0.2.10",
   "publisher": "hyorman",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -396,7 +396,6 @@
     "@types/cheerio": "^0.22.35",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.10.5",
-    "@types/pdf-parse": "^1.1.5",
     "@types/vscode": "^1.105.0",
     "@typescript-eslint/eslint-plugin": "^8.46.3",
     "@typescript-eslint/parser": "^8.46.3",
@@ -420,9 +419,9 @@
     "archiver": "^7.0.1",
     "async-mutex": "^0.5.0",
     "cheerio": "^1.1.2",
-    "ignore": "^5.3.2",
-    "langchain": "^1.0.0",
-    "pdf-parse": "^1.1.1"
+    "ignore": "^7.0.5",
+    "apache-arrow": "^18.1.0",
+    "pdf-parse": "2.4.5"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",
@@ -445,8 +444,7 @@
     "@lancedb/lancedb-win32-x64-msvc": "^0.19.1"
   },
   "overrides": {
-    "fsevents": {
-      "install": ""
-    }
+    "diff": "8.0.3",
+    "serialize-javascript": "7.0.3"
   }
 }
