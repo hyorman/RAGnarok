@@ -2,7 +2,7 @@
   "name": "ragnarok",
   "displayName": "RAGnarōk - Local RAG for Copilot",
   "description": "Retrieval-Augmented Generation extension for VSCode with local sentence transformers and semantic chunking",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "publisher": "hyorman",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -24,10 +24,35 @@
     "onStartupFinished"
   ],
   "main": "./out/src/extension.js",
+  "enabledApiProposals": [
+    "embeddings"
+  ],
   "contributes": {
     "configuration": {
       "title": "RAGnarōk",
       "properties": {
+        "ragnarok.embeddingBackend": {
+          "type": "string",
+          "default": "auto",
+          "markdownDescription": "**Embedding backend** to use for generating vectors:\n\n- **auto** (default): Try VS Code LM embeddings first; fall back to local HuggingFace if unavailable.\n- **vscodeLM**: Force VS Code Language Model API embeddings (requires a registered embedding provider such as GitHub Copilot).\n- **huggingface**: Force local HuggingFace Transformers.js embeddings (ONNX/WASM, fully offline).\n\n⚠️ Switching backends may change the embedding dimension. Existing vector stores built with a different backend/model will need to be re-indexed.",
+          "enum": [
+            "auto",
+            "vscodeLM",
+            "huggingface"
+          ],
+          "enumDescriptions": [
+            "Auto: Try VS Code LM first, fall back to HuggingFace",
+            "VS Code LM: Force VS Code Language Model API embeddings (requires provider)",
+            "HuggingFace: Force local Transformers.js embeddings (offline)"
+          ],
+          "order": 1
+        },
+        "ragnarok.embeddingVscodeModelId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "**VS Code LM embedding model ID** to use when backend is `vscodeLM` or `auto`.\n\nLeave empty to auto-select the first available model. The available models depend on the registered embeddings provider (e.g., GitHub Copilot).\n\n💡 Check `Developer: Show Running Extensions` → Language Model API for available model IDs.",
+          "order": 1
+        },
         "ragnarok.localModelPath": {
           "type": "string",
           "default": "",
@@ -124,24 +149,14 @@
         },
         "ragnarok.agenticUseLLM": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "markdownDescription": "**Use LLM (Copilot) for intelligent planning:** Uses Copilot for query decomposition and result evaluation instead of rule-based heuristics.\n\n**Requirements:**\n- ✅ GitHub Copilot subscription\n- ✅ GitHub Copilot extension\n\n**Trade-offs:**\n- ✅ Much more intelligent\n- ✅ Context-aware planning\n- ⚠️ 2-3x slower\n- ⚠️ Uses Copilot API quota\n\n⚠️ _Only applies when Agentic Mode is enabled_",
           "order": 14
         },
         "ragnarok.agenticLLMModel": {
           "type": "string",
-          "default": "gpt-4o",
-          "markdownDescription": "**LLM model to use** for query planning and evaluation:\n\n- **gpt-4o** (default): Most intelligent, best reasoning\n- **gpt-4o-mini**: Faster, cheaper, still very capable\n- **gpt-3.5-turbo**: Fastest, most economical\n\n**Performance:**\n- gpt-4o: Best quality, slower, more tokens\n- gpt-4o-mini: Good balance\n- gpt-3.5-turbo: Fast, lower quality\n\n⚠️ _Only applies when LLM Mode is enabled_",
-          "enum": [
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-3.5-turbo"
-          ],
-          "enumDescriptions": [
-            "GPT-4o: Most intelligent, best for complex reasoning (slower, more expensive)",
-            "GPT-4o-mini: Balanced performance and cost (recommended for most uses)",
-            "GPT-3.5 Turbo: Fastest and most economical (lower quality reasoning)"
-          ],
+          "default": "gpt-4o-mini",
+          "markdownDescription": "**LLM model family** to use for query planning and evaluation.\n\nUse **RAG: Select LLM Model** from the Command Palette to discover all available models at runtime.\n\n💡 The available models depend on your Copilot subscription and installed extensions.\n\n⚠️ _Only applies when LLM Mode is enabled_",
           "order": 15
         },
         "ragnarok.agenticIncludeWorkspaceContext": {
@@ -198,6 +213,24 @@
         "command": "ragnarok.clearDatabase",
         "title": "Clear Database",
         "category": "RAG"
+      },
+      {
+        "command": "ragnarok.selectVscodeEmbeddingModel",
+        "title": "Select VS Code Embedding Model",
+        "category": "RAG",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "ragnarok.selectHfEmbeddingModel",
+        "title": "Select HuggingFace Embedding Model",
+        "category": "RAG",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "ragnarok.selectLLMModel",
+        "title": "Select LLM Model",
+        "category": "RAG",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "ragnarok.addGithubToken",
@@ -278,6 +311,21 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "ragnarok.selectHfEmbeddingModel",
+          "when": "view == ragTopics && viewItem == config-embedding-hf",
+          "group": "inline@1"
+        },
+        {
+          "command": "ragnarok.selectVscodeEmbeddingModel",
+          "when": "view == ragTopics && viewItem == config-embedding-vscode",
+          "group": "inline@1"
+        },
+        {
+          "command": "ragnarok.selectLLMModel",
+          "when": "view == ragTopics && viewItem =~ /config-llm/",
+          "group": "inline@1"
+        },
         {
           "command": "ragnarok.addDocument",
           "when": "view == ragTopics && viewItem == topic",

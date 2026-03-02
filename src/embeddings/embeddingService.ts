@@ -1,12 +1,20 @@
 /**
- * Embedding service using Transformers.js for local sentence transformers
- * Refactored with async-mutex to prevent race conditions
+ * Embedding service with pluggable backend support
+ *
+ * Supported backends:
+ * - **HuggingFace Transformers.js** – local ONNX/WASM inference (default)
+ * - **VS Code Language Model API** – proposed `vscode.lm.computeEmbeddings`
+ *
+ * Backend selection is controlled by the `ragnarok.embeddingBackend` setting:
+ * - `auto`        – Try VS Code LM first; fall back to HuggingFace.
+ * - `vscodeLM`    – Force VS Code LM (errors if unavailable).
+ * - `huggingface` – Force local HuggingFace.
  *
  * Features:
- * - Local embedding generation using HuggingFace Transformers.js
  * - Multiple similarity metrics via LangChain (cosine, euclidean, inner product)
- * - Cross-platform WASM backend for ONNX models
+ * - Cross-platform WASM backend for ONNX models (HuggingFace)
  * - Batch processing with progress tracking
+ * - Automatic fallback in `auto` mode
  *
  * Note: @huggingface/transformers is dynamically imported because it's an ESM-only package
  * and VS Code extensions run in CommonJS mode. Dynamic import() allows us to load ESM packages
@@ -23,6 +31,8 @@ import { EventEmitter } from 'events';
 import { cosineSimilarity as langchainCosineSimilarity, euclideanDistance as langchainEuclideanDistance, innerProduct as langchainInnerProduct } from '@langchain/core/utils/math';
 import { CONFIG, DEFAULTS } from '../utils/constants';
 import { Logger } from '../utils/logger';
+import { EmbeddingBackend, EmbeddingBackendType } from './embeddingBackend';
+import { VscodeLmBackend } from './vscodeLmBackend';
 
 // Type definitions for the dynamically imported transformers module
 type TransformersModule = any; // Dynamic import type - resolved at runtime
@@ -76,10 +86,27 @@ export class EmbeddingService {
     return curatedDefault;
   }
   private static readonly CURATED_MODELS = [
-    'Xenova/all-MiniLM-L6-v2',
-    'Xenova/all-MiniLM-L12-v2',
-    'Xenova/paraphrase-MiniLM-L6-v2',
-    'Xenova/multi-qa-MiniLM-L6-cos-v1',
+    // ====================================================================
+    // Xenova/ namespace — pre-converted ONNX models (most reliable)
+    // ====================================================================
+    // --- Sentence-Transformers (MiniLM) ---
+    'Xenova/all-MiniLM-L6-v2',           // 384-dim, 23 MB – fast & popular
+    'Xenova/all-MiniLM-L12-v2',          // 384-dim, 33 MB – more accurate
+    'Xenova/paraphrase-MiniLM-L6-v2',    // 384-dim, 23 MB – paraphrasing
+    'Xenova/multi-qa-MiniLM-L6-cos-v1',  // 384-dim, 23 MB – QA / retrieval
+    // --- Sentence-Transformers (Other) ---
+    'Xenova/all-distilroberta-v1',        // 768-dim, 82 MB – higher quality
+    'Xenova/paraphrase-multilingual-MiniLM-L12-v2', // 384-dim – multilingual
+    'Xenova/multi-qa-distilbert-cos-v1',  // 768-dim – QA / retrieval
+    // --- BGE / BAAI ---
+    'Xenova/bge-small-en-v1.5',           // 384-dim, 33 MB – BAAI
+    'Xenova/bge-base-en-v1.5',            // 768-dim, 109 MB – BAAI
+    // --- E5 ---
+    'Xenova/e5-small-v2',                 // 384-dim, 33 MB – Microsoft
+    // --- GTE ---
+    'Xenova/gte-small',                   // 384-dim, 33 MB – Alibaba
+    // --- nomic ---
+    'nomic-ai/nomic-embed-text-v1',       // 768-dim – strong general-purpose (ONNX included)
   ];
   private static readonly DEFAULT_MODEL = EmbeddingService.resolveDefaultModel();
   private pipeline: FeatureExtractionPipeline | null = null;
@@ -94,6 +121,14 @@ export class EmbeddingService {
   // Cache bundled model root (if present in packaged extension)
   private bundledModelsRoot: string | null = null;
   private bundledModelsRootChecked: boolean = false;
+
+  // ---- Backend abstraction ----
+  /** The currently active backend instance (`null` implies HuggingFace pipeline path). */
+  private vscodeLmBackend: VscodeLmBackend | null = null;
+  /** Resolved backend type that is currently in use. */
+  private activeBackendType: 'vscodeLM' | 'huggingface' = 'huggingface';
+  /** Whether the backend has already been resolved for the current config snapshot. */
+  private backendResolved = false;
 
   // Event emitter for model changes
   private static readonly _onModelChanged = new EventEmitter();
@@ -118,6 +153,97 @@ export class EmbeddingService {
 
   private constructor() {
     this.logger = new Logger('EmbeddingService');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Backend resolution
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Read the `ragnarok.embeddingBackend` and `ragnarok.embeddingVscodeModelId`
+   * settings and determine which concrete backend to activate.
+   *
+   * In `auto` mode the VS Code LM backend is tried first; if it reports
+   * unavailable the service silently falls back to HuggingFace.
+   */
+  private async resolveBackend(): Promise<'vscodeLM' | 'huggingface'> {
+    const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+    const setting = config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, 'auto');
+    const vscodeLmModelId = config.get<string>(CONFIG.EMBEDDING_VSCODE_MODEL_ID, '');
+
+    if (setting === 'huggingface') {
+      this.logger.info('Embedding backend forced to HuggingFace by configuration');
+      return 'huggingface';
+    }
+
+    if (setting === 'vscodeLM') {
+      // Forced – do not fall back
+      this.logger.info('Embedding backend forced to VS Code LM by configuration');
+      return 'vscodeLM';
+    }
+
+    // auto: try VS Code LM first
+    const probe = new VscodeLmBackend(vscodeLmModelId || undefined);
+    if (await probe.isAvailable()) {
+      this.logger.info(
+        `Auto-resolved embedding backend to VS Code LM (model: ${vscodeLmModelId || probe['modelId'] || 'auto'})`
+      );
+      return 'vscodeLM';
+    }
+
+    this.logger.info('VS Code LM embeddings not available; falling back to HuggingFace');
+    return 'huggingface';
+  }
+
+  /**
+   * Ensure the correct backend is activated based on current config.
+   * Called at the start of `initialize()`.
+   */
+  private async ensureBackend(): Promise<void> {
+    if (this.backendResolved) return;
+
+    const resolved = await this.resolveBackend();
+    const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+    const vscodeLmModelId = config.get<string>(CONFIG.EMBEDDING_VSCODE_MODEL_ID, '');
+
+    if (resolved === 'vscodeLM') {
+      this.vscodeLmBackend = new VscodeLmBackend(vscodeLmModelId || undefined);
+      await this.vscodeLmBackend.initialize();
+      this.activeBackendType = 'vscodeLM';
+
+      const modelDesc = this.vscodeLmBackend['modelId'] || vscodeLmModelId || 'auto';
+      this.logger.info(`Using VS Code LM embeddings (model: ${modelDesc})`);
+      vscode.window.showInformationMessage(
+        `RAGnarōk: Using VS Code LM embeddings (model: ${modelDesc})`
+      );
+    } else {
+      this.activeBackendType = 'huggingface';
+      this.vscodeLmBackend = null;
+      this.logger.info('Using HuggingFace Transformers.js embeddings');
+    }
+
+    this.backendResolved = true;
+  }
+
+  /**
+   * Force the backend to be re-resolved on the next `initialize()` call.
+   * Useful when the user changes the `ragnarok.embeddingBackend` setting.
+   */
+  public resetBackendSelection(): void {
+    this.backendResolved = false;
+    if (this.vscodeLmBackend) {
+      this.vscodeLmBackend.dispose();
+      this.vscodeLmBackend = null;
+    }
+    this.activeBackendType = 'huggingface';
+    this.logger.info('Backend selection reset; will re-resolve on next initialization');
+  }
+
+  /**
+   * Returns the currently resolved backend type.
+   */
+  public getActiveBackendType(): 'vscodeLM' | 'huggingface' {
+    return this.activeBackendType;
   }
 
   /**
@@ -420,10 +546,49 @@ export class EmbeddingService {
   }
 
   /**
-   * Initialize the embedding model with mutex to prevent race conditions
-   * @param modelName - Optional explicit embedding model name
+   * Initialize the embedding model with mutex to prevent race conditions.
+   *
+   * The method first resolves which backend to use (VS Code LM vs HuggingFace)
+   * based on the `ragnarok.embeddingBackend` setting. In `auto` mode it tries
+   * VS Code LM first, falling back to HuggingFace if unavailable.
+   *
+   * When the VS Code LM backend is active, the `modelName` parameter is ignored
+   * (the model is determined by `ragnarok.embeddingVscodeModelId` or auto-selected).
+   *
+   * @param modelName - Optional explicit HuggingFace embedding model name
    */
   public async initialize(modelName?: string): Promise<void> {
+
+    // Resolve the backend (vscodeLM vs huggingface) based on config.
+    // In auto+forced-vscodeLM paths this may throw if the backend is unavailable.
+    try {
+      await this.ensureBackend();
+    } catch (backendError: any) {
+      // If user forced vscodeLM and it failed, don't silently swallow
+      const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+      const setting = config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, 'auto');
+      if (setting === 'vscodeLM') {
+        throw backendError;
+      }
+      // auto mode: VS Code LM init failed – fall back to HuggingFace
+      this.logger.warn(
+        `VS Code LM backend initialization failed, falling back to HuggingFace: ${backendError?.message ?? backendError}`
+      );
+      vscode.window.showWarningMessage(
+        `RAGnarōk: VS Code LM embeddings unavailable — falling back to HuggingFace. Reason: ${backendError?.message ?? backendError}`
+      );
+      this.activeBackendType = 'huggingface';
+      this.vscodeLmBackend = null;
+      this.backendResolved = true;
+    }
+
+    // If we resolved to VS Code LM, the backend is already initialized — done.
+    if (this.activeBackendType === 'vscodeLM' && this.vscodeLmBackend) {
+      this.logger.debug('VS Code LM backend is active; skipping HuggingFace pipeline initialization');
+      return;
+    }
+
+    // ---------- HuggingFace pipeline path (existing logic) ----------
 
     // Priority:
     // 1. Explicit parameter (for programmatic control, tests)
@@ -593,9 +758,33 @@ export class EmbeddingService {
   }
 
   /**
-   * Generate embeddings for a single text
+   * Generate embeddings for a single text.
+   *
+   * Delegates to the active backend (VS Code LM or HuggingFace pipeline).
+   * Includes runtime fallback: if VS Code LM fails and we are in `auto` mode,
+   * the HuggingFace pipeline is tried transparently.
    */
   public async embed(text: string): Promise<number[]> {
+    // ---- VS Code LM fast path ----
+    if (this.activeBackendType === 'vscodeLM' && this.vscodeLmBackend) {
+      try {
+        return await this.vscodeLmBackend.embed(text);
+      } catch (error: any) {
+        // Runtime fallback to HF when in auto mode
+        if (await this.shouldFallbackToHuggingFace(error)) {
+          this.logger.warn(`VS Code LM embed failed at runtime, falling back to HuggingFace: ${error?.message}`);
+          vscode.window.showWarningMessage(
+            `RAGnarōk: VS Code LM embedding failed — falling back to HuggingFace. Reason: ${error?.message ?? error}`
+          );
+          await this.switchToHuggingFace();
+          // Fall through to HF path below
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    // ---- HuggingFace pipeline path ----
     if (!this.pipeline) {
       await this.initialize();
     }
@@ -625,12 +814,33 @@ export class EmbeddingService {
   }
 
   /**
-   * Generate embeddings for multiple texts in batch with progress reporting
+   * Generate embeddings for multiple texts in batch with progress reporting.
+   *
+   * Delegates to the active backend. Includes auto-mode runtime fallback.
    */
   public async embedBatch(
     texts: string[],
     progressCallback?: (progress: number) => void
   ): Promise<number[][]> {
+    // ---- VS Code LM fast path ----
+    if (this.activeBackendType === 'vscodeLM' && this.vscodeLmBackend) {
+      try {
+        return await this.vscodeLmBackend.embedBatch(texts, progressCallback);
+      } catch (error: any) {
+        if (await this.shouldFallbackToHuggingFace(error)) {
+          this.logger.warn(`VS Code LM embedBatch failed at runtime, falling back to HuggingFace: ${error?.message}`);
+          vscode.window.showWarningMessage(
+            `RAGnarōk: VS Code LM batch embedding failed — falling back to HuggingFace. Reason: ${error?.message ?? error}`
+          );
+          await this.switchToHuggingFace();
+          // Fall through to HF path below
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    // ---- HuggingFace pipeline path ----
     if (!this.pipeline) {
       await this.initialize();
     }
@@ -735,11 +945,15 @@ export class EmbeddingService {
   }
 
   /**
-   * Get the current model name
-   * Returns the name of the model that is currently loaded or will be loaded on next initialization.
-   * Returns the default model name if no specific model has been set.
+   * Get the current model name.
+   *
+   * When the VS Code LM backend is active, returns a descriptive string
+   * including the provider model ID.
    */
   public getCurrentModel(): string {
+    if (this.activeBackendType === 'vscodeLM' && this.vscodeLmBackend) {
+      return `vscodeLM:${this.vscodeLmBackend['modelId'] || 'auto'}`;
+    }
     return this.currentModel;
   }
 
@@ -755,6 +969,9 @@ export class EmbeddingService {
     this.currentModel = EmbeddingService.DEFAULT_MODEL;
     this.lastSuccessfulModel = null;
 
+    // Also reset backend selection so it re-resolves on next init
+    this.resetBackendSelection();
+
     this.logger.info('Embedding model cache cleared successfully');
     vscode.window.showInformationMessage('Embedding model cache cleared. Model will reload on next use.');
   }
@@ -766,7 +983,15 @@ export class EmbeddingService {
   public dispose(): void {
     this.logger.info('Disposing EmbeddingService');
 
-    // Clear pipeline
+    // Dispose VS Code LM backend if active
+    if (this.vscodeLmBackend) {
+      this.vscodeLmBackend.dispose();
+      this.vscodeLmBackend = null;
+    }
+    this.backendResolved = false;
+    this.activeBackendType = 'huggingface';
+
+    // Clear HuggingFace pipeline
     this.pipeline = null;
     // Reset to default model name for consistency
     this.currentModel = EmbeddingService.DEFAULT_MODEL;
@@ -779,5 +1004,33 @@ export class EmbeddingService {
     this.initPromise = null;
 
     this.logger.info('EmbeddingService disposed');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Runtime fallback helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Determine if we should fall back to HuggingFace after a VS Code LM failure.
+   * Only returns true when the user setting is `auto`.
+   */
+  private async shouldFallbackToHuggingFace(_error: any): Promise<boolean> {
+    const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+    const setting = config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, 'auto');
+    return setting === 'auto';
+  }
+
+  /**
+   * Switch from VS Code LM to HuggingFace at runtime.
+   * Initializes the HF pipeline if it is not already loaded.
+   */
+  private async switchToHuggingFace(): Promise<void> {
+    if (this.vscodeLmBackend) {
+      this.vscodeLmBackend.dispose();
+      this.vscodeLmBackend = null;
+    }
+    this.activeBackendType = 'huggingface';
+    // The next embed/embedBatch call will go through the HF path and
+    // lazily initialize the pipeline via the existing `if (!this.pipeline)` guard.
   }
 }

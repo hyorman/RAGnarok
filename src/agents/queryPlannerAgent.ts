@@ -145,7 +145,7 @@ Provide your analysis as valid JSON:`;
     try {
       // Get VS Code Language Model
       const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
-      const modelFamily = options.modelFamily || config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o');
+      const modelFamily = options.modelFamily || config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o-mini');
 
       let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: modelFamily });
 

@@ -31,6 +31,27 @@ Why install?
 - **Offline & private**: Keep embeddings and inference on-device for privacy and compliance.
 - **Default model included**: Ships with `Xenova/all-MiniLM-L6-v2` by default for fast, 384-dimension embeddings.
 
+### 🔌 **Pluggable Embedding Backends**
+
+RAGnarōk supports multiple embedding providers via a pluggable backend system:
+
+| Mode | Setting value | Description |
+|------|--------------|-------------|
+| **Auto** | `auto` (default) | Tries VS Code LM embeddings first; falls back to HuggingFace when unavailable |
+| **VS Code LM** | `vscodeLM` | Uses the proposed `vscode.lm.computeEmbeddings` API (requires a registered provider such as GitHub Copilot) |
+| **HuggingFace** | `huggingface` | Local Transformers.js ONNX/WASM inference — fully offline, no external services |
+
+**Configuration:**
+- `ragnarok.embeddingBackend` — select `auto`, `vscodeLM`, or `huggingface`
+- `ragnarok.embeddingVscodeModelId` — (optional) specific VS Code LM model ID; leave blank to auto-select
+
+**Prerequisites for VS Code LM embeddings:**
+- VS Code Insiders (or any build that supports the proposed embeddings API)
+- `"enabledApiProposals": ["embeddings"]` in the extension manifest (already configured)
+- An embeddings provider registered at runtime (e.g., GitHub Copilot with embeddings support)
+
+> ⚠️ **Known limitation:** The `vscode.lm.computeEmbeddings` API is a *proposed API* and may not be available on stable VS Code builds. When using `auto` mode, the extension silently falls back to HuggingFace if the API is unavailable.
+
 ### 🧠 **Agentic RAG with Query Planning**
 
 - **Intelligent Query Decomposition**: Automatically breaks complex queries into sub-queries
@@ -528,7 +549,21 @@ Complete: Documents ready for retrieval
 
 ---
 
-## 🔬 Testing
+## � Troubleshooting
+
+### Embedding Backend Issues
+
+| Problem | Solution |
+|---------|----------|
+| **"No embeddings provider registered"** | Ensure a provider (e.g., GitHub Copilot) is installed and active. Set `ragnarok.embeddingBackend` to `huggingface` as a workaround. |
+| **"Proposed API not enabled"** | The `vscode.lm.computeEmbeddings` API requires `"enabledApiProposals": ["embeddings"]` in the extension manifest. Use VS Code Insiders for full support. |
+| **VS Code LM embedding dimension mismatch** | Switching backends may change the embedding dimension. Existing vector stores need re-indexing after backend changes. Delete the topic and re-add documents. |
+| **Fallback warnings appearing frequently** | If you see repeated "falling back to HuggingFace" messages, either set `ragnarok.embeddingBackend` to `huggingface` explicitly, or check that your VS Code LM provider is running. |
+| **Model not found in VS Code LM** | Verify the model ID in `ragnarok.embeddingVscodeModelId` matches one listed in `vscode.lm.embeddingModels`. Leave blank to auto-select. |
+
+---
+
+## �🔬 Testing
 
 ### Run Tests
 

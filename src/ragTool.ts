@@ -301,9 +301,9 @@ export class RAGTool {
       enableIterativeRefinement: config.get<boolean>(CONFIG.AGENTIC_ITERATIVE_REFINEMENT, true),
       maxIterations: config.get<number>(CONFIG.AGENTIC_MAX_ITERATIONS, 3),
       confidenceThreshold: config.get<number>(CONFIG.AGENTIC_CONFIDENCE_THRESHOLD, 0.7),
-      useLLM: config.get<boolean>(CONFIG.AGENTIC_USE_LLM, false),
+      useLLM: config.get<boolean>(CONFIG.AGENTIC_USE_LLM, true),
       retrievalStrategy: retrievalStrategy,
-      modelFamily: config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o'),
+      modelFamily: config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o-mini'),
     };
   }
 

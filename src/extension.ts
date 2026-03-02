@@ -181,6 +181,52 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         }
 
+        // Handle Embedding Backend or VS Code Model ID change
+        const embeddingBackendSetting = `${CONFIG.ROOT}.${CONFIG.EMBEDDING_BACKEND}`;
+        const embeddingVscodeModelSetting = `${CONFIG.ROOT}.${CONFIG.EMBEDDING_VSCODE_MODEL_ID}`;
+        if (
+          event.affectsConfiguration(embeddingBackendSetting) ||
+          event.affectsConfiguration(embeddingVscodeModelSetting)
+        ) {
+          logger.info("Embedding backend configuration changed");
+
+          try {
+            // Reset backend so it re-resolves from updated config
+            embeddingService.resetBackendSelection();
+
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: `RAGnarōk: Switching embedding backend...`,
+              },
+              async (progress) => {
+                progress.report({ message: "Resolving backend..." });
+                await embeddingService.initialize();
+
+                progress.report({ message: "Reinitializing services..." });
+                await topicManager.reinitializeWithNewModel();
+              }
+            );
+
+            const model = embeddingService.getCurrentModel();
+            const backend = embeddingService.getActiveBackendType();
+            logger.info(`Embedding backend switched: ${backend} (model: ${model})`);
+            vscode.window.showInformationMessage(
+              `RAGnarōk: Embedding backend set to "${backend}" (model: ${model})`
+            );
+            treeDataProvider.refresh();
+          } catch (error) {
+            const errorMessage =
+              error instanceof Error ? error.message : String(error);
+            logger.error("Failed to switch embedding backend", {
+              error: errorMessage,
+            });
+            vscode.window.showErrorMessage(
+              `RAGnarōk: Failed to switch embedding backend: ${errorMessage}`
+            );
+          }
+        }
+
         // Handle Common Database Path change
         if (event.affectsConfiguration(`${CONFIG.ROOT}.${CONFIG.COMMON_DATABASE_PATH}`)) {
           logger.info("Common database path configuration changed");

@@ -1,7 +1,11 @@
 /**
- * LangChain-compatible wrapper for our existing EmbeddingService
- * This allows us to use our HuggingFace Transformers.js embeddings
- * with LangChain's vector stores and other components
+ * LangChain-compatible wrapper for EmbeddingService
+ *
+ * This allows us to use our pluggable embedding backends (HuggingFace or
+ * VS Code LM) with LangChain's vector stores and other components.
+ *
+ * The wrapper is backend-agnostic — it delegates to EmbeddingService which
+ * internally routes to the configured backend (see embeddingBackend.ts).
  */
 
 import { Embeddings, EmbeddingsParams } from "@langchain/core/embeddings";
@@ -9,8 +13,8 @@ import { EmbeddingService } from "./embeddingService";
 import { Logger } from "../utils/logger";
 
 /**
- * LangChain Embeddings implementation using our existing EmbeddingService
- * which uses @huggingface/transformers (Transformers.js) for local embeddings
+ * LangChain Embeddings implementation backed by EmbeddingService.
+ * Works with any backend (HuggingFace Transformers.js or VS Code LM).
  */
 export class TransformersEmbeddings extends Embeddings {
   private embeddingService: EmbeddingService;

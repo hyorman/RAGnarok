@@ -25,6 +25,9 @@ export const CONFIG = {
   CHUNK_OVERLAP: "chunkOverlap",
   LOG_LEVEL: "logLevel",
   RETRIEVAL_STRATEGY: "retrievalStrategy",
+  // Embedding backend configuration
+  EMBEDDING_BACKEND: "embeddingBackend",
+  EMBEDDING_VSCODE_MODEL_ID: "embeddingVscodeModelId",
   // Agentic RAG configuration
   USE_AGENTIC_MODE: "useAgenticMode",
   AGENTIC_MAX_ITERATIONS: "agenticMaxIterations",
@@ -57,6 +60,10 @@ export const COMMANDS = {
   CLEAR_MODEL_CACHE: "ragnarok.clearModelCache",
   CLEAR_DATABASE: "ragnarok.clearDatabase",
   SET_EMBEDDING_MODEL: "ragnarok.setEmbeddingModel",
+  SELECT_VSCODE_EMBEDDING_MODEL: "ragnarok.selectVscodeEmbeddingModel",
+  SELECT_HF_EMBEDDING_MODEL: "ragnarok.selectHfEmbeddingModel",
+  SELECT_LLM_MODEL: "ragnarok.selectLLMModel",
+  EDIT_CONFIG_ITEM: "ragnarok.editConfigItem",
   // GitHub token management
   ADD_GITHUB_TOKEN: "ragnarok.addGithubToken",
   LIST_GITHUB_TOKENS: "ragnarok.listGithubTokens",
@@ -86,4 +93,25 @@ export const STATE = {
  */
 export const TOOLS = {
   RAG_QUERY: "ragQuery",
+} as const;
+
+/**
+ * Tree-view config item keys — used in both topicTreeView.ts and commands.ts
+ * to avoid duplicated hardcoded strings.
+ */
+export const TREE_CONFIG_KEY = {
+  EMBEDDING_MODEL: "embedding-model",
+  EMBEDDING_BACKEND: "embedding-backend",
+  RETRIEVAL_STRATEGY: "retrieval-strategy",
+  TOP_K: "top-k",
+  CHUNK_SIZE: "chunk-size",
+  CHUNK_OVERLAP: "chunk-overlap",
+  LOG_LEVEL: "log-level",
+  AGENTIC_MODE: "agentic-mode",
+  USE_LLM: "use-llm",
+  LLM_MODEL: "llm-model",
+  ITERATIVE_REFINEMENT: "iterative-refinement",
+  INCLUDE_WORKSPACE_CONTEXT: "include-workspace-context",
+  MAX_ITERATIONS: "max-iterations",
+  CONFIDENCE_THRESHOLD: "confidence-threshold",
 } as const;

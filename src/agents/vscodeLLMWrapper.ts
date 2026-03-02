@@ -290,7 +290,7 @@ export function createVSCodeLLM(params: VSCodeLLMParams = {}): VSCodeLLM {
  */
 export async function getConfiguredLLM(): Promise<VSCodeLLM> {
   const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
-  const modelFamily = config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o');
+  const modelFamily = config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o-mini');
 
   return new VSCodeLLM({
     modelFamily,
