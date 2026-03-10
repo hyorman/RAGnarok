@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Malformed HTML Test</title>
+  <style>body { color: red; font-size: 14px; }</style>
+</head>
+<body>
+  <h1>Unclosed heading
+  <p>Paragraph with <strong>unclosed bold
+  <div>Nested <span>content</div></span>
+  <!-- HTML comment with -- dashes inside -- -->
+  <p>Content after comment</p>
+  <SCRIPT>var x = "should be removed";</SCRIPT>
+  <p>Mixed case <B>bold</b> tags</p>
+  <p>Numeric entity: &#65; &#x41;</p>
+</body>
+</html>

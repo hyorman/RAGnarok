@@ -5,6 +5,8 @@
 import { expect } from 'chai';
 import { Document as LangChainDocument } from '@langchain/core/documents';
 import { EnsembleRetrieverWrapper } from '../../src/retrievers/ensembleRetriever';
+import { VectorRetriever } from '../../src/retrievers/vectorRetriever';
+import { KeywordRetriever } from '../../src/retrievers/keywordRetriever';
 
 // Mock vector store
 class MockVectorStore {
@@ -27,7 +29,7 @@ class MockVectorStore {
     k: number
   ): Promise<[LangChainDocument, number][]> {
     // Mock with decreasing scores
-    return this.documents.slice(0, k).map((doc, i) => [doc, 1 - i * 0.1]);
+    return this.documents.slice(0, k).map((doc, i) => [doc, i * 0.1]);
   }
 
   asRetriever(options: { k: number }) {
@@ -64,35 +66,37 @@ describe('EnsembleRetriever', () => {
   ];
 
   let vectorStore: any;
+  let vectorRetriever: VectorRetriever;
+  let keywordRetriever: KeywordRetriever;
   let retriever: EnsembleRetrieverWrapper;
 
   beforeEach(() => {
     vectorStore = new MockVectorStore(testDocuments);
-    retriever = new EnsembleRetrieverWrapper(vectorStore as any);
+    vectorRetriever = new VectorRetriever(vectorStore as any);
+    keywordRetriever = new KeywordRetriever();
+    retriever = new EnsembleRetrieverWrapper(vectorRetriever, keywordRetriever);
   });
 
   describe('Initialization', () => {
     it('should initialize with provided documents', async () => {
-      await retriever.initialize(testDocuments);
+      await keywordRetriever.initialize(testDocuments);
       expect(retriever.isInitialized()).to.be.true;
       expect(retriever.getDocumentCount()).to.equal(testDocuments.length);
     });
 
-    it('should load documents from vector store when none provided', async () => {
-      await retriever.initialize([]);
-      expect(retriever.isInitialized()).to.be.true;
-      expect(retriever.getDocumentCount()).to.equal(testDocuments.length);
+    it('should report not initialized before keyword init', () => {
+      expect(retriever.isInitialized()).to.be.false;
     });
 
     it('should report correct document count', async () => {
-      await retriever.initialize(testDocuments);
+      await keywordRetriever.initialize(testDocuments);
       expect(retriever.getDocumentCount()).to.equal(5);
     });
   });
 
   describe('Search', () => {
     beforeEach(async () => {
-      await retriever.initialize(testDocuments);
+      await keywordRetriever.initialize(testDocuments);
     });
 
     it('should perform ensemble search', async () => {
@@ -108,11 +112,12 @@ describe('EnsembleRetriever', () => {
       expect(results.length).to.be.at.most(2);
     });
 
-    it('should throw error if not initialized', async () => {
-      const uninitializedRetriever = new EnsembleRetrieverWrapper(vectorStore as any);
+    it('should throw error if keyword retriever not initialized', async () => {
+      const uninitKr = new KeywordRetriever();
+      const uninitRetriever = new EnsembleRetrieverWrapper(vectorRetriever, uninitKr);
 
       try {
-        await uninitializedRetriever.search('test');
+        await uninitRetriever.search('test');
         expect.fail('Should have thrown error');
       } catch (error: any) {
         expect(error.message).to.include('not initialized');
@@ -133,25 +138,26 @@ describe('EnsembleRetriever', () => {
 
   describe('Vector Store Management', () => {
     beforeEach(async () => {
-      await retriever.initialize(testDocuments);
+      await keywordRetriever.initialize(testDocuments);
     });
 
-    it('should allow updating vector store', () => {
+    it('should create new ensemble with different vector store', () => {
       const newVectorStore = new MockVectorStore(testDocuments);
-      retriever.setVectorStore(newVectorStore as any);
-      expect(retriever.isInitialized()).to.be.false; // Should require re-init
+      const newVectorRetriever = new VectorRetriever(newVectorStore as any);
+      const newRetriever = new EnsembleRetrieverWrapper(newVectorRetriever, keywordRetriever);
+      expect(newRetriever.isInitialized()).to.be.true;
     });
 
-    it('should allow refreshing', async () => {
+    it('should reflect keyword retriever refresh', async () => {
       expect(retriever.isInitialized()).to.be.true;
-      await retriever.refresh();
+      await keywordRetriever.refresh(testDocuments);
       expect(retriever.isInitialized()).to.be.true;
     });
   });
 
   describe('Result Format', () => {
     beforeEach(async () => {
-      await retriever.initialize(testDocuments);
+      await keywordRetriever.initialize(testDocuments);
     });
 
     it('should return documents in correct format', async () => {
@@ -172,7 +178,7 @@ describe('EnsembleRetriever', () => {
 
   describe('Performance', () => {
     beforeEach(async () => {
-      await retriever.initialize(testDocuments);
+      await keywordRetriever.initialize(testDocuments);
     });
 
     it('should complete search in reasonable time', async () => {

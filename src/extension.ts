@@ -26,6 +26,14 @@ export async function activate(context: vscode.ExtensionContext) {
     // Initialize embedding service instance (will load model on first use)
     const embeddingService = EmbeddingService.getInstance();
 
+    // Start model initialization in the background — don't block activation
+    embeddingService.initialize().then(() => {
+      logger.info('Embedding model initialized successfully');
+    }).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('Embedding model initialization deferred', { error: msg });
+    });
+
     // Initialize GitHub token manager
     GitHubTokenManager.initialize(context);
     logger.info("GitHub token manager initialized");
@@ -124,15 +132,21 @@ export async function activate(context: vscode.ExtensionContext) {
         const localModelPathSetting = `${CONFIG.ROOT}.${CONFIG.LOCAL_MODEL_PATH}`;
         const treeViewConfigPaths = [
           `${CONFIG.ROOT}.${CONFIG.RETRIEVAL_STRATEGY}`,
-          `${CONFIG.ROOT}.${CONFIG.AGENTIC_LLM_MODEL}`,
-          `${CONFIG.ROOT}.${CONFIG.AGENTIC_MAX_ITERATIONS}`,
-          `${CONFIG.ROOT}.${CONFIG.AGENTIC_CONFIDENCE_THRESHOLD}`,
-          `${CONFIG.ROOT}.${CONFIG.AGENTIC_ITERATIVE_REFINEMENT}`,
+          `${CONFIG.ROOT}.${CONFIG.LLM_MODEL}`,
+          `${CONFIG.ROOT}.${CONFIG.MAX_ITERATIONS}`,
+          `${CONFIG.ROOT}.${CONFIG.CONFIDENCE_THRESHOLD}`,
         ];
 
         if (
           event.affectsConfiguration(localModelPathSetting)
         ) {
+          if (embeddingService.isProcessing) {
+            vscode.window.showWarningMessage(
+              "RAGnarōk: Cannot change embedding model while ingestion is in progress. Please wait for it to finish."
+            );
+            return;
+          }
+
           logger.info("Embedding local model path changed");
 
           try {
@@ -182,6 +196,13 @@ export async function activate(context: vscode.ExtensionContext) {
           event.affectsConfiguration(embeddingBackendSetting) ||
           event.affectsConfiguration(embeddingVscodeModelSetting)
         ) {
+          if (embeddingService.isProcessing) {
+            vscode.window.showWarningMessage(
+              "RAGnarōk: Cannot change embedding backend while ingestion is in progress. Please wait for it to finish."
+            );
+            return;
+          }
+
           logger.info("Embedding backend configuration changed");
 
           try {

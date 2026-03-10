@@ -20,6 +20,7 @@ export class TransformersEmbeddings extends Embeddings {
   private embeddingService: EmbeddingService;
   private modelName?: string;
   private logger: Logger;
+  private initialized = false;
 
   constructor(fields?: EmbeddingsParams & { modelName?: string }) {
     super(fields ?? {});
@@ -31,9 +32,15 @@ export class TransformersEmbeddings extends Embeddings {
   /**
    * Embed a list of documents (batch operation)
    */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.embeddingService.initialize(this.modelName);
+      this.initialized = true;
+    }
+  }
+
   async embedDocuments(documents: string[]): Promise<number[][]> {
-    // Ensure the embedding service is initialized with the configured model
-    await this.embeddingService.initialize(this.modelName);
+    await this.ensureInitialized();
 
     // Use the batch embedding method for efficiency
     return await this.embeddingService.embedBatch(documents);
@@ -43,8 +50,7 @@ export class TransformersEmbeddings extends Embeddings {
    * Embed a single query text
    */
   async embedQuery(query: string): Promise<number[]> {
-    // Ensure the embedding service is initialized with the configured model
-    await this.embeddingService.initialize(this.modelName);
+    await this.ensureInitialized();
 
     this.logger.debug("Embedding query", {
       model: this.modelName || "default",

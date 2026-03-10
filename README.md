@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./assets/icon.png" alt="RAGnarok icon" title="RAGnarok" width="120" height="120" />
-  <h1>RAGnarōk — Local, Agentic Knowledge RAG for VS Code</h1>
+  <h1>RAGnarōk <br/>Local, Agentic Knowledge RAG for VS Code</h2>
   <p><strong>Find precise answers from your files and repos using local embeddings, smart query planning, and embedded vector search.</strong></p>
 </div>
 
@@ -50,7 +50,7 @@ RAGnarōk supports multiple embedding providers via a pluggable backend system:
 - `"enabledApiProposals": ["embeddings"]` in the extension manifest (already configured)
 - An embeddings provider registered at runtime (e.g., GitHub Copilot with embeddings support)
 
-> ⚠️ **Known limitation:** The `vscode.lm.computeEmbeddings` API is a *proposed API* and may not be available on stable VS Code builds. When using `auto` mode, the extension silently falls back to HuggingFace if the API is unavailable.
+> ⚠️ **Known limitation:** The `vscode.lm.computeEmbeddings` API is a *proposed API* and may not be available on stable VS Code builds. When using `auto` mode, the extension shows user-visible warning/info notifications and falls back to HuggingFace if the API is unavailable.
 
 ### 🔧 Enable VS Code LM embeddings (proposed API)
 
@@ -364,24 +364,21 @@ Reloads the topic tree view. Useful after importing topics or external changes.
 
 **Note**: GitHub access tokens are now managed via secure Secret Storage, not settings.json. See [GitHub Token Management](#github-token-management) section.
 
-### Agentic Mode Settings
+### Query Settings
 
 ```json
 {
   // Maximum refinement iterations (1-10)
-  "ragnarok.agenticMaxIterations": 3,
+  "ragnarok.maxIterations": 3,
 
   // Confidence threshold (0-1) for stopping iteration
-  "ragnarok.agenticConfidenceThreshold": 0.7,
-
-  // Enable iterative refinement
-  "ragnarok.agenticIterativeRefinement": true,
+  "ragnarok.confidenceThreshold": 0.7,
 
   // LLM model: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
-  "ragnarok.agenticLLMModel": "gpt-4o",
+  "ragnarok.llmModel": "gpt-4o",
 
   // Include workspace context (selected code, active file, imports, symbols)
-  "ragnarok.agenticIncludeWorkspaceContext": true
+  "ragnarok.includeWorkspaceContext": true
 }
 ```
 
@@ -561,7 +558,7 @@ Complete: Documents ready for retrieval
 
 ---
 
-## � Troubleshooting
+## 🛠️ Troubleshooting
 
 ### Embedding Backend Issues
 
@@ -575,7 +572,7 @@ Complete: Documents ready for retrieval
 
 ---
 
-## �🔬 Testing
+## 🧪 Testing
 
 ### Run Tests
 

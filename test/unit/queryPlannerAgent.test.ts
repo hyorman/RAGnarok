@@ -399,6 +399,33 @@ describe('QueryPlannerAgent', function() {
       expect(plan2.subQueries[0].topK).to.equal(10);
     });
 
+    it('should build distinct cache keys for all plan-affecting options', function() {
+      const query = 'Python and JavaScript and TypeScript';
+      const baseKey = (planner as any).buildCacheKey(query, {
+        modelFamily: 'gpt-4o-mini',
+        maxSubQueries: 3,
+        defaultTopK: 5,
+        topicName: 'General Docs',
+        workspaceContext: 'src/index.ts',
+        minTopK: 1,
+        topKMultipliers: { high: 1.0, medium: 0.7, low: 0.5 },
+      });
+
+      const changedKeys = [
+        (planner as any).buildCacheKey(query, { modelFamily: 'gpt-4o' }),
+        (planner as any).buildCacheKey(query, { maxSubQueries: 2 }),
+        (planner as any).buildCacheKey(query, { defaultTopK: 7 }),
+        (planner as any).buildCacheKey(query, { topicName: 'API Docs' }),
+        (planner as any).buildCacheKey(query, { workspaceContext: 'src/server.ts' }),
+        (planner as any).buildCacheKey(query, { minTopK: 2 }),
+        (planner as any).buildCacheKey(query, { topKMultipliers: { high: 1.0, medium: 0.5, low: 0.25 } }),
+      ];
+
+      changedKeys.forEach((key: string) => {
+        expect(key).to.not.equal(baseKey);
+      });
+    });
+
     it('should clear cache when clearCache is called', async function() {
       await planner.createPlan('cached query', { defaultTopK: 5 });
       planner.clearCache();
@@ -443,14 +470,27 @@ describe('QueryPlannerAgent', function() {
       const plan = await planner.createPlan('difference between SQL and NoSQL');
 
       expect(plan.complexity).to.equal('complex');
-      expect(plan.subQueries.length).to.be.at.least(1);
+      expect(plan.subQueries).to.have.lengthOf(2);
+      expect(plan.subQueries[0].query).to.equal('SQL');
+      expect(plan.subQueries[1].query).to.equal('NoSQL');
     });
 
     it('should handle "compare X to Y" pattern', async function() {
       const plan = await planner.createPlan('compare React to Vue');
 
       expect(plan.complexity).to.equal('complex');
-      expect(plan.subQueries.length).to.be.at.least(1);
+      expect(plan.subQueries).to.have.lengthOf(2);
+      expect(plan.subQueries[0].query).to.equal('React');
+      expect(plan.subQueries[1].query).to.equal('Vue');
+    });
+
+    it('should handle "compare X with Y" pattern', async function() {
+      const plan = await planner.createPlan('compare Docker with Kubernetes');
+
+      expect(plan.complexity).to.equal('complex');
+      expect(plan.subQueries).to.have.lengthOf(2);
+      expect(plan.subQueries[0].query).to.equal('Docker');
+      expect(plan.subQueries[1].query).to.equal('Kubernetes');
     });
   });
 
@@ -669,6 +709,42 @@ describe('QueryPlannerAgent', function() {
       // (both return heuristic plans, but the score may differ)
       expect(techContext).to.be.an('object');
       expect(techContext.subQueries.length).to.be.greaterThan(0);
+    });
+
+    it('should report when technical context boosting applies', function() {
+      const withBoost = (planner as any).hasTechnicalContextBoost('explain functions', {
+        topicName: 'Kubernetes API Deployment',
+      });
+      const withoutBoost = (planner as any).hasTechnicalContextBoost('explain functions', {
+        topicName: 'General Writing',
+      });
+
+      expect(withBoost).to.be.true;
+      expect(withoutBoost).to.be.false;
+    });
+  });
+
+  describe('Refinement Prompt Alignment', function() {
+    it('should advertise every supported strategy in the refinement prompt', function() {
+      const prompt = (planner as any).buildRefinementPrompt(
+        'compare React and Vue',
+        'Topic: Frontend',
+        {
+          originalQuery: 'compare React and Vue',
+          complexity: 'complex',
+          subQueries: [
+            { query: 'React', reasoning: 'Search React', topK: 5, priority: 'high' },
+            { query: 'Vue', reasoning: 'Search Vue', topK: 5, priority: 'high' },
+          ],
+          strategy: 'parallel',
+          explanation: 'Comparison query',
+        },
+      );
+
+      expect(prompt).to.include('sequential, parallel, hybrid, or priority-based');
+      expect(prompt).to.include('"strategy": "sequential" | "parallel" | "hybrid" | "priority-based"');
+      expect(prompt).to.include('Hybrid strategy');
+      expect(prompt).to.include('Priority-based strategy');
     });
   });
 

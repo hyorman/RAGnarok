@@ -26,7 +26,7 @@ describe('LanceDB Integration', function () {
     // Create temp directory for test database
     testDbPath = path.join(os.tmpdir(), `lancedb-test-${Date.now()}`);
     await fs.mkdir(testDbPath, { recursive: true });
-    
+
     tableName = 'test-table';
   });
 
@@ -77,7 +77,7 @@ describe('LanceDB Integration', function () {
       // Open existing database
       const db = await connect(testDbPath);
       const table = await db.openTable(tableName);
-      
+
       // Create vector store from existing table
       const store = new LanceDB(embeddings, { table });
 
@@ -87,7 +87,7 @@ describe('LanceDB Integration', function () {
       console.log('\n=== Search Results ===');
       console.log('Query: "programming language"');
       console.log(`Results found: ${results.length}`);
-      
+
       results.forEach((result, i) => {
         console.log(`\n${i + 1}. ${result.pageContent}`);
         console.log(`   Source: ${result.metadata.source}`);
@@ -106,7 +106,7 @@ describe('LanceDB Integration', function () {
 
       console.log('\n=== Search with Scores ===');
       console.log('Query: "web development"');
-      
+
       results.forEach(([doc, score], i) => {
         const scoreValue = typeof score === 'number' ? score.toFixed(4) : 'N/A';
         console.log(`\n${i + 1}. Score: ${scoreValue}`);
@@ -114,7 +114,7 @@ describe('LanceDB Integration', function () {
       });
 
       expect(results).to.have.length.greaterThan(0);
-      
+
       // Note: LanceDB may return undefined scores in some cases
       // The important thing is we get results
       expect(results[0][0].pageContent).to.include('JavaScript');
@@ -131,19 +131,19 @@ describe('LanceDB Integration', function () {
       console.log('\n=== Semantic Search ===');
       console.log('Query: "scripting language"');
       console.log(`Results: ${results.length}`);
-      
+
       results.forEach((result, i) => {
         console.log(`${i + 1}. ${result.pageContent}`);
       });
 
       expect(results).to.have.length.greaterThan(0);
-      
+
       // Should find JavaScript or TypeScript related content
-      const hasScriptingContent = results.some(r => 
-        r.pageContent.includes('JavaScript') || 
+      const hasScriptingContent = results.some(r =>
+        r.pageContent.includes('JavaScript') ||
         r.pageContent.includes('TypeScript')
       );
-      
+
       expect(hasScriptingContent).to.be.true;
     });
 
@@ -161,13 +161,17 @@ describe('LanceDB Integration', function () {
 
   describe('Real Yellow Book Data Search', function () {
     it('should search in actual yellow book database', async function () {
-      const realDbPath = 'C:\\Users\\haorman\\AppData\\Roaming\\Code\\User\\globalStorage\\hyorman.ragnarok\\database\\lancedb';
-      const realTableName = 'topic-1762689493819-xmetedt';
+      const realDbPath = process.env.TEST_DB_PATH;
+      if (!realDbPath) {
+        this.skip();
+        return;
+      }
+      const realTableName = process.env.TEST_TABLE_NAME || 'topic-1762689493819-xmetedt';
 
       try {
         const db = await connect(realDbPath);
         const tableNames = await db.tableNames();
-        
+
         console.log(`\n=== Real Database Check ===`);
         console.log(`Available tables: ${tableNames.join(', ')}`);
 
@@ -196,7 +200,7 @@ describe('LanceDB Integration', function () {
         });
 
         expect(results).to.have.length.greaterThan(0);
-        
+
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.log(`Could not access real database: ${message}`);

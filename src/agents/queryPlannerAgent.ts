@@ -10,6 +10,7 @@ import * as vscode from 'vscode';
 import { z } from 'zod';
 import { Logger } from '../utils/logger';
 import { CONFIG } from '../utils/constants';
+import { RetrievalStrategy } from '../utils/types';
 
 /** Default timeout for LLM requests in milliseconds */
 const LLM_TIMEOUT_MS = 15_000;
@@ -64,6 +65,9 @@ export interface QueryPlannerOptions {
    * Defaults: `{ high: 1.0, medium: 0.7, low: 0.5 }`
    */
   topKMultipliers?: { high?: number; medium?: number; low?: number };
+
+  /** Retrieval strategy — when BM25 or ensemble, sub-queries are converted to keywords */
+  retrievalStrategy?: RetrievalStrategy;
 }
 
 /**
@@ -74,6 +78,18 @@ export class QueryPlannerAgent {
   private planCache = new Map<string, { plan: QueryPlan; timestamp: number }>();
   private static readonly CACHE_TTL_MS = 60_000; // 1 minute
   private static readonly MAX_CACHE_SIZE = 50;
+  private static readonly STOP_WORDS = new Set([
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+    'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+    'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by',
+    'from', 'this', 'that', 'these', 'those', 'it', 'its', 'and', 'or', 'but', 'not',
+    'about', 'how', 'what', 'when', 'where', 'why', 'which', 'who', 'very', 'also',
+    // Query-intent words: useful for understanding the question but not for keyword matching
+    'mean', 'means', 'meaning', 'meant', 'definition', 'define', 'defined',
+    'explain', 'explained', 'explanation', 'describe', 'described', 'description',
+    'tell', 'give', 'show', 'list', 'find', 'know', 'understand',
+    'purpose', 'reason', 'example', 'examples', 'important', 'biggest', 'main',
+  ]);
 
   constructor() {
     this.logger = new Logger('QueryPlannerAgent');
@@ -82,12 +98,51 @@ export class QueryPlannerAgent {
 
   /** Build a cache key from query + relevant options */
   private buildCacheKey(query: string, options: QueryPlannerOptions): string {
+    const topKMultipliers = options.topKMultipliers
+      ? {
+          high: options.topKMultipliers.high ?? null,
+          medium: options.topKMultipliers.medium ?? null,
+          low: options.topKMultipliers.low ?? null,
+        }
+      : null;
+
     return JSON.stringify({
       q: query,
-      model: options.modelFamily,
-      maxSub: options.maxSubQueries,
-      topK: options.defaultTopK,
+      modelFamily: options.modelFamily ?? null,
+      maxSubQueries: options.maxSubQueries ?? null,
+      defaultTopK: options.defaultTopK ?? null,
+      topicName: options.topicName ?? null,
+      workspaceContext: options.workspaceContext ?? null,
+      minTopK: options.minTopK ?? null,
+      retrievalStrategy: options.retrievalStrategy ?? null,
+      topKMultipliers,
     });
+  }
+
+  /** Determine whether a query can benefit from LLM refinement. */
+  public static async canRefineWithLLM(query: string, modelFamily?: string): Promise<boolean> {
+    const trimmed = query.trim();
+    if (trimmed.length === 0 || !trimmed.includes(' ')) {
+      return false;
+    }
+
+    if (!vscode.lm || typeof vscode.lm.selectChatModels !== 'function') {
+      return false;
+    }
+
+    try {
+      const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+      const resolvedModelFamily = modelFamily || config.get<string>(CONFIG.LLM_MODEL, 'gpt-4o-mini');
+
+      let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: resolvedModelFamily });
+      if (models.length === 0) {
+        models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+      }
+
+      return models.length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /** Return a cached plan if still valid, promoting it for LRU eviction */
@@ -122,17 +177,75 @@ export class QueryPlannerAgent {
     this.planCache.clear();
   }
 
+  /** Whether the retrieval strategy relies on keyword matching (BM25) */
+  private static isKeywordStrategy(strategy?: RetrievalStrategy): boolean {
+    return strategy === RetrievalStrategy.BM25 || strategy === RetrievalStrategy.ENSEMBLE;
+  }
+
+  /**
+   * Convert a natural language sentence into a keyword query by removing stop words
+   * and keeping only meaningful terms.
+   * "What are the main personality traits of Harry Potter?" -> "personality traits Harry Potter"
+   */
+  private toKeywordQuery(sentence: string): string {
+    const words = sentence
+      .replace(/[?!.,;:'"()\[\]{}]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 1)
+      .filter(w => !QueryPlannerAgent.STOP_WORDS.has(w.toLowerCase()));
+    return words.join(' ');
+  }
+
+  /**
+   * Convert all sub-queries in a plan to keyword form for BM25-based retrieval.
+   * Preserves the original sentence in the reasoning field.
+   */
+  private convertPlanToKeywords(plan: QueryPlan): QueryPlan {
+    return {
+      ...plan,
+      subQueries: plan.subQueries.map(sq => {
+        const keywordQuery = this.toKeywordQuery(sq.query);
+        if (keywordQuery === sq.query) {
+          return sq;
+        }
+        return {
+          ...sq,
+          query: keywordQuery,
+          reasoning: `${sq.reasoning} (keyword-adapted from: "${sq.query}")`,
+        };
+      }),
+    };
+  }
+
   /**
    * Build a refinement prompt that includes the heuristic plan for LLM to improve
    */
-  private buildRefinementPrompt(query: string, context: string, heuristicPlan: QueryPlan): string {
+  private buildRefinementPrompt(query: string, context: string, heuristicPlan: QueryPlan, retrievalStrategy?: RetrievalStrategy): string {
     const heuristicJSON = JSON.stringify(heuristicPlan, null, 2);
+
+    const keywordGuidance = QueryPlannerAgent.isKeywordStrategy(retrievalStrategy) ? `
+IMPORTANT — Keyword-Based Retrieval Mode:
+The retrieval strategy is "${retrievalStrategy}" which uses BM25 keyword matching.
+Sub-queries MUST be keyword phrases containing ONLY domain-specific content words.
+Remove ALL of these:
+- Question/intent words: what, how, why, explain, define, meaning, describe, list, show
+- Articles/prepositions: the, a, an, of, in, for, with, at, by, from, to
+- Common verbs: is, are, was, were, do, does, have, has, can, will
+
+Examples:
+- "What does patronus mean?" -> "patronus"
+- "What are the main personality traits of Harry Potter?" -> "Harry Potter personality traits"
+- "Compare the backgrounds of Harry and Ron" -> "Harry Ron background family"
+- "How does the Sorting Hat work?" -> "Sorting Hat"
+Keep ONLY the specific nouns, proper names, and domain terms that would appear in the text.
+` : '';
 
     return `You are a query planning assistant for a RAG (Retrieval-Augmented Generation) system.
 Your task is to review and improve a preliminary query plan created by a heuristic planner.
 
 Use the following context to inform your sub-query decomposition and strategy selection:
 ${context}
+${keywordGuidance}
 
 User Query: "${query}"
 
@@ -143,7 +256,7 @@ Your job:
 1. Review the heuristic plan above for correctness and completeness.
 2. Improve sub-query decomposition if the heuristic missed nuances or opportunities.
 3. Correct the complexity classification if it seems wrong.
-4. Adjust the strategy (sequential vs parallel) if needed.
+4. Adjust the strategy (sequential, parallel, hybrid, or priority-based) if needed.
 5. Refine sub-query wording for better retrieval results.
 6. Add or remove sub-queries as appropriate.
 
@@ -151,8 +264,10 @@ Guidelines:
 - Simple queries (single concept): Use ONE sub-query
 - Moderate queries (2-3 concepts): Break into 2-3 focused sub-queries
 - Complex queries (comparisons, multi-part): Break into multiple specific sub-queries
-- Sequential strategy: When results of one query inform the next
-- Parallel strategy: When sub-queries are independent
+- Sequential strategy: When results of one query should inform the next or order matters
+- Parallel strategy: When sub-queries are independent and can be searched together
+- Hybrid strategy: When high-priority sub-queries can run in parallel, followed by sequential follow-up searches
+- Priority-based strategy: When some sub-queries are clearly more important and should run before lower-priority ones
 
 Response Format: Provide an improved JSON object with this exact structure:
 {
@@ -166,11 +281,57 @@ Response Format: Provide an improved JSON object with this exact structure:
       "priority": "high" | "medium" | "low"
     }
   ],
-  "strategy": "sequential" | "parallel",
+  "strategy": "sequential" | "parallel" | "hybrid" | "priority-based",
   "explanation": "brief explanation of the strategy"
 }
 
 Provide your improved plan as valid JSON:`;
+  }
+
+  private hasTechnicalContextBoost(query: string, options?: QueryPlannerOptions): boolean {
+    if (!options?.topicName && !options?.workspaceContext) {
+      return false;
+    }
+
+    const ctx = `${options.topicName || ''} ${options.workspaceContext || ''}`.toLowerCase();
+    const technicalTerms = /\b(api|code|deploy|server|database|algorithm|pipeline|config|docker|kubernetes|ci\/cd|testing)\b/i;
+    return technicalTerms.test(ctx) || technicalTerms.test(query);
+  }
+
+  private cleanComparisonConcept(value: string): string {
+    return value
+      .trim()
+      .replace(/^[\s:;,.(\[\]"'`-]+/, '')
+      .replace(/[\s:;,.)\[\]"'`!?-]+$/, '')
+      .trim();
+  }
+
+  private extractComparisonConcepts(query: string): [string, string] | null {
+    const normalized = query.trim().replace(/[.!?\s]+$/, '');
+    const patterns = [
+      /\bdifference between\s+(.+?)\s+and\s+(.+)$/i,
+      /\bcompare\s+(.+?)\s+to\s+(.+)$/i,
+      /\bcompare\s+(.+?)\s+with\s+(.+)$/i,
+      /\bcompare\s+(.+?)\s+and\s+(.+)$/i,
+      /(.+?)\s+(?:vs\.?|versus)\s+(.+)$/i,
+      /\bwhich is better:?\s+(.+?)\s+or\s+(.+)$/i,
+    ] as const;
+
+    for (const pattern of patterns) {
+      const match = normalized.match(pattern);
+      if (!match) {
+        continue;
+      }
+
+      const left = this.cleanComparisonConcept(match[1]);
+      const right = this.cleanComparisonConcept(match[2]);
+
+      if (left && right) {
+        return [left, right];
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -211,12 +372,8 @@ Provide your improved plan as valid JSON:`;
     }
 
     // Context-aware boost: technical topics get a slight bump
-    if (options?.topicName || options?.workspaceContext) {
-      const ctx = `${options.topicName || ''} ${options.workspaceContext || ''}`.toLowerCase();
-      const technicalTerms = /\b(api|code|deploy|server|database|algorithm|pipeline|config|docker|kubernetes|ci\/cd|testing)\b/i;
-      if (technicalTerms.test(ctx) || technicalTerms.test(query)) {
-        score += 0.1;
-      }
+    if (this.hasTechnicalContextBoost(query, options)) {
+      score += 0.1;
     }
 
     return Math.min(score, 1);
@@ -286,14 +443,18 @@ Provide your improved plan as valid JSON:`;
       // Step 2: Try to refine with LLM
       const refinedPlan = await this.refinePlanWithLLM(query, heuristicPlan, options);
       if (refinedPlan) {
-        this.cachePlan(cacheKey, refinedPlan);
-        return refinedPlan;
+        const finalPlan = QueryPlannerAgent.isKeywordStrategy(options.retrievalStrategy)
+          ? this.convertPlanToKeywords(refinedPlan) : refinedPlan;
+        this.cachePlan(cacheKey, finalPlan);
+        return finalPlan;
       }
 
       // If LLM not available, return the heuristic plan as-is
       this.logger.debug('Using heuristic plan directly');
-      this.cachePlan(cacheKey, heuristicPlan);
-      return heuristicPlan;
+      const finalHeuristic = QueryPlannerAgent.isKeywordStrategy(options.retrievalStrategy)
+        ? this.convertPlanToKeywords(heuristicPlan) : heuristicPlan;
+      this.cachePlan(cacheKey, finalHeuristic);
+      return finalHeuristic;
     } catch (error) {
       this.logger.error('Failed to create query plan', {
         error: error instanceof Error ? error.message : String(error),
@@ -302,7 +463,9 @@ Provide your improved plan as valid JSON:`;
       });
 
       // Fallback to heuristic plan (pure sync, won't throw)
-      return this.createHeuristicPlan(query, options);
+      const fallback = this.createHeuristicPlan(query, options);
+      return QueryPlannerAgent.isKeywordStrategy(options.retrievalStrategy)
+        ? this.convertPlanToKeywords(fallback) : fallback;
     }
   }
 
@@ -317,7 +480,7 @@ Provide your improved plan as valid JSON:`;
     try {
       // Get VS Code Language Model
       const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
-      const modelFamily = options.modelFamily || config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o-mini');
+      const modelFamily = options.modelFamily || config.get<string>(CONFIG.LLM_MODEL, 'gpt-4o-mini');
 
       let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: modelFamily });
 
@@ -338,7 +501,7 @@ Provide your improved plan as valid JSON:`;
       const context = this.buildContextString(options);
 
       // Build refinement prompt with heuristic plan
-      const prompt = this.buildRefinementPrompt(query, context, heuristicPlan);
+      const prompt = this.buildRefinementPrompt(query, context, heuristicPlan, options.retrievalStrategy);
 
       // Send request to LLM with timeout and proper cancellation
       const messages = [
@@ -375,10 +538,25 @@ Provide your improved plan as valid JSON:`;
       // Extract JSON from markdown code blocks if present (handles varied whitespace/CRLF)
       const jsonMatch = responseText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
       const jsonText = jsonMatch ? jsonMatch[1] : responseText;
-      // Strip any leading/trailing non-JSON characters as a safety net
-      const cleanedJson = jsonText.trim().replace(/^[^{]*/, '').replace(/[^}]*$/, '');
+      // Try to parse the extracted text, falling back to outermost {...} extraction
+      let cleanedJson = jsonText.trim();
+      try {
+        JSON.parse(cleanedJson);
+      } catch {
+        const match = cleanedJson.match(/\{[\s\S]*\}/);
+        if (!match) {
+          throw new Error('No valid JSON object found in LLM response');
+        }
+        cleanedJson = match[0];
+      }
 
       const parsedJSON = JSON.parse(cleanedJson);
+
+      if (typeof parsedJSON !== 'object' || parsedJSON === null) {
+        this.logger.warn('LLM returned non-object JSON');
+        return null;
+      }
+
       const plan = QueryPlanSchema.parse(parsedJSON) as QueryPlan;
 
       // Apply constraints
@@ -429,8 +607,12 @@ Provide your improved plan as valid JSON:`;
     const defaultTopK = options.defaultTopK || 5;
 
     // Use NLP-based complexity score alongside pattern checks
+    const technicalContextBoostApplied = this.hasTechnicalContextBoost(query, options);
     const complexityScore = this.analyzeComplexityScore(query, options);
-    this.logger.debug('Complexity score computed', { complexityScore });
+    this.logger.debug('Complexity score computed', {
+      complexityScore,
+      technicalContextBoostApplied,
+    });
 
     // Pattern-based indicators
     const hasComparison = /\b(vs|versus|compare|difference|between|better|worse)\b/i.test(query);
@@ -438,36 +620,29 @@ Provide your improved plan as valid JSON:`;
     const hasMultipleConcepts = query.split(/\band\b|\bor\b/i).length > 2;
     const isLongQuery = query.split(/\s+/).length > 15;
 
-    // Boost complexity if workspace context suggests a technical domain
-    const effectiveScore = Math.min(complexityScore, 1);
-    this.logger.debug('Effective complexity score', { effectiveScore, contextBoost: complexityScore !== effectiveScore });
-
     let complexity: 'simple' | 'moderate' | 'complex';
     let subQueries: SubQuery[];
     let strategy: ExecutionStrategy;
     let explanation: string;
 
-    if (hasComparison || effectiveScore >= 0.6) {
+    if (hasComparison || complexityScore >= 0.6) {
       // Comparison or high-complexity query
       complexity = 'complex';
 
-      // Try to extract the two concepts around the comparison keyword
-      const comparisonMatch = query.match(
-        /(.+?)\s+(?:vs\.?|versus|compared?\s+to|difference\s+between|between)\s+(.+)/i
-      );
+      const comparisonConcepts = hasComparison ? this.extractComparisonConcepts(query) : null;
 
-      if (comparisonMatch) {
+      if (comparisonConcepts) {
         // Clean structured extraction
         subQueries = [
           {
-            query: comparisonMatch[1].trim(),
-            reasoning: `Search for information about ${comparisonMatch[1].trim()}`,
+            query: comparisonConcepts[0],
+            reasoning: `Search for information about ${comparisonConcepts[0]}`,
             topK: defaultTopK,
             priority: 'high' as const,
           },
           {
-            query: comparisonMatch[2].trim(),
-            reasoning: `Search for information about ${comparisonMatch[2].trim()}`,
+            query: comparisonConcepts[1],
+            reasoning: `Search for information about ${comparisonConcepts[1]}`,
             topK: defaultTopK,
             priority: 'high' as const,
           },
@@ -503,7 +678,7 @@ Provide your improved plan as valid JSON:`;
       explanation = hasComparison
         ? 'Comparison query broken into parallel searches for each concept'
         : 'Complex query decomposed with hybrid strategy';
-    } else if (hasMultipleQuestions || hasMultipleConcepts || effectiveScore >= 0.35) {
+    } else if (hasMultipleQuestions || hasMultipleConcepts || complexityScore >= 0.35) {
       // Multiple concepts - moderate complexity
       complexity = 'moderate';
 
@@ -528,14 +703,9 @@ Provide your improved plan as valid JSON:`;
       strategy = 'sequential';
 
       // Extract top keywords by filtering out stop words
-      const stopWords = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
-        'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
-        'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by',
-        'from', 'this', 'that', 'these', 'those', 'it', 'its', 'and', 'or', 'but', 'not',
-        'about', 'how', 'what', 'when', 'where', 'why', 'which', 'who', 'very', 'also']);
       const keywords = query.split(/\s+/)
         .map(w => w.replace(/[^a-zA-Z0-9]/g, '').toLowerCase())
-        .filter(w => w.length > 2 && !stopWords.has(w));
+        .filter(w => w.length > 2 && !QueryPlannerAgent.STOP_WORDS.has(w));
 
       // Use the full query as primary, plus a keyword-focused sub-query if useful
       subQueries = [
@@ -606,7 +776,8 @@ Provide your improved plan as valid JSON:`;
       complexity: plan.complexity,
       subQueryCount: plan.subQueries.length,
       strategy: plan.strategy,
-      complexityScore: effectiveScore,
+      complexityScore,
+      technicalContextBoostApplied,
     });
 
     return plan;
@@ -621,11 +792,11 @@ Provide your improved plan as valid JSON:`;
     const parts: string[] = [];
 
     if (options.topicName) {
-      parts.push(`Topic: ${options.topicName}`);
+      parts.push(`Topic: ${JSON.stringify(options.topicName)}`);
     }
 
     if (options.workspaceContext) {
-      parts.push(`Workspace Context: ${options.workspaceContext}`);
+      parts.push(`Workspace context: ${JSON.stringify(options.workspaceContext)}`);
     }
 
     if (parts.length === 0) {

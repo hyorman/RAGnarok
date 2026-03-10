@@ -151,6 +151,8 @@ export class DocumentPipeline {
     const startTime = Date.now();
     const errors: string[] = [];
 
+    this.embeddingService.setProcessing(true);
+
     this.logger.info("Starting document pipeline", {
       fileCount: filePaths.length,
       topicId,
@@ -347,6 +349,8 @@ export class DocumentPipeline {
       result.metadata.totalTime = Date.now() - startTime;
 
       return result;
+    } finally {
+      this.embeddingService.setProcessing(false);
     }
   }
 

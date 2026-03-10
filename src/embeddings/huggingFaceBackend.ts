@@ -34,6 +34,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
   private lastSuccessfulModel: string | null = null;
   private initMutex: Mutex = new Mutex();
   private initPromise: Promise<void> | null = null;
+  private initError: Error | null = null;
   private logger: Logger;
   private transformers: TransformersModule | null = null;
   private dimension: number | null = null;
@@ -136,6 +137,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     try {
       const embeddings: number[][] = [];
       const batchSize = 1000;
+      let processedCount = 0;
 
       for (let i = 0; i < texts.length; i += batchSize) {
         const batch = texts.slice(i, i + batchSize);
@@ -156,9 +158,10 @@ export class HuggingFaceBackend implements EmbeddingBackend {
 
         const batchEmbeddings = await Promise.all(batchPromises);
         embeddings.push(...batchEmbeddings);
+        processedCount += batchEmbeddings.length;
 
         if (progressCallback) {
-          progressCallback(embeddings.length / texts.length);
+          progressCallback(Math.min(1.0, processedCount / texts.length));
         }
 
         if (i + batchSize < texts.length) {
@@ -168,6 +171,17 @@ export class HuggingFaceBackend implements EmbeddingBackend {
 
       if (embeddings.length > 0) {
         this.dimension = embeddings[0].length;
+      }
+
+      if (embeddings.length > 1) {
+        const expectedDim = embeddings[0].length;
+        for (let i = 1; i < embeddings.length; i++) {
+          if (embeddings[i].length !== expectedDim) {
+            throw new Error(
+              `Inconsistent embedding dimensions: expected ${expectedDim}, got ${embeddings[i].length} at index ${i}`
+            );
+          }
+        }
       }
 
       this.logger.debug(`Successfully generated ${embeddings.length} embeddings`);
@@ -212,6 +226,10 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     }
 
     await this.initMutex.runExclusive(async () => {
+      if (this.initError) {
+        throw this.initError;
+      }
+
       if (this.pipeline && this.currentModel === targetModel) {
         this.logger.debug(`Model ${targetModel} initialized while waiting for lock`);
         return;
@@ -232,8 +250,9 @@ export class HuggingFaceBackend implements EmbeddingBackend {
         await this.initPromise;
         this.logger.info(`Successfully initialized model: ${targetModel}`);
       } catch (error) {
+        this.initError = error instanceof Error ? error : new Error(String(error));
         this.logger.error(`Failed to initialize model: ${targetModel}`, error);
-        throw error;
+        throw this.initError;
       } finally {
         this.initPromise = null;
       }
@@ -318,7 +337,14 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     }
 
     this.transformers = await import('@huggingface/transformers');
-    const { env } = this.transformers;
+    this.configureTransformersEnvironment(this.transformers);
+
+    this.logger.info('HuggingFaceBackend configured: WASM backend (ONNX)');
+    return this.transformers;
+  }
+
+  private configureTransformersEnvironment(transformers: TransformersModule): void {
+    const { env } = transformers;
 
     env.allowLocalModels = true;
     env.allowRemoteModels = true;
@@ -338,8 +364,16 @@ export class HuggingFaceBackend implements EmbeddingBackend {
       this.logger.info(`Transformers env.localModelPath set to ${localModelPath}`);
     }
 
-    this.logger.info('HuggingFaceBackend configured: WASM backend (ONNX)');
-    return this.transformers;
+    const cacheDir = typeof env.cacheDir === 'string' && env.cacheDir.trim().length > 0
+      ? env.cacheDir
+      : null;
+    this.modelRegistry.setTransformersCacheDir(cacheDir);
+
+    if (cacheDir) {
+      this.logger.info(`Transformers env.cacheDir set to ${cacheDir}`);
+    } else {
+      this.logger.debug('Transformers env.cacheDir unavailable; downloaded-model detection may be incomplete');
+    }
   }
 
   // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
   "name": "ragnarok",
   "displayName": "RAGnarōk - Local RAG for Copilot",
   "description": "Retrieval-Augmented Generation extension for VSCode with local sentence transformers and semantic chunking",
-  "version": "0.2.11",
+  "version": "0.3.0",
   "publisher": "hyorman",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -69,7 +69,7 @@
         },
         "ragnarok.chunkSize": {
           "type": "number",
-          "default": 512,
+          "default": 1000,
           "description": "Maximum size of text chunks for embedding (in characters)",
           "minimum": 100,
           "maximum": 2000,
@@ -77,7 +77,7 @@
         },
         "ragnarok.chunkOverlap": {
           "type": "number",
-          "default": 50,
+          "default": 200,
           "description": "Overlap between chunks (in characters)",
           "minimum": 0,
           "maximum": 500,
@@ -104,7 +104,7 @@
         "ragnarok.retrievalStrategy": {
           "type": "string",
           "default": "hybrid",
-          "markdownDescription": "**Retrieval strategy** for RAG queries (applies to both simple and agentic modes):\n\n- **hybrid** (recommended): 70% semantic + 30% keyword\n- **vector**: Pure semantic similarity\n- **ensemble**: Advanced RRF fusion of vector + BM25 (slower, more accurate)\n- **bm25**: Pure keyword search with BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
+          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): 70% semantic + 30% keyword\n- **vector**: Pure semantic similarity\n- **ensemble**: Advanced RRF fusion of vector + BM25 (slower, more accurate)\n- **bm25**: Pure keyword search with BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
           "enum": [
             "vector",
             "hybrid",
@@ -117,47 +117,41 @@
             "Ensemble: Uses Reciprocal Rank Fusion with BM25 (most accurate, higher memory)",
             "BM25: Pure keyword search (Okapi BM25 algorithm, no embeddings needed)"
           ],
-          "order": 9
+          "order": 7
         },
-        "ragnarok.agenticMaxIterations": {
+        "ragnarok.maxIterations": {
           "type": "number",
           "default": 3,
-          "markdownDescription": "Maximum retrieval iterations in agentic mode. Higher = more thorough but slower.\n\n⚠️ _Only applies when Agentic Mode is enabled_",
+          "markdownDescription": "Maximum retrieval iterations. Higher = more thorough but slower.",
           "minimum": 1,
           "maximum": 10,
-          "order": 11
+          "order": 8
         },
-        "ragnarok.agenticConfidenceThreshold": {
+        "ragnarok.confidenceThreshold": {
           "type": "number",
           "default": 0.7,
-          "markdownDescription": "Confidence threshold (0-1) to stop retrieval. Lower = more iterations, higher = stops earlier.\n\n⚠️ _Only applies when Agentic Mode is enabled_",
+          "markdownDescription": "Confidence threshold (0-1) to stop retrieval. Lower = more iterations, higher = stops earlier.",
           "minimum": 0,
           "maximum": 1,
-          "order": 12
+          "order": 9
         },
-        "ragnarok.agenticIterativeRefinement": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Generate follow-up queries to fill information gaps detected during retrieval.\n\n⚠️ _Only applies when Agentic Mode is enabled_",
-          "order": 13
-        },
-        "ragnarok.agenticLLMModel": {
+        "ragnarok.llmModel": {
           "type": "string",
           "default": "gpt-4o-mini",
-          "markdownDescription": "**LLM model family** to use for query planning and evaluation.\n\nUse **RAG: Select LLM Model** from the Command Palette to discover all available models at runtime.\n\n💡 The available models depend on your Copilot subscription and installed extensions.\n\n⚠️ _Only applies when LLM Mode is enabled_",
-          "order": 15
+          "markdownDescription": "**LLM model family** to use for query planning and evaluation.\n\nUse **RAG: Select LLM Model** from the Command Palette to discover all available models at runtime.\n\n💡 The available models depend on your Copilot subscription and installed extensions.",
+          "order": 10
         },
-        "ragnarok.agenticIncludeWorkspaceContext": {
+        "ragnarok.includeWorkspaceContext": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "**Include workspace context:** Pass selected code, active file, imports, and symbols to Copilot (like #codebase).\n\n**Includes:**\n- Selected code (max 1000 chars)\n- File imports and symbols\n- Workspace name\n\n**Privacy:** Only relative paths, no sensitive data\n\n⚠️ _Only applies when LLM Mode is enabled_",
-          "order": 16
+          "markdownDescription": "**Include workspace context:** Pass selected code, active file, imports, and symbols to Copilot (like #codebase).\n\n**Includes:**\n- Selected code (max 1000 chars)\n- File imports and symbols\n- Workspace name\n\n**Privacy:** Only relative paths, no sensitive data",
+          "order": 11
         },
         "ragnarok.commonDatabasePath": {
           "type": "string",
           "default": "",
           "markdownDescription": "**Path to a shared/common RAG database folder.** Topics from this path are read-only and cannot be deleted or modified. Useful for team-shared knowledge bases.\n\n**Format:** Absolute path to a folder containing exported RAG database files.",
-          "order": 17
+          "order": 12
         }
       }
     },
@@ -185,6 +179,12 @@
         "title": "Add Git Repository to Topic",
         "category": "RAG",
         "icon": "$(github)"
+      },
+      {
+        "command": "ragnarok.addWebUrl",
+        "title": "Add Web URL to Topic",
+        "category": "RAG",
+        "icon": "$(globe)"
       },
       {
         "command": "ragnarok.refreshTopics",
@@ -303,19 +303,24 @@
           "group": "inline@2"
         },
         {
-          "command": "ragnarok.exportTopic",
+          "command": "ragnarok.addWebUrl",
           "when": "view == ragTopics && viewItem == topic",
           "group": "inline@3"
         },
         {
-          "command": "ragnarok.deleteTopic",
+          "command": "ragnarok.exportTopic",
           "when": "view == ragTopics && viewItem == topic",
           "group": "inline@4"
         },
         {
-          "command": "ragnarok.renameTopic",
+          "command": "ragnarok.deleteTopic",
           "when": "view == ragTopics && viewItem == topic",
           "group": "inline@5"
+        },
+        {
+          "command": "ragnarok.renameTopic",
+          "when": "view == ragTopics && viewItem == topic",
+          "group": "inline@6"
         }
       ]
     },
@@ -397,14 +402,15 @@
     "clean:test": "rimraf out/test"
   },
   "devDependencies": {
-    "@types/glob": "^7.2.0",
     "@eslint/js": "^9.39.1",
     "@types/adm-zip": "^0.5.7",
     "@types/archiver": "^7.0.0",
     "@types/chai": "^5.2.3",
     "@types/cheerio": "^0.22.35",
+    "@types/glob": "^7.2.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.10.5",
+    "@types/sinon": "^21.0.0",
     "@types/vscode": "^1.105.0",
     "@typescript-eslint/eslint-plugin": "^8.46.3",
     "@typescript-eslint/parser": "^8.46.3",
@@ -415,6 +421,7 @@
     "eslint": "^9.39.1",
     "mocha": "^11.0.1",
     "rimraf": "^6.0.1",
+    "sinon": "^21.0.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.47.0"
   },
@@ -425,12 +432,12 @@
     "@langchain/core": "^1.0.0",
     "@langchain/textsplitters": "^1.0.0",
     "adm-zip": "^0.5.16",
+    "apache-arrow": "^18.1.0",
     "archiver": "^7.0.1",
     "async-mutex": "^0.5.0",
     "cheerio": "^1.1.2",
-    "ignore": "^7.0.5",
     "glob": "^10.4.5",
-    "apache-arrow": "^18.1.0",
+    "ignore": "^7.0.5",
     "pdf-parse": "^1.1.1"
   },
   "optionalDependencies": {

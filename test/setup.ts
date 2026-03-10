@@ -13,11 +13,10 @@ const ragConfig = {
   chunkOverlap: 50,
   logLevel: 'info',
   retrievalStrategy: 'hybrid',
-  agenticMaxIterations: 3,
-  agenticConfidenceThreshold: 0.7,
-  agenticIterativeRefinement: true,
-  agenticLLMModel: 'gpt-4o',
-  agenticIncludeWorkspaceContext: false,
+  maxIterations: 3,
+  confidenceThreshold: 0.7,
+  llmModel: 'gpt-4o',
+  includeWorkspaceContext: false,
 };
 
 const globalConfig = {
@@ -137,8 +136,20 @@ const mockVscode = {
   },
 
   CancellationTokenSource: class {
-    token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) };
-    cancel() {}
+    private _listeners: Array<() => void> = [];
+    token = {
+      isCancellationRequested: false,
+      onCancellationRequested: (listener: () => void) => {
+        this._listeners.push(listener);
+        return { dispose: () => {} };
+      },
+    };
+    cancel() {
+      this.token.isCancellationRequested = true;
+      for (const listener of this._listeners) {
+        listener();
+      }
+    }
     dispose() {}
   },
 

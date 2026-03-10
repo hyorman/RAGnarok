@@ -5,6 +5,7 @@
 
 import { expect } from 'chai';
 import { HybridRetriever, HybridSearchOptions } from '../../src/retrievers/hybridRetriever';
+import { VectorRetriever } from '../../src/retrievers/vectorRetriever';
 import { VectorStore } from '@langchain/core/vectorstores';
 import { Document as LangChainDocument } from '@langchain/core/documents';
 import { Embeddings } from '@langchain/core/embeddings';
@@ -119,8 +120,9 @@ describe('HybridRetriever', function() {
     vectorStore = new MockVectorStore(new MockEmbeddings());
     vectorStore.setDocuments([...testDocuments]);
 
-    // Create retriever
-    retriever = new HybridRetriever(vectorStore);
+    // Create retriever with VectorRetriever wrapper
+    const vectorRetriever = new VectorRetriever(vectorStore);
+    retriever = new HybridRetriever(vectorRetriever);
   });
 
   describe('Hybrid Search', function() {
@@ -250,26 +252,23 @@ describe('HybridRetriever', function() {
     });
   });
 
-  describe('Keyword Search', function() {
-    it('should perform keyword-only search', async function() {
+  describe('Keyword Scoring', function() {
+    it('should score documents with matching keywords', async function() {
       const query = 'JavaScript TypeScript';
-      const results = await retriever.keywordSearch(query, 3);
+      const results = await retriever.search(query, { k: 5 });
 
       expect(results).to.be.an('array');
-      expect(results.length).to.be.lessThanOrEqual(3);
+      expect(results.length).to.be.greaterThan(0);
 
-      // Keyword search should have keywordScore but no vectorScore
-      results.forEach(result => {
-        expect(result.keywordScore).to.be.at.least(0);
-        expect(result.vectorScore).to.equal(0);
-      });
+      // At least some results should have keyword scores
+      const hasKeywordMatch = results.some(result => result.keywordScore > 0);
+      expect(hasKeywordMatch).to.be.true;
     });
 
     it('should find documents with matching keywords', async function() {
       const query = 'machine learning';
-      const results = await retriever.keywordSearch(query, 5);
+      const results = await retriever.search(query, { k: 5 });
 
-      // At least some results should contain the keywords
       const hasMatch = results.some(result =>
         result.document.pageContent.toLowerCase().includes('machine') ||
         result.document.pageContent.toLowerCase().includes('learning')
@@ -278,13 +277,12 @@ describe('HybridRetriever', function() {
       expect(hasMatch).to.be.true;
     });
 
-    it('should return results sorted by keyword score', async function() {
+    it('should return results sorted by hybrid score', async function() {
       const query = 'Python data';
-      const results = await retriever.keywordSearch(query, 5);
+      const results = await retriever.search(query, { k: 5 });
 
-      // Check descending order
       for (let i = 0; i < results.length - 1; i++) {
-        expect(results[i].keywordScore).to.be.at.least(results[i + 1].keywordScore);
+        expect(results[i].score).to.be.at.least(results[i + 1].score);
       }
     });
   });
@@ -402,7 +400,7 @@ describe('HybridRetriever', function() {
   });
 
   describe('Vector Store Updates', function() {
-    it('should allow updating vector store', function() {
+    it('should work with a new VectorRetriever', async function() {
       const newStore = new MockVectorStore(new MockEmbeddings());
       newStore.setDocuments([
         new LangChainDocument({
@@ -411,17 +409,19 @@ describe('HybridRetriever', function() {
         })
       ]);
 
-      retriever.setVectorStore(newStore);
+      const newVectorRetriever = new VectorRetriever(newStore);
+      const newRetriever = new HybridRetriever(newVectorRetriever);
+      const results = await newRetriever.search('testing');
 
-      // Verify new store is used (indirectly through successful search)
-      expect(() => retriever.setVectorStore(newStore)).to.not.throw();
+      expect(results).to.be.an('array');
+      expect(results.length).to.be.greaterThan(0);
     });
   });
 
   describe('Score Calculation', function() {
     it('should calculate BM25-like scores with term frequency', async function() {
       const query = 'Python Python Python'; // Repeated term
-      const results = await retriever.keywordSearch(query, 5);
+      const results = await retriever.search(query, { k: 5 });
 
       expect(results).to.be.an('array');
 

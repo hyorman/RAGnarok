@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { EmbeddingService } from './embeddings/embeddingService';
 import { TopicManager } from './managers/topicManager';
 import { RAGAgent } from './agents/ragAgent';
+import { QueryPlannerAgent } from './agents/queryPlannerAgent';
 import { RAGQueryParams, RAGQueryResult, RetrievalStrategy } from './utils/types';
 import { TOOLS, CONFIG } from './utils/constants';
 import { WorkspaceContextProvider } from './utils/workspaceContext';
@@ -15,6 +16,7 @@ import { Logger } from './utils/logger';
 const logger = new Logger('RAGTool');
 
 export class RAGTool {
+  private static readonly MAX_CACHED_AGENTS = 10;
   private embeddingService: EmbeddingService;
   private topicManager: Promise<TopicManager>;
   private ragAgents: Map<string, RAGAgent>; // One agent per topic
@@ -116,9 +118,12 @@ export class RAGTool {
       // Build agentic options from params and config
       const agenticOptions = this.buildAgenticOptions(params, config, retrievalStrategy);
 
-      // Get workspace context (if includeWorkspaceContext is true)
-      const includeWorkspace = config.get<boolean>(CONFIG.AGENTIC_INCLUDE_WORKSPACE, true);
-      if (includeWorkspace) {
+      // Get workspace context only when LLM refinement is actually plausible
+      const includeWorkspace = config.get<boolean>(CONFIG.INCLUDE_WORKSPACE, true);
+      const canUseWorkspaceContext = includeWorkspace
+        && await QueryPlannerAgent.canRefineWithLLM(params.query, agenticOptions.modelFamily);
+
+      if (canUseWorkspaceContext) {
         const wsContext = await WorkspaceContextProvider.getContext({
           includeSelection: true,
           includeActiveFile: true,
@@ -127,6 +132,11 @@ export class RAGTool {
         });
         // Convert workspace context to string for the agent
         agenticOptions.workspaceContext = JSON.stringify(wsContext, null, 2);
+      } else if (includeWorkspace) {
+        logger.debug('Skipping workspace context collection because LLM refinement is unavailable or not expected', {
+          query: params.query.substring(0, 100),
+          modelFamily: agenticOptions.modelFamily,
+        });
       }
 
       // Execute agentic query with RAGAgent
@@ -179,9 +189,14 @@ export class RAGTool {
       logger.info(`Query completed: ${formattedResults.results.length} results, confidence: ${ragResult.avgConfidence.toFixed(2)}`);
       return formattedResults;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.error(`RAG Query Failed: ${errorMessage}`);
-      throw new Error(`RAG Query Failed: ${errorMessage}`);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`RAG Query Failed: ${rawMessage}`);
+      const sanitizedMessage = rawMessage
+        .replace(/\/[\w/.-]+/g, '<path>')
+        .replace(/[A-Z]:\\[\w\\.-]+/g, '<path>')
+        .replace(/at\s+\w+\s+\([\s\S]*?\)/g, '')
+        .trim();
+      throw new Error(`RAG Query Failed: ${sanitizedMessage}`);
     }
   }
 
@@ -199,7 +214,13 @@ export class RAGTool {
     const agent = new RAGAgent();
 
     // Get vector store from TopicManager
-    const topicManager = await this.topicManager;
+    let topicManager: TopicManager;
+    try {
+      topicManager = await this.topicManager;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`Failed to initialize TopicManager: ${msg}`);
+    }
     let vectorStore;
     try {
       vectorStore = await topicManager.getVectorStore(topicId);
@@ -210,8 +231,17 @@ export class RAGTool {
       throw new Error(`Failed to load vector store for topic: ${topicId}`);
     }
 
-    // Initialize agent with vector store
-    await agent.initialize(vectorStore);
+    // Initialize agent with vector store and document fetcher (table scan avoids dimension mismatch)
+    const documentFetcher = (limit: number) => topicManager.getAllDocuments(topicId, limit);
+    await agent.initialize(vectorStore, { documentFetcher });
+
+    // Evict oldest entry if cache is full
+    if (this.ragAgents.size >= RAGTool.MAX_CACHED_AGENTS) {
+      const firstKey = this.ragAgents.keys().next().value;
+      if (firstKey) {
+        this.ragAgents.delete(firstKey);
+      }
+    }
 
     // Cache the agent
     this.ragAgents.set(topicId, agent);
@@ -255,7 +285,6 @@ export class RAGTool {
     retrievalStrategy: RetrievalStrategy
   ): {
     topK?: number;
-    enableIterativeRefinement?: boolean;
     maxIterations?: number;
     confidenceThreshold?: number;
     retrievalStrategy?: RetrievalStrategy;
@@ -264,11 +293,10 @@ export class RAGTool {
   } {
     return {
       topK: params.topK ?? config.get<number>(CONFIG.TOP_K, 5),
-      enableIterativeRefinement: config.get<boolean>(CONFIG.AGENTIC_ITERATIVE_REFINEMENT, true),
-      maxIterations: config.get<number>(CONFIG.AGENTIC_MAX_ITERATIONS, 3),
-      confidenceThreshold: config.get<number>(CONFIG.AGENTIC_CONFIDENCE_THRESHOLD, 0.7),
+      maxIterations: config.get<number>(CONFIG.MAX_ITERATIONS, 3),
+      confidenceThreshold: config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7),
       retrievalStrategy: retrievalStrategy,
-      modelFamily: config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o-mini'),
+      modelFamily: config.get<string>(CONFIG.LLM_MODEL, 'gpt-4o-mini'),
     };
   }
 

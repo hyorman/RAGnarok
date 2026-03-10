@@ -132,28 +132,34 @@ export class VSCodeLLM extends BaseChatModel {
       // Convert LangChain messages to VS Code messages
       const vscodeMessages = this.convertToVSCodeMessages(messages);
 
-      // Create cancellation token
-      const cancellationToken = new vscode.CancellationTokenSource().token;
+      // Create cancellation token with 30s timeout
+      const cts = new vscode.CancellationTokenSource();
+      const timeout = setTimeout(() => cts.cancel(), 30_000);
 
-      // Send request
-      const response = await model.sendRequest(
-        vscodeMessages,
-        {
-          // VS Code LM API doesn't support temperature/maxTokens directly
-          // These would need to be handled differently or ignored
-        },
-        cancellationToken
-      );
-
-      // Collect response text
       let responseText = '';
-      for await (const chunk of response.text) {
-        responseText += chunk;
+      try {
+        // Send request
+        const response = await model.sendRequest(
+          vscodeMessages,
+          {
+            // VS Code LM API doesn't support temperature/maxTokens directly
+            // These would need to be handled differently or ignored
+          },
+          cts.token
+        );
 
-        // Stream to callback manager if provided
-        if (runManager) {
-          await runManager.handleLLMNewToken(chunk);
+        // Collect response text
+        for await (const chunk of response.text) {
+          responseText += chunk;
+
+          // Stream to callback manager if provided
+          if (runManager) {
+            await runManager.handleLLMNewToken(chunk);
+          }
         }
+      } finally {
+        clearTimeout(timeout);
+        cts.dispose();
       }
 
       this.logger.debug('Response generated', {
@@ -290,7 +296,7 @@ export function createVSCodeLLM(params: VSCodeLLMParams = {}): VSCodeLLM {
  */
 export async function getConfiguredLLM(): Promise<VSCodeLLM> {
   const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
-  const modelFamily = config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o-mini');
+  const modelFamily = config.get<string>(CONFIG.LLM_MODEL, 'gpt-4o-mini');
 
   return new VSCodeLLM({
     modelFamily,

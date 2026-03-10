@@ -1,113 +1,42 @@
 /**
- * Document Loader Factory - Unified document loading using LangChain loaders
- * Supports PDF, Markdown, HTML, and plain text files
+ * Document Loader Factory - Unified document loading orchestrator
+ * Delegates to specialized loader modules for each file type.
  *
  * Architecture: Factory pattern with automatic file type detection
- * Uses LangChain's battle-tested document loaders for better parsing
  */
 
 import * as path from "path";
 import * as fs from "fs/promises";
 import { Document as LangChainDocument } from "@langchain/core/documents";
-import { BaseDocumentLoader } from "@langchain/core/document_loaders/base";
-import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
-import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
-import { GithubRepoLoader } from "@langchain/community/document_loaders/web/github";
-import * as cheerio from "cheerio";
 import { Logger } from "../utils/logger";
+import { TextDocumentLoader } from "./textLoader";
+import { MarkdownDocumentLoader } from "./markdownLoader";
+import { HtmlDocumentLoader } from "./htmlLoader";
+import { PdfDocumentLoader } from "./pdfLoader";
+import { GithubDocumentLoader } from "./githubLoader";
+import { WebDocumentLoader } from "./webLoader";
+import type { DocumentLoader, LoaderOptions, LoadedDocument, SupportedFileType } from "./types";
+
+// Re-export types for backward compatibility
+export type { SupportedFileType, LoaderOptions, LoadedDocument } from "./types";
 
 /**
- * Text file loader - extends LangChain's BaseDocumentLoader
- * Note: TextLoader is not available in @langchain/community v1.0 for Node.js,
- * so we implement it following LangChain's patterns
- */
-class TextLoader extends BaseDocumentLoader {
-  constructor(private filePath: string) {
-    super();
-  }
-
-  async load(): Promise<LangChainDocument[]> {
-    const text = await fs.readFile(this.filePath, "utf-8");
-    return [
-      new LangChainDocument({
-        pageContent: text,
-        metadata: { source: this.filePath }
-      })
-    ];
-  }
-}
-
-export type SupportedFileType = "pdf" | "markdown" | "html" | "text" | "github" | "web";
-
-export interface LoaderOptions {
-  /** File path to load (or GitHub repo URL for github type) */
-  filePath: string;
-
-  /** Override automatic file type detection */
-  fileType?: SupportedFileType;
-
-  /** PDF-specific: Split pages into separate documents */
-  splitPages?: boolean;
-
-  /** PDF-specific: Separator between parsed items */
-  parsedItemSeparator?: string;
-
-  /** HTML-specific: CSS selector to extract content */
-  selector?: string;
-
-  /** GitHub-specific: Branch to load from (defaults to 'main') */
-  branch?: string;
-
-  /** GitHub-specific: Load files recursively */
-  recursive?: boolean;
-
-  /** GitHub-specific: Ignore patterns (.gitignore syntax) */
-  ignorePaths?: string[];
-
-  /** GitHub-specific: Access token for private repos (or use GITHUB_ACCESS_TOKEN env var) */
-  accessToken?: string;
-
-  /** GitHub-specific: Maximum concurrent requests (defaults to 2) */
-  maxConcurrency?: number;
-
-  /** GitHub-specific: Process submodules (requires recursive: true) */
-  processSubmodules?: boolean;
-
-  /** Additional metadata to attach to all documents */
-  additionalMetadata?: Record<string, any>;
-
-  /** Load files recursively from directories (applies when filePath is a directory). For GitHub repos, use 'recursive' option. */
-  recursiveDirectory?: boolean;
-
-  /** File extensions to include when loading directories (e.g., ['.html', '.md']). If not specified, all supported extensions are included. */
-  includeExtensions?: string[];
-}
-
-export interface LoadedDocument {
-  /** LangChain documents */
-  documents: LangChainDocument[];
-
-  /** Detected or specified file type */
-  fileType: SupportedFileType;
-
-  /** Original file name */
-  fileName: string;
-
-  /** File size in bytes */
-  fileSize: number;
-
-  /** Load time in milliseconds */
-  loadTime: number;
-}
-
-/**
- * Factory for loading documents using LangChain loaders
+ * Factory for loading documents — delegates to specialized loader modules.
  */
 export class DocumentLoaderFactory {
   private logger: Logger;
+  private loaders: Record<SupportedFileType, DocumentLoader>;
 
   constructor() {
     this.logger = new Logger("DocumentLoaderFactory");
+    this.loaders = {
+      text: new TextDocumentLoader(),
+      markdown: new MarkdownDocumentLoader(),
+      html: new HtmlDocumentLoader(),
+      pdf: new PdfDocumentLoader(),
+      github: new GithubDocumentLoader(),
+      web: new WebDocumentLoader(),
+    };
   }
 
   /**
@@ -139,31 +68,12 @@ export class DocumentLoaderFactory {
         fileSize = stats.size;
       }
 
-      // Load documents based on type
-      let documents: LangChainDocument[];
-
-      switch (fileType) {
-        case "pdf":
-          documents = await this.loadPDF(filePath, options);
-          break;
-        case "markdown":
-          documents = await this.loadMarkdown(filePath, options);
-          break;
-        case "html":
-          documents = await this.loadHTML(filePath, options);
-          break;
-        case "text":
-          documents = await this.loadText(filePath, options);
-          break;
-        case "github":
-          documents = await this.loadGitHub(filePath, options);
-          break;
-        case "web":
-          documents = await this.loadWebPage(filePath, options);
-          break;
-        default:
-          throw new Error(`Unsupported file type: ${fileType}`);
+      // Delegate to the appropriate loader
+      const loader = this.loaders[fileType];
+      if (!loader) {
+        throw new Error(`Unsupported file type: ${fileType}`);
       }
+      const documents = await loader.load(filePath, options);
 
       // Add common metadata to all documents
       const enrichedDocuments = documents.map((doc) => {
@@ -221,9 +131,9 @@ export class DocumentLoaderFactory {
     const expandedPaths: LoaderOptions[] = [];
     for (const item of filePathsOrOptions) {
       const options = typeof item === "string" ? { filePath: item } : item;
-      
-      // Check if path is a directory (skip for URLs - GitHub and Web)
-      if (!DocumentLoaderFactory.isGitHubUrl(options.filePath) && !DocumentLoaderFactory.isWebUrl(options.filePath)) {
+
+      // Check if path is a directory (skip for URLs)
+      if (!DocumentLoaderFactory.isWebUrl(options.filePath)) {
         const isDir = await this.isDirectory(options.filePath);
         if (isDir) {
           // Collect files from directory
@@ -244,7 +154,7 @@ export class DocumentLoaderFactory {
           continue;
         }
       }
-      
+
       // Not a directory (or is a URL), add as-is
       expandedPaths.push(options);
     }
@@ -330,32 +240,16 @@ export class DocumentLoaderFactory {
   }
 
   /**
-   * Check if a file is supported (includes GitHub URLs)
+   * Check if a file is supported (includes URLs)
    */
   public static isSupported(filePath: string): boolean {
-    // Check if it's a GitHub URL
-    if (this.isGitHubUrl(filePath)) {
-      return true;
-    }
-    // Check if it's a generic Web URL
+    // Check if it's a Web URL (includes GitHub URLs)
     if (this.isWebUrl(filePath)) {
       return true;
     }
     // Check file extension
     const ext = path.extname(filePath).toLowerCase();
     return this.getSupportedExtensions().includes(ext);
-  }
-
-  /**
-   * Check if a path is a GitHub repository URL (GitHub.com or Enterprise)
-   */
-  public static isGitHubUrl(url: string): boolean {
-    // Match repository URLs with pattern: https://domain/owner/repo
-    // Works for:
-    // - github.com/owner/repo
-    // - github.company.com/owner/repo (GitHub Enterprise)
-    // - any custom GitHub Enterprise domain
-    return /^https?:\/\/[a-zA-Z0-9.-]+\/[\w-]+\/[\w.-]+/.test(url);
   }
 
   /**
@@ -384,15 +278,11 @@ export class DocumentLoaderFactory {
   }
 
   /**
-   * Detect file type from extension or URL pattern
+   * Detect file type from extension or URL pattern.
+   * Note: GitHub repos are detected via explicit fileType option from addGithubRepo.
    */
   private detectFileType(filePath: string): SupportedFileType {
-    // Check if it's a GitHub URL
-    if (DocumentLoaderFactory.isGitHubUrl(filePath)) {
-      return "github";
-    }
-
-    // Check if it's a generic Web URL
+    // Check if it's a Web URL
     if (DocumentLoaderFactory.isWebUrl(filePath)) {
       return "web";
     }
@@ -418,361 +308,6 @@ export class DocumentLoaderFactory {
   }
 
   /**
-   * Load PDF document using LangChain PDFLoader
-   */
-  private async loadPDF(
-    filePath: string,
-    options: LoaderOptions
-  ): Promise<LangChainDocument[]> {
-    this.logger.debug("Loading PDF", { filePath });
-
-    const loader = new PDFLoader(filePath, {
-      // Don't split pages by default - we'll handle chunking separately
-      splitPages: options.splitPages ?? false,
-      // Use newline separator for better text extraction
-      parsedItemSeparator: options.parsedItemSeparator ?? "\n",
-    });
-
-    try {
-      const documents = await loader.load();
-
-      this.logger.debug("PDF loaded", {
-        filePath,
-        pageCount: documents.length,
-      });
-
-      return documents;
-    } catch (error) {
-      this.logger.error("Failed to load PDF", {
-        error: error instanceof Error ? error.message : String(error),
-        filePath,
-      });
-      throw new Error(
-        `Failed to load PDF: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
-
-  /**
-   * Load Markdown document using TextLoader
-   * Markdown is treated as text, structure will be preserved for semantic chunking
-   */
-  private async loadMarkdown(
-    filePath: string,
-    options: LoaderOptions
-  ): Promise<LangChainDocument[]> {
-    this.logger.debug("Loading Markdown", { filePath });
-
-    const loader = new TextLoader(filePath);
-
-    try {
-      const documents = await loader.load();
-
-      // Add markdown-specific metadata
-      documents.forEach((doc: LangChainDocument) => {
-        doc.metadata.isMarkdown = true;
-        doc.metadata.preserveStructure = true;
-      });
-
-      this.logger.debug("Markdown loaded", {
-        filePath,
-        documentCount: documents.length,
-      });
-
-      return documents;
-    } catch (error) {
-      this.logger.error("Failed to load Markdown", {
-        error: error instanceof Error ? error.message : String(error),
-        filePath,
-      });
-      throw new Error(
-        `Failed to load Markdown: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
-
-  /**
-   * Load HTML document using simple HTML text extraction
-   * Removes HTML tags and extracts text content
-   */
-  private async loadHTML(
-    filePath: string,
-    options: LoaderOptions
-  ): Promise<LangChainDocument[]> {
-    this.logger.debug("Loading HTML", { filePath });
-
-    try {
-      // Simple HTML parsing without external dependencies
-      // Extract title
-      const htmlContent = await fs.readFile(filePath, "utf-8");
-      const titleMatch = htmlContent.match(/<title[^>]*>([^<]+)<\/title>/i);
-      const title = titleMatch ? titleMatch[1].trim() : path.basename(filePath);
-
-      // Remove script and style tags with their content
-      let text = htmlContent
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ");
-
-      // Remove HTML comments
-      text = text.replace(/<!--[\s\S]*?-->/g, " ");
-
-      // Remove all HTML tags
-      text = text.replace(/<[^>]+>/g, " ");
-
-      // Decode common HTML entities
-      text = text
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&apos;/g, "'");
-
-      // Clean up whitespace
-      text = text
-        .replace(/\s+/g, " ") // Multiple spaces to single space
-        .replace(/\n\s*\n/g, "\n") // Multiple newlines to single
-        .trim();
-
-      const document = new LangChainDocument({
-        pageContent: text,
-        metadata: {
-          source: filePath,
-          title,
-          isHTML: true,
-        },
-      });
-
-      this.logger.debug("HTML loaded", {
-        filePath,
-        textLength: text.length,
-        title,
-      });
-
-      return [document];
-    } catch (error) {
-      this.logger.error("Failed to load HTML", {
-        error: error instanceof Error ? error.message : String(error),
-        filePath,
-      });
-      throw new Error(
-        `Failed to load HTML: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
-
-  /**
-   * Load plain text document using TextLoader
-   */
-  private async loadText(
-    filePath: string,
-    options: LoaderOptions
-  ): Promise<LangChainDocument[]> {
-    this.logger.debug("Loading text", { filePath });
-
-    const loader = new TextLoader(filePath);
-
-    try {
-      const documents = await loader.load();
-
-      this.logger.debug("Text loaded", {
-        filePath,
-        documentCount: documents.length,
-      });
-
-      return documents;
-    } catch (error) {
-      this.logger.error("Failed to load text", {
-        error: error instanceof Error ? error.message : String(error),
-        filePath,
-      });
-      throw new Error(
-        `Failed to load text: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
-
-  /**
-   * Load GitHub repository using LangChain GithubRepoLoader
-   * Supports loading entire repos or specific branches with filtering
-   *
-   * @param repoUrl - GitHub repository URL (e.g., https://github.com/owner/repo)
-   * @param options - Loader options including branch, recursive, ignorePaths, etc.
-   */
-  private async loadGitHub(
-    repoUrl: string,
-    options: LoaderOptions
-  ): Promise<LangChainDocument[]> {
-    this.logger.debug("Loading GitHub repository", {
-      repoUrl,
-      branch: options.branch || "main",
-      recursive: options.recursive,
-      ignorePaths: options.ignorePaths,
-      hasAccessToken: !!options.accessToken,
-    });
-
-    try {
-      // Extract base URL and API URL for GitHub Enterprise support
-      const urlObj = new URL(repoUrl);
-      const baseUrl = `${urlObj.protocol}//${urlObj.host}`;
-
-      // Determine API URL based on host
-      // For GitHub.com, use api.github.com
-      // For GitHub Enterprise, use the same host with /api/v3
-      const apiUrl = urlObj.host === "github.com"
-        ? "https://api.github.com"
-        : `${baseUrl}/api/v3`;
-
-      this.logger.debug("GitHub configuration", {
-        baseUrl,
-        apiUrl,
-        host: urlObj.host,
-      });
-
-      this.logger.info("Starting GitHub repository load - this may take a while for large repositories...", {
-        repoUrl,
-        branch: options.branch || "main",
-      });
-
-      const startTime = Date.now();
-
-      const loader = new GithubRepoLoader(repoUrl, {
-        baseUrl,
-        apiUrl,
-        branch: options.branch || "main",
-        recursive: options.recursive ?? true,
-        unknown: "warn" as const,
-        ignorePaths: options.ignorePaths,
-        accessToken: options.accessToken || process.env.GITHUB_ACCESS_TOKEN,
-        maxConcurrency: options.maxConcurrency || 10,
-        processSubmodules: options.processSubmodules ?? false,
-        verbose: true, // Enable verbose logging to see progress
-      });
-
-      // Add periodic progress logging
-      const progressInterval = setInterval(() => {
-        this.logger.info("Still loading GitHub repository...", {
-          repoUrl,
-          elapsed: `${Math.floor((Date.now() - startTime) / 1000)}s`,
-        });
-      }, 10000); // Log every 10 seconds
-
-      try {
-        const documents = await loader.load();
-        clearInterval(progressInterval);
-
-        this.logger.info("GitHub repository loaded successfully", {
-          repoUrl,
-          documentCount: documents.length,
-          branch: options.branch || "main",
-          totalContentLength: documents.reduce(
-            (sum, doc) => sum + doc.pageContent.length,
-            0
-          ),
-          fileSources: documents.slice(0, 5).map((doc) => doc.metadata.source),
-        });
-
-        // Log warning if no documents loaded
-        if (documents.length === 0) {
-          this.logger.warn("GitHub repository loaded but no documents found", {
-            repoUrl,
-            branch: options.branch || "main",
-            recursive: options.recursive,
-            ignorePaths: options.ignorePaths,
-            suggestion:
-              "Check if repository is empty, branch exists, or ignorePaths is too restrictive",
-          });
-        }
-
-        return documents;
-      } finally {
-        clearInterval(progressInterval);
-      }
-    } catch (error) {
-      this.logger.error("Failed to load GitHub repository", {
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        repoUrl,
-        branch: options.branch,
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Load a public web page
-   * Includes security checks to reject pages requiring authentication
-   */
-  private async loadWebPage(
-    url: string,
-    options: LoaderOptions
-  ): Promise<LangChainDocument[]> {
-    this.logger.debug("Loading web page", { url });
-
-    try {
-      // 1. Security Check: Verify URL is accessible without auth
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'RAGnarok-VSCode-Extension/1.0'
-        }
-      });
-
-      // Check status code
-      if (response.status === 401 || response.status === 403) {
-        throw new Error(`Authentication required (Status ${response.status})`);
-      }
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch URL (Status ${response.status})`);
-      }
-
-      // Check for login redirects
-      const finalUrl = response.url;
-      if (finalUrl.includes('login') || finalUrl.includes('signin') || finalUrl.includes('auth')) {
-        throw new Error('Redirected to potential login page');
-      }
-
-      // Check content for password fields
-      const html = await response.text();
-      if (html.includes('type="password"') || html.includes('type=\'password\'')) {
-        throw new Error('Page contains password field, likely requires login');
-      }
-
-      // 2. Load content using CheerioWebBaseLoader
-      const loader = new CheerioWebBaseLoader(url, {
-        selector: options.selector as any
-      });
-
-      const documents = await loader.load();
-
-      this.logger.info("Web page loaded successfully", {
-        url,
-        documentCount: documents.length,
-        title: documents[0]?.metadata?.title
-      });
-
-      return documents;
-
-    } catch (error) {
-      this.logger.error("Failed to load web page", {
-        error: error instanceof Error ? error.message : String(error),
-        url
-      });
-      throw error;
-    }
-  }
-
-  /**
    * Check if a path is a directory
    */
   private async isDirectory(filePath: string): Promise<boolean> {
@@ -794,8 +329,10 @@ export class DocumentLoaderFactory {
   private async collectFilesFromDirectory(
     dirPath: string,
     recursive: boolean,
-    includeExtensions?: string[]
+    includeExtensions?: string[],
+    depth: number = 0
   ): Promise<string[]> {
+    if (depth > 20) { return []; }
     const files: string[] = [];
     const extensionsToInclude = includeExtensions || DocumentLoaderFactory.getSupportedExtensions();
 
@@ -807,11 +344,14 @@ export class DocumentLoaderFactory {
 
         if (entry.isDirectory()) {
           if (recursive) {
+            const stats = await fs.lstat(fullPath);
+            if (stats.isSymbolicLink()) { continue; }
             // Recursively collect files from subdirectory
             const subFiles = await this.collectFilesFromDirectory(
               fullPath,
               recursive,
-              includeExtensions
+              includeExtensions,
+              depth + 1
             );
             files.push(...subFiles);
           }

@@ -4,7 +4,7 @@
  */
 
 import * as vscode from "vscode";
-import { TopicManager } from "./managers/topicManager";
+import { TopicManager, TopicStats } from "./managers/topicManager";
 import { Topic, Document, RetrievalStrategy } from "./utils/types";
 import { Logger } from "./utils/logger";
 import { CONFIG, COMMANDS, TREE_CONFIG_KEY, CONTEXT } from "./utils/constants";
@@ -141,9 +141,12 @@ export class TopicTreeDataProvider
   }
 }
 
+type ConfigData = { key: string; value: unknown };
+type TreeItemData = Topic | Document | TopicStats | ConfigData | undefined;
+
 export class TopicTreeItem extends vscode.TreeItem {
   constructor(
-    public readonly data: Topic | Document | any,
+    public readonly data: TreeItemData,
     public readonly type:
       | "topic"
       | "document"
@@ -196,7 +199,7 @@ export class TopicTreeItem extends vscode.TreeItem {
     const { key, value } = configData;
     switch (key) {
       case TREE_CONFIG_KEY.RETRIEVAL_STRATEGY:
-        return `Strategy: ${
+        return `💡 Retrieval Strategy: ${
           value === RetrievalStrategy.HYBRID
             ? "🔀 Hybrid"
             : value === RetrievalStrategy.VECTOR
@@ -223,10 +226,6 @@ export class TopicTreeItem extends vscode.TreeItem {
         return `📏 Chunk Size: ${value}`;
       case TREE_CONFIG_KEY.CHUNK_OVERLAP:
         return `↔️ Chunk Overlap: ${value}`;
-      case TREE_CONFIG_KEY.LOG_LEVEL:
-        return `📋 Log Level: ${value}`;
-      case TREE_CONFIG_KEY.ITERATIVE_REFINEMENT:
-        return `🔗 Iterative Refinement: ${value ? "✅" : "❌"}`;
       case TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT:
         return `🏢 Include Workspace Context: ${value ? "✅" : "❌"}`;
       default:
@@ -323,17 +322,6 @@ export class TopicTreeItem extends vscode.TreeItem {
           this.tooltip = 'Click to change the retrieval strategy';
         }
 
-        // Boolean toggles
-        if (data && data.key === TREE_CONFIG_KEY.ITERATIVE_REFINEMENT) {
-          this.command = {
-            command: COMMANDS.EDIT_CONFIG_ITEM,
-            title: 'Toggle Iterative Refinement',
-            arguments: [TREE_CONFIG_KEY.ITERATIVE_REFINEMENT],
-          };
-          this.contextValue = "config-iterative-refinement";
-          this.tooltip = `Iterative Refinement: ${data.value ? 'Enabled' : 'Disabled'} — Click to toggle`;
-        }
-
         if (data && data.key === TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
@@ -403,16 +391,6 @@ export class TopicTreeItem extends vscode.TreeItem {
           };
           this.contextValue = "config-chunk-overlap";
           this.tooltip = `Chunk Overlap: ${data.value} — Click to change`;
-        }
-
-        if (data && data.key === TREE_CONFIG_KEY.LOG_LEVEL) {
-          this.command = {
-            command: COMMANDS.EDIT_CONFIG_ITEM,
-            title: 'Change Log Level',
-            arguments: [TREE_CONFIG_KEY.LOG_LEVEL],
-          };
-          this.contextValue = "config-log-level";
-          this.tooltip = `Log Level: ${data.value} — Click to change`;
         }
 
         break;
@@ -531,7 +509,7 @@ export class ConfigTreeDataProvider
       new TopicTreeItem({ key: TREE_CONFIG_KEY.TOP_K, value: topK }, "config-item")
     );
 
-    const chunkSize = config.get<number>(CONFIG.CHUNK_SIZE, 512);
+    const chunkSize = config.get<number>(CONFIG.CHUNK_SIZE, 1000);
     items.push(
       new TopicTreeItem(
         { key: TREE_CONFIG_KEY.CHUNK_SIZE, value: chunkSize },
@@ -539,7 +517,7 @@ export class ConfigTreeDataProvider
       )
     );
 
-    const chunkOverlap = config.get<number>(CONFIG.CHUNK_OVERLAP, 50);
+    const chunkOverlap = config.get<number>(CONFIG.CHUNK_OVERLAP, 200);
     items.push(
       new TopicTreeItem(
         { key: TREE_CONFIG_KEY.CHUNK_OVERLAP, value: chunkOverlap },
@@ -547,15 +525,7 @@ export class ConfigTreeDataProvider
       )
     );
 
-    const logLevel = config.get<string>(CONFIG.LOG_LEVEL, "info");
-    items.push(
-      new TopicTreeItem(
-        { key: TREE_CONFIG_KEY.LOG_LEVEL, value: logLevel },
-        "config-item"
-      )
-    );
-
-    const llmModel = config.get<string>(CONFIG.AGENTIC_LLM_MODEL, "gpt-4o-mini");
+    const llmModel = config.get<string>(CONFIG.LLM_MODEL, "gpt-4o-mini");
     items.push(
       new TopicTreeItem(
         { key: TREE_CONFIG_KEY.LLM_MODEL, value: llmModel },
@@ -564,7 +534,7 @@ export class ConfigTreeDataProvider
     );
 
     const includeWorkspace = config.get<boolean>(
-      CONFIG.AGENTIC_INCLUDE_WORKSPACE,
+      CONFIG.INCLUDE_WORKSPACE,
       true
     );
     items.push(
@@ -574,18 +544,7 @@ export class ConfigTreeDataProvider
       )
     );
 
-    const iterativeRefinement = config.get<boolean>(
-      CONFIG.AGENTIC_ITERATIVE_REFINEMENT,
-      true
-    );
-    items.push(
-      new TopicTreeItem(
-        { key: TREE_CONFIG_KEY.ITERATIVE_REFINEMENT, value: iterativeRefinement },
-        "config-item"
-      )
-    );
-
-    const maxIterations = config.get<number>(CONFIG.AGENTIC_MAX_ITERATIONS, 3);
+    const maxIterations = config.get<number>(CONFIG.MAX_ITERATIONS, 3);
     items.push(
       new TopicTreeItem(
         { key: TREE_CONFIG_KEY.MAX_ITERATIONS, value: maxIterations },
@@ -594,7 +553,7 @@ export class ConfigTreeDataProvider
     );
 
     const threshold = config.get<number>(
-      CONFIG.AGENTIC_CONFIDENCE_THRESHOLD,
+      CONFIG.CONFIDENCE_THRESHOLD,
       0.7
     );
     items.push(
@@ -795,7 +754,7 @@ export class ConfigTreeDataProvider
       }
 
       const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
-      const currentFamily = config.get<string>(CONFIG.AGENTIC_LLM_MODEL, 'gpt-4o-mini');
+      const currentFamily = config.get<string>(CONFIG.LLM_MODEL, 'gpt-4o-mini');
 
       const familyMap = new Map<string, { vendor: string; maxTokens: number; count: number }>();
       for (const m of allModels) {
@@ -847,7 +806,7 @@ export class ConfigTreeDataProvider
       }
 
       await config.update(
-        CONFIG.AGENTIC_LLM_MODEL,
+        CONFIG.LLM_MODEL,
         picked.label,
         vscode.ConfigurationTarget.Workspace
       );
@@ -901,18 +860,13 @@ export class ConfigTreeDataProvider
         },
         label: 'Retrieval Strategy',
       },
-      [TREE_CONFIG_KEY.ITERATIVE_REFINEMENT]: {
-        settingKey: CONFIG.AGENTIC_ITERATIVE_REFINEMENT,
-        type: 'boolean',
-        label: 'Iterative Refinement',
-      },
       [TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT]: {
-        settingKey: CONFIG.AGENTIC_INCLUDE_WORKSPACE,
+        settingKey: CONFIG.INCLUDE_WORKSPACE,
         type: 'boolean',
         label: 'Include Workspace Context',
       },
       [TREE_CONFIG_KEY.MAX_ITERATIONS]: {
-        settingKey: CONFIG.AGENTIC_MAX_ITERATIONS,
+        settingKey: CONFIG.MAX_ITERATIONS,
         type: 'number',
         min: 1,
         max: 10,
@@ -920,7 +874,7 @@ export class ConfigTreeDataProvider
         label: 'Max Iterations',
       },
       [TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD]: {
-        settingKey: CONFIG.AGENTIC_CONFIDENCE_THRESHOLD,
+        settingKey: CONFIG.CONFIDENCE_THRESHOLD,
         type: 'number',
         min: 0,
         max: 1,
@@ -950,18 +904,6 @@ export class ConfigTreeDataProvider
         max: 500,
         step: 10,
         label: 'Chunk Overlap',
-      },
-      [TREE_CONFIG_KEY.LOG_LEVEL]: {
-        settingKey: CONFIG.LOG_LEVEL,
-        type: 'enum',
-        options: ['debug', 'info', 'warn', 'error'],
-        optionLabels: {
-          'debug': 'Debug — verbose logging for troubleshooting',
-          'info': 'Info — standard messages (recommended)',
-          'warn': 'Warn — only warnings and errors',
-          'error': 'Error — only error messages',
-        },
-        label: 'Log Level',
       },
     };
 

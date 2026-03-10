@@ -28,12 +28,12 @@ export const CONFIG = {
   // Embedding backend configuration
   EMBEDDING_BACKEND: "embeddingBackend",
   EMBEDDING_VSCODE_MODEL_ID: "embeddingVscodeModelId",
-  // Agentic RAG configuration
-  AGENTIC_MAX_ITERATIONS: "agenticMaxIterations",
-  AGENTIC_CONFIDENCE_THRESHOLD: "agenticConfidenceThreshold",
-  AGENTIC_ITERATIVE_REFINEMENT: "agenticIterativeRefinement",
-  AGENTIC_LLM_MODEL: "agenticLLMModel",
-  AGENTIC_INCLUDE_WORKSPACE: "agenticIncludeWorkspaceContext",
+  // RAG query configuration
+  MAX_ITERATIONS: "maxIterations",
+  CONFIDENCE_THRESHOLD: "confidenceThreshold",
+  LLM_MODEL: "llmModel",
+  INCLUDE_WORKSPACE: "includeWorkspaceContext",
+  GAP_SCORE_THRESHOLD: "gapScoreThreshold",
   // Common database configuration
   COMMON_DATABASE_PATH: "commonDatabasePath",
 } as const;
@@ -57,6 +57,7 @@ export const COMMANDS = {
   DELETE_TOPIC: "ragnarok.deleteTopic",
   ADD_DOCUMENT: "ragnarok.addDocument",
   ADD_GITHUB_REPO: "ragnarok.addGithubRepo",
+  ADD_WEB_URL: "ragnarok.addWebUrl",
   REFRESH_TOPICS: "ragnarok.refreshTopics",
   CLEAR_MODEL_CACHE: "ragnarok.clearModelCache",
   CLEAR_DATABASE: "ragnarok.clearDatabase",
@@ -116,9 +117,7 @@ export const TREE_CONFIG_KEY = {
   TOP_K: "top-k",
   CHUNK_SIZE: "chunk-size",
   CHUNK_OVERLAP: "chunk-overlap",
-  LOG_LEVEL: "log-level",
   LLM_MODEL: "llm-model",
-  ITERATIVE_REFINEMENT: "iterative-refinement",
   INCLUDE_WORKSPACE_CONTEXT: "include-workspace-context",
   MAX_ITERATIONS: "max-iterations",
   CONFIDENCE_THRESHOLD: "confidence-threshold",

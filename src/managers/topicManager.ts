@@ -13,6 +13,7 @@ import * as path from "path";
 import archiver from "archiver";
 import AdmZip from "adm-zip";
 import { VectorStore } from "@langchain/core/vectorstores";
+import { Document as LangChainDocument } from "@langchain/core/documents";
 import { Topic, TopicsIndex, Document as TopicDocument, ExportedTopicData, TopicSource } from "../utils/types";
 import {
   DocumentPipeline,
@@ -51,7 +52,7 @@ export interface AddDocumentResult {
  * Manages all topic operations and vector stores
  */
 export class TopicManager {
-  private static instance: TopicManager;
+  private static instance: TopicManager | null;
   private static initPromise: Promise<void> | null = null;
 
   // Callback registry for external components to register cleanup functions
@@ -95,9 +96,10 @@ export class TopicManager {
           "TopicManager not initialized. Context required for first call."
         );
       }
-      TopicManager.instance = new TopicManager(context);
+      const inst = new TopicManager(context);
+      TopicManager.instance = inst;
       // Automatically initialize on first getInstance call
-      TopicManager.initPromise = TopicManager.instance.init();
+      TopicManager.initPromise = inst.init();
     }
 
     // Wait for initialization to complete
@@ -106,7 +108,7 @@ export class TopicManager {
         await TopicManager.initPromise;
       } catch (error) {
         // Clear instance on failure to allow retry
-        TopicManager.instance = null as any;
+        TopicManager.instance = null;
         TopicManager.initPromise = null;
         const errorMessage = error instanceof Error ? error.message : String(error);
         throw new Error(`TopicManager initialization failed: ${errorMessage}`);
@@ -117,7 +119,7 @@ export class TopicManager {
 
     // Verify initialization succeeded
     if (!TopicManager.instance.isInitialized) {
-      TopicManager.instance = null as any;
+      TopicManager.instance = null;
       throw new Error("TopicManager initialization failed - instance is not initialized");
     }
 
@@ -290,6 +292,18 @@ export class TopicManager {
         topicId,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Invalidate cached vector stores
+   * @param topicId - If provided, invalidates only that topic's cache. Otherwise clears all.
+   */
+  public invalidateVectorStoreCache(topicId?: string): void {
+    if (topicId) {
+      this.vectorStoreCache.delete(topicId);
+    } else {
+      this.vectorStoreCache.clear();
     }
   }
 
@@ -504,6 +518,9 @@ export class TopicManager {
         }
       }
 
+      // Invalidate cached vector store so next read picks up new documents
+      this.vectorStoreCache.delete(topicId);
+
       // Update topic document count
       topic.documentCount = this.topicDocuments.get(topicId)?.size || 0;
       topic.updatedAt = Date.now();
@@ -574,6 +591,18 @@ export class TopicManager {
   }
 
   /**
+   * Fetch all documents from a topic via table scan (no embedding needed).
+   */
+  public async getAllDocuments(topicId: string, limit: number): Promise<LangChainDocument[]> {
+    if (!this.vectorStoreFactory) {
+      throw new Error("TopicManager not initialized");
+    }
+
+    const customDir = this.isCommonTopic(topicId) ? this.commonDatabasePath : undefined;
+    return this.vectorStoreFactory.getAllDocuments(topicId, limit, customDir ?? undefined);
+  }
+
+  /**
    * Prevent mixing embeddings generated with incompatible models
    */
   private async ensureEmbeddingModelCompatibility(topicId: string): Promise<void> {
@@ -598,7 +627,19 @@ export class TopicManager {
     );
 
     if (isModelAvailable) {
-      // Model is available, proceed (VectorStoreFactory will handle loading the correct model)
+      // Model is available but differs from current — mixing embeddings would corrupt results
+      if (metadata.embeddingModel !== currentModel) {
+        this.logger.warn('Embedding model mismatch', {
+          topicId,
+          storedModel: metadata.embeddingModel,
+          currentModel,
+        });
+        throw new Error(
+          `Topic "${topicId}" was created with embedding model "${metadata.embeddingModel}" ` +
+          `but current model is "${currentModel}". ` +
+          `Adding documents with a different model would corrupt search results.`
+        );
+      }
       return;
     }
 
@@ -948,6 +989,12 @@ export class TopicManager {
           if (entry.isDirectory) continue;
 
           const targetPath = path.join(lanceDbDir, relativePath);
+          const resolvedTarget = path.resolve(targetPath);
+          const resolvedDir = path.resolve(lanceDbDir);
+          if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
+            this.logger.warn('Skipping potentially malicious ZIP entry', { entryName: entry.entryName });
+            continue;
+          }
           await fs.mkdir(path.dirname(targetPath), { recursive: true });
           await fs.writeFile(targetPath, entry.getData());
         }
@@ -958,6 +1005,12 @@ export class TopicManager {
           if (entry.isDirectory) continue;
 
           const targetPath = path.join(lanceDbDir, relativePath);
+          const resolvedTarget = path.resolve(targetPath);
+          const resolvedDir = path.resolve(lanceDbDir);
+          if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
+            this.logger.warn('Skipping potentially malicious ZIP entry', { entryName: entry.entryName });
+            continue;
+          }
           await fs.mkdir(path.dirname(targetPath), { recursive: true });
           await fs.writeFile(targetPath, entry.getData());
         }

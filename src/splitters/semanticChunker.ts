@@ -67,6 +67,7 @@ export class SemanticChunker {
   private logger: Logger;
   private defaultChunkSize: number;
   private defaultChunkOverlap: number;
+  private chunkIdCounter = 0;
 
   constructor() {
     this.logger = new Logger('SemanticChunker');
@@ -220,9 +221,19 @@ export class SemanticChunker {
       return 'code';
     }
 
-    // Sample only first 20 documents for strategy detection (performance optimization)
-    const sampleSize = Math.min(20, documents.length);
-    const sampleDocs = documents.slice(0, sampleSize);
+    // Sample from beginning, middle, and end for better diversity
+    const sampleSize = Math.min(Math.max(50, Math.ceil(documents.length * 0.1)), 200);
+    const indices = new Set<number>();
+    for (let i = 0; i < sampleSize && indices.size < documents.length; i++) {
+      if (i < sampleSize / 3) {
+        indices.add(i); // Beginning
+      } else if (i < (2 * sampleSize) / 3) {
+        indices.add(Math.floor(documents.length / 2) + i - Math.floor(sampleSize / 3)); // Middle
+      } else {
+        indices.add(documents.length - 1 - (i - Math.floor(2 * sampleSize / 3))); // End
+      }
+    }
+    const sampleDocs = [...indices].filter(i => i >= 0 && i < documents.length).map(i => documents[i]);
 
     // Check document metadata
     const hasMarkdown = sampleDocs.some(
@@ -439,11 +450,9 @@ export class SemanticChunker {
    * Generate a unique ID for a chunk
    */
   private generateChunkId(chunk: LangChainDocument, index: number): string {
-    const source = chunk.metadata.source || chunk.metadata.filePath || 'unknown';
     const fileName = chunk.metadata.fileName || 'unknown';
-    // Create a simple hash-like ID
-    const timestamp = Date.now();
-    return `${fileName}-${index}-${timestamp}`;
+    const counter = ++this.chunkIdCounter;
+    return `${fileName}-${index}-${counter}`;
   }
 
   /**

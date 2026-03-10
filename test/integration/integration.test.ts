@@ -10,6 +10,7 @@ import { VectorStore } from '@langchain/core/vectorstores';
 import { RAGAgent } from '../../src/agents/ragAgent';
 import { RetrievalStrategy } from '../../src/utils/types';
 import { HybridRetriever } from '../../src/retrievers/hybridRetriever';
+import { VectorRetriever } from '../../src/retrievers/vectorRetriever';
 import { EmbeddingService } from '../../src/embeddings/embeddingService';
 import { SemanticChunker } from '../../src/splitters/semanticChunker';
 import { QueryPlannerAgent } from '../../src/agents/queryPlannerAgent';
@@ -115,7 +116,8 @@ describe('Integration Tests', function () {
       expect(plan).to.have.property('subQueries');
 
       // Test retriever
-      const retriever = new HybridRetriever(vectorStore);
+      const vectorRetriever = new VectorRetriever(vectorStore);
+      const retriever = new HybridRetriever(vectorRetriever);
       const results = await retriever.search('Python', { k: 5 });
 
       expect(results).to.be.an('array');
@@ -214,18 +216,6 @@ describe('Integration Tests', function () {
         expect(result.results[i - 1].score).to.be.at.least(result.results[i].score);
       }
     });
-
-    it('should use simple query path for direct queries', async function () {
-      const results = await ragAgent.simpleQuery('JavaScript', 3);
-
-      expect(results).to.be.an('array');
-      expect(results.length).to.be.at.most(3);
-      results.forEach(r => {
-        expect(r).to.have.property('document');
-        expect(r).to.have.property('score');
-        expect(r).to.have.property('source');
-      });
-    });
   });
 
   describe('End-to-End Agentic Query Workflow', function () {
@@ -298,7 +288,6 @@ describe('Integration Tests', function () {
 
     it('should support iterative refinement when enabled', async function () {
       const result = await ragAgent.query('Python features and use cases', {
-        enableIterativeRefinement: true,
         maxIterations: 2,
         confidenceThreshold: 0.8,
       });

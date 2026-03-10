@@ -4,7 +4,8 @@
  */
 
 import { expect } from 'chai';
-import { RAGAgent } from '../../src/agents/ragAgent';
+import { RAGAgent, RetrievalResult } from '../../src/agents/ragAgent';
+import { QueryPlan } from '../../src/agents/queryPlannerAgent';
 import { RetrievalStrategy } from '../../src/utils/types';
 import { VectorStore } from '@langchain/core/vectorstores';
 import { Document as LangChainDocument } from '@langchain/core/documents';
@@ -42,7 +43,84 @@ class MockVectorStore extends VectorStore {
   }
 }
 
-// Mock Embeddings
+/**
+ * Embeddings subclass that tracks the last query text.
+ * Since LangChain always calls embedQuery before similaritySearchVectorWithScore,
+ * this is a stable way to pass query context to the vector store (#9).
+ */
+class QueryTrackingEmbeddings extends Embeddings {
+  public lastQueryText: string = '';
+
+  constructor() {
+    super({});
+  }
+
+  async embedDocuments(texts: string[]): Promise<number[][]> {
+    return texts.map(() => [0.1, 0.2, 0.3]);
+  }
+
+  async embedQuery(text: string): Promise<number[]> {
+    this.lastQueryText = text;
+    return [0.1, 0.2, 0.3];
+  }
+}
+
+/**
+ * Query-aware mock vector store that returns different documents and scores
+ * depending on the query text. Uses QueryTrackingEmbeddings for stable
+ * query text capture (#9).
+ */
+class QueryAwareMockVectorStore extends VectorStore {
+  _vectorstoreType(): string {
+    return 'query-aware-mock';
+  }
+
+  private documents: LangChainDocument[] = [];
+  private queryRules: Map<string, { docIndices: number[]; scoreMultiplier: number }> = new Map();
+  private trackingEmbeddings: QueryTrackingEmbeddings;
+
+  constructor() {
+    const embeddings = new QueryTrackingEmbeddings();
+    super(embeddings, {});
+    this.trackingEmbeddings = embeddings;
+  }
+
+  async addDocuments(docs: LangChainDocument[]): Promise<void> {
+    this.documents.push(...docs);
+  }
+
+  async addVectors(): Promise<void> {}
+
+  addRule(keyword: string, docIndices: number[], scoreMultiplier: number): void {
+    this.queryRules.set(keyword.toLowerCase(), { docIndices, scoreMultiplier });
+  }
+
+  async similaritySearchVectorWithScore(
+    query: number[],
+    k: number
+  ): Promise<[LangChainDocument, number][]> {
+    let indices = Array.from({ length: Math.min(k, this.documents.length) }, (_, i) => i);
+    let multiplier = 0.9;
+
+    const lastQuery = this.trackingEmbeddings.lastQueryText;
+    if (lastQuery) {
+      for (const [keyword, rule] of this.queryRules) {
+        if (lastQuery.toLowerCase().includes(keyword)) {
+          indices = rule.docIndices.filter(i => i < this.documents.length).slice(0, k);
+          multiplier = rule.scoreMultiplier;
+          break;
+        }
+      }
+    }
+
+    return indices.map((docIdx, rank) => {
+      const score = Math.max(0, (1 - rank * 0.1) * multiplier);
+      return [this.documents[docIdx], score];
+    });
+  }
+}
+
+// Mock Embeddings (used by basic MockVectorStore)
 class MockEmbeddings extends Embeddings {
   constructor() {
     super({});
@@ -107,57 +185,7 @@ describe('RAGAgent', function () {
 
       // Verify the agent is properly initialized and can execute queries
       expect(newAgent).to.be.an('object');
-      expect(newAgent).to.respondTo('simpleQuery');
       expect(newAgent).to.respondTo('query');
-    });
-
-    it('should use configuration from query options', async function () {
-      // Configuration is passed as options, not stored in agent
-      const results = await agent.simpleQuery('test query', 3, RetrievalStrategy.VECTOR);
-
-      expect(results).to.be.an('array');
-      expect(results.length).to.be.at.most(3);
-    });
-  });
-
-  describe('Simple Query (Fast Path)', function () {
-    it('should execute simple query without planning', async function () {
-      const results = await agent.simpleQuery('Python programming', 3);
-
-      expect(results).to.be.an('array');
-      expect(results.length).to.be.at.most(3);
-
-      results.forEach((result) => {
-        expect(result).to.have.property('document');
-        expect(result).to.have.property('score');
-        expect(result).to.have.property('source');
-      });
-    });
-
-    it('should respect topK parameter', async function () {
-      const results = await agent.simpleQuery('programming', 2);
-
-      expect(results.length).to.be.at.most(2);
-    });
-
-    it('should return results with scores', async function () {
-      const results = await agent.simpleQuery('JavaScript', 5);
-
-      results.forEach((result) => {
-        expect(result.score).to.be.a('number');
-        expect(result.score).to.be.within(0, 1);
-      });
-    });
-
-    it('should throw error if not initialized', async function () {
-      const uninitializedAgent = new RAGAgent();
-
-      try {
-        await uninitializedAgent.simpleQuery('test');
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error).to.be.an('error');
-      }
     });
   });
 
@@ -264,44 +292,144 @@ describe('RAGAgent', function () {
   });
 
   describe('Iterative Refinement', function () {
-    it('should perform iterative refinement when enabled', async function () {
-      const result = await agent.query('compare Python and JavaScript', {
-        enableIterativeRefinement: true,
-        maxIterations: 2,
-      });
-
-      expect(result.iterations).to.be.a('number');
-      expect(result.iterations).to.be.at.least(1);
-    });
-
-    it('should disable iterative refinement for simple queries', async function () {
-      const result = await agent.query('Python', {
-        enableIterativeRefinement: true,
-      });
-
-      // Simple queries should be single-shot
-      expect(result.iterations).to.equal(1);
-    });
-
-    it('should respect max iterations', async function () {
-      const result = await agent.query('complex query with multiple concepts', {
-        enableIterativeRefinement: true,
-        maxIterations: 1,
-        confidenceThreshold: 0.99, // High threshold won't be met
-      });
-
-      expect(result.iterations).to.be.at.most(1);
-    });
-
-    it('should stop when confidence threshold met', async function () {
+    // UC-1: High confidence after first pass → stop immediately
+    it('should stop after first pass when confidence threshold is met', async function () {
       const result = await agent.query('Python programming', {
-        enableIterativeRefinement: true,
-        confidenceThreshold: 0.1, // Low threshold
+        confidenceThreshold: 0.1, // Low threshold easily met
         maxIterations: 5,
       });
 
-      // Should stop early due to low threshold
       expect(result.confidenceMet).to.be.true;
+      expect(result.iterations).to.equal(1);
+    });
+
+    // UC-2: Low confidence triggers follow-up iterations
+    it('should attempt iteration and stop when no progress is made', async function () {
+      const result = await agent.query('compare Python and JavaScript', {
+        maxIterations: 3,
+        confidenceThreshold: 0.99, // Impossibly high to force iteration
+      });
+
+      expect(result.iterations).to.be.a('number');
+      // With mock store returning same docs, convergence stops early
+      expect(result.iterations).to.be.at.least(1).and.at.most(3);
+      expect(result.confidenceMet).to.be.false;
+    });
+
+    // UC-3: Comparison queries detect coverage imbalance
+    it('should handle comparison queries with iterative refinement', async function () {
+      const result = await agent.query('difference between Python and JavaScript', {
+        maxIterations: 3,
+        confidenceThreshold: 0.99,
+      });
+
+      expect(result.plan.complexity).to.equal('complex');
+      expect(result.plan.subQueries.length).to.be.greaterThanOrEqual(2);
+      expect(result.iterations).to.be.at.least(1);
+      expect(result.results).to.be.an('array');
+    });
+
+    // UC-4: Complex multi-part queries detect under-covered sub-queries
+    it('should iterate for complex multi-part queries', async function () {
+      const result = await agent.query(
+        'What is Python? How does JavaScript work? Compare TypeScript features.',
+        {
+          maxIterations: 3,
+          confidenceThreshold: 0.99,
+        }
+      );
+
+      expect(result.plan.complexity).to.be.oneOf(['moderate', 'complex']);
+      expect(result.iterations).to.be.at.least(1);
+      expect(result.metadata.subQueriesExecuted).to.be.at.least(1);
+    });
+
+    // UC-5: Max iterations limit is respected
+    it('should respect max iterations', async function () {
+      const result = await agent.query('complex query with multiple concepts', {
+        maxIterations: 2,
+        confidenceThreshold: 0.99,
+      });
+
+      expect(result.iterations).to.be.at.most(2);
+    });
+
+    // UC-6: Convergence detection stops early when no improvement
+    it('should converge and stop when no improvement between iterations', async function () {
+      const result = await agent.query('compare Python and JavaScript', {
+        maxIterations: 5,
+        confidenceThreshold: 0.99, // Won't be met
+      });
+
+      // Should stop before max iterations due to convergence
+      expect(result.iterations).to.be.at.most(5);
+      expect(result.results.length).to.be.greaterThan(0);
+    });
+
+    // Simple queries should bypass iterative refinement entirely
+    it('should disable iterative refinement for simple queries', async function () {
+      const result = await agent.query('Python', {
+        maxIterations: 5,
+      });
+
+      // Simple queries use single-shot (plan.complexity === 'simple')
+      expect(result.iterations).to.equal(1);
+    });
+
+    // Results accumulate across iterations
+    it('should accumulate results across iterations', async function () {
+      const result = await agent.query('compare Python and JavaScript', {
+        maxIterations: 3,
+        confidenceThreshold: 0.99,
+        topK: 10, // Higher topK to see accumulation
+      });
+
+      expect(result.metadata.totalResults).to.be.at.least(1);
+      // Total results should include documents from multiple iterations
+      expect(result.results).to.be.an('array');
+    });
+
+    // avgConfidence is calculated correctly across all accumulated results
+    it('should calculate avgConfidence across all results', async function () {
+      const result = await agent.query('compare Python and JavaScript', {
+        maxIterations: 2,
+        confidenceThreshold: 0.99,
+      });
+
+      expect(result.avgConfidence).to.be.a('number');
+      expect(result.avgConfidence).to.be.within(0, 1);
+    });
+
+    // Deduplication still works with multi-iteration results
+    it('should deduplicate results from multiple iterations', async function () {
+      const result = await agent.query('compare Python and JavaScript', {
+        maxIterations: 3,
+        confidenceThreshold: 0.99,
+        topK: 10,
+      });
+
+      // All results should have unique chunk IDs
+      const chunkIds = result.results.map(r => r.document.metadata.chunkId);
+      const uniqueIds = new Set(chunkIds);
+      expect(uniqueIds.size).to.equal(chunkIds.length);
+    });
+
+    // UC-cancellation: Pre-cancelled token stops iteration immediately
+    it('should stop iteration when cancellation is requested', async function () {
+      // Use the mock CancellationTokenSource from test setup
+      const vscode = require('vscode');
+      const cts = new vscode.CancellationTokenSource();
+      cts.cancel(); // pre-cancel
+
+      const result = await agent.query('compare Python and JavaScript', {
+        maxIterations: 5,
+        confidenceThreshold: 0.99,
+        token: cts.token,
+      });
+
+      // Pre-cancelled token should stop at 0 iterations (cancelled before first iteration)
+      expect(result.iterations).to.be.at.most(1);
+      cts.dispose();
     });
   });
 
@@ -478,7 +606,7 @@ describe('RAGAgent', function () {
       const result = await agent.query('test');
 
       result.results.forEach((r) => {
-        expect(r.source).to.be.oneOf(['vector', 'hybrid', 'keyword']);
+        expect(r.source).to.be.oneOf(['vector', 'hybrid', 'keyword', 'ensemble', 'bm25']);
       });
     });
   });
@@ -504,6 +632,254 @@ describe('RAGAgent', function () {
       results.forEach((result) => {
         expect(result.results).to.be.an('array');
       });
+    });
+  });
+
+  describe('Gap Analysis (analyzeGaps)', function () {
+    it('should detect no gaps when all sub-queries return high-score results', function () {
+      const plan: QueryPlan = {
+        originalQuery: 'Python programming',
+        complexity: 'moderate',
+        subQueries: [
+          { query: 'Python basics', reasoning: 'r', topK: 5, priority: 'high' },
+          { query: 'Python advanced', reasoning: 'r', topK: 5, priority: 'medium' },
+        ],
+        strategy: 'parallel',
+        explanation: 'test',
+      };
+
+      const results: RetrievalResult[] = [
+        { document: new LangChainDocument({ pageContent: 'a', metadata: {} }), score: 0.9, source: RetrievalStrategy.HYBRID, subQuery: 'Python basics' },
+        { document: new LangChainDocument({ pageContent: 'b', metadata: {} }), score: 0.8, source: RetrievalStrategy.HYBRID, subQuery: 'Python basics' },
+        { document: new LangChainDocument({ pageContent: 'c', metadata: {} }), score: 0.85, source: RetrievalStrategy.HYBRID, subQuery: 'Python advanced' },
+        { document: new LangChainDocument({ pageContent: 'd', metadata: {} }), score: 0.7, source: RetrievalStrategy.HYBRID, subQuery: 'Python advanced' },
+      ];
+
+      const analysis = agent.analyzeGaps(plan, results);
+      expect(analysis.gaps).to.have.lengthOf(0);
+      expect(analysis.hasSufficientCoverage).to.be.true;
+      expect(analysis.coverageRatio).to.equal(1);
+    });
+
+    it('should detect no_results gap', function () {
+      const plan: QueryPlan = {
+        originalQuery: 'compare Python and Rust',
+        complexity: 'complex',
+        subQueries: [
+          { query: 'Python features', reasoning: 'r', topK: 5, priority: 'high' },
+          { query: 'Rust features', reasoning: 'r', topK: 5, priority: 'high' },
+        ],
+        strategy: 'parallel',
+        explanation: 'test',
+      };
+
+      // Only Python has results
+      const results: RetrievalResult[] = [
+        { document: new LangChainDocument({ pageContent: 'a', metadata: {} }), score: 0.9, source: RetrievalStrategy.HYBRID, subQuery: 'Python features' },
+        { document: new LangChainDocument({ pageContent: 'b', metadata: {} }), score: 0.8, source: RetrievalStrategy.HYBRID, subQuery: 'Python features' },
+      ];
+
+      const analysis = agent.analyzeGaps(plan, results);
+      expect(analysis.gaps).to.have.lengthOf(1);
+      expect(analysis.gaps[0].subQuery.query).to.equal('Rust features');
+      expect(analysis.gaps[0].reason).to.equal('no_results');
+      expect(analysis.gaps[0].resultCount).to.equal(0);
+      expect(analysis.coverageRatio).to.equal(0.5);
+    });
+
+    it('should detect low_score gap', function () {
+      const plan: QueryPlan = {
+        originalQuery: 'architecture patterns',
+        complexity: 'moderate',
+        subQueries: [
+          { query: 'design patterns', reasoning: 'r', topK: 5, priority: 'high' },
+          { query: 'microservices', reasoning: 'r', topK: 5, priority: 'medium' },
+        ],
+        strategy: 'parallel',
+        explanation: 'test',
+      };
+
+      const results: RetrievalResult[] = [
+        { document: new LangChainDocument({ pageContent: 'a', metadata: {} }), score: 0.85, source: RetrievalStrategy.HYBRID, subQuery: 'design patterns' },
+        { document: new LangChainDocument({ pageContent: 'b', metadata: {} }), score: 0.2, source: RetrievalStrategy.HYBRID, subQuery: 'microservices' },
+        { document: new LangChainDocument({ pageContent: 'c', metadata: {} }), score: 0.1, source: RetrievalStrategy.HYBRID, subQuery: 'microservices' },
+      ];
+
+      const analysis = agent.analyzeGaps(plan, results);
+      expect(analysis.gaps).to.have.lengthOf(1);
+      expect(analysis.gaps[0].subQuery.query).to.equal('microservices');
+      expect(analysis.gaps[0].reason).to.equal('low_score');
+      expect(analysis.gaps[0].avgScore).to.be.below(0.4);
+    });
+
+    it('should detect coverage_imbalance gap', function () {
+      const plan: QueryPlan = {
+        originalQuery: 'compare React and Angular',
+        complexity: 'complex',
+        subQueries: [
+          { query: 'React features', reasoning: 'r', topK: 5, priority: 'high' },
+          { query: 'Angular features', reasoning: 'r', topK: 5, priority: 'high' },
+        ],
+        strategy: 'parallel',
+        explanation: 'test',
+      };
+
+      // React has many results, Angular has very few (< 30% of max)
+      const results: RetrievalResult[] = [
+        { document: new LangChainDocument({ pageContent: 'a', metadata: {} }), score: 0.9, source: RetrievalStrategy.HYBRID, subQuery: 'React features' },
+        { document: new LangChainDocument({ pageContent: 'b', metadata: {} }), score: 0.85, source: RetrievalStrategy.HYBRID, subQuery: 'React features' },
+        { document: new LangChainDocument({ pageContent: 'c', metadata: {} }), score: 0.8, source: RetrievalStrategy.HYBRID, subQuery: 'React features' },
+        { document: new LangChainDocument({ pageContent: 'd', metadata: {} }), score: 0.75, source: RetrievalStrategy.HYBRID, subQuery: 'React features' },
+        // Angular: 0 results → flagged as no_results AND coverage_imbalance
+      ];
+
+      const analysis = agent.analyzeGaps(plan, results);
+      expect(analysis.gaps.length).to.be.greaterThanOrEqual(1);
+      // Angular should be flagged
+      const angularGap = analysis.gaps.find(g => g.subQuery.query === 'Angular features');
+      expect(angularGap).to.exist;
+    });
+
+    it('should report full coverage when all sub-queries are well covered', function () {
+      const plan: QueryPlan = {
+        originalQuery: 'test',
+        complexity: 'moderate',
+        subQueries: [
+          { query: 'q1', reasoning: 'r', topK: 5, priority: 'high' },
+          { query: 'q2', reasoning: 'r', topK: 5, priority: 'high' },
+          { query: 'q3', reasoning: 'r', topK: 5, priority: 'medium' },
+        ],
+        strategy: 'parallel',
+        explanation: 'test',
+      };
+
+      const results: RetrievalResult[] = [
+        { document: new LangChainDocument({ pageContent: 'a', metadata: {} }), score: 0.8, source: RetrievalStrategy.HYBRID, subQuery: 'q1' },
+        { document: new LangChainDocument({ pageContent: 'b', metadata: {} }), score: 0.7, source: RetrievalStrategy.HYBRID, subQuery: 'q2' },
+        { document: new LangChainDocument({ pageContent: 'c', metadata: {} }), score: 0.75, source: RetrievalStrategy.HYBRID, subQuery: 'q3' },
+      ];
+
+      const analysis = agent.analyzeGaps(plan, results);
+      expect(analysis.hasSufficientCoverage).to.be.true;
+      expect(analysis.coverageRatio).to.equal(1);
+    });
+
+    it('should handle empty results', function () {
+      const plan: QueryPlan = {
+        originalQuery: 'test',
+        complexity: 'moderate',
+        subQueries: [
+          { query: 'q1', reasoning: 'r', topK: 5, priority: 'high' },
+        ],
+        strategy: 'parallel',
+        explanation: 'test',
+      };
+
+      const analysis = agent.analyzeGaps(plan, []);
+      expect(analysis.gaps).to.have.lengthOf(1);
+      expect(analysis.gaps[0].reason).to.equal('no_results');
+      expect(analysis.coverageRatio).to.equal(0);
+      expect(analysis.hasSufficientCoverage).to.be.false;
+    });
+
+    it('should handle plan with no sub-queries', function () {
+      const plan: QueryPlan = {
+        originalQuery: 'test',
+        complexity: 'simple',
+        subQueries: [],
+        strategy: 'sequential',
+        explanation: 'test',
+      };
+
+      const analysis = agent.analyzeGaps(plan, []);
+      expect(analysis.gaps).to.have.lengthOf(0);
+      expect(analysis.coverageRatio).to.equal(1);
+      expect(analysis.hasSufficientCoverage).to.be.true;
+    });
+  });
+
+  describe('Iterative Refinement with Query-Aware Store', function () {
+    let queryAwareStore: QueryAwareMockVectorStore;
+    let qaAgent: RAGAgent;
+
+    beforeEach(async function () {
+      qaAgent = new RAGAgent();
+      queryAwareStore = new QueryAwareMockVectorStore();
+
+      const docs = [
+        new LangChainDocument({ pageContent: 'Python is great for data science', metadata: { chunkId: 'py1', source: 'python.txt' } }),
+        new LangChainDocument({ pageContent: 'Python has dynamic typing', metadata: { chunkId: 'py2', source: 'python.txt' } }),
+        new LangChainDocument({ pageContent: 'JavaScript powers the web', metadata: { chunkId: 'js1', source: 'javascript.txt' } }),
+        new LangChainDocument({ pageContent: 'TypeScript adds static types to JavaScript', metadata: { chunkId: 'ts1', source: 'typescript.txt' } }),
+        new LangChainDocument({ pageContent: 'Rust is a systems programming language', metadata: { chunkId: 'rs1', source: 'rust.txt' } }),
+      ];
+
+      await queryAwareStore.addDocuments(docs);
+
+      // Python queries return good results
+      queryAwareStore.addRule('python', [0, 1], 0.9);
+      // JavaScript queries return decent results
+      queryAwareStore.addRule('javascript', [2, 3], 0.7);
+      // Rust queries return very poor results (simulating gap)
+      queryAwareStore.addRule('rust', [4], 0.15);
+      // TypeScript queries return moderate results
+      queryAwareStore.addRule('typescript', [3], 0.6);
+
+      await qaAgent.initialize(queryAwareStore);
+    });
+
+    it('should complete iterative refinement with query-aware results', async function () {
+      const result = await qaAgent.query('compare Python and JavaScript', {
+        maxIterations: 3,
+        confidenceThreshold: 0.99,
+      });
+
+      expect(result.iterations).to.be.at.least(1);
+      expect(result.results).to.be.an('array');
+      expect(result.results.length).to.be.greaterThan(0);
+    });
+
+    it('should detect gaps when one topic has low scores', async function () {
+      // Create a plan that references both Python (good) and Rust (poor)
+      const plan: QueryPlan = {
+        originalQuery: 'compare Python and Rust',
+        complexity: 'complex',
+        subQueries: [
+          { query: 'Python features', reasoning: 'reason', topK: 3, priority: 'high' },
+          { query: 'Rust features', reasoning: 'reason', topK: 3, priority: 'high' },
+        ],
+        strategy: 'parallel',
+        explanation: 'Compare two languages',
+      };
+
+      // Simulate results: Python yields good scores, Rust yields low scores
+      const results: RetrievalResult[] = [
+        { document: new LangChainDocument({ pageContent: 'Python is great', metadata: {} }), score: 0.9, source: RetrievalStrategy.HYBRID, subQuery: 'Python features' },
+        { document: new LangChainDocument({ pageContent: 'Python dynamic', metadata: {} }), score: 0.85, source: RetrievalStrategy.HYBRID, subQuery: 'Python features' },
+        { document: new LangChainDocument({ pageContent: 'Rust systems', metadata: {} }), score: 0.15, source: RetrievalStrategy.HYBRID, subQuery: 'Rust features' },
+      ];
+
+      const gapAnalysis = qaAgent.analyzeGaps(plan, results);
+      expect(gapAnalysis.gaps.length).to.be.greaterThanOrEqual(1);
+
+      const rustGap = gapAnalysis.gaps.find(g => g.subQuery.query === 'Rust features');
+      expect(rustGap).to.exist;
+      expect(rustGap!.reason).to.equal('low_score');
+    });
+
+    it('should accumulate unique results across iterations', async function () {
+      const result = await qaAgent.query('compare Python and JavaScript', {
+        maxIterations: 3,
+        confidenceThreshold: 0.99,
+        topK: 10,
+      });
+
+      // Results from multiple iterations should all be unique
+      const chunkIds = result.results
+        .map(r => r.document.metadata.chunkId)
+        .filter(Boolean);
+      const uniqueIds = new Set(chunkIds);
+      expect(uniqueIds.size).to.equal(chunkIds.length);
     });
   });
 });

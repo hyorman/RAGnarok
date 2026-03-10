@@ -132,6 +132,11 @@ export class ModelRegistry {
     const bundledRoot = this.getBundledModelsRoot();
     if (bundledRoot) {
       const bundledPath = path.join(bundledRoot, modelName);
+      const resolvedBundled = path.resolve(bundledPath);
+      const resolvedRoot = path.resolve(bundledRoot);
+      if (!resolvedBundled.startsWith(resolvedRoot + path.sep) && resolvedBundled !== resolvedRoot) {
+        return modelName; // Don't use bundled path for suspicious model names
+      }
       if (fs.existsSync(bundledPath)) {
         this.logger.debug(`Using bundled model for ${modelName} at ${bundledPath}`);
         return bundledPath;
@@ -162,6 +167,13 @@ export class ModelRegistry {
 
     this.resolvedLocalModelPath = normalizedPath;
     return normalizedPath;
+  }
+
+  /**
+   * Invalidate the cached local model path so it is re-resolved on next access.
+   */
+  public invalidateLocalModelPathCache(): void {
+    this.resolvedLocalModelPath = null;
   }
 
   /**

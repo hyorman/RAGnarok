@@ -1,13 +1,13 @@
 /**
- * Hybrid Retriever - Combines semantic (vector) and keyword (BM25-like) search
- * Implements weighted scoring and result fusion for optimal retrieval
+ * Hybrid Retriever - Composite retriever combining vector and keyword search
  *
- * Architecture: Multi-strategy retrieval with configurable weights
- * Replaces: HybridSearchStrategy with LangChain integration
+ * Delegates retrieval to VectorRetriever and KeywordRetriever, then applies
+ * weighted score fusion to produce a single ranked list.
  */
 
-import { VectorStore } from '@langchain/core/vectorstores';
 import { Document as LangChainDocument } from '@langchain/core/documents';
+import { VectorRetriever } from './vectorRetriever';
+import { KeywordRetriever } from './keywordRetriever';
 import { Logger } from '../utils/logger';
 
 export interface HybridSearchOptions {
@@ -39,11 +39,12 @@ export interface HybridSearchResult {
 }
 
 /**
- * Hybrid retriever combining vector and keyword search
+ * Hybrid retriever combining vector and keyword search with weighted score fusion
  */
 export class HybridRetriever {
   private logger: Logger;
-  private vectorStore: VectorStore;
+  private vectorRetriever: VectorRetriever;
+  private keywordRetriever?: KeywordRetriever;
 
   // Default weights
   private readonly DEFAULT_VECTOR_WEIGHT = 0.7;
@@ -51,20 +52,14 @@ export class HybridRetriever {
   private readonly DEFAULT_K = 5;
   private readonly DEFAULT_MIN_SIMILARITY = 0.0;
 
-  // Stop words for keyword extraction (common English words)
-  private readonly STOP_WORDS = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
-    'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
-    'to', 'was', 'will', 'with', 'what', 'when', 'where', 'who', 'how',
-    'this', 'these', 'those', 'they', 'their', 'there', 'which', 'can',
-    'could', 'would', 'should', 'do', 'does', 'did', 'have', 'had', 'been',
-  ]);
-
-  constructor(vectorStore: VectorStore) {
+  constructor(vectorRetriever: VectorRetriever, keywordRetriever?: KeywordRetriever) {
     this.logger = new Logger('HybridRetriever');
-    this.vectorStore = vectorStore;
+    this.vectorRetriever = vectorRetriever;
+    this.keywordRetriever = keywordRetriever;
 
-    this.logger.info('HybridRetriever initialized');
+    this.logger.info('HybridRetriever initialized', {
+      hasKeywordRetriever: !!keywordRetriever,
+    });
   }
 
   /**
@@ -89,54 +84,74 @@ export class HybridRetriever {
     });
 
     try {
-      // Step 1: Perform vector similarity search
-      // Fetch more candidates than needed for re-ranking
+      // Step 1: Fetch vector candidates (more than needed for re-ranking)
       const candidateCount = Math.max(k * 3, 20);
-      const vectorResults = await this.vectorStore.similaritySearchWithScore(
-        query,
-        candidateCount
-      );
+      const vectorResults = await this.vectorRetriever.search(query, candidateCount);
 
       this.logger.debug('Vector search complete', {
         candidateCount: vectorResults.length,
       });
 
-      // Step 2: Extract keywords from query
-      const keywords = this.extractKeywords(query, options.customStopWords);
+      // Step 2: Extract keywords (delegate to keyword retriever or local fallback)
+      const keywords = this.keywordRetriever
+        ? this.keywordRetriever.extractKeywords(query, options.customStopWords)
+        : this.extractKeywordsFallback(query, options.customStopWords);
 
       this.logger.debug('Keywords extracted', {
         keywords,
         count: keywords.length,
       });
 
-      // Step 3: Calculate keyword scores for all candidates
-      const hybridResults: HybridSearchResult[] = vectorResults.map(([doc, vectorScore]) => {
-        const keywordScore = this.calculateKeywordScore(
-          doc.pageContent,
-          keywords,
-          options.keywordBoosting
-        );
+      // Step 3: Build candidate map from vector results
+      const candidateMap = new Map<string, { doc: LangChainDocument; vectorScore: number }>();
+      for (const { document: doc, score: vectorScore } of vectorResults) {
+        const key = doc.metadata?.chunkId ?? doc.pageContent;
+        if (!candidateMap.has(key)) {
+          candidateMap.set(key, { doc, vectorScore });
+        }
+      }
 
-        // Normalize vector score from distance metric to similarity score (0-1)
-        const normalizedVectorScore = this.normalizeVectorScore(vectorScore, doc);
+      // Step 4: If keyword retriever is initialized, fetch BM25 candidates to expand pool
+      if (this.keywordRetriever?.isInitialized()) {
+        const bm25Results = await this.keywordRetriever.search(query, candidateCount);
+        let bm25Added = 0;
+        for (const { document: doc } of bm25Results) {
+          const key = doc.metadata?.chunkId ?? doc.pageContent;
+          if (!candidateMap.has(key)) {
+            candidateMap.set(key, { doc, vectorScore: 0 });
+            bm25Added++;
+          }
+        }
+        this.logger.debug('BM25 candidates merged', {
+          bm25Total: bm25Results.length,
+          bm25Added,
+          totalCandidates: candidateMap.size,
+        });
+      }
 
-        // Calculate hybrid score as weighted combination
+      // Step 5: Score all candidates with hybrid formula
+      const hybridResults: HybridSearchResult[] = [];
+      for (const { doc, vectorScore } of candidateMap.values()) {
+        const keywordScore = this.keywordRetriever
+          ? this.keywordRetriever.scoreDocument(doc.pageContent, keywords, options.keywordBoosting)
+          : this.scoreDocumentFallback(doc.pageContent, keywords, options.keywordBoosting);
+
         const hybridScore =
-          vectorWeight * normalizedVectorScore +
+          vectorWeight * vectorScore +
           keywordWeight * keywordScore;
 
-        return {
+        hybridResults.push({
           document: doc,
           score: hybridScore,
-          vectorScore: normalizedVectorScore,
+          vectorScore,
           keywordScore,
-        };
-      });
+        });
+      }
 
-      // Step 4: Re-rank by hybrid score
+      // Step 6: Re-rank by hybrid score
       hybridResults.sort((a, b) => b.score - a.score);
 
-      // Step 5: Filter by minimum similarity and limit results
+      // Step 7: Filter by minimum similarity and limit results
       const filteredResults = hybridResults
         .filter((result) => result.score >= minSimilarity)
         .slice(0, k);
@@ -149,7 +164,7 @@ export class HybridRetriever {
         avgScore: this.calculateAvgScore(filteredResults),
       });
 
-      // Add explanations if needed
+      // Add explanations
       if (filteredResults.length > 0) {
         this.addExplanations(filteredResults, keywords);
       }
@@ -174,12 +189,12 @@ export class HybridRetriever {
     this.logger.debug('Performing vector-only search', { query, k });
 
     try {
-      const results = await this.vectorStore.similaritySearchWithScore(query, k);
+      const results = await this.vectorRetriever.search(query, k);
 
-      return results.map(([doc, score]) => ({
+      return results.map(({ document: doc, score }) => ({
         document: doc,
-        score: this.normalizeVectorScore(score, doc),
-        vectorScore: this.normalizeVectorScore(score, doc),
+        score,
+        vectorScore: score,
         keywordScore: 0,
       }));
     } catch (error) {
@@ -191,171 +206,50 @@ export class HybridRetriever {
     }
   }
 
-  /**
-   * Perform keyword-only search (BM25-like)
-   */
-  public async keywordSearch(
-    query: string,
-    k: number = this.DEFAULT_K
-  ): Promise<HybridSearchResult[]> {
-    this.logger.debug('Performing keyword-only search', { query, k });
-
-    try {
-      // Fetch more candidates for keyword filtering
-      const candidateCount = Math.max(k * 5, 50);
-      const allDocs = await this.vectorStore.similaritySearchWithScore(
-        query,
-        candidateCount
-      );
-
-      const keywords = this.extractKeywords(query);
-
-      // Score documents by keyword matching only
-      const keywordResults: HybridSearchResult[] = allDocs.map(([doc]) => {
-        const keywordScore = this.calculateKeywordScore(doc.pageContent, keywords);
-
-        return {
-          document: doc,
-          score: keywordScore,
-          vectorScore: 0,
-          keywordScore,
-        };
-      });
-
-      // Sort by keyword score and return top-k
-      keywordResults.sort((a, b) => b.keywordScore - a.keywordScore);
-      return keywordResults.slice(0, k);
-    } catch (error) {
-      this.logger.error('Keyword search failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-  }
-
   // ==================== Private Methods ====================
 
-  /**
-   * Normalize vector distance/similarity score to a consistent similarity score (0-1)
-   *
-   * Handles different distance metrics returned by vector stores:
-   * - Cosine distance: Range 0-2, where 0 = identical, 2 = opposite
-   * - L2/Euclidean distance: Range 0+, where smaller = more similar
-   * - Dot product: Can be negative, where larger = more similar
-   * - Missing/undefined: Falls back to neutral score (0.5)
-   *
-   * @param vectorScore - The raw score from vector store (may be distance or similarity)
-   * @param doc - The document with potential metadata containing distance
-   * @returns Normalized similarity score between 0 and 1 (higher = more similar)
-   */
-  private normalizeVectorScore(
-    vectorScore: number | undefined,
-    doc: LangChainDocument
-  ): number {
-    // First, get the actual distance value
-    // LanceDB may store distance in metadata._distance instead of returning it
-    let distance: number | undefined = vectorScore;
-    if (distance === undefined || isNaN(distance)) {
-      distance = doc.metadata?._distance;
-    }
+  /** Minimal keyword extraction fallback when no KeywordRetriever is provided */
+  private static readonly FALLBACK_STOP_WORDS = new Set([
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+    'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
+    'to', 'was', 'will', 'with', 'what', 'when', 'where', 'who', 'how',
+    'this', 'these', 'those', 'they', 'their', 'there', 'which', 'can',
+    'could', 'would', 'should', 'do', 'does', 'did', 'have', 'had', 'been',
+  ]);
 
-    // Handle missing or invalid distance
-    if (distance === undefined || isNaN(distance)) {
-      this.logger.debug('No distance score available, using neutral score');
-      return 0.5; // Neutral score allows keyword-only ranking to work
-    }
-
-    // Handle negative distances (dot product similarity)
-    // Negative values indicate similarity, where more negative = less similar
-    if (distance < 0) {
-      // Convert to similarity: smaller absolute distance = higher similarity
-      // Formula: similarity = 1 / (1 + |distance|)
-      return 1 / (1 + Math.abs(distance));
-    }
-
-    // Handle cosine distance (range 0-2)
-    // Cosine distance: 0 = identical vectors, 2 = opposite vectors
-    if (distance <= 2.0) {
-      // Linear conversion: 0 distance → 1.0 similarity, 2 distance → 0.0 similarity
-      return Math.max(0, 1 - (distance / 2));
-    }
-
-    // Handle L2/Euclidean distance (typically > 2)
-    // Larger distances indicate less similarity
-    // Formula: similarity = 1 / (1 + distance)
-    // This ensures: distance 0 → similarity 1, distance ∞ → similarity 0
-    return 1 / (1 + distance);
-  }
-
-  /**
-   * Extract keywords from query text
-   */
-  private extractKeywords(query: string, customStopWords?: string[]): string[] {
-    // Combine default and custom stop words
+  private extractKeywordsFallback(query: string, customStopWords?: string[]): string[] {
     const stopWords = customStopWords
-      ? new Set([...this.STOP_WORDS, ...customStopWords])
-      : this.STOP_WORDS;
-
-    // Tokenize and filter
+      ? new Set([...HybridRetriever.FALLBACK_STOP_WORDS, ...customStopWords])
+      : HybridRetriever.FALLBACK_STOP_WORDS;
     const tokens = query
       .toLowerCase()
-      .replace(/[^\w\s]/g, ' ') // Remove punctuation
+      .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
       .filter((word) => word.length > 2 && !stopWords.has(word));
-
-    // Remove duplicates
     return [...new Set(tokens)];
   }
 
-  /**
-   * Calculate keyword matching score for a document
-   * Uses BM25-like scoring with term frequency and document length normalization
-   */
-  private calculateKeywordScore(
-    text: string,
-    keywords: string[],
-    boosting: boolean = true
-  ): number {
-    if (keywords.length === 0) {
-      return 0;
-    }
-
+  private scoreDocumentFallback(text: string, keywords: string[], boosting?: boolean): number {
+    if (keywords.length === 0) return 0;
     const textLower = text.toLowerCase();
-    const textWords = textLower.split(/\s+/);
-    const textLength = textWords.length;
-
+    const textLength = textLower.split(/\s+/).length;
     let score = 0;
-
     for (const keyword of keywords) {
-      // Count occurrences
       const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
       const matches = textLower.match(regex);
-      const termFrequency = matches ? matches.length : 0;
-
-      if (termFrequency > 0) {
-        // BM25-like scoring
-        // TF component: log-scaled term frequency
-        const tfScore = Math.log(1 + termFrequency);
-
-        // Length normalization (penalize very long documents)
+      const tf = matches ? matches.length : 0;
+      if (tf > 0) {
+        const tfScore = Math.log(1 + tf);
         const lengthNorm = 1 / (1 + Math.log(1 + textLength / 100));
-
-        // Position boosting (keyword near start of document is weighted more)
         let positionBoost = 1;
-        if (boosting) {
-          const firstOccurrence = textLower.indexOf(keyword);
-          if (firstOccurrence >= 0) {
-            // Higher boost for keywords appearing earlier
-            positionBoost = 1 + (1 - firstOccurrence / textLength);
-          }
+        if (boosting !== false) {
+          const pos = textLower.indexOf(keyword);
+          if (pos >= 0) positionBoost = 1 + (1 - pos / textLength);
         }
-
-        score += tfScore * lengthNorm * positionBoost;
+        score += Math.min(1.0, tfScore * lengthNorm * positionBoost);
       }
     }
-
-    // Normalize by number of keywords (0-1 range)
-    return Math.min(1, score / keywords.length);
+    return Math.min(1.0, score / keywords.length);
   }
 
   /**
@@ -396,13 +290,5 @@ export class HybridRetriever {
 
     const sum = results.reduce((acc, r) => acc + r.score, 0);
     return sum / results.length;
-  }
-
-  /**
-   * Update the vector store (useful for testing or switching topics)
-   */
-  public setVectorStore(vectorStore: VectorStore): void {
-    this.vectorStore = vectorStore;
-    this.logger.debug('Vector store updated');
   }
 }

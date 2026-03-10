@@ -42,8 +42,10 @@ export class VectorStoreFactory {
   private embeddings: Embeddings;
   private storageDir: string;
   private storeCache: Map<string, VectorStore> = new Map();
+  private static readonly MAX_CACHE_SIZE = 50;
   private embeddingModel: string;
   private lanceDbUri: string;
+  private metadataDropWarningShown = false;
 
   constructor(embeddings: Embeddings, storageDir: string, embeddingModel: string) {
     this.logger = new Logger("VectorStoreFactory");
@@ -120,6 +122,10 @@ export class VectorStoreFactory {
         }
       );
 
+      if (this.storeCache.size >= VectorStoreFactory.MAX_CACHE_SIZE) {
+        const firstKey = this.storeCache.keys().next().value;
+        if (firstKey) this.storeCache.delete(firstKey);
+      }
       this.storeCache.set(config.topicId, store);
       this.logger.info("Vector store created successfully", { topicId: config.topicId, hasInitialDocs: normalizedDocs.length > 0 });
     } catch (error) {
@@ -155,6 +161,14 @@ export class VectorStoreFactory {
 
       // Read metadata to know which model was used
       const metadata = await this.getStoreMetadata(topicId);
+
+      if (!metadata) {
+        this.logger.warn('Vector store metadata missing — cannot verify embedding model compatibility', {
+          topicId,
+          usingModel: this.embeddingModel,
+        });
+      }
+
       // If we have metadata with a model, use it. Otherwise fall back to factory default.
       const modelToUse = metadata?.embeddingModel || this.embeddingModel;
 
@@ -163,11 +177,11 @@ export class VectorStoreFactory {
         model: modelToUse
       });
 
-      if (modelToUse !== this.embeddingModel) {
-        this.logger.info("Switching embedding model for topic load", {
+      if (metadata && metadata.embeddingModel && metadata.embeddingModel !== this.embeddingModel) {
+        this.logger.warn('Embedding model mismatch detected', {
           topicId,
-          configuredModel: this.embeddingModel,
-          topicModel: modelToUse
+          storedModel: metadata.embeddingModel,
+          currentModel: this.embeddingModel,
         });
       }
 
@@ -180,6 +194,10 @@ export class VectorStoreFactory {
       // Create vector store from existing table (per LangChain docs)
       const store = new LanceDB(embeddings, { table });
 
+      if (this.storeCache.size >= VectorStoreFactory.MAX_CACHE_SIZE) {
+        const firstKey = this.storeCache.keys().next().value;
+        if (firstKey) this.storeCache.delete(firstKey);
+      }
       this.storeCache.set(topicId, store);
       this.logger.info("Vector store loaded successfully", { topicId });
       return store;
@@ -305,6 +323,67 @@ export class VectorStoreFactory {
   }
 
   /**
+   * Fetch all documents from a topic via LanceDB table scan.
+   * Unlike similaritySearch, this does NOT require embedding a query vector,
+   * so it works regardless of the current embedding model's dimension.
+   */
+  public async getAllDocuments(topicId: string, limit: number, customStorageDir?: string): Promise<LangChainDocument[]> {
+    this.logger.info("Fetching all documents via table scan", { topicId, limit });
+
+    try {
+      const targetUri = customStorageDir
+        ? path.join(customStorageDir, "lancedb")
+        : this.lanceDbUri;
+
+      const db = await connect(targetUri);
+      const tableNames = await db.tableNames();
+      if (!tableNames.includes(topicId)) {
+        this.logger.warn("Table not found for getAllDocuments", { topicId });
+        return [];
+      }
+
+      const table = await db.openTable(topicId);
+      const rows = await table.query().limit(limit).toArray();
+
+      // Debug: log first row's column keys and text preview
+      if (rows.length > 0) {
+        const firstRow = rows[0];
+        const keys = Object.keys(firstRow);
+        const textPreview = typeof firstRow["text"] === "string"
+          ? firstRow["text"].substring(0, 100)
+          : `[${typeof firstRow["text"]}]`;
+        this.logger.debug("Table scan first row", { columns: keys, textPreview });
+      }
+
+      const documents = rows.map((row: Record<string, unknown>) => {
+        const metadata: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(row)) {
+          if (key !== "text" && key !== "vector") {
+            metadata[key] = value;
+          }
+        }
+        return new LangChainDocument({
+          pageContent: (row["text"] as string) || "",
+          metadata,
+        });
+      });
+
+      this.logger.info("Table scan complete", {
+        topicId,
+        documentCount: documents.length,
+        nonEmptyCount: documents.filter(d => d.pageContent.length > 0).length,
+      });
+      return documents;
+    } catch (error) {
+      this.logger.error("Failed to fetch all documents", {
+        error: error instanceof Error ? error.message : String(error),
+        topicId,
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Dispose of all resources and clean up
    * Clears cache and releases references
    * Note: LanceDB connections are stateless and don't need explicit closing
@@ -356,6 +435,15 @@ export class VectorStoreFactory {
         normalizedMetadata.loc_lines_from = doc.metadata.loc.lines?.from;
         normalizedMetadata.loc_lines_to = doc.metadata.loc.lines?.to;
         delete normalizedMetadata.loc; // Remove complex object
+      }
+
+      // Warn about dropped fields (once)
+      const droppedFields = Object.keys(doc.metadata).filter(f => !allowedFields.includes(f) && f !== 'chunkId');
+      if (droppedFields.length > 0 && !this.metadataDropWarningShown) {
+        this.logger.warn('Some metadata fields were dropped during normalization', {
+          droppedFields: droppedFields.slice(0, 5),
+        });
+        this.metadataDropWarningShown = true;
       }
 
       return new LangChainDocument({

@@ -1,25 +1,25 @@
 /**
- * Ensemble Retriever - Combines multiple retrieval strategies using Reciprocal Rank Fusion
- * Manual implementation since langchain's EnsembleRetriever is not yet exported
+ * Ensemble Retriever - Composite retriever using Reciprocal Rank Fusion
  *
- * Architecture: Uses custom RRF implementation with BM25 + Vector search
- * Benefits: More robust to different score scales, better fusion algorithm
- * Tradeoff: BM25 requires loading all documents in memory (less scalable than HybridRetriever)
+ * Delegates retrieval to VectorRetriever and KeywordRetriever, then applies
+ * RRF rank fusion to produce a single ranked list. Unlike HybridRetriever
+ * which uses weighted score fusion, EnsembleRetriever fuses by rank position.
  */
 
-import { VectorStore } from '@langchain/core/vectorstores';
+import { createHash } from 'crypto';
 import { Document as LangChainDocument } from '@langchain/core/documents';
-import { BM25Retriever } from '@langchain/community/retrievers/bm25';
+import { VectorRetriever } from './vectorRetriever';
+import { KeywordRetriever } from './keywordRetriever';
 import { Logger } from '../utils/logger';
 
 export interface EnsembleSearchOptions {
   /** Number of results to return */
   k?: number;
 
-  /** Weight for vector retriever (0-1, default 0.5) */
+  /** Weight for vector retriever (0-1, default 0.7) */
   vectorWeight?: number;
 
-  /** Weight for BM25 retriever (0-1, default 0.5) */
+  /** Weight for BM25 retriever (0-1, default 0.3) */
   bm25Weight?: number;
 }
 
@@ -29,63 +29,23 @@ export interface EnsembleSearchResult {
 }
 
 /**
- * Ensemble retriever using RRF to combine vector and BM25 search
+ * Ensemble retriever using RRF to combine vector and keyword search
  */
 export class EnsembleRetrieverWrapper {
   private logger: Logger;
-  private vectorStore: VectorStore;
-  private bm25Retriever?: BM25Retriever;
-  private documents: LangChainDocument[] = [];
+  private vectorRetriever: VectorRetriever;
+  private keywordRetriever: KeywordRetriever;
 
   private readonly DEFAULT_K = 5;
-  private readonly DEFAULT_VECTOR_WEIGHT = 0.5;
-  private readonly DEFAULT_BM25_WEIGHT = 0.5;
+  private readonly DEFAULT_VECTOR_WEIGHT = 0.7;
+  private readonly DEFAULT_BM25_WEIGHT = 0.3;
   private readonly RRF_CONSTANT = 60; // Standard RRF constant
 
-  constructor(vectorStore: VectorStore) {
+  constructor(vectorRetriever: VectorRetriever, keywordRetriever: KeywordRetriever) {
     this.logger = new Logger('EnsembleRetriever');
-    this.vectorStore = vectorStore;
+    this.vectorRetriever = vectorRetriever;
+    this.keywordRetriever = keywordRetriever;
     this.logger.info('EnsembleRetriever initialized');
-  }
-
-  /**
-   * Initialize the ensemble retriever by loading all documents from vector store
-   * This is required for BM25 to work (it needs all docs in memory)
-   */
-  public async initialize(documents?: LangChainDocument[]): Promise<void> {
-    this.logger.info('Initializing ensemble retriever with BM25');
-
-    if (documents && documents.length > 0) {
-      this.documents = documents;
-    } else {
-      // Fetch documents from vector store
-      // Note: This requires fetching ALL documents which may be memory-intensive
-      this.logger.warn('No documents provided, fetching from vector store. This may be slow for large datasets.');
-
-      try {
-        // Fetch a large number of documents (approximate all)
-        // This is a limitation of BM25 - it needs all docs in memory
-        const allDocs = await this.vectorStore.similaritySearch('', 10000);
-        this.documents = allDocs;
-        this.logger.info('Loaded documents from vector store', { count: allDocs.length });
-      } catch (error) {
-        this.logger.error('Failed to load documents from vector store', error);
-        throw new Error('Failed to initialize EnsembleRetriever: could not load documents');
-      }
-    }
-
-    if (this.documents.length === 0) {
-      throw new Error('EnsembleRetriever requires documents to initialize BM25');
-    }
-
-    // Create BM25 retriever from documents
-    this.bm25Retriever = BM25Retriever.fromDocuments(this.documents, {
-      k: this.DEFAULT_K,
-    });
-
-    this.logger.info('Ensemble retriever initialized successfully', {
-      documentCount: this.documents.length,
-    });
   }
 
   /**
@@ -95,14 +55,24 @@ export class EnsembleRetrieverWrapper {
     query: string,
     options: EnsembleSearchOptions = {}
   ): Promise<EnsembleSearchResult[]> {
-    if (!this.bm25Retriever) {
-      throw new Error('EnsembleRetriever not initialized. Call initialize() first.');
+    if (!this.keywordRetriever.isInitialized()) {
+      throw new Error('EnsembleRetriever not initialized. KeywordRetriever must be initialized first.');
     }
 
     const startTime = Date.now();
     const k = options.k || this.DEFAULT_K;
-    const vectorWeight = options.vectorWeight ?? this.DEFAULT_VECTOR_WEIGHT;
-    const bm25Weight = options.bm25Weight ?? this.DEFAULT_BM25_WEIGHT;
+    let vectorWeight = options.vectorWeight ?? this.DEFAULT_VECTOR_WEIGHT;
+    let bm25Weight = options.bm25Weight ?? this.DEFAULT_BM25_WEIGHT;
+
+    if (vectorWeight < 0 || bm25Weight < 0) {
+      throw new Error('Weights must be non-negative');
+    }
+    // Normalize if they don't sum to ~1.0
+    const totalWeight = vectorWeight + bm25Weight;
+    if (totalWeight > 0 && Math.abs(totalWeight - 1.0) > 0.01) {
+      vectorWeight = vectorWeight / totalWeight;
+      bm25Weight = bm25Weight / totalWeight;
+    }
 
     this.logger.info('Starting ensemble search with manual RRF', {
       query: query.substring(0, 100),
@@ -115,16 +85,16 @@ export class EnsembleRetrieverWrapper {
       // Fetch extra documents for re-ranking
       const fetchCount = k * 3;
 
-      // Get results from both retrievers
+      // Get results from both retrievers in parallel
       const [vectorResults, bm25Results] = await Promise.all([
-        this.vectorStore.similaritySearch(query, fetchCount),
-        this.bm25Retriever.invoke(query),
+        this.vectorRetriever.getDocuments(query, fetchCount),
+        this.keywordRetriever.search(query, fetchCount),
       ]);
 
       // Apply Reciprocal Rank Fusion (RRF)
       const fusedResults = this.reciprocalRankFusion(
         vectorResults,
-        bm25Results.slice(0, fetchCount),
+        bm25Results.map(r => r.document),
         vectorWeight,
         bm25Weight
       );
@@ -204,40 +174,24 @@ export class EnsembleRetrieverWrapper {
    * Get a unique ID for a document
    */
   private getDocumentId(doc: LangChainDocument): string {
-    // Use pageContent + metadata as a simple unique identifier
-    return `${doc.pageContent.substring(0, 100)}-${JSON.stringify(doc.metadata)}`;
+    if (doc.metadata?.chunkId) return String(doc.metadata.chunkId);
+    const hash = createHash('sha256');
+    hash.update(doc.pageContent);
+    hash.update(JSON.stringify(doc.metadata || {}));
+    return hash.digest('hex');
   }
 
   /**
-   * Check if the retriever is initialized
+   * Check if the retriever is ready (keyword retriever initialized)
    */
   public isInitialized(): boolean {
-    return this.bm25Retriever !== undefined;
+    return this.keywordRetriever.isInitialized();
   }
 
   /**
-   * Get document count
+   * Get document count from keyword retriever
    */
   public getDocumentCount(): number {
-    return this.documents.length;
-  }
-
-  /**
-   * Update the vector store (useful for testing or switching topics)
-   */
-  public setVectorStore(vectorStore: VectorStore): void {
-    this.vectorStore = vectorStore;
-    this.bm25Retriever = undefined; // Force re-initialization
-    this.logger.debug('Vector store updated, ensemble retriever needs re-initialization');
-  }
-
-  /**
-   * Refresh documents from vector store and reinitialize
-   */
-  public async refresh(): Promise<void> {
-    this.logger.info('Refreshing ensemble retriever');
-    this.bm25Retriever = undefined;
-    this.documents = [];
-    await this.initialize();
+    return this.keywordRetriever.getDocumentCount();
   }
 }

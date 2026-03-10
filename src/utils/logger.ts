@@ -23,6 +23,7 @@ export class Logger {
 
     if (!Logger.outputChannel) {
       Logger.outputChannel = vscode.window.createOutputChannel('RAGnarōk');
+      Logger.refreshLogLevel();
     }
   }
 
@@ -115,6 +116,13 @@ export class Logger {
   }
 
   /**
+   * Refresh log level from workspace configuration
+   */
+  public static refreshLogLevel(): void {
+    Logger.logLevel = Logger.getConfiguredLogLevel();
+  }
+
+  /**
    * Show the output channel
    */
   public show(): void {
@@ -135,4 +143,15 @@ export class Logger {
     Logger.outputChannel?.dispose();
     Logger.outputChannel = null;
   }
+}
+
+/**
+ * Extract a user-friendly message from an error and strip local file-system paths
+ * to avoid leaking usernames/directory structures in VS Code notifications.
+ */
+export function sanitizeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/\/Users\/[\w/.-]+/g, '<path>')
+    .replace(/C:\\[\w\\.-]+/g, '<path>');
 }

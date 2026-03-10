@@ -43,6 +43,20 @@ export class EmbeddingService {
   /** Concrete HuggingFace backend (lazy, may be null if vscodeLM is forced). */
   private hfBackend: HuggingFaceBackend | null = null;
 
+  /** Promise-based lock to prevent concurrent ensureBackend() initialization. */
+  private initPromise: Promise<void> | null = null;
+
+  /** Flag indicating an ingestion pipeline is actively using the backend. */
+  private _processing = false;
+
+  public get isProcessing(): boolean {
+    return this._processing;
+  }
+
+  public setProcessing(value: boolean): void {
+    this._processing = value;
+  }
+
   // Event emitter for model changes
   private static readonly _onModelChanged = new EventEmitter();
 
@@ -100,6 +114,20 @@ export class EmbeddingService {
   }
 
   private async ensureBackend(): Promise<void> {
+    if (this.backendResolved) return;
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+    this.initPromise = this._doEnsureBackend();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async _doEnsureBackend(): Promise<void> {
     if (this.backendResolved) return;
 
     const resolved = await this.resolveBackend();
@@ -191,40 +219,34 @@ export class EmbeddingService {
   // ---------------------------------------------------------------------------
 
   public async embed(text: string): Promise<number[]> {
-    if (this.activeBackendType === 'vscodeLM' && this.activeBackend) {
-      try {
-        return await this.activeBackend.embed(text);
-      } catch (error: any) {
-        if (await this.shouldFallbackToHuggingFace(error)) {
-          this.logger.warn(`VS Code LM embed failed at runtime, falling back to HuggingFace: ${error?.message}`);
-          vscode.window.showWarningMessage(
-            `RAGnarōk: VS Code LM embedding failed — falling back to HuggingFace. Reason: ${error?.message ?? error}`
-          );
-          await this.switchToHuggingFace();
-        } else {
-          throw error;
-        }
-      }
-    }
-
-    if (!this.activeBackend) {
-      await this.initialize();
-    }
-    return this.activeBackend!.embed(text);
+    return this.executeWithFallback(
+      (backend) => backend.embed(text),
+      'embed'
+    );
   }
 
   public async embedBatch(
     texts: string[],
     progressCallback?: (progress: number) => void
   ): Promise<number[][]> {
+    return this.executeWithFallback(
+      (backend) => backend.embedBatch(texts, progressCallback),
+      'embedBatch'
+    );
+  }
+
+  private async executeWithFallback<T>(
+    operation: (backend: EmbeddingBackend) => Promise<T>,
+    operationName: string
+  ): Promise<T> {
     if (this.activeBackendType === 'vscodeLM' && this.activeBackend) {
       try {
-        return await this.activeBackend.embedBatch(texts, progressCallback);
+        return await operation(this.activeBackend);
       } catch (error: any) {
         if (await this.shouldFallbackToHuggingFace(error)) {
-          this.logger.warn(`VS Code LM embedBatch failed at runtime, falling back to HuggingFace: ${error?.message}`);
+          this.logger.warn(`VS Code LM ${operationName} failed at runtime, falling back to HuggingFace: ${error?.message}`);
           vscode.window.showWarningMessage(
-            `RAGnarōk: VS Code LM batch embedding failed — falling back to HuggingFace. Reason: ${error?.message ?? error}`
+            `RAGnarōk: VS Code LM ${operationName} failed — falling back to HuggingFace. Reason: ${error?.message ?? error}`
           );
           await this.switchToHuggingFace();
         } else {
@@ -236,7 +258,7 @@ export class EmbeddingService {
     if (!this.activeBackend) {
       await this.initialize();
     }
-    return this.activeBackend!.embedBatch(texts, progressCallback);
+    return operation(this.activeBackend!);
   }
 
   // ---------------------------------------------------------------------------
@@ -246,6 +268,11 @@ export class EmbeddingService {
   public cosineSimilarity(a: number[], b: number[]): number {
     if (a.length !== b.length) {
       throw new Error('Embeddings must have the same dimension');
+    }
+    const normA = Math.sqrt(a.reduce((sum, x) => sum + x * x, 0));
+    const normB = Math.sqrt(b.reduce((sum, x) => sum + x * x, 0));
+    if (normA === 0 || normB === 0) {
+      return 0;
     }
     return langchainCosineSimilarity([a], [b])[0][0];
   }
@@ -328,5 +355,8 @@ export class EmbeddingService {
     this.activeBackendType = 'huggingface';
     this.hfBackend = this.getOrCreateHfBackend();
     this.activeBackend = this.hfBackend;
+
+    const newModelId = this.hfBackend.getCurrentModel();
+    EmbeddingService._onModelChanged.emit('modelChanged', newModelId);
   }
 }

@@ -142,6 +142,11 @@ export class VscodeLmBackend implements EmbeddingBackend {
   // Batch embedding
   // ---------------------------------------------------------------------------
 
+  private static readonly BATCH_SIZE = 500;
+  private static readonly CONCURRENCY = 3;
+  private static readonly MAX_RETRIES = 5;
+  private static readonly INITIAL_BACKOFF_MS = 1000;
+
   async embedBatch(
     texts: string[],
     progressCallback?: (progress: number) => void
@@ -156,42 +161,99 @@ export class VscodeLmBackend implements EmbeddingBackend {
 
     this.logger.debug(`Batch-embedding ${texts.length} texts via VS Code LM`);
 
-    try {
-      // The proposed API accepts string[] and returns Embedding[]
-      const results: Array<{ values: number[] }> = await this.lmApi.computeEmbeddings(
-        this.modelId,
-        texts
-      );
+    const allEmbeddings: number[][] = new Array(texts.length);
+    let completedCount = 0;
 
-      const embeddings: number[][] = results.map((r, idx) => {
-        if (!r.values || r.values.length === 0) {
-          throw new Error(`Empty embedding at index ${idx}`);
+    try {
+      // Split texts into batches
+      const batches: { texts: string[]; startIdx: number }[] = [];
+      for (let i = 0; i < texts.length; i += VscodeLmBackend.BATCH_SIZE) {
+        batches.push({ texts: texts.slice(i, i + VscodeLmBackend.BATCH_SIZE), startIdx: i });
+      }
+
+      // Process batches with bounded concurrency
+      for (let w = 0; w < batches.length; w += VscodeLmBackend.CONCURRENCY) {
+        const window = batches.slice(w, w + VscodeLmBackend.CONCURRENCY);
+
+        if (texts.length > 100) {
+          const scheduled = Math.min((w + VscodeLmBackend.CONCURRENCY) * VscodeLmBackend.BATCH_SIZE, texts.length);
+          const progressPercent = Math.round((scheduled / texts.length) * 100);
+          this.logger.info(`Generating embeddings: ${scheduled}/${texts.length} (${progressPercent}%)`);
         }
-        return r.values;
-      });
+
+        const windowResults = await Promise.all(
+          window.map(async (batch) => {
+            const results: Array<{ values: number[] }> = await this.lmApi.computeEmbeddings(
+              this.modelId,
+              batch.texts
+            );
+            return results.map((r, idx) => {
+              if (!r.values || r.values.length === 0) {
+                throw new Error(`Empty embedding at index ${batch.startIdx + idx}`);
+              }
+              return { globalIdx: batch.startIdx + idx, values: r.values };
+            });
+          })
+        );
+
+        for (const batchResults of windowResults) {
+          for (const result of batchResults) {
+            allEmbeddings[result.globalIdx] = result.values;
+          }
+          completedCount += batchResults.length;
+        }
+
+        progressCallback?.(Math.min(1.0, completedCount / texts.length));
+      }
 
       // Validate uniform dimensions
-      this.validateDimensions(embeddings);
-
-      progressCallback?.(1.0);
+      this.validateDimensions(allEmbeddings);
 
       this.logger.debug(
-        `Batch embedding complete: ${embeddings.length} vectors, dim=${this.dimension}`
+        `Batch embedding complete: ${allEmbeddings.length} vectors, dim=${this.dimension}`
       );
-      return embeddings;
+      return allEmbeddings;
     } catch (batchError: any) {
-      // Fallback: process texts one-by-one if the batch call fails
+      // Fallback: process only the remaining un-embedded texts sequentially
+      const remaining = texts.length - completedCount;
       this.logger.warn(
-        `Batch embedding failed (${batchError?.message}), falling back to sequential processing`
+        `Batch embedding failed at ${completedCount}/${texts.length} (${batchError?.message}), ` +
+        `falling back to sequential processing for ${remaining} remaining texts`
       );
 
-      const embeddings: number[][] = [];
       for (let i = 0; i < texts.length; i++) {
-        embeddings.push(await this.embed(texts[i]));
-        progressCallback?.((i + 1) / texts.length);
+        if (allEmbeddings[i]) {
+          continue; // Already embedded in the batch phase
+        }
+        allEmbeddings[i] = await this.embedWithRetry(texts[i]);
+        completedCount++;
+        progressCallback?.(completedCount / texts.length);
       }
-      return embeddings;
+      return allEmbeddings;
     }
+  }
+
+  /**
+   * Embed a single text with exponential backoff for rate-limit (429) errors.
+   */
+  private async embedWithRetry(text: string): Promise<number[]> {
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
+      try {
+        return await this.embed(text);
+      } catch (error: any) {
+        lastError = error;
+        const msg = error?.message ?? String(error);
+        if (msg.includes('429') && attempt < VscodeLmBackend.MAX_RETRIES) {
+          const backoff = VscodeLmBackend.INITIAL_BACKOFF_MS * Math.pow(2, attempt);
+          this.logger.warn(`Rate limited (attempt ${attempt + 1}/${VscodeLmBackend.MAX_RETRIES}), retrying in ${backoff}ms`);
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError;
   }
 
   // ---------------------------------------------------------------------------
