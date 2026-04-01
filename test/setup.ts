@@ -3,7 +3,7 @@
  * This file is loaded before running any tests
  */
 
-import { DEFAULTS } from '../src/utils/constants';
+import { DEFAULTS } from "@ragnarok/core";
 
 // Create a comprehensive VS Code API mock
 const ragConfig = {
@@ -11,17 +11,17 @@ const ragConfig = {
   topK: 5,
   chunkSize: 512,
   chunkOverlap: 50,
-  logLevel: 'info',
-  retrievalStrategy: 'hybrid',
+  logLevel: "info",
+  retrievalStrategy: "hybrid",
   maxIterations: 3,
   confidenceThreshold: 0.7,
-  llmModel: 'gpt-4o',
+  llmModel: "gpt-4o",
   includeWorkspaceContext: false,
 };
 
 const globalConfig = {
   ...ragConfig,
-  pdfStructureDetection: 'heuristic',
+  pdfStructureDetection: "heuristic",
 };
 
 const mockVscode = {
@@ -29,7 +29,7 @@ const mockVscode = {
     getConfiguration: (section?: string) => ({
       get: <T>(key: string, defaultValue?: T): T => {
         if (section) {
-          const sectionConfig = section === 'ragnarok' ? ragConfig : globalConfig;
+          const sectionConfig = section === "ragnarok" ? ragConfig : globalConfig;
           const scopedValue = (sectionConfig as any)[key];
           if (scopedValue !== undefined) {
             return scopedValue;
@@ -77,19 +77,19 @@ const mockVscode = {
       return await task(progress, { isCancellationRequested: false });
     },
     createOutputChannel: (name: string) => ({
-      append: (value: string) => {},
-      appendLine: (value: string) => {},
+      append: (_value: string) => {},
+      appendLine: (_value: string) => {},
       clear: () => {},
       show: () => {},
       hide: () => {},
       dispose: () => {},
       name,
-      replace: (value: string) => {},
+      replace: (_value: string) => {},
     }),
   },
 
   lm: {
-    selectChatModels: async (options?: any) => {
+    selectChatModels: async (_options?: any) => {
       // Mock LM model selection (returns empty for unit tests)
       return [];
     },
@@ -100,7 +100,7 @@ const mockVscode = {
       return {
         fsPath: path,
         path,
-        scheme: 'file',
+        scheme: "file",
         toString: () => path,
       };
     }
@@ -109,7 +109,7 @@ const mockVscode = {
       return {
         fsPath: uri,
         path: uri,
-        scheme: 'file',
+        scheme: "file",
         toString: () => uri,
       };
     }
@@ -128,7 +128,10 @@ const mockVscode = {
   },
 
   TreeItem: class {
-    constructor(public label: string, public collapsibleState?: any) {}
+    constructor(
+      public label: string,
+      public collapsibleState?: any,
+    ) {}
   },
 
   ThemeIcon: class {
@@ -179,14 +182,14 @@ const mockVscode = {
       update: async () => undefined,
       keys: () => [],
     };
-    extensionPath = '/mock/extension/path';
-    storagePath = '/mock/storage/path';
-    globalStoragePath = '/mock/global/storage/path';
-    logPath = '/mock/log/path';
-    extensionUri = { fsPath: '/mock/extension/path' };
-    storageUri = { fsPath: '/mock/storage/path' };
-    globalStorageUri = { fsPath: '/mock/global/storage/path' };
-    logUri = { fsPath: '/mock/log/path' };
+    extensionPath = "/mock/extension/path";
+    storagePath = "/mock/storage/path";
+    globalStoragePath = "/mock/global/storage/path";
+    logPath = "/mock/log/path";
+    extensionUri = { fsPath: "/mock/extension/path" };
+    storageUri = { fsPath: "/mock/storage/path" };
+    globalStorageUri = { fsPath: "/mock/global/storage/path" };
+    logUri = { fsPath: "/mock/log/path" };
   },
 };
 

@@ -1,9 +1,11 @@
 # Compiled output
 out/
 dist/
+dist-test/
 *.js
 !esbuild.js
 *.js.map
+*.tsbuildinfo
 !test/fixtures/**
 !scripts/**
 
@@ -24,7 +26,6 @@ node_modules/
 
 # npm
 npm-debug.log*
-package-lock.json
 
 # Test artifacts
 coverage/
@@ -35,3 +36,4 @@ test/.temp-storage/
 # Environment
 .env
 .env.local
+.vsce-staging-*/

@@ -1,0 +1,28 @@
+services:
+  ragnarok-mcp:
+    build:
+      context: ../..
+      dockerfile: packages/mcp-server/Dockerfile
+    ports:
+      - "${RAGNAROK_PORT:-4000}:4000"
+    volumes:
+      - ${RAGNAROK_HOST_STORAGE_DIR:-ragnarok-data}:/data/ragnarok
+    environment:
+      - RAGNAROK_PORT=4000
+      - RAGNAROK_STORAGE_DIR=/data/ragnarok
+      - RAGNAROK_HTTP_HOST=0.0.0.0
+      - RAGNAROK_API_KEY=${RAGNAROK_API_KEY:-}
+      - RAGNAROK_LLM_PROVIDER=${RAGNAROK_LLM_PROVIDER:-none}
+      - RAGNAROK_LLM_API_KEY=${RAGNAROK_LLM_API_KEY:-}
+      - RAGNAROK_LLM_MODEL=${RAGNAROK_LLM_MODEL:-}
+      - RAGNAROK_LLM_BASE_URL=${RAGNAROK_LLM_BASE_URL:-}
+      - RAGNAROK_EMBEDDING_MODEL=${RAGNAROK_EMBEDDING_MODEL:-Xenova/all-MiniLM-L6-v2}
+      - RAGNAROK_EMBEDDING_PROVIDER=${RAGNAROK_EMBEDDING_PROVIDER:-huggingface}
+      - RAGNAROK_EMBEDDING_BASE_URL=${RAGNAROK_EMBEDDING_BASE_URL:-}
+      - RAGNAROK_EMBEDDING_API_KEY=${RAGNAROK_EMBEDDING_API_KEY:-}
+      - RAGNAROK_CORS_ORIGIN=${RAGNAROK_CORS_ORIGIN:-*}
+      - RAGNAROK_LOG_LEVEL=${RAGNAROK_LOG_LEVEL:-info}
+    restart: unless-stopped
+
+volumes:
+  ragnarok-data:

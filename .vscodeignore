@@ -2,32 +2,35 @@
 .vscode/**
 .vscode-test/**
 test/**
-out/test/**
+out/**
+dist-test/**
 scripts/**
 
-# Source files (compiled output in /out is included)
-src/**
+# Source TypeScript and per-package compiled output (bundled into dist/extension.js)
+packages/**
 **/*.ts
 **/*.map
-
+esbuild.mjs
+tsconfig*.json
 
 # Configuration files
 .gitignore
 .yarnrc
 .github/**
-**/tsconfig.json
-**/tsconfig.test.json
-**/.tsconfig.json
-**/.tsconfig.test.json
-**/.eslintrc.json
+.dockerignore
+.eslintrc.json
+.prettierignore
+.prettierrc*
+eslint.config.mjs
+.env
+.npmrc
+stubs/**
 
 # Dependencies - exclude all node_modules by default
 node_modules/**
 
 # LangChain dependencies (CRITICAL - needed for document loading and vector stores)
 !node_modules/@langchain/**
-!node_modules/langchain/**
-!node_modules/langsmith/**
 !node_modules/uuid/**
 !node_modules/js-tiktoken/**
 !node_modules/flat/**
@@ -47,9 +50,6 @@ node_modules/**
 # Transformers.js for embeddings
 !node_modules/@huggingface/transformers/**
 !node_modules/@huggingface/jinja/**
-!node_modules/onnxruntime-common/**
-!node_modules/onnxruntime-node/**
-!node_modules/onnxruntime-web/**
 
 # Document loaders
 !node_modules/@mixmark-io/domino/**

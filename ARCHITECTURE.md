@@ -23,15 +23,15 @@ RAGnarōk is a VS Code extension that implements a full Retrieval-Augmented Gene
 
 ### Core Capabilities
 
-| Capability | Description |
-|---|---|
-| **Multi-format ingestion** | PDF, Markdown, HTML, plain text, GitHub repos, web pages |
-| **Semantic chunking** | Structure-aware splitting with heading metadata preservation |
-| **Dual embedding backends** | HuggingFace Transformers.js (local ONNX) or VS Code LM API |
-| **4 retrieval strategies** | Vector, Hybrid, Ensemble (RRF), BM25 |
-| **Agentic query planning** | LLM-powered query decomposition with heuristic fallback |
-| **Iterative refinement** | Gap analysis → follow-up query generation → convergence detection |
-| **Per-topic isolation** | Independent vector stores, document caches, and metadata per topic |
+| Capability                  | Description                                                        |
+| --------------------------- | ------------------------------------------------------------------ |
+| **Multi-format ingestion**  | PDF, Markdown, HTML, plain text, GitHub repos, web pages           |
+| **Semantic chunking**       | Structure-aware splitting with heading metadata preservation       |
+| **Pluggable embedding backends** | HuggingFace (local ONNX), VS Code LM API, Remote (OpenAI/Ollama) |
+| **4 retrieval strategies**  | Vector, Hybrid, Ensemble (RRF), BM25                               |
+| **Agentic query planning**  | LLM-powered query decomposition with heuristic fallback            |
+| **Iterative refinement**    | Gap analysis → follow-up query generation → convergence detection  |
+| **Per-topic isolation**     | Independent vector stores, document caches, and metadata per topic |
 
 ---
 
@@ -185,14 +185,14 @@ flowchart TD
 
 Each pipeline execution returns a `PipelineResult` containing:
 
-| Field | Description |
-|---|---|
-| `stages` | Boolean success per stage (loading, chunking, embedding, storing) |
-| `metadata.originalDocuments` | Count of source documents loaded |
-| `metadata.chunksCreated` | Total chunks after splitting |
-| `metadata.chunksEmbedded` | Chunks successfully embedded |
-| `metadata.chunksStored` | Chunks written to LanceDB |
-| `metadata.stageTimings` | Per-stage timing breakdown |
+| Field                        | Description                                                       |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `stages`                     | Boolean success per stage (loading, chunking, embedding, storing) |
+| `metadata.originalDocuments` | Count of source documents loaded                                  |
+| `metadata.chunksCreated`     | Total chunks after splitting                                      |
+| `metadata.chunksEmbedded`    | Chunks successfully embedded                                      |
+| `metadata.chunksStored`      | Chunks written to LanceDB                                         |
+| `metadata.stageTimings`      | Per-stage timing breakdown                                        |
 
 ### Loader Module Architecture
 
@@ -232,30 +232,30 @@ classDiagram
     DocumentLoader <|.. WebDocumentLoader
 ```
 
-| Module | File | Method |
-|---|---|---|
-| **TextDocumentLoader** | `src/loaders/textLoader.ts` | UTF-8 file read, returns single document |
-| **MarkdownDocumentLoader** | `src/loaders/markdownLoader.ts` | Text read with `isMarkdown` and `preserveStructure` metadata |
-| **HtmlDocumentLoader** | `src/loaders/htmlLoader.ts` | Regex-based: strips `<script>`, `<style>`, comments, all tags; decodes HTML entities; normalizes whitespace |
-| **PdfDocumentLoader** | `src/loaders/pdfLoader.ts` | Delegates to LangChain `PDFLoader` (`pdf-parse`), optional page splitting |
-| **GithubDocumentLoader** | `src/loaders/githubLoader.ts` | Delegates to LangChain `GithubRepoLoader`, supports GitHub Enterprise |
-| **WebDocumentLoader** | `src/loaders/webLoader.ts` | Delegates to `CheerioWebBaseLoader`, security checks (rejects 401/403, login redirects, password fields) |
+| Module                     | File                            | Method                                                                                                      |
+| -------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **TextDocumentLoader**     | `src/loaders/textLoader.ts`     | UTF-8 file read, returns single document                                                                    |
+| **MarkdownDocumentLoader** | `src/loaders/markdownLoader.ts` | Text read with `isMarkdown` and `preserveStructure` metadata                                                |
+| **HtmlDocumentLoader**     | `src/loaders/htmlLoader.ts`     | Regex-based: strips `<script>`, `<style>`, comments, all tags; decodes HTML entities; normalizes whitespace |
+| **PdfDocumentLoader**      | `src/loaders/pdfLoader.ts`      | Delegates to LangChain `PDFLoader` (`pdf-parse`), optional page splitting                                   |
+| **GithubDocumentLoader**   | `src/loaders/githubLoader.ts`   | Delegates to LangChain `GithubRepoLoader`, supports GitHub Enterprise                                       |
+| **WebDocumentLoader**      | `src/loaders/webLoader.ts`      | Delegates to `CheerioWebBaseLoader`, security checks (rejects 401/403, login redirects, password fields)    |
 
 ### Chunking Configuration
 
-| Setting | Default | Description |
-|---|---|---|
-| `chunkSize` | 512 | Target characters per chunk |
-| `chunkOverlap` | 50 | Overlap between adjacent chunks |
-| `preserveStructure` | true | Keep heading hierarchy (Markdown) |
+| Setting             | Default | Description                       |
+| ------------------- | ------- | --------------------------------- |
+| `chunkSize`         | 512     | Target characters per chunk       |
+| `chunkOverlap`      | 50      | Overlap between adjacent chunks   |
+| `preserveStructure` | true    | Keep heading hierarchy (Markdown) |
 
 **Recommended chunk sizes by use case:**
 
-| Use Case | Chunk Size |
-|---|---|
-| Q&A | 500 |
-| Search | 1000 |
-| Summarization | 2000 |
+| Use Case      | Chunk Size |
+| ------------- | ---------- |
+| Q&A           | 500        |
+| Search        | 1000       |
+| Summarization | 2000       |
 
 ---
 
@@ -329,21 +329,21 @@ flowchart TD
 
 The `QueryPlannerAgent` scores query complexity using heuristics:
 
-| Factor | Weight | Example |
-|---|---|---|
-| Sentence/clause count | +1 per extra sentence | "How does X work? And how about Y?" |
-| Question words | +1 per question word | what, how, why, when, where |
-| Comparison indicators | +2 | "compare X vs Y", "difference between" |
-| Word count > 25 | +1 | Long, detailed queries |
-| Conjunctions | +0.5 | and, or, but, also |
+| Factor                | Weight                | Example                                |
+| --------------------- | --------------------- | -------------------------------------- |
+| Sentence/clause count | +1 per extra sentence | "How does X work? And how about Y?"    |
+| Question words        | +1 per question word  | what, how, why, when, where            |
+| Comparison indicators | +2                    | "compare X vs Y", "difference between" |
+| Word count > 25       | +1                    | Long, detailed queries                 |
+| Conjunctions          | +0.5                  | and, or, but, also                     |
 
 **Complexity mapping:**
 
-| Score | Classification | Sub-queries |
-|---|---|---|
-| 0–2 | Simple | 1 (passthrough) |
-| 3–5 | Moderate | 2–3 |
-| 6+ | Complex | 3–5 |
+| Score | Classification | Sub-queries     |
+| ----- | -------------- | --------------- |
+| 0–2   | Simple         | 1 (passthrough) |
+| 3–5   | Moderate       | 2–3             |
+| 6+    | Complex        | 3–5             |
 
 ---
 
@@ -420,12 +420,12 @@ When gaps are detected, the system generates targeted follow-up queries:
 
 The loop terminates when any of these conditions are met:
 
-| Condition | Description |
-|---|---|
+| Condition      | Description                           |
+| -------------- | ------------------------------------- |
 | Confidence met | `avgConfidence ≥ confidenceThreshold` |
-| Max iterations | `iteration ≥ maxIterations` |
-| No gaps found | Gap analysis returns empty list |
-| Cancellation | `token.isCancellationRequested` |
+| Max iterations | `iteration ≥ maxIterations`           |
+| No gaps found  | Gap analysis returns empty list       |
+| Cancellation   | `token.isCancellationRequested`       |
 
 ---
 
@@ -437,37 +437,34 @@ The loop terminates when any of these conditions are met:
 flowchart TD
     START([Embedding request]) --> RESOLVE{Backend config}
 
-    %% use plain labels (no inner quotes or HTML) to avoid parser issues
-    RESOLVE -->|auto (default)| AUTO{VS Code LM API available?}
-    AUTO -->|Yes| VSCODE[VscodeLmBackend]
-    AUTO -->|No| HF[HuggingFaceBackend]
+    RESOLVE -->|auto| AUTO{Try registered backends}
+    AUTO -->|First available| SELECTED[Selected Backend]
+    AUTO -->|None available| FALLBACK[Last registered backend]
 
-    RESOLVE -->|vscodeLM| FORCE_VS{API available?}
-    FORCE_VS -->|Yes| VSCODE
-    FORCE_VS -->|No| ERROR([Error: API unavailable])
+    RESOLVE -->|specific name| FORCE{Backend registered?}
+    FORCE -->|Yes| SELECTED
+    FORCE -->|No| ERROR([Error: backend not registered])
 
-    RESOLVE -->|huggingface| HF
-
-    VSCODE --> EXEC[Execute embedding]
-    HF --> EXEC
+    SELECTED --> EXEC[Execute embedding]
+    FALLBACK --> EXEC
 
     EXEC --> FAIL{Failure?}
     FAIL -->|No| RETURN([Return vectors])
-    FAIL -->|Yes + auto mode| FALLBACK[Switch to HuggingFace\nShow warning]
+    FAIL -->|Yes + auto mode| SWITCH[Switch to fallback backend]
     FAIL -->|Yes + forced| ERROR2([Propagate error])
-    FALLBACK --> HF
+    SWITCH --> EXEC
 ```
 
 ### Backend Comparison
 
-| Feature | HuggingFace | VS Code LM |
-|---|---|---|
-| **Runtime** | ONNX / WASM (local) | VS Code proposed API |
-| **Models** | Xenova/* (bundled or downloaded) | Copilot-provided |
-| **Latency** | ~50ms first load, ~5ms after | API-dependent |
-| **Offline** | Yes | No |
-| **Dimensions** | Model-dependent (384/768) | Provider-dependent |
-| **Batch** | Sequential (per text) | Native batch API |
+| Feature        | HuggingFace                       | VS Code LM           | Remote (OpenAI/Ollama)    |
+| -------------- | --------------------------------- | -------------------- | ------------------------- |
+| **Runtime**    | ONNX / WASM (local)               | VS Code proposed API | HTTP API call             |
+| **Models**     | Xenova/\* (bundled or downloaded) | Copilot-provided     | Server-hosted             |
+| **Latency**    | ~50ms first load, ~5ms after      | API-dependent        | Network-dependent         |
+| **Offline**    | Yes                               | No                   | No                        |
+| **Dimensions** | Model-dependent (384/768)         | Provider-dependent   | Model-dependent           |
+| **Batch**      | Sequential (per text)             | Native batch API     | Batch (up to 100/request) |
 
 ### Class Diagram: Embedding Subsystem
 
@@ -475,27 +472,27 @@ flowchart TD
 classDiagram
     class EmbeddingBackend {
         <<interface>>
+        +name string
         +isAvailable() Promise~boolean~
         +initialize(modelName?) Promise~void~
         +embed(text) Promise~number[]~
         +embedBatch(texts, callback?) Promise~number[][]~
         +getDimension() number | null
+        +getModelId() string | null
         +dispose() void
     }
 
     class EmbeddingService {
-        -instance$ EmbeddingService
         -activeBackend EmbeddingBackend
         -activeBackendType string
-        -hfBackend HuggingFaceBackend
+        -registeredBackends EmbeddingBackend[]
         -initPromise Promise~void~
         -modelRegistry ModelRegistry
-        +getInstance()$ EmbeddingService
+        +registerBackend(backend) void
         +embed(text) Promise~number[]~
         +embedBatch(texts, cb?) Promise~number[][]~
         +initialize(modelName?) Promise~void~
         +getCurrentModel() string
-        +getDimension() number
         +resetBackendSelection() void
         -resolveBackend() Promise~string~
         -executeWithFallback(op, name) Promise~T~
@@ -503,25 +500,37 @@ classDiagram
     }
 
     class HuggingFaceBackend {
+        +name = "huggingface"
         -pipeline FeatureExtractionPipeline
         -currentModel string
         -dimension number
-        -initMutex Mutex
         +isAvailable() Promise~boolean~
         +initialize(modelName?) Promise~void~
         +embed(text) Promise~number[]~
         +embedBatch(texts, cb?) Promise~number[][]~
-        -truncateText(text, maxTokens?) string
     }
 
     class VscodeLmBackend {
+        +name = "vscodeLM"
         -model EmbeddingModel
         -dimension number
         +isAvailable() Promise~boolean~
         +initialize(modelName?) Promise~void~
         +embed(text) Promise~number[]~
         +embedBatch(texts, cb?) Promise~number[][]~
-        -validateDimensions(embeddings) void
+    }
+
+    class RemoteEmbeddingBackend {
+        +name = "remote"
+        -baseUrl string
+        -apiKey string
+        -format RemoteEmbeddingFormat
+        -modelName string
+        +isAvailable() Promise~boolean~
+        +initialize(modelName?) Promise~void~
+        +embed(text) Promise~number[]~
+        +embedBatch(texts, cb?) Promise~number[][]~
+        +listModels() Promise~Array~
     }
 
     class ModelRegistry {
@@ -529,16 +538,15 @@ classDiagram
         +getInstance()$ ModelRegistry
         +getDefaultModel() string
         +resolveModelIdentifier(name) string
-        +resolveLocalModelPath(config?) string
-        +discoverLocalModels() Promise~AvailableModel[]~
-        +validateModelPath(path) Promise~void~
+        +listAvailableModels() Promise~AvailableModel[]~
         +CURATED_MODELS$ string[]
     }
 
     EmbeddingBackend <|.. HuggingFaceBackend
     EmbeddingBackend <|.. VscodeLmBackend
+    EmbeddingBackend <|.. RemoteEmbeddingBackend
     EmbeddingService --> EmbeddingBackend : activeBackend
-    EmbeddingService --> HuggingFaceBackend : hfBackend
+    EmbeddingService --> EmbeddingBackend : registeredBackends[*]
     EmbeddingService --> ModelRegistry : modelRegistry
 ```
 
@@ -548,12 +556,12 @@ classDiagram
 
 ### Strategy Comparison
 
-| Strategy | Semantic | Keyword | Speed | Memory | Best For |
-|---|---|---|---|---|---|
-| **Vector** | Yes | No | Fast | Medium | Pure semantic similarity |
-| **Hybrid** (default) | Yes | Yes | Medium | Medium | General purpose |
-| **Ensemble (RRF)** | Yes | Yes | Medium-Slow | High | Robustness, multi-signal |
-| **BM25** | No | Yes | Fast | High | Exact term match, code, IDs |
+| Strategy             | Semantic | Keyword | Speed       | Memory | Best For                    |
+| -------------------- | -------- | ------- | ----------- | ------ | --------------------------- |
+| **Vector**           | Yes      | No      | Fast        | Medium | Pure semantic similarity    |
+| **Hybrid** (default) | Yes      | Yes     | Medium      | Medium | General purpose             |
+| **Ensemble (RRF)**   | Yes      | Yes     | Medium-Slow | High   | Robustness, multi-signal    |
+| **BM25**             | No       | Yes     | Fast        | High   | Exact term match, code, IDs |
 
 ### Hybrid Retrieval Scoring
 
@@ -937,30 +945,30 @@ sequenceDiagram
 sequenceDiagram
     participant C as Caller
     participant ES as EmbeddingService
-    participant VLM as VscodeLmBackend
-    participant HF as HuggingFaceBackend
+    participant PB as Primary Backend
+    participant FB as Fallback Backend
 
     C->>ES: embed(text)
     ES->>ES: ensureBackend()
 
-    alt activeBackendType = vscodeLM
-        ES->>VLM: embed(text)
+    alt Primary backend active
+        ES->>PB: embed(text)
         alt Success
-            VLM-->>ES: number[]
+            PB-->>ES: number[]
             ES-->>C: number[]
         else Failure + auto mode
-            VLM--xES: Error
-            ES->>ES: shouldFallbackToHuggingFace()
-            ES->>HF: initialize()
-            ES->>ES: activeBackendType = 'huggingface'
-            ES->>HF: embed(text)
-            HF-->>ES: number[]
+            PB--xES: Error
+            ES->>ES: shouldFallback()
+            ES->>FB: initialize()
+            ES->>ES: switch active to fallback
+            ES->>FB: embed(text)
+            FB-->>ES: number[]
             ES-->>C: number[]
             Note over ES: Show warning to user
         end
-    else activeBackendType = huggingface
-        ES->>HF: embed(text)
-        HF-->>ES: number[]
+    else Direct backend call
+        ES->>PB: embed(text)
+        PB-->>ES: number[]
         ES-->>C: number[]
     end
 ```
@@ -1049,12 +1057,12 @@ erDiagram
 
 ### Caching Strategy
 
-| Cache | Scope | Size Limit | Eviction |
-|---|---|---|---|
-| **RAGAgent** | Per topic | 10 agents | LRU on overflow |
-| **VectorStore** | Per topic | 50 stores | LRU on overflow |
-| **QueryPlan** | Per query hash | 50 plans | 1-minute TTL |
-| **Topic documents** | Per topic | Unbounded | On topic delete |
+| Cache               | Scope          | Size Limit | Eviction        |
+| ------------------- | -------------- | ---------- | --------------- |
+| **RAGAgent**        | Per topic      | 10 agents  | LRU on overflow |
+| **VectorStore**     | Per topic      | 50 stores  | LRU on overflow |
+| **QueryPlan**       | Per query hash | 50 plans   | 1-minute TTL    |
+| **Topic documents** | Per topic      | Unbounded  | On topic delete |
 
 ---
 
@@ -1064,37 +1072,37 @@ All settings are under the `ragnarok.*` namespace.
 
 ### Core Settings
 
-| Setting | Type | Default | Description |
-|---|---|---|---|
-| `topK` | number | 5 | Number of results per query |
-| `chunkSize` | number | 512 | Target chunk size (characters) |
-| `chunkOverlap` | number | 50 | Overlap between adjacent chunks |
-| `retrievalStrategy` | enum | `hybrid` | `vector` \| `hybrid` \| `ensemble` \| `bm25` |
-| `logLevel` | enum | `info` | `debug` \| `info` \| `warn` \| `error` |
+| Setting             | Type   | Default  | Description                                  |
+| ------------------- | ------ | -------- | -------------------------------------------- |
+| `topK`              | number | 5        | Number of results per query                  |
+| `chunkSize`         | number | 512      | Target chunk size (characters)               |
+| `chunkOverlap`      | number | 50       | Overlap between adjacent chunks              |
+| `retrievalStrategy` | enum   | `hybrid` | `vector` \| `hybrid` \| `ensemble` \| `bm25` |
+| `logLevel`          | enum   | `info`   | `debug` \| `info` \| `warn` \| `error`       |
 
 ### Embedding Settings
 
-| Setting | Type | Default | Description |
-|---|---|---|---|
-| `embeddingBackend` | enum | `auto` | `auto` \| `huggingface` \| `vscodeLM` |
-| `embeddingVscodeModelId` | string | `""` | VS Code LM model identifier |
-| `localModelPath` | string | `""` | Custom local model directory |
+| Setting                  | Type   | Default | Description                                    |
+| ------------------------ | ------ | ------- | ---------------------------------------------- |
+| `embeddingBackend`       | string | `auto`  | `auto` or any registered backend name          |
+| `embeddingVscodeModelId` | string | `""`    | VS Code LM model identifier                    |
+| `localModelPath`         | string | `""`    | Custom local model directory                   |
 
 ### Query Settings
 
-| Setting | Type | Default | Description |
-|---|---|---|---|
-| `maxIterations` | number | 3 | Max refinement iterations |
-| `confidenceThreshold` | number | 0.7 | Min confidence to stop refining |
-| `llmModel` | string | `gpt-4o-mini` | LLM model family for planning |
-| `includeWorkspaceContext` | boolean | true | Include open files as context |
-| `gapScoreThreshold` | number | 0.4 | Min avg score before gap is flagged |
+| Setting                   | Type    | Default       | Description                         |
+| ------------------------- | ------- | ------------- | ----------------------------------- |
+| `maxIterations`           | number  | 3             | Max refinement iterations           |
+| `confidenceThreshold`     | number  | 0.7           | Min confidence to stop refining     |
+| `llmModel`                | string  | `gpt-4o-mini` | LLM model family for planning       |
+| `includeWorkspaceContext` | boolean | true          | Include open files as context       |
+| `gapScoreThreshold`       | number  | 0.4           | Min avg score before gap is flagged |
 
 ### Advanced Settings
 
-| Setting | Type | Default | Description |
-|---|---|---|---|
-| `commonDatabasePath` | string | `""` | Path to shared read-only database |
+| Setting              | Type   | Default | Description                       |
+| -------------------- | ------ | ------- | --------------------------------- |
+| `commonDatabasePath` | string | `""`    | Path to shared read-only database |
 
 ---
 
@@ -1104,44 +1112,44 @@ All commands are under the `ragnarok.*` namespace.
 
 ### Topic Management
 
-| Command | Title | Description |
-|---|---|---|
+| Command                | Title            | Description                                      |
+| ---------------------- | ---------------- | ------------------------------------------------ |
 | `ragnarok.createTopic` | Create New Topic | Create a new RAG topic with name and description |
-| `ragnarok.deleteTopic` | Delete Topic | Remove a topic and its vector store |
-| `ragnarok.renameTopic` | Rename Topic | Rename an existing topic |
-| `ragnarok.exportTopic` | Export Topic | Export topic data to a portable format |
-| `ragnarok.importTopic` | Import Topic | Import a previously exported topic |
+| `ragnarok.deleteTopic` | Delete Topic     | Remove a topic and its vector store              |
+| `ragnarok.renameTopic` | Rename Topic     | Rename an existing topic                         |
+| `ragnarok.exportTopic` | Export Topic     | Export topic data to a portable format           |
+| `ragnarok.importTopic` | Import Topic     | Import a previously exported topic               |
 
 ### Document Ingestion
 
-| Command | Title | Description |
-|---|---|---|
-| `ragnarok.addDocument` | Add Document to Topic | Add local files (PDF, MD, HTML, TXT) or directories |
-| `ragnarok.addGithubRepo` | Add GitHub Repo to Topic | Ingest a GitHub repository (with optional token) |
-| `ragnarok.addWebUrl` | Add Web URL to Topic | Load a web page; auto-detects GitHub URLs and routes to repo ingestion |
+| Command                  | Title                    | Description                                                            |
+| ------------------------ | ------------------------ | ---------------------------------------------------------------------- |
+| `ragnarok.addDocument`   | Add Document to Topic    | Add local files (PDF, MD, HTML, TXT) or directories                    |
+| `ragnarok.addGithubRepo` | Add GitHub Repo to Topic | Ingest a GitHub repository (with optional token)                       |
+| `ragnarok.addWebUrl`     | Add Web URL to Topic     | Load a web page; auto-detects GitHub URLs and routes to repo ingestion |
 
 ### Embedding & Model Configuration
 
-| Command | Title | Description |
-|---|---|---|
-| `ragnarok.setEmbeddingModel` | Set Embedding Model | Choose between HuggingFace and VS Code LM backends |
-| `ragnarok.selectVscodeEmbeddingModel` | Select VS Code Embedding Model | Pick from available VS Code LM embedding models |
-| `ragnarok.selectHfEmbeddingModel` | Select HuggingFace Model | Pick from curated or custom HuggingFace models |
-| `ragnarok.selectLLMModel` | Select LLM Model | Choose LLM for agentic query planning |
+| Command                               | Title                          | Description                                        |
+| ------------------------------------- | ------------------------------ | -------------------------------------------------- |
+| `ragnarok.setEmbeddingModel`          | Set Embedding Model            | Choose between HuggingFace and VS Code LM backends |
+| `ragnarok.selectVscodeEmbeddingModel` | Select VS Code Embedding Model | Pick from available VS Code LM embedding models    |
+| `ragnarok.selectHfEmbeddingModel`     | Select HuggingFace Model       | Pick from curated or custom HuggingFace models     |
+| `ragnarok.selectLLMModel`             | Select LLM Model               | Choose LLM for agentic query planning              |
 
 ### GitHub Token Management
 
-| Command | Title | Description |
-|---|---|---|
-| `ragnarok.addGithubToken` | Add GitHub Token | Store a PAT for GitHub API access (5000 req/hr) |
-| `ragnarok.listGithubTokens` | List GitHub Tokens | View stored tokens by host |
-| `ragnarok.removeGithubToken` | Remove GitHub Token | Delete a stored token |
+| Command                      | Title               | Description                                     |
+| ---------------------------- | ------------------- | ----------------------------------------------- |
+| `ragnarok.addGithubToken`    | Add GitHub Token    | Store a PAT for GitHub API access (5000 req/hr) |
+| `ragnarok.listGithubTokens`  | List GitHub Tokens  | View stored tokens by host                      |
+| `ragnarok.removeGithubToken` | Remove GitHub Token | Delete a stored token                           |
 
 ### Maintenance
 
-| Command | Title | Description |
-|---|---|---|
-| `ragnarok.refreshTopics` | Refresh Topics | Reload topic tree view |
-| `ragnarok.clearModelCache` | Clear Model Cache | Remove cached embedding model files |
-| `ragnarok.clearDatabase` | Clear Database | Delete all topics and vector data |
-| `ragnarok.editConfigItem` | Edit Config Item | Modify a configuration setting inline |
+| Command                    | Title             | Description                           |
+| -------------------------- | ----------------- | ------------------------------------- |
+| `ragnarok.refreshTopics`   | Refresh Topics    | Reload topic tree view                |
+| `ragnarok.clearModelCache` | Clear Model Cache | Remove cached embedding model files   |
+| `ragnarok.clearDatabase`   | Clear Database    | Delete all topics and vector data     |
+| `ragnarok.editConfigItem`  | Edit Config Item  | Modify a configuration setting inline |

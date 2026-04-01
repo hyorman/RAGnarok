@@ -1,0 +1,41 @@
+{
+  "name": "@ragnarok/mcp-server",
+  "version": "0.4.0",
+  "description": "MCP server exposing RAGnarōk tools to any MCP-compatible agent",
+  "main": "dist/index.js",
+  "bin": {
+    "ragnarok-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "clean": "rimraf dist dist-test node_modules tsconfig.tsbuildinfo",
+    "clean:tests": "rimraf dist-test",
+    "compile:tests": "tsc -p ./tsconfig.test.json",
+    "pretest": "npm run compile:tests",
+    "test": "mocha",
+    "start": "node dist/index.js",
+    "start:http": "node dist/index.js --http",
+    "publish": "npm publish --access public",
+    "docker:build": "docker build -f Dockerfile -t ragnarok-mcp ../../",
+    "docker:push": "docker tag ragnarok-mcp hyorman/ragnarok-mcp:latest && docker push hyorman/ragnarok-mcp:latest"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@ragnarok/core": "0.4.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "openai": "^4.86.0",
+    "@anthropic-ai/sdk": "^0.39.0"
+  },
+  "devDependencies": {
+    "@types/chai": "^5.2.3",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/mocha": "^10.0.10",
+    "@types/sinon": "^21.0.0",
+    "chai": "^5.1.2",
+    "mocha": "^11.0.1",
+    "rimraf": "^6.0.1",
+    "sinon": "^21.0.2",
+    "typescript": "^5.9.3"
+  }
+}

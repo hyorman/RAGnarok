@@ -1,0 +1,13 @@
+{
+  "name": "onnxruntime-web",
+  "version": "0.0.0",
+  "description": "Stub: onnxruntime-web is not needed in Node.js (VS Code extension uses onnxruntime-node)",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./all": "./index.js",
+    "./wasm": "./index.js",
+    "./webgl": "./index.js",
+    "./webgpu": "./index.js"
+  }
+}

@@ -3,25 +3,28 @@
  * Configures and runs all tests in VS Code environment
  */
 
-import * as path from 'path';
-import Mocha from 'mocha';
-import { globSync } from 'glob';
+import * as path from "path";
+import Mocha from "mocha";
+import { globSync } from "glob";
 
 export function run(): Promise<void> {
   // Create the mocha test
   const mocha = new Mocha({
-    ui: 'bdd',
+    ui: "bdd",
     color: true,
     timeout: 120000, // 2 minutes for tests that download models
-    reporter: 'spec',
+    reporter: "spec",
   });
 
-  const testsRoot = path.resolve(__dirname, '..');
+  const testsRoot = path.resolve(__dirname, "..", "..");
 
   return new Promise((resolve, reject) => {
     try {
-      // Find all test files
-      const files = globSync('**/**.test.js', { cwd: testsRoot });
+      // Find all test files (root test/ and packages/vscode/test/)
+      const files = [
+        ...globSync("test/**/*.test.js", { cwd: testsRoot }),
+        ...globSync("packages/vscode/test/**/*.test.js", { cwd: testsRoot }),
+      ];
 
       // Add files to the test suite
       files.forEach((f: string) => mocha.addFile(path.resolve(testsRoot, f)));

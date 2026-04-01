@@ -1,0 +1,30 @@
+# Docker build context ignore rules
+# Run from repo root: docker build -f packages/mcp-server/Dockerfile .
+
+node_modules/
+dist/
+out/
+.git/
+.gitignore
+.vscode/
+.github/
+
+# VS Code extension package (not needed for MCP server)
+packages/vscode/
+!packages/vscode/package.json
+
+# Tests
+test/
+
+# Dev files
+*.md
+LICENSE
+eslint.config.mjs
+tsconfig.test.json
+scripts/
+*.vsix
+.vscodeignore
+
+# Chunk output / fixtures
+test/
+chunk-output/

@@ -1,0 +1,7 @@
+out
+dist
+node_modules
+*.d.ts
+.vscode-test
+test/chunk-output
+assets

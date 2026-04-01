@@ -48,7 +48,7 @@ installProcess.on('close', (code) => {
   }
 
   // Run vsce package
-  const vsceProcess = spawn('npx', ['vsce', 'package', '--allow-proposed-apis', 'embeddings'], {
+  const vsceProcess = spawn('npx', ['vsce', 'package'], {
     stdio: 'inherit',
     shell: true
   });
