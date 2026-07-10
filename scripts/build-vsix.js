@@ -132,6 +132,14 @@ function copyToStaging(stagingDir) {
       copyDirSync(src, path.join(stagingDir, dir));
     }
   }
+
+  // Bundled ONNX models live in the core package (shipped with the npm
+  // package); stage them under assets/models where findAssetsModelsDir()
+  // expects them relative to the extension bundle.
+  const modelsSrc = path.join(ROOT, 'packages', 'core', 'assets', 'models');
+  if (fs.existsSync(modelsSrc)) {
+    copyDirSync(modelsSrc, path.join(stagingDir, 'assets', 'models'));
+  }
 }
 
 function copyDirSync(src, dest) {
@@ -268,6 +276,24 @@ function downloadAndExtract(packageName, version, targetDir) {
 // 6. Prune bloat
 // ---------------------------------------------------------------------------
 
+// @langchain/community is allowlisted into the VSIX, but we only import a
+// handful of CommonJS runtime entrypoints. Prune the package down to the
+// exact runtime files we need, while preserving the nested node_modules tree
+// for the separate gutting step below.
+const LANGCHAIN_COMMUNITY_KEEP_PATHS = [
+  'package.json',
+  'LICENSE',
+  'node_modules',
+  'dist/_virtual/_rolldown/runtime.cjs',
+  'dist/utils/extname.cjs',
+  'dist/utils/@furkantoprak/bm25/BM25.cjs',
+  'dist/document_loaders/web/github.cjs',
+  'dist/document_loaders/web/cheerio.cjs',
+  'dist/document_loaders/fs/pdf.cjs',
+  'dist/retrievers/bm25.cjs',
+  'dist/vectorstores/lancedb.cjs',
+];
+
 function pruneBloat(stagingDir, targetPlatform) {
   console.log('\nPruning package bloat...');
   const nm = path.join(stagingDir, 'node_modules');
@@ -296,6 +322,14 @@ function pruneBloat(stagingDir, targetPlatform) {
     if (removedVersions > 0) console.log(`  ✓ Removed ${removedVersions} unused pdf.js versions (kept ${KEEP_PDFJS})`);
   }
 
+  const communityPruneResult = pruneLangchainCommunityPackage(nm);
+  if (communityPruneResult) {
+    console.log(
+      `  ✓ Pruned @langchain/community to required runtime files ` +
+      `(removed ${communityPruneResult.files} files and ${communityPruneResult.directories} directories)`
+    );
+  }
+
   // Remove .map source maps from all packages included in VSIX
   let mapCount = 0;
   const topLevelScopes = [
@@ -317,8 +351,10 @@ function pruneBloat(stagingDir, targetPlatform) {
   // Keep package.json stubs so npm list --production passes (required by vsce)
   const communityNm = path.join(nm, '@langchain', 'community', 'node_modules');
   if (fs.existsSync(communityNm)) {
-    // @langchain/classic provides BufferLoader base class for PDFLoader — keep it
-    const KEEP = new Set(['@langchain/classic']);
+    // @langchain/classic provides BufferLoader base class for PDFLoader.
+    // binary-extensions is required by GithubRepoLoader and is only present
+    // under @langchain/community/node_modules in the packaged tree.
+    const KEEP = new Set(['@langchain/classic', 'binary-extensions']);
     let gutted = 0;
     for (const entry of fs.readdirSync(communityNm, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -380,7 +416,78 @@ function findFiles(dir, ext) {
   return results;
 }
 
-/** Gut a package directory — remove everything except package.json. Returns 1 if gutted, 0 if skipped. */
+function pruneLangchainCommunityPackage(nodeModulesDir) {
+  const communityDir = path.join(nodeModulesDir, '@langchain', 'community');
+  if (!fs.existsSync(communityDir)) return null;
+
+  const keepSet = buildKeepPathSet(LANGCHAIN_COMMUNITY_KEEP_PATHS);
+  const removed = { files: 0, directories: 0 };
+  pruneDirectoryToKeepSet(communityDir, communityDir, keepSet, removed);
+  return removed;
+}
+
+function buildKeepPathSet(relativePaths) {
+  const keepSet = new Set();
+  for (const relativePath of relativePaths) {
+    const normalizedPath = normalizeRelativePath(relativePath);
+    keepSet.add(normalizedPath);
+
+    let parent = path.posix.dirname(normalizedPath);
+    while (parent !== '.') {
+      keepSet.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+  }
+  return keepSet;
+}
+
+function pruneDirectoryToKeepSet(rootDir, currentDir, keepSet, removed) {
+  for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+    const fullPath = path.join(currentDir, entry.name);
+    const relativePath = normalizeRelativePath(path.relative(rootDir, fullPath));
+
+    if (entry.isDirectory()) {
+      if (relativePath === 'node_modules') continue;
+
+      if (keepSet.has(relativePath)) {
+        pruneDirectoryToKeepSet(rootDir, fullPath, keepSet, removed);
+        continue;
+      }
+
+      const counts = countTreeEntries(fullPath);
+      fs.rmSync(fullPath, { recursive: true, force: true });
+      removed.files += counts.files;
+      removed.directories += counts.directories;
+      continue;
+    }
+
+    if (!keepSet.has(relativePath)) {
+      fs.rmSync(fullPath, { force: true });
+      removed.files += 1;
+    }
+  }
+}
+
+function countTreeEntries(dir) {
+  const counts = { files: 0, directories: 1 };
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const nestedCounts = countTreeEntries(fullPath);
+      counts.files += nestedCounts.files;
+      counts.directories += nestedCounts.directories;
+    } else {
+      counts.files += 1;
+    }
+  }
+  return counts;
+}
+
+function normalizeRelativePath(relativePath) {
+  return relativePath.split(path.sep).join('/');
+}
+
+/** Gut a package directory — remove everything except package.json and nested node_modules. Returns 1 if gutted, 0 if skipped. */
 function gutPackage(pkgDir) {
   if (!fs.existsSync(path.join(pkgDir, 'package.json'))) return 0;
   let removed = false;
@@ -432,7 +539,14 @@ async function main() {
   const distExtension = path.join(ROOT, 'dist', 'extension.js');
   if (!fs.existsSync(distExtension)) {
     console.log('Building extension bundle...');
-    execSync('npm run compile', { cwd: ROOT, stdio: 'inherit' });
+    execSync('npm run vscode:prepublish', { cwd: ROOT, stdio: 'inherit' });
+  }
+
+  if (!fs.existsSync(distExtension)) {
+    throw new Error(
+      `Missing extension bundle: expected ${distExtension} after running "npm run vscode:prepublish". ` +
+      'Check the compile/bundle output and ensure the extension entrypoint is generated before packaging.'
+    );
   }
 
   const stagingDir = createStagingDir(targetPlatform.target);

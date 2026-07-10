@@ -39,7 +39,7 @@
         "ragnarok.embeddingBackend": {
           "type": "string",
           "default": "auto",
-          "markdownDescription": "**Embedding backend** to use for generating vectors:\n\n- **auto** (default): Try VS Code LM embeddings first; fall back to local HuggingFace if unavailable.\n- **vscodeLM**: Force VS Code Language Model API embeddings (requires a registered embedding provider such as GitHub Copilot).\n- **huggingface**: Force local HuggingFace Transformers.js embeddings (ONNX/WASM, fully offline).\n\n⚠️ Switching backends may change the embedding dimension. Existing vector stores built with a different backend/model will need to be re-indexed.",
+          "markdownDescription": "**Embedding backend** to use for generating vectors:\n\n- **auto** (default): Try VS Code LM embeddings first; fall back to local HuggingFace if unavailable.\n- **vscodeLM**: Force VS Code Language Model API embeddings. This uses the proposed `embeddings` API, so it requires VS Code Insiders (or another build exposing the proposal), `--enable-proposed-api=hyorman.ragnarok`, and a registered embedding provider such as GitHub Copilot.\n- **huggingface**: Force local HuggingFace Transformers.js embeddings (ONNX/WASM, fully offline).\n\n⚠️ Switching backends may change the embedding dimension. Existing vector stores built with a different backend/model will need to be re-indexed.",
           "enum": [
             "auto",
             "vscodeLM",
@@ -55,7 +55,7 @@
         "ragnarok.embeddingVscodeModelId": {
           "type": "string",
           "default": "",
-          "markdownDescription": "**VS Code LM embedding model ID** to use when backend is `vscodeLM` or `auto`.\n\nLeave empty to auto-select the first available model. The available models depend on the registered embeddings provider (e.g., GitHub Copilot).\n\n💡 Check `Developer: Show Running Extensions` → Language Model API for available model IDs.",
+          "markdownDescription": "**VS Code LM embedding model ID** to use when backend is `vscodeLM` or `auto`.\n\nLeave empty to auto-select the first available model. The available models depend on the registered embeddings provider (e.g., GitHub Copilot).\n\n⚠️ This setting only works when the proposed `embeddings` API is enabled for `hyorman.ragnarok`.\n\n💡 Check `Developer: Show Running Extensions` → Language Model API for available model IDs.",
           "order": 1
         },
         "ragnarok.localModelPath": {
@@ -109,7 +109,7 @@
         "ragnarok.retrievalStrategy": {
           "type": "string",
           "default": "hybrid",
-          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): 70% semantic + 30% keyword\n- **vector**: Pure semantic similarity\n- **ensemble**: Advanced RRF fusion of vector + BM25 (slower, more accurate)\n- **bm25**: Pure keyword search with BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
+          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): 90% semantic + 10% keyword\n- **vector**: Pure semantic similarity\n- **ensemble**: Advanced RRF fusion of vector + BM25 (slower, more accurate)\n- **bm25**: Pure keyword search with BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
           "enum": [
             "vector",
             "hybrid",
@@ -157,6 +157,28 @@
           "default": "",
           "markdownDescription": "**Path to a shared/common RAG database folder.** Topics from this path are read-only and cannot be deleted or modified. Useful for team-shared knowledge bases.\n\n**Format:** Absolute path to a folder containing exported RAG database files.",
           "order": 12
+        },
+        "ragnarok.rerankerModel": {
+          "type": "string",
+          "default": "Xenova/ms-marco-MiniLM-L-6-v2",
+          "markdownDescription": "**Reranker Model** — The HuggingFace cross-encoder model to use for reranking. Default is `Xenova/ms-marco-MiniLM-L-6-v2` (23MB, fast). Alternatives: `Xenova/ms-marco-MiniLM-L-12-v2` (more accurate), `Xenova/ms-marco-TinyBERT-L-2-v2` (fastest).",
+          "order": 13
+        },
+        "ragnarok.rerankerMaxCandidates": {
+          "type": "number",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 100,
+          "markdownDescription": "**Reranker Max Candidates** — Maximum number of candidates to pass through the cross-encoder. Higher values improve recall but increase latency.",
+          "order": 14
+        },
+        "ragnarok.rerankerCandidateMultiplier": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 10,
+          "markdownDescription": "**Reranker Candidate Multiplier** — Over-fetch multiplier for initial retrieval when reranking is enabled. `topK * multiplier` candidates are retrieved before reranking.",
+          "order": 15
         }
       }
     },
@@ -241,6 +263,10 @@
         "title": "Rename Topic",
         "category": "RAG",
         "icon": "$(edit)"
+      },
+      {
+        "command": "ragnarok.selectRerankerModel",
+        "title": "RAGnarok: Select Reranker Model"
       }
     ],
     "viewsContainers": {
@@ -382,7 +408,8 @@
     "compile": "npm run build --workspaces && npm run version:sync",
     "bundle": "node esbuild.mjs",
     "bundle:watch": "node esbuild.mjs --watch",
-    "compile:tests": "tsc -p ./tsconfig.test.json",
+    "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
+    "compile:tests:all": "npm run compile:tests && npm run compile:tests --workspace=packages/core && npm run compile:tests --workspace=packages/mcp-server",
     "watch": "tsc -b --watch",
     "watch:tests": "tsc -watch -p ./tsconfig.test.json",
     "lint": "eslint packages/*/src packages/*/test test/",
@@ -409,8 +436,14 @@
     "pretest": "npm run compile && npm run compile:tests",
     "test": "node ./dist-test/test/runTest.js",
     "test:core": "npm test --workspace=packages/core",
+    "test:core:compiled": "npm exec --workspace=packages/core mocha",
+    "test:vscode:compiled": "node ./dist-test/test/runTest.js",
     "test:mcp": "npm test --workspace=packages/mcp-server",
-    "test:all": "npm run test:core && npm test && npm run test:mcp",
+    "test:mcp:compiled": "npm exec --workspace=packages/mcp-server mocha",
+    "test:all": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:vscode:compiled && npm run test:mcp:compiled",
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "bench:beir": "npm run bench:beir --workspace=packages/core",
+    "bench:frames": "npm run bench:frames --workspace=packages/core",
     "inspect:chunks": "npm run compile && node scripts/inspect-chunks.js",
     "clean": "npm run clean --workspaces && rimraf dist out dist-test && rimraf node_modules",
     "clean:test": "rimraf dist-test",
@@ -452,7 +485,7 @@
     "@huggingface/transformers": "^3.7.6",
     "@lancedb/lancedb": "^0.19.1",
     "@langchain/community": "^1.0.0",
-    "@langchain/core": "^1.0.0",
+    "@langchain/core": "^1.1.40",
     "@langchain/textsplitters": "^1.0.0",
     "adm-zip": "^0.5.16",
     "apache-arrow": "^18.1.0",

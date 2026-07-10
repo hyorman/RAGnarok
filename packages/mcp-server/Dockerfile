@@ -41,8 +41,8 @@ COPY --from=build /app/node_modules/ node_modules/
 # Copy mcp-server's workspace-level node_modules (version-conflicted deps not hoisted to root)
 COPY --from=build /app/packages/mcp-server/node_modules/ packages/mcp-server/node_modules/
 
-# Copy bundled models (if present)
-COPY assets/models/ assets/models/
+# Copy bundled models (if present) — shipped inside the core package
+COPY packages/core/assets/models/ packages/core/assets/models/
 
 ENV NODE_ENV=production
 ENV RAGNAROK_STORAGE_DIR=/data/ragnarok

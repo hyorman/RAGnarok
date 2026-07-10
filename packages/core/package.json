@@ -4,13 +4,21 @@
   "description": "Portable RAG engine - document loading, embedding, vector storage, and retrieval",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "assets",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p ./",
     "clean": "rimraf dist dist-test tsconfig.tsbuildinfo",
+    "prepack": "npm run clean && npm run build",
     "clean:tests": "rimraf dist-test",
-    "compile:tests": "tsc -p ./tsconfig.test.json",
+    "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
     "pretest": "npm run compile:tests",
-    "test": "mocha"
+    "test": "mocha",
+    "bench:beir": "npm run compile:tests && BEIR_BENCHMARK=1 mocha --grep 'BEIR' --timeout 0",
+    "bench:frames": "npm run compile:tests && FRAMES_BENCHMARK=1 mocha --grep 'FRAMES' --timeout 0"
   },
   "license": "MIT",
   "dependencies": {
@@ -18,6 +26,7 @@
     "@lancedb/lancedb": "^0.19.1",
     "@langchain/community": "^1.0.0",
     "@langchain/core": "^1.0.0",
+    "@langchain/langgraph": "^1.2.9",
     "@langchain/textsplitters": "^1.0.0",
     "adm-zip": "^0.5.16",
     "apache-arrow": "^18.1.0",
@@ -25,6 +34,10 @@
     "async-mutex": "^0.5.0",
     "cheerio": "^1.1.2",
     "glob": "^10.4.5",
+    "graphology": "^0.26.0",
+    "graphology-communities-louvain": "^2.0.2",
+    "graphology-traversal": "^0.3.1",
+    "graphology-types": "^0.24.8",
     "ignore": "^7.0.5",
     "pdf-parse": "^1.1.1"
   },
