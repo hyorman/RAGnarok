@@ -19,15 +19,17 @@ class ConsoleLoggerFactory implements ILoggerFactory {
 class ConsoleLogger implements ILogger {
   constructor(private context: string) {}
 
+  // Diagnostics go to stderr: stdout may be owned by a protocol stream
+  // (e.g. MCP stdio transport), and mixing log text into it corrupts framing.
   debug(message: string, ...args: any[]): void {
     if (Logger.getLogLevel() <= LogLevel.DEBUG) {
-      console.debug(`[DEBUG] [${this.context}] ${message}`, ...args);
+      console.error(`[DEBUG] [${this.context}] ${message}`, ...args);
     }
   }
 
   info(message: string, ...args: any[]): void {
     if (Logger.getLogLevel() <= LogLevel.INFO) {
-      console.log(`[INFO] [${this.context}] ${message}`, ...args);
+      console.error(`[INFO] [${this.context}] ${message}`, ...args);
     }
   }
 
@@ -57,13 +59,19 @@ export function setLoggerFactory(factory: ILoggerFactory): void {
 /**
  * Logger class that delegates to the configured factory.
  * Drop-in replacement — existing code keeps `new Logger('context')` unchanged.
+ *
+ * The delegate is resolved lazily so Loggers constructed before
+ * setLoggerFactory() (e.g. at module import time) still pick up the
+ * bootstrapped factory instead of keeping a stale default delegate.
  */
 export class Logger {
-  private delegate: ILogger;
+  private context: string;
+  private delegate: ILogger | null = null;
+  private delegateSource: ILoggerFactory | null = null;
   private static logLevel: LogLevel = LogLevel.INFO;
 
   constructor(context: string) {
-    this.delegate = loggerFactory.createLogger(context);
+    this.context = context;
   }
 
   public static setLogLevel(level: LogLevel): void {
@@ -74,20 +82,28 @@ export class Logger {
     return Logger.logLevel;
   }
 
+  private getDelegate(): ILogger {
+    if (this.delegate === null || this.delegateSource !== loggerFactory) {
+      this.delegate = loggerFactory.createLogger(this.context);
+      this.delegateSource = loggerFactory;
+    }
+    return this.delegate;
+  }
+
   public debug(message: string, ...args: any[]): void {
-    this.delegate.debug(message, ...args);
+    this.getDelegate().debug(message, ...args);
   }
 
   public info(message: string, ...args: any[]): void {
-    this.delegate.info(message, ...args);
+    this.getDelegate().info(message, ...args);
   }
 
   public warn(message: string, ...args: any[]): void {
-    this.delegate.warn(message, ...args);
+    this.getDelegate().warn(message, ...args);
   }
 
   public error(message: string, error?: Error | unknown): void {
-    this.delegate.error(message, error);
+    this.getDelegate().error(message, error);
   }
 }
 

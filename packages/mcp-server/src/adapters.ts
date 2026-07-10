@@ -23,11 +23,12 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.LOG_LEVEL]: this.mcpConfig.logLevel,
       [CONFIG.EMBEDDING_BACKEND]: this.mcpConfig.embeddingProvider !== "huggingface" ? "remote" : "huggingface",
       [CONFIG.LOCAL_MODEL_PATH]: "",
-      [CONFIG.EMBEDDING_VSCODE_MODEL_ID]: "",
       [CONFIG.LLM_MODEL]: this.mcpConfig.llmModel,
-      [CONFIG.INCLUDE_WORKSPACE]: false,
       [CONFIG.GAP_SCORE_THRESHOLD]: 0.3,
       [CONFIG.COMMON_DATABASE_PATH]: "",
+      [CONFIG.RERANKER_MODEL]: this.mcpConfig.rerankerModel,
+      [CONFIG.RERANKER_MAX_CANDIDATES]: this.mcpConfig.rerankerMaxCandidates,
+      [CONFIG.RERANKER_CANDIDATE_MULTIPLIER]: this.mcpConfig.rerankerCandidateMultiplier,
     };
 
     if (key in mapping) {
@@ -38,21 +39,25 @@ export class EnvConfigProvider implements IConfigProvider {
 }
 
 /**
- * Console-based logger for MCP server
+ * Console-based logger for MCP server.
+ *
+ * ALL output goes to stderr: in stdio mode stdout belongs exclusively to the
+ * JSON-RPC transport, and any diagnostic text on stdout corrupts the protocol
+ * stream. stderr is also the right channel in HTTP mode.
  */
 class ConsoleLogger implements ILogger {
   constructor(private context: string) {}
 
   debug(message: string, ...args: any[]): void {
-    console.debug(`[DEBUG] [${this.context}] ${message}`, ...args);
+    console.error(`[DEBUG] [${this.context}] ${message}`, ...args);
   }
 
   info(message: string, ...args: any[]): void {
-    console.log(`[INFO] [${this.context}] ${message}`, ...args);
+    console.error(`[INFO] [${this.context}] ${message}`, ...args);
   }
 
   warn(message: string, ...args: any[]): void {
-    console.warn(`[WARN] [${this.context}] ${message}`, ...args);
+    console.error(`[WARN] [${this.context}] ${message}`, ...args);
   }
 
   error(message: string, error?: Error | unknown): void {
@@ -67,15 +72,16 @@ export class ConsoleLoggerFactory implements ILoggerFactory {
 }
 
 /**
- * Console-based notifier for MCP server
+ * Console-based notifier for MCP server.
+ * Writes to stderr only — stdout is reserved for the stdio JSON-RPC transport.
  */
 export class ConsoleNotifier implements INotifier {
   showInfo(message: string): void {
-    console.log(`[INFO] ${message}`);
+    console.error(`[INFO] ${message}`);
   }
 
   showWarning(message: string): void {
-    console.warn(`[WARN] ${message}`);
+    console.error(`[WARN] ${message}`);
   }
 
   showError(message: string): void {
@@ -83,9 +89,9 @@ export class ConsoleNotifier implements INotifier {
   }
 
   async withProgress<T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> {
-    console.log(`[PROGRESS] ${title}`);
+    console.error(`[PROGRESS] ${title}`);
     return task((message) => {
-      console.log(`[PROGRESS] ${title}: ${message}`);
+      console.error(`[PROGRESS] ${title}: ${message}`);
     });
   }
 }

@@ -58,7 +58,7 @@ describe("MCP Server", () => {
       expect(config.embeddingModel).to.equal("Xenova/all-MiniLM-L6-v2");
       expect(config.chunkSize).to.equal(1000);
       expect(config.chunkOverlap).to.equal(200);
-      expect(config.topK).to.equal(5);
+      expect(config.topK).to.equal(10);
       expect(config.retrievalStrategy).to.equal("hybrid");
       expect(config.maxIterations).to.equal(3);
       expect(config.confidenceThreshold).to.equal(0.7);
@@ -76,9 +76,9 @@ describe("MCP Server", () => {
       expect(config.llmApiKey).to.equal("");
     });
 
-    it("should default llmModel to 'gpt-4o-mini'", () => {
+    it("should default llmModel to empty string (providers pick their own default)", () => {
       const config = loadConfig();
-      expect(config.llmModel).to.equal("gpt-4o-mini");
+      expect(config.llmModel).to.equal("");
     });
 
     it("should default llmBaseUrl to 'http://localhost:11434'", () => {
@@ -128,11 +128,25 @@ describe("MCP Server", () => {
   });
 
   describe("EnvConfigProvider", () => {
-    const mcpConfig = loadConfig();
+    let mcpConfig: ReturnType<typeof loadConfig>;
     let provider: EnvConfigProvider;
 
     before(() => {
+      // Clean embedding env vars so loadConfig() returns defaults
+      const savedProvider = process.env.RAGNAROK_EMBEDDING_PROVIDER;
+      const savedUrl = process.env.RAGNAROK_EMBEDDING_BASE_URL;
+      const savedKey = process.env.RAGNAROK_EMBEDDING_API_KEY;
+      delete process.env.RAGNAROK_EMBEDDING_PROVIDER;
+      delete process.env.RAGNAROK_EMBEDDING_BASE_URL;
+      delete process.env.RAGNAROK_EMBEDDING_API_KEY;
+
+      mcpConfig = loadConfig();
       provider = new EnvConfigProvider(mcpConfig);
+
+      // Restore
+      if (savedProvider !== undefined) {process.env.RAGNAROK_EMBEDDING_PROVIDER = savedProvider;}
+      if (savedUrl !== undefined) {process.env.RAGNAROK_EMBEDDING_BASE_URL = savedUrl;}
+      if (savedKey !== undefined) {process.env.RAGNAROK_EMBEDDING_API_KEY = savedKey;}
     });
 
     it("should return mapped values for known CONFIG keys", () => {
@@ -156,10 +170,6 @@ describe("MCP Server", () => {
 
     it('should return "huggingface" for CONFIG.EMBEDDING_BACKEND', () => {
       expect(provider.get(CONFIG.EMBEDDING_BACKEND, "")).to.equal("huggingface");
-    });
-
-    it("should return false for CONFIG.INCLUDE_WORKSPACE", () => {
-      expect(provider.get(CONFIG.INCLUDE_WORKSPACE, true)).to.equal(false);
     });
 
     it('should return "" for CONFIG.COMMON_DATABASE_PATH', () => {
@@ -196,31 +206,33 @@ describe("MCP Server", () => {
       sandbox.restore();
     });
 
-    it("debug() writes to console.debug with correct format", () => {
-      const stub = sandbox.stub(console, "debug");
+    // All levels write to console.error (stderr): stdout is reserved for the
+    // stdio JSON-RPC transport and must never carry diagnostic text.
+    it("debug() writes to stderr with correct format", () => {
+      const stub = sandbox.stub(console, "error");
       const logger = factory.createLogger("TestContext");
       logger.debug("msg");
       expect(stub.calledOnce).to.be.true;
       expect(stub.firstCall.args[0]).to.equal("[DEBUG] [TestContext] msg");
     });
 
-    it("info() writes to console.log with correct format", () => {
-      const stub = sandbox.stub(console, "log");
+    it("info() writes to stderr with correct format", () => {
+      const stub = sandbox.stub(console, "error");
       const logger = factory.createLogger("TestContext");
       logger.info("msg");
       expect(stub.calledOnce).to.be.true;
       expect(stub.firstCall.args[0]).to.equal("[INFO] [TestContext] msg");
     });
 
-    it("warn() writes to console.warn with correct format", () => {
-      const stub = sandbox.stub(console, "warn");
+    it("warn() writes to stderr with correct format", () => {
+      const stub = sandbox.stub(console, "error");
       const logger = factory.createLogger("TestContext");
       logger.warn("msg");
       expect(stub.calledOnce).to.be.true;
       expect(stub.firstCall.args[0]).to.equal("[WARN] [TestContext] msg");
     });
 
-    it("error() writes to console.error with correct format", () => {
+    it("error() writes to stderr with correct format", () => {
       const stub = sandbox.stub(console, "error");
       const logger = factory.createLogger("TestContext");
       logger.error("msg");
@@ -228,8 +240,21 @@ describe("MCP Server", () => {
       expect(stub.firstCall.args[0]).to.equal("[ERROR] [TestContext] msg");
     });
 
+    it("never writes to stdout (console.log)", () => {
+      const logStub = sandbox.stub(console, "log");
+      sandbox.stub(console, "error");
+      sandbox.stub(console, "warn");
+      sandbox.stub(console, "debug");
+      const logger = factory.createLogger("TestContext");
+      logger.debug("msg");
+      logger.info("msg");
+      logger.warn("msg");
+      logger.error("msg");
+      expect(logStub.called).to.be.false;
+    });
+
     it("logger includes context and optional data", () => {
-      const stub = sandbox.stub(console, "log");
+      const stub = sandbox.stub(console, "error");
       const logger = factory.createLogger("TestContext");
       logger.info("msg", { key: "value" });
       expect(stub.calledOnce).to.be.true;
@@ -265,19 +290,22 @@ describe("MCP Server", () => {
       expect(() => notifier.showError("error message")).to.not.throw();
     });
 
-    it("withProgress reports progress messages to console.log", async () => {
-      const stub = sinon.stub(console, "log");
+    it("withProgress reports progress messages to stderr, never stdout", async () => {
+      const errStub = sinon.stub(console, "error");
+      const logStub = sinon.stub(console, "log");
       try {
         await notifier.withProgress("Loading", async (report) => {
           report("step 1");
           report("step 2");
           return true;
         });
-        expect(stub.calledWith("[PROGRESS] Loading")).to.be.true;
-        expect(stub.calledWith("[PROGRESS] Loading: step 1")).to.be.true;
-        expect(stub.calledWith("[PROGRESS] Loading: step 2")).to.be.true;
+        expect(errStub.calledWith("[PROGRESS] Loading")).to.be.true;
+        expect(errStub.calledWith("[PROGRESS] Loading: step 1")).to.be.true;
+        expect(errStub.calledWith("[PROGRESS] Loading: step 2")).to.be.true;
+        expect(logStub.called).to.be.false;
       } finally {
-        stub.restore();
+        errStub.restore();
+        logStub.restore();
       }
     });
   });
