@@ -23,6 +23,7 @@ function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     retrievalStrategy: "hybrid",
     maxIterations: 3,
     confidenceThreshold: 0.7,
+    langGraphEnabled: false,
     logLevel: "info",
     port: 3000,
     llmProvider: "none",
@@ -35,6 +36,9 @@ function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     apiKey: "",
     corsOrigin: "*",
     httpHost: "127.0.0.1",
+    rerankerModel: "Xenova/ms-marco-MiniLM-L-6-v2",
+    rerankerMaxCandidates: 20,
+    rerankerCandidateMultiplier: 4,
     ...overrides,
   };
 }

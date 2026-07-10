@@ -84,7 +84,7 @@ Notes:
 
 ### 🔍 **Multiple Retrieval Strategies**
 
-- **Hybrid Search** (recommended): Combines vector + keyword (70%/30% weights, configurable)
+- **Hybrid Search** (recommended): Combines vector + keyword (90%/10% weights, configurable)
 - **Vector Search**: Pure semantic similarity using embeddings
 - **Ensemble Search**: Advanced RRF (Reciprocal Rank Fusion) with BM25 for highest accuracy
 - **BM25 Search**: Pure keyword search using Okapi BM25 algorithm (no embeddings needed)
@@ -123,6 +123,30 @@ Notes:
 - **Error Handling**: Robust error recovery throughout
 - **Async-Safe**: Mutex locks prevent race conditions
 - **Configurable**: 15+ settings for customization
+
+### 🕸️ **Knowledge Graph**
+
+- **LLM-Powered Entity Extraction**: Automatically extracts entities (concepts, technologies, people, organizations) and relationships from ingested documents using LLM with Zod-validated output, circuit breaker, and batch processing
+- **Graph-Based Retrieval** (`graph` strategy): Finds entities matching the query via name + embedding similarity, traverses the knowledge graph neighborhood via BFS, and scores results by match quality and hop distance
+- **Graph-Hybrid Retrieval** (`graph_hybrid` strategy): Fuses graph traversal results with vector similarity search using weighted score fusion (default: 70% vector / 30% graph), with graceful fallback when either source is unavailable
+- **In-Memory Graph**: Uses [graphology](https://graphology.github.io/) `DirectedGraph` with LanceDB persistence via `KnowledgeGraphStore` — one graph per topic
+- **Community Detection**: Louvain algorithm for automatic community/cluster identification across entities
+
+### 🧠 **Standalone Memory Module**
+
+- **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
+- **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
+- **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
+- **LLM-Powered Entity Extraction**: Optionally extracts entities (facts, preferences, concepts, tools, conventions) from stored memories; gracefully degrades when no LLM is available
+- **Markdown Export**: Automatically generates a `memories.md` file summarizing stored memories for human review
+- **MCP Integration**: Exposed as the `rag_memory` tool with actions: `store`, `recall`, `forget`, `stats`, `list`
+
+### 🔮 **LangGraph Orchestration** _(experimental, opt-in)_
+
+- Enable with the `ragnarok.langGraphEnabled` VS Code setting or `RAGNAROK_LANGGRAPH_ENABLED=true` for the MCP server
+- When enabled, [LangGraph](https://langchain-ai.github.io/langgraphjs/) `StateGraph` pipelines orchestrate both query execution and document ingestion — ingestion additionally builds a per-topic knowledge graph (entity extraction requires an LLM provider), which powers the `graph` retrieval strategies
+- The existing procedural flows (`RAGAgent`, `DocumentPipeline`) remain the default
+- See [Phase 4 plan](docs/knowledge-graph/phase-4-memory-langgraph.md) for the full design
 
 ---
 
@@ -427,7 +451,7 @@ copilot-rag/
 |---------|-------------|
 | **`@ragnarok/core`** | Loaders, chunkers, embeddings, retrievers, agents, stores — all platform-agnostic with dependency injection |
 | **`@ragnarok/vscode`** | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point |
-| **`@ragnarok/mcp-server`** | Exposes RAG tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio + HTTP transports) |
+| **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio + HTTP transports) |
 
 ### Build & Test Commands
 
@@ -442,6 +466,23 @@ npm run lint             # Lint all packages
 npm run format           # Format all source and test files
 npm run clean            # Clean all build artifacts
 ```
+
+### MCP Tools
+
+The MCP server exposes these tools to any MCP-compatible agent:
+
+| Tool | Description |
+|------|-------------|
+| `rag_query` | Query a topic with agentic RAG (supports all retrieval strategies) |
+| `rag_list_topics` | List available topics |
+| `rag_topic_stats` | Get statistics for a topic |
+| `rag_create_topic` | Create a new topic |
+| `rag_add_documents` | Add documents to a topic |
+| `rag_list_embedding_models` | List available embedding models |
+| `rag_embedding_info` | Get current embedding model info |
+| `rag_switch_embedding_model` | Switch the active embedding model |
+| `rag_llm_status` | Get current LLM provider status |
+| `rag_memory` | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped) |
 
 ---
 

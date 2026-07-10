@@ -16,6 +16,7 @@
  *   RAGNAROK_LLM_API_KEY      — API key for OpenAI or Anthropic
  *   RAGNAROK_LLM_MODEL        — LLM model name (default: gpt-4o-mini)
  *   RAGNAROK_LLM_BASE_URL     — Ollama base URL (default: http://localhost:11434)
+ *   RAGNAROK_LANGGRAPH_ENABLED — Run queries/indexing through the LangGraph pipeline (default: false, experimental)
  *   RAGNAROK_PORT             — HTTP server port (default: 3000)
  *   RAGNAROK_EMBEDDING_PROVIDER   — Embedding provider: huggingface, openai, ollama (default: huggingface)
  *   RAGNAROK_EMBEDDING_BASE_URL   — Remote embedding API base URL (required for openai/ollama)
@@ -26,6 +27,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import * as path from "path";
 import {
   setLoggerFactory,
   Logger,
@@ -35,6 +37,9 @@ import {
   HuggingFaceBackend,
   RemoteEmbeddingBackend,
   ModelRegistry,
+  RAGQueryService,
+  MemoryStore,
+  CrossEncoderReranker,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig } from "./config";
@@ -97,6 +102,7 @@ async function main(): Promise<void> {
     config: configProvider,
     notifier,
     embeddingService,
+    llmProvider,
   });
 
   logger.info(`Loaded ${topicManager.getAllTopics().length} topic(s) from ${config.storageDir}`);
@@ -108,7 +114,27 @@ async function main(): Promise<void> {
   });
 
   // Register tools
-  registerTools(server, topicManager, configProvider, llmProvider, embeddingService, config.storageDir);
+  const ragQueryService = new RAGQueryService(topicManager, configProvider, llmProvider);
+  TopicManager.onAgentCacheCleanup.subscribe((topicId) => ragQueryService.clearAgentCache(topicId));
+
+  // Create standalone memory store
+  const memoryStore = new MemoryStore({
+    storageDir: config.storageDir,
+    embeddingService,
+    llmProvider,
+    workingDir: process.cwd(),
+    markdownPath: path.join(config.storageDir, "memories.md"),
+  });
+
+  ragQueryService.setGraphDeps({ memoryStore, notifier, embeddingService });
+
+  // Create reranker (always-on — gracefully degrades if ONNX model unavailable)
+  let reranker: CrossEncoderReranker | null = null;
+  reranker = new CrossEncoderReranker(config.rerankerModel, {
+    maxCandidates: config.rerankerMaxCandidates,
+  });
+
+  registerTools(server, topicManager, llmProvider, embeddingService, ragQueryService, memoryStore, reranker, config);
 
   // Start transport
   const useHttp = process.argv.includes("--http");

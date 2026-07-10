@@ -20,6 +20,7 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.RETRIEVAL_STRATEGY]: this.mcpConfig.retrievalStrategy,
       [CONFIG.MAX_ITERATIONS]: this.mcpConfig.maxIterations,
       [CONFIG.CONFIDENCE_THRESHOLD]: this.mcpConfig.confidenceThreshold,
+      [CONFIG.LANGGRAPH_ENABLED]: this.mcpConfig.langGraphEnabled,
       [CONFIG.LOG_LEVEL]: this.mcpConfig.logLevel,
       [CONFIG.EMBEDDING_BACKEND]: this.mcpConfig.embeddingProvider !== "huggingface" ? "remote" : "huggingface",
       [CONFIG.LOCAL_MODEL_PATH]: "",

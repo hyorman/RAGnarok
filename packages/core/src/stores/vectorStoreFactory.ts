@@ -440,7 +440,10 @@ export class VectorStoreFactory {
    */
   private normalizeDocumentMetadata(documents: LangChainDocument[]): LangChainDocument[] {
     return documents.map((doc) => {
-      // Keep only essential, consistent metadata fields
+      // Keep only essential, consistent metadata fields.
+      // chunkId is required for graph retrieval to hydrate chunks (entities
+      // reference chunks by chunkId), and the position/heading fields drive
+      // source attribution in query results.
       const allowedFields = [
         "source",
         "fileName",
@@ -453,6 +456,11 @@ export class VectorStoreFactory {
         "loc",
         "isMarkdown",
         "preserveStructure",
+        "chunkId",
+        "startPosition",
+        "endPosition",
+        "headingPath",
+        "sectionTitle",
       ];
 
       const normalizedMetadata: Record<string, any> = {};
@@ -471,8 +479,14 @@ export class VectorStoreFactory {
         delete normalizedMetadata.loc; // Remove complex object
       }
 
+      // Serialize array-valued headingPath to a scalar JSON string — LanceDB
+      // columns must be scalar (same treatment as tags/entityIds elsewhere).
+      if (Array.isArray(normalizedMetadata.headingPath)) {
+        normalizedMetadata.headingPath = JSON.stringify(normalizedMetadata.headingPath);
+      }
+
       // Warn about dropped fields (once)
-      const droppedFields = Object.keys(doc.metadata).filter((f) => !allowedFields.includes(f) && f !== "chunkId");
+      const droppedFields = Object.keys(doc.metadata).filter((f) => !allowedFields.includes(f));
       if (droppedFields.length > 0 && !this.metadataDropWarningShown) {
         this.logger.warn("Some metadata fields were dropped during normalization", {
           droppedFields: droppedFields.slice(0, 5),

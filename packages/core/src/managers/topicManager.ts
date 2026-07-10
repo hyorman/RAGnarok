@@ -13,10 +13,14 @@ import archiver from "archiver";
 import AdmZip from "adm-zip";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
-import { IConfigProvider, INotifier } from "../interfaces";
-import { Topic, TopicsIndex, Document as TopicDocument, ExportedTopicData, TopicSource } from "../utils/types";
+import { IConfigProvider, ILLMProvider, INotifier } from "../interfaces";
+import { Topic, TopicsIndex, Document as TopicDocument, ExportedTopicData, TopicSource, TopicMatch } from "../utils/types";
 import { DocumentPipeline, PipelineOptions, PipelineResult } from "./documentPipeline";
+import { executeIndexingGraph } from "../agents/indexingGraph";
 import { VectorStoreFactory } from "../stores/vectorStoreFactory";
+import { KnowledgeGraphStore } from "../stores/knowledgeGraphStore";
+import { KnowledgeGraph } from "../stores/knowledgeGraph";
+import { EventEmitter } from "events";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
 import { EXTENSION, CONFIG } from "../constants";
@@ -29,6 +33,11 @@ export interface TopicManagerOptions {
   config: IConfigProvider;
   notifier: INotifier;
   embeddingService: EmbeddingService;
+  /**
+   * LLM provider for entity extraction during LangGraph indexing.
+   * Optional — without it the graph pipeline skips extraction.
+   */
+  llmProvider?: ILLMProvider;
 }
 
 export interface CreateTopicOptions {
@@ -54,19 +63,40 @@ export interface AddDocumentResult {
  * Manages all topic operations and vector stores
  */
 export class TopicManager {
-  // Callback registry for external components to register cleanup functions
-  // This allows TopicManager to notify other components (like RAGTool) without creating circular dependencies
-  private static agentCacheCleanupCallback: ((topicId: string) => void) | null = null;
+  // Event emitter for agent cache cleanup notifications
+  // Allows multiple external components (RAGTool, MCP server) to subscribe without overwriting each other
+  private static readonly _onAgentCacheCleanup = new EventEmitter();
+
+  public static readonly onAgentCacheCleanup = {
+    subscribe(listener: (topicId: string) => void): { unsubscribe(): void } {
+      TopicManager._onAgentCacheCleanup.on("cleanup", listener);
+      return {
+        unsubscribe() {
+          TopicManager._onAgentCacheCleanup.off("cleanup", listener);
+        },
+      };
+    },
+  };
+
+  /**
+   * Check if a topic name/ID indicates a system-internal topic.
+   * System topics (e.g. _memory) are hidden from normal listings.
+   */
+  static isSystemTopic(nameOrId: string): boolean {
+    return nameOrId.startsWith("_");
+  }
 
   private storageDir: string;
   private config: IConfigProvider;
   private notifier: INotifier;
   private embeddingService: EmbeddingService;
+  private llmProvider: ILLMProvider | undefined;
 
   private logger: Logger;
   private topicsIndex: TopicsIndex | null = null;
   private documentPipeline: DocumentPipeline;
   private vectorStoreFactory: VectorStoreFactory | null = null;
+  private knowledgeGraphStore: KnowledgeGraphStore | null = null;
   private isInitialized: boolean = false;
 
   // Cache for loaded vector stores
@@ -95,6 +125,7 @@ export class TopicManager {
     this.config = options.config;
     this.notifier = options.notifier;
     this.embeddingService = options.embeddingService;
+    this.llmProvider = options.llmProvider;
     this.documentPipeline = new DocumentPipeline(this.notifier, this.embeddingService, this.config);
 
     this.logger.info("TopicManager created");
@@ -126,6 +157,7 @@ export class TopicManager {
       await this.documentPipeline.initialize(storageDir);
 
       this.vectorStoreFactory = new VectorStoreFactory(storageDir, this.topicsIndex!.modelName, this.embeddingService);
+      this.knowledgeGraphStore = new KnowledgeGraphStore(path.join(storageDir, "lancedb"));
 
       // Load common database if configured
       await this.loadCommonDatabase();
@@ -231,6 +263,11 @@ export class TopicManager {
       // Delete vector store
       await this.vectorStoreFactory.deleteStore(topicId);
 
+      // Delete knowledge graph tables if they exist
+      if (this.knowledgeGraphStore) {
+        await this.knowledgeGraphStore.deleteGraph(topicId);
+      }
+
       // Remove from cache
       this.vectorStoreCache.delete(topicId);
       this.topicDocuments.delete(topicId);
@@ -275,18 +312,48 @@ export class TopicManager {
   }
 
   /**
+   * Get the knowledge graph store for persisting entity/edge tables
+   */
+  public getKnowledgeGraphStore(): KnowledgeGraphStore | null {
+    return this.knowledgeGraphStore;
+  }
+
+  /**
+   * Load the knowledge graph for a topic (returns null if none exists)
+   */
+  public async getKnowledgeGraph(topicId: string): Promise<KnowledgeGraph | null> {
+    if (!this.knowledgeGraphStore) {return null;}
+    try {
+      const hasGraph = await this.knowledgeGraphStore.hasGraph(topicId);
+      if (!hasGraph) {return null;}
+      const data = await this.knowledgeGraphStore.loadGraph(topicId);
+      if (!data) {return null;}
+      return KnowledgeGraph.fromJSON(data);
+    } catch (error) {
+      this.logger.warn("Failed to load knowledge graph", {
+        topicId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get the embedding service instance
+   */
+  public getEmbeddingService(): EmbeddingService {
+    return this.embeddingService;
+  }
+
+  /**
    * Notify registered components to clear cached agents for a topic
    */
   private notifyAgentCacheCleanup(topicId: string): void {
-    if (!TopicManager.agentCacheCleanupCallback) {
-      return;
-    }
-
     try {
-      TopicManager.agentCacheCleanupCallback(topicId);
+      TopicManager._onAgentCacheCleanup.emit("cleanup", topicId);
     } catch (error) {
       // Don't fail the caller if cache cleanup fails
-      this.logger.debug("Agent cache cleanup callback failed", {
+      this.logger.debug("Agent cache cleanup notification failed", {
         topicId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -372,7 +439,56 @@ export class TopicManager {
       ? Object.values(this.commonTopicsIndex.topics).map((t) => ({ ...t, source: "common" as TopicSource }))
       : [];
 
-    return [...localTopics, ...commonTopics];
+    return [...localTopics, ...commonTopics].filter((t) => !TopicManager.isSystemTopic(t.name));
+  }
+
+  /**
+   * Find the best matching topic for a user-supplied name.
+   * Tries exact match first, then single-topic fallback, then semantic similarity.
+   * Throws if no topics exist at all.
+   */
+  public async resolveTopicByName(requestedTopic: string): Promise<TopicMatch> {
+    if (!requestedTopic.trim()) {
+      throw new Error("Topic name is required.");
+    }
+    const allTopics = this.getAllTopics();
+
+    if (allTopics.length === 0) {
+      throw new Error("No topics found in the RAG database. Create a topic first.");
+    }
+
+    // Try exact match (case-insensitive)
+    const exactMatch = allTopics.find((t) => t.name.toLowerCase() === requestedTopic.toLowerCase());
+    if (exactMatch) {
+      this.logger.debug(`Exact topic match found: ${exactMatch.name}`);
+      return { topic: exactMatch, matchType: "exact" };
+    }
+
+    const topicNames = allTopics.map((t) => t.name);
+
+    // Single-topic fallback
+    if (allTopics.length === 1) {
+      this.logger.debug(`Single topic fallback: ${allTopics[0].name}`);
+      return { topic: allTopics[0], matchType: "fallback", availableTopics: topicNames };
+    }
+
+    // Semantic similarity across all topics
+    this.logger.debug(`Computing semantic similarity for topic: ${requestedTopic}`);
+    const requestedEmbedding = await this.embeddingService.embed(requestedTopic);
+
+    const topicSimilarities = await Promise.all(
+      allTopics.map(async (topic) => {
+        const topicEmbedding = await this.embeddingService.embed(topic.name);
+        const similarity = this.embeddingService.cosineSimilarity(requestedEmbedding, topicEmbedding);
+        return { topic, similarity };
+      }),
+    );
+
+    topicSimilarities.sort((a, b) => b.similarity - a.similarity);
+    const bestMatch = topicSimilarities[0];
+
+    this.logger.debug(`Best matching topic: ${bestMatch.topic.name} (similarity: ${bestMatch.similarity.toFixed(3)})`);
+    return { topic: bestMatch.topic, matchType: "similar", availableTopics: topicNames };
   }
 
   /**
@@ -423,12 +539,17 @@ export class TopicManager {
       }
 
       const results: AddDocumentResult[] = [];
+      const useLangGraph = this.config.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false);
 
       // Process each document
       for (const filePath of filePaths) {
         try {
-          // Process document through pipeline
-          const pipelineResult = await this.documentPipeline.processDocument(filePath, topicId, options);
+          // Process document through the LangGraph pipeline (single-pass
+          // load/chunk/store with topic-graph extraction) or the legacy
+          // pipeline, depending on the langGraphEnabled flag.
+          const pipelineResult = useLangGraph
+            ? await this.processDocumentViaGraph(filePath, topicId)
+            : await this.documentPipeline.processDocument(filePath, topicId, options);
 
           if (!pipelineResult.success) {
             this.logger.warn("Document processing failed", {
@@ -481,6 +602,7 @@ export class TopicManager {
 
       // Invalidate cached vector store so next read picks up new documents
       this.vectorStoreCache.delete(topicId);
+      this.notifyAgentCacheCleanup(topicId);
 
       // Update topic document count
       topic.documentCount = this.topicDocuments.get(topicId)?.size || 0;
@@ -505,6 +627,68 @@ export class TopicManager {
       });
       throw error;
     }
+  }
+
+  /**
+   * Embed and persist already-chunked documents (store-only path).
+   * Used by the LangGraph indexing pipeline, which owns loading/chunking.
+   */
+  public async storeProcessedChunks(topicId: string, chunks: LangChainDocument[]): Promise<void> {
+    await this.documentPipeline.storeProcessedChunks(chunks, topicId);
+  }
+
+  /**
+   * Run one document through the LangGraph indexing pipeline and adapt the
+   * graph result to the PipelineResult shape addDocuments() bookkeeping uses.
+   */
+  private async processDocumentViaGraph(filePath: string, topicId: string): Promise<PipelineResult> {
+    const startTime = Date.now();
+    const graphResult = await executeIndexingGraph(
+      {
+        topicManager: this,
+        llmProvider: this.llmProvider,
+        config: this.config,
+      },
+      [filePath],
+      topicId,
+    );
+
+    const success = graphResult.success === true;
+    const documentCount = (graphResult.documentCount as number) ?? 0;
+    const chunkCount = (graphResult.chunkCount as number) ?? 0;
+    const entityCount = (graphResult.entityCount as number) ?? 0;
+    const relationshipCount = (graphResult.relationshipCount as number) ?? 0;
+    const errors = (graphResult.errors as string[] | undefined) ?? [];
+    const completedStage = (graphResult.completedStage as string) ?? "";
+
+    const stageReached = (stage: string): boolean => {
+      const order = ["loaded", "chunked", "stored", "extracted", "entities_stored"];
+      return order.indexOf(completedStage) >= order.indexOf(stage);
+    };
+
+    const totalTime = Date.now() - startTime;
+    return {
+      success,
+      stages: {
+        loading: stageReached("loaded"),
+        chunking: stageReached("chunked"),
+        extracting: stageReached("extracted"),
+        embedding: stageReached("stored"),
+        storing: stageReached("stored"),
+      },
+      metadata: {
+        originalDocuments: documentCount,
+        chunksCreated: chunkCount,
+        chunksEmbedded: success ? chunkCount : 0,
+        chunksStored: success ? chunkCount : 0,
+        entitiesExtracted: entityCount,
+        relationshipsExtracted: relationshipCount,
+        totalTime,
+        stageTimings: { loading: 0, chunking: 0, extracting: 0, embedding: 0, storing: 0 },
+      },
+      chunks: [],
+      errors: errors.length > 0 ? errors : undefined,
+    };
   }
 
   /**
@@ -695,14 +879,7 @@ export class TopicManager {
     }
   }
 
-  /**
-   * Register a callback function to be called when topics are deleted
-   * This allows external components (like RAGTool) to clean up their caches
-   * without creating circular dependencies
-   */
-  public static registerAgentCacheCleanupCallback(callback: (topicId: string) => void): void {
-    TopicManager.agentCacheCleanupCallback = callback;
-  }
+
 
   /**
    * Refresh topics from disk
@@ -787,8 +964,8 @@ export class TopicManager {
     this.topicsIndex = null;
     this.isInitialized = false;
 
-    // Clear static callback
-    TopicManager.agentCacheCleanupCallback = null;
+    // Clear all agent cache cleanup listeners
+    TopicManager._onAgentCacheCleanup.removeAllListeners();
 
     this.logger.info("TopicManager disposed");
   }

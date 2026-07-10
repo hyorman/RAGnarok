@@ -13,7 +13,7 @@ import { VscodeLmBackend } from "./vscodeLmBackend";
 import { RAGTool } from "./ragTool";
 import { CommandHandler } from "./commands";
 import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
-import { VIEWS, CONTEXT, COMMANDS } from "./constants";
+import { VIEWS, CONTEXT, COMMANDS, VSCODE_CONFIG } from "./constants";
 import { GitHubTokenManager } from "./githubTokenManager";
 
 // Install VS Code logger factory before anything else
@@ -36,7 +36,9 @@ export async function activate(context: vscode.ExtensionContext) {
     const embeddingService = new EmbeddingService({ config: configProvider, notifier });
 
     // Register VS Code LM embedding backend (proposed embeddings API)
-    const vscodeLmBackend = new VscodeLmBackend();
+    const vscodeLmBackend = new VscodeLmBackend(undefined, {
+      modelIdResolver: () => configProvider.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, ""),
+    });
     embeddingService.registerBackend(vscodeLmBackend);
 
     // Register HuggingFace backend as the default fallback
@@ -51,6 +53,7 @@ export async function activate(context: vscode.ExtensionContext) {
       config: configProvider,
       notifier,
       embeddingService,
+      llmProvider,
     });
 
     // Start model initialization in the background — don't block activation
@@ -149,12 +152,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Register configuration change listener for embedding model
     const configChangeDisposable = vscode.workspace.onDidChangeConfiguration(async (event) => {
-      const localModelPathSetting = `${CONFIG.ROOT}.${CONFIG.LOCAL_MODEL_PATH}`;
+      const localModelPathSetting = `${VSCODE_CONFIG.ROOT}.${CONFIG.LOCAL_MODEL_PATH}`;
       const treeViewConfigPaths = [
-        `${CONFIG.ROOT}.${CONFIG.RETRIEVAL_STRATEGY}`,
-        `${CONFIG.ROOT}.${CONFIG.LLM_MODEL}`,
-        `${CONFIG.ROOT}.${CONFIG.MAX_ITERATIONS}`,
-        `${CONFIG.ROOT}.${CONFIG.CONFIDENCE_THRESHOLD}`,
+        `${VSCODE_CONFIG.ROOT}.${CONFIG.RETRIEVAL_STRATEGY}`,
+        `${VSCODE_CONFIG.ROOT}.${CONFIG.LLM_MODEL}`,
+        `${VSCODE_CONFIG.ROOT}.${CONFIG.MAX_ITERATIONS}`,
+        `${VSCODE_CONFIG.ROOT}.${CONFIG.CONFIDENCE_THRESHOLD}`,
       ];
 
       if (event.affectsConfiguration(localModelPathSetting)) {
@@ -201,8 +204,8 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       // Handle Embedding Backend or VS Code Model ID change
-      const embeddingBackendSetting = `${CONFIG.ROOT}.${CONFIG.EMBEDDING_BACKEND}`;
-      const embeddingVscodeModelSetting = `${CONFIG.ROOT}.${CONFIG.EMBEDDING_VSCODE_MODEL_ID}`;
+      const embeddingBackendSetting = `${VSCODE_CONFIG.ROOT}.${CONFIG.EMBEDDING_BACKEND}`;
+      const embeddingVscodeModelSetting = `${VSCODE_CONFIG.ROOT}.${VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID}`;
       if (
         event.affectsConfiguration(embeddingBackendSetting) ||
         event.affectsConfiguration(embeddingVscodeModelSetting)
@@ -217,9 +220,9 @@ export async function activate(context: vscode.ExtensionContext) {
         logger.info("Embedding backend configuration changed");
 
         try {
-          const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+          const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
           const requested = config.get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
-          const requestedModel = config.get<string>(CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
+          const requestedModel = config.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
 
           if (requested === "vscodeLM") {
             const probe = new VscodeLmBackend(requestedModel || undefined);
@@ -228,7 +231,7 @@ export async function activate(context: vscode.ExtensionContext) {
               logger.warn('Requested VS Code LM backend unavailable; reverting embeddingBackend setting to "auto"');
               try {
                 await vscode.workspace
-                  .getConfiguration(CONFIG.ROOT)
+                  .getConfiguration(VSCODE_CONFIG.ROOT)
                   .update(CONFIG.EMBEDDING_BACKEND, "auto", vscode.ConfigurationTarget.Workspace);
                 vscode.window.showWarningMessage(
                   'Requested VS Code LM embedding backend is not available. Reverting to "auto".',
@@ -273,7 +276,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       // Handle Common Database Path change
-      if (event.affectsConfiguration(`${CONFIG.ROOT}.${CONFIG.COMMON_DATABASE_PATH}`)) {
+      if (event.affectsConfiguration(`${VSCODE_CONFIG.ROOT}.${CONFIG.COMMON_DATABASE_PATH}`)) {
         logger.info("Common database path configuration changed");
         await topicManager.loadCommonDatabase();
         treeDataProvider.refresh();

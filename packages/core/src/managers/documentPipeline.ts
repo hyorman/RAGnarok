@@ -6,13 +6,17 @@
  * Integrates: DocumentLoaderFactory → SemanticChunker → EmbeddingService → VectorStoreFactory
  */
 
-import { IConfigProvider, INotifier } from "../interfaces";
+import { IConfigProvider, ILLMProvider, INotifier } from "../interfaces";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { DocumentLoaderFactory, LoaderOptions } from "../loaders/documentLoaderFactory";
 import { SemanticChunker, ChunkingOptions } from "../splitters/semanticChunker";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { VectorStoreFactory } from "../stores/vectorStoreFactory";
+import { KnowledgeGraph } from "../stores/knowledgeGraph";
+import { EntityExtractor } from "../agents/entityExtractor";
+import { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "../agents/entityExtractorTypes";
 import { Logger } from "../logger";
+import { upsertExtractedGraphData } from "../utils/knowledgeGraphAssembly";
 
 export interface PipelineOptions {
   /** Document loading options */
@@ -29,7 +33,7 @@ export interface PipelineOptions {
 }
 
 export interface PipelineProgress {
-  stage: "loading" | "chunking" | "embedding" | "storing" | "complete";
+  stage: "loading" | "chunking" | "extracting" | "embedding" | "storing" | "complete";
   progress: number; // 0-100
   message: string;
   details?: any;
@@ -43,6 +47,7 @@ export interface PipelineResult {
   stages: {
     loading: boolean;
     chunking: boolean;
+    extracting: boolean;
     embedding: boolean;
     storing: boolean;
   };
@@ -53,10 +58,13 @@ export interface PipelineResult {
     chunksCreated: number;
     chunksEmbedded: number;
     chunksStored: number;
+    entitiesExtracted: number;
+    relationshipsExtracted: number;
     totalTime: number;
     stageTimings: {
       loading: number;
       chunking: number;
+      extracting: number;
       embedding: number;
       storing: number;
     };
@@ -78,6 +86,9 @@ export class DocumentPipeline {
   private semanticChunker: SemanticChunker;
   private embeddingService: EmbeddingService;
   private vectorStoreFactory: VectorStoreFactory | null = null;
+  private config: IConfigProvider | undefined;
+  private knowledgeGraph: KnowledgeGraph | null = null;
+  private entityExtractor: EntityExtractor | null = null;
 
   constructor(
     private notifier: INotifier,
@@ -88,8 +99,19 @@ export class DocumentPipeline {
     this.documentLoader = new DocumentLoaderFactory();
     this.semanticChunker = new SemanticChunker(config);
     this.embeddingService = embeddingService;
+    this.config = config;
 
     this.logger.info("DocumentPipeline initialized");
+  }
+
+  /**
+   * Set up knowledge graph extraction (opt-in).
+   * Call before processDocuments() to enable entity extraction.
+   */
+  public setKnowledgeGraph(kg: KnowledgeGraph, llmProvider: ILLMProvider): void {
+    this.knowledgeGraph = kg;
+    this.entityExtractor = new EntityExtractor(llmProvider);
+    this.logger.info("Knowledge graph extraction enabled");
   }
 
   /**
@@ -155,6 +177,7 @@ export class DocumentPipeline {
       stages: {
         loading: false,
         chunking: false,
+        extracting: false,
         embedding: false,
         storing: false,
       },
@@ -163,10 +186,13 @@ export class DocumentPipeline {
         chunksCreated: 0,
         chunksEmbedded: 0,
         chunksStored: 0,
+        entitiesExtracted: 0,
+        relationshipsExtracted: 0,
         totalTime: 0,
         stageTimings: {
           loading: 0,
           chunking: 0,
+          extracting: 0,
           embedding: 0,
           storing: 0,
         },
@@ -264,7 +290,74 @@ export class DocumentPipeline {
         });
       }
 
-      // Stage 3: Generate embeddings
+      // Stage 3: Extract entities (optional — only if KG + extractor are set up)
+      if (this.knowledgeGraph && this.entityExtractor && chunkingResult.chunkCount > 0) {
+        const extractStartTime = Date.now();
+        this.reportProgress(options.onProgress, {
+          stage: "extracting",
+          progress: 30,
+          message: `Extracting entities from ${chunkingResult.chunkCount} chunk(s)...`,
+        });
+
+        try {
+          const batchSize = DEFAULT_ENTITY_EXTRACTOR_OPTIONS.batchSize;
+          const rateLimitMs = DEFAULT_ENTITY_EXTRACTOR_OPTIONS.rateLimitMs;
+          const maxConsecutiveFailures = DEFAULT_ENTITY_EXTRACTOR_OPTIONS.maxConsecutiveFailures;
+          const entityTypes = [...DEFAULT_ENTITY_EXTRACTOR_OPTIONS.entityTypes];
+
+          const extractionResult = await this.entityExtractor.extractFromChunks(result.chunks, {
+            batchSize,
+            rateLimitMs,
+            maxConsecutiveFailures,
+            entityTypes,
+            onProgress: (p) => {
+              const extractProgress = chunkingResult.chunkCount > 0
+                ? 30 + (p.processedChunks / p.totalChunks) * 15
+                : 30;
+              this.reportProgress(options.onProgress, {
+                stage: "extracting",
+                progress: extractProgress,
+                message: `Extracted ${p.entitiesFound} entities, ${p.relationshipsFound} relationships...`,
+              });
+            },
+          });
+
+          // Embed entity descriptions
+          const entityEmbeddings = await this.entityExtractor.embedEntities(
+            extractionResult.entities,
+            this.embeddingService,
+          );
+
+          const graphUpsert = upsertExtractedGraphData({
+            knowledgeGraph: this.knowledgeGraph,
+            entities: extractionResult.entities,
+            relationships: extractionResult.relationships,
+            entityEmbeddings,
+            chunks: result.chunks,
+          });
+
+          result.metadata.entitiesExtracted = extractionResult.entities.length;
+          result.metadata.relationshipsExtracted = graphUpsert.relationshipsAdded + graphUpsert.relationshipsUpdated;
+          result.stages.extracting = true;
+          result.metadata.stageTimings.extracting = Date.now() - extractStartTime;
+
+          this.logger.info("Entity extraction stage complete", {
+            entities: extractionResult.entities.length,
+            relationships: graphUpsert.relationshipCount,
+            time: result.metadata.stageTimings.extracting,
+          });
+        } catch (error) {
+          // Entity extraction failure should NOT block the pipeline
+          const errorMessage = `Entity extraction failed: ${error instanceof Error ? error.message : String(error)}`;
+          this.logger.error(errorMessage);
+          if (!result.errors) {
+            result.errors = [];
+          }
+          result.errors.push(errorMessage);
+        }
+      }
+
+      // Stage 4: Generate embeddings
       this.reportProgress(options.onProgress, {
         stage: "embedding",
         progress: 50,
@@ -330,6 +423,29 @@ export class DocumentPipeline {
       result.metadata.totalTime = Date.now() - startTime;
 
       return result;
+    } finally {
+      this.embeddingService.setProcessing(false);
+    }
+  }
+
+  /**
+   * Embed and persist already-chunked documents, skipping the load/chunk
+   * stages. Storage path (validation, store creation, metadata save) is
+   * identical to processDocuments(). Used by the LangGraph indexing pipeline,
+   * which loads and chunks exactly once in its own stages.
+   */
+  public async storeProcessedChunks(
+    chunks: LangChainDocument[],
+    topicId: string,
+    options: PipelineOptions = {},
+  ): Promise<void> {
+    if (!this.vectorStoreFactory) {
+      throw new Error("Pipeline not initialized. Call initialize() first.");
+    }
+
+    this.embeddingService.setProcessing(true);
+    try {
+      await this.storeDocuments(chunks, topicId, options);
     } finally {
       this.embeddingService.setProcessing(false);
     }

@@ -132,6 +132,12 @@
           "maximum": 10,
           "order": 8
         },
+        "ragnarok.langGraphEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "**LangGraph execution** (experimental): Run RAG queries and document indexing through the LangGraph state-machine pipeline with checkpointing and entity extraction, instead of the legacy agent loop.\n\n⚠️ Experimental — behavior and performance characteristics may change.",
+          "order": 8.5
+        },
         "ragnarok.confidenceThreshold": {
           "type": "number",
           "default": 0.7,
