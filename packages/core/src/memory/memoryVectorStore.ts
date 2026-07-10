@@ -3,11 +3,16 @@
  *
  * Table naming convention:
  *   - Workspace memories:  `_memory-entries-workspace`
- *   - Branch memories:     `_memory-entries-branch-{sanitizedBranchName}`
+ *   - Branch memories:     `_memory-entries-branch-{encodedBranchName}`
  *   - Workspace entities:  `_memory-entities-workspace`
- *   - Branch entities:     `_memory-entities-branch-{sanitizedBranchName}`
+ *   - Branch entities:     `_memory-entities-branch-{encodedBranchName}`
  *   - Workspace edges:     `_memory-edges-workspace`
- *   - Branch edges:        `_memory-edges-branch-{sanitizedBranchName}`
+ *   - Branch edges:        `_memory-edges-branch-{encodedBranchName}`
+ *
+ * Branch names are base64url-encoded in table names: the encoding is
+ * reversible (listBranches returns the original name) and collision-free —
+ * lossy sanitization previously mapped distinct branches like `feature/foo`
+ * and `feature_foo` onto the same table, leaking memory across branches.
  */
 
 import { connect } from "@lancedb/lancedb";
@@ -28,24 +33,33 @@ export class MemoryVectorStore {
 
   private entriesTable(scope: MemoryScope, branch?: string): string {
     return scope === "branch" && branch
-      ? `${MEMORY_TABLE_PREFIX}-entries-branch-${this.sanitizeBranch(branch)}`
+      ? `${MEMORY_TABLE_PREFIX}-entries-branch-${this.encodeBranch(branch)}`
       : `${MEMORY_TABLE_PREFIX}-entries-workspace`;
   }
 
   private entitiesTable(scope: MemoryScope, branch?: string): string {
     return scope === "branch" && branch
-      ? `${MEMORY_TABLE_PREFIX}-entities-branch-${this.sanitizeBranch(branch)}`
+      ? `${MEMORY_TABLE_PREFIX}-entities-branch-${this.encodeBranch(branch)}`
       : `${MEMORY_TABLE_PREFIX}-entities-workspace`;
   }
 
   private edgesTable(scope: MemoryScope, branch?: string): string {
     return scope === "branch" && branch
-      ? `${MEMORY_TABLE_PREFIX}-edges-branch-${this.sanitizeBranch(branch)}`
+      ? `${MEMORY_TABLE_PREFIX}-edges-branch-${this.encodeBranch(branch)}`
       : `${MEMORY_TABLE_PREFIX}-edges-workspace`;
   }
 
-  private sanitizeBranch(branch: string): string {
-    return branch.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/^_+|_+$/g, "");
+  /**
+   * Reversible, collision-free branch → table-segment encoding.
+   * base64url uses only [A-Za-z0-9_-], which is valid in LanceDB table names.
+   */
+  private encodeBranch(branch: string): string {
+    return Buffer.from(branch, "utf8").toString("base64url");
+  }
+
+  /** Decode a table-name segment back to the original branch name. */
+  private decodeBranch(encoded: string): string {
+    return Buffer.from(encoded, "base64url").toString("utf8");
   }
 
   /**
@@ -112,12 +126,16 @@ export class MemoryVectorStore {
     const db = await connect(this.lanceDbUri);
     const tableName = this.entriesTable(scope, branch);
 
-    try {
-      const tableNames = await db.tableNames();
-      if (!tableNames.includes(tableName)) {
-        return [];
-      }
+    // Only a missing table means "no data". Any other failure (corrupt rows,
+    // schema mismatch, I/O) must propagate — returning [] here would make
+    // corruption indistinguishable from an empty store, and the next save
+    // would overwrite recoverable data.
+    const tableNames = await db.tableNames();
+    if (!tableNames.includes(tableName)) {
+      return [];
+    }
 
+    try {
       const table = await db.openTable(tableName);
       const rows = await table.query().limit(100000).toArray();
 
@@ -143,7 +161,9 @@ export class MemoryVectorStore {
       }));
     } catch (error) {
       this.logger.error(`Failed to load entries from ${tableName}`, error);
-      return [];
+      throw new Error(
+        `Memory store read failed for table ${tableName}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -156,14 +176,20 @@ export class MemoryVectorStore {
     const db = await connect(this.lanceDbUri);
     const tableName = this.entriesTable(scope, branch);
 
-    try {
-      const tableNames = await db.tableNames();
-      if (!tableNames.includes(tableName)) {
-        return [];
-      }
+    const tableNames = await db.tableNames();
+    if (!tableNames.includes(tableName)) {
+      return [];
+    }
 
+    try {
       const table = await db.openTable(tableName);
-      const rows = await table.vectorSearch(queryVector).limit(topK).toArray();
+      // Filter superseded versions at query time, BEFORE the limit: a query
+      // close to many historical versions would otherwise fill the top-K with
+      // superseded rows and crowd out current memories entirely.
+      // The column name must be backtick-quoted: Lance's SQL dialect
+      // lowercases unquoted identifiers (no column "islatest") and treats
+      // double-quoted tokens as string literals, silently matching nothing.
+      const rows = await table.vectorSearch(queryVector).where("`isLatest` = 1").limit(topK).toArray();
 
       return rows.map((row) => ({
         entry: {
@@ -191,7 +217,9 @@ export class MemoryVectorStore {
       }));
     } catch (error) {
       this.logger.error(`Failed to search entries in ${tableName}`, error);
-      return [];
+      throw new Error(
+        `Memory store search failed for table ${tableName}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -309,8 +337,12 @@ export class MemoryVectorStore {
 
       return { entities, relationships } as MemoryGraphData;
     } catch (error) {
+      // Missing tables are handled above; anything reaching here is real
+      // corruption or I/O failure and must not masquerade as "no graph".
       this.logger.error("Failed to load graph", error);
-      return null;
+      throw new Error(
+        `Memory graph read failed for scope ${scope}${branch ? `/${branch}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -325,7 +357,7 @@ export class MemoryVectorStore {
 
     for (const name of tableNames) {
       if (name.startsWith(prefix)) {
-        branches.add(name.slice(prefix.length));
+        branches.add(this.decodeBranch(name.slice(prefix.length)));
       }
     }
 
@@ -342,7 +374,7 @@ export class MemoryVectorStore {
 
     for (const name of tableNames) {
       if (name.startsWith(prefix)) {
-        branches.add(name.slice(prefix.length));
+        branches.add(this.decodeBranch(name.slice(prefix.length)));
       }
     }
 
@@ -351,11 +383,18 @@ export class MemoryVectorStore {
 
   async deleteBranchMemories(branch: string): Promise<void> {
     const db = await connect(this.lanceDbUri);
-    const sanitized = this.sanitizeBranch(branch);
     const tableNames = await db.tableNames();
 
-    for (const tableName of tableNames) {
-      if (tableName.includes(`branch-${sanitized}`)) {
+    // Exact table names only — substring matching could drop tables of
+    // branches whose encoded name contains this branch's encoding as a prefix.
+    const targets = [
+      this.entriesTable("branch", branch),
+      this.entitiesTable("branch", branch),
+      this.edgesTable("branch", branch),
+    ];
+
+    for (const tableName of targets) {
+      if (tableNames.includes(tableName)) {
         await db.dropTable(tableName);
       }
     }

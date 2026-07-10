@@ -195,20 +195,23 @@ export class MemoryStore {
     for (const { scope, branch } of scopes) {
       // Search entries via vector store
       const results = await this.vectorStore.searchEntries(queryVector, scope, branch, topK);
-      allMemories.push(...results);
 
-      // Reinforce accessed memories
+      // Reinforce accessed memories and return the UPDATED entries so callers
+      // see post-increment accessCount/lastAccessedAt (the search results are
+      // detached copies read from LanceDB).
       if (results.length > 0) {
         const entries = await this.getEntries(scope, branch);
-        for (const { entry } of results) {
-          const cached = entries.find((e) => e.id === entry.id);
+        for (const result of results) {
+          const cached = entries.find((e) => e.id === result.entry.id);
           if (cached) {
             cached.accessCount += 1;
             cached.lastAccessedAt = Date.now();
+            result.entry = cached;
           }
         }
         await this.persistEntries(scope, branch);
       }
+      allMemories.push(...results);
 
       // Include graph entities if requested
       if (options.includeEntities) {
@@ -432,9 +435,11 @@ export class MemoryStore {
   // ── Decay ───────────────────────────────────────────────────────────
 
   /**
-   * Run one decay cycle across all entries. Reduces confidence based on
-   * time since last access. Does not remove entries — call forget({ expired: true })
-   * or expireStale to actually remove low-confidence entries.
+   * Run one decay cycle across all entries: evaluates effective confidence
+   * (base × time-decay × access boost) against the expiry thresholds.
+   * Pure and idempotent — the stored base confidence is never modified, so
+   * repeated cycles report the same result for the same wall-clock time.
+   * Does not remove entries — call forget({ expired: true }) to purge.
    */
   async runDecay(scope?: MemoryScope, branch?: string): Promise<DecayStatus> {
     const combined: DecayStatus = {
@@ -453,11 +458,6 @@ export class MemoryStore {
       combined.decayedCount += status.decayedCount;
       combined.expiredCount += status.expiredCount;
       combined.nearThresholdCount += status.nearThresholdCount;
-
-      if (status.decayedCount > 0) {
-        await this.persistEntries(s, b);
-        this.invalidateCache(this.scopeKey(s, b));
-      }
     };
 
     if (scope) {

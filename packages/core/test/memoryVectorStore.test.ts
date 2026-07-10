@@ -177,6 +177,37 @@ describe("MemoryVectorStore", function () {
       const loaded = await store.loadEntries("branch", "nonexistent-branch-xyz");
       expect(loaded).to.deep.equal([]);
     });
+
+    it("should not let superseded versions crowd current memories out of the top-K", async function () {
+      const dir = path.join(tempDir, "crowd-out-test");
+      await fs.mkdir(dir, { recursive: true });
+      const s = new MemoryVectorStore(dir);
+
+      const queryVec = randomVector();
+
+      // 5 superseded historical versions sitting exactly on the query vector…
+      const superseded = Array.from({ length: 5 }, (_, i) =>
+        createTestEntry({
+          content: `historical version ${i}`,
+          vector: [...queryVec],
+          isLatest: false,
+          supersededBy: "someone-newer",
+        }),
+      );
+      // …and one current entry slightly farther away
+      const currentVec = queryVec.map((v) => v + (Math.random() * 0.02 - 0.01));
+      const current = createTestEntry({ content: "the current version", vector: currentVec, isLatest: true });
+
+      await s.saveEntries([...superseded, current], "workspace");
+
+      // topK smaller than the number of closer historical rows: the filter
+      // must be applied BEFORE the limit or the current entry is crowded out
+      const results = await s.searchEntries(queryVec, "workspace", undefined, 3);
+
+      expect(results.length).to.be.greaterThan(0);
+      expect(results.every(({ entry }) => entry.isLatest !== false)).to.be.true;
+      expect(results.map(({ entry }) => entry.id)).to.include(current.id);
+    });
   });
 
   // ── Graph Operations ───────────────────────────────────────────────
@@ -383,27 +414,60 @@ describe("MemoryVectorStore", function () {
     });
   });
 
-  // ── Table Naming / Branch Sanitization ─────────────────────────────
+  // ── Table Naming / Branch Encoding ─────────────────────────────────
 
   describe("Table naming", function () {
-    it("should sanitize branch names with special characters", async function () {
-      const sanitizeDir = path.join(tempDir, "sanitize-test");
-      await fs.mkdir(sanitizeDir, { recursive: true });
-      const sanitizeStore = new MemoryVectorStore(sanitizeDir);
+    it("should round-trip branch names with special characters", async function () {
+      const encodeDir = path.join(tempDir, "encode-test");
+      await fs.mkdir(encodeDir, { recursive: true });
+      const encodeStore = new MemoryVectorStore(encodeDir);
 
       const specialBranch = "feature/my.branch name";
       const entry = createTestEntry({ scope: "branch", branch: specialBranch });
 
-      await sanitizeStore.saveEntries([entry], "branch", specialBranch);
-      const loaded = await sanitizeStore.loadEntries("branch", specialBranch);
+      await encodeStore.saveEntries([entry], "branch", specialBranch);
+      const loaded = await encodeStore.loadEntries("branch", specialBranch);
 
       expect(loaded).to.have.lengthOf(1);
       expect(loaded[0].id).to.equal(entry.id);
 
-      // Branch list should contain the sanitized name (slashes, dots, spaces → underscores)
-      const branches = await sanitizeStore.listBranches();
+      // listBranches returns the ORIGINAL branch name (base64url round-trip)
+      const branches = await encodeStore.listBranches();
       expect(branches).to.have.lengthOf(1);
-      expect(branches[0]).to.equal("feature_my_branch_name");
+      expect(branches[0]).to.equal(specialBranch);
+    });
+
+    it("should keep similarly-named branches in separate tables (no collisions)", async function () {
+      // Lossy sanitization used to map all of these onto the same table,
+      // leaking/overwriting memory across branches.
+      const collideDir = path.join(tempDir, "collide-test");
+      await fs.mkdir(collideDir, { recursive: true });
+      const s = new MemoryVectorStore(collideDir);
+
+      const slash = createTestEntry({ scope: "branch", branch: "feature/foo", content: "slash" });
+      const underscore = createTestEntry({ scope: "branch", branch: "feature_foo", content: "underscore" });
+      const at = createTestEntry({ scope: "branch", branch: "feature@foo", content: "at" });
+
+      await s.saveEntries([slash], "branch", "feature/foo");
+      await s.saveEntries([underscore], "branch", "feature_foo");
+      await s.saveEntries([at], "branch", "feature@foo");
+
+      const slashLoaded = await s.loadEntries("branch", "feature/foo");
+      const underscoreLoaded = await s.loadEntries("branch", "feature_foo");
+      const atLoaded = await s.loadEntries("branch", "feature@foo");
+
+      expect(slashLoaded.map((e) => e.content)).to.deep.equal(["slash"]);
+      expect(underscoreLoaded.map((e) => e.content)).to.deep.equal(["underscore"]);
+      expect(atLoaded.map((e) => e.content)).to.deep.equal(["at"]);
+
+      const branches = await s.listBranches();
+      expect(branches).to.have.members(["feature/foo", "feature_foo", "feature@foo"]);
+
+      // Deleting one branch must not touch the others
+      await s.deleteBranchMemories("feature/foo");
+      expect(await s.loadEntries("branch", "feature/foo")).to.deep.equal([]);
+      expect(await s.loadEntries("branch", "feature_foo")).to.have.lengthOf(1);
+      expect(await s.loadEntries("branch", "feature@foo")).to.have.lengthOf(1);
     });
   });
 });

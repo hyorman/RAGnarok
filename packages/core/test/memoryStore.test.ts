@@ -160,8 +160,8 @@ describe("MemoryStore", function () {
     expect(stats.byScope).to.have.property("workspace").that.is.a("number");
     expect(stats.byScope).to.have.property("branch").that.is.a("number");
     expect(stats.branches).to.be.an("array");
-    // Branch names are sanitized in LanceDB table names (/ → _)
-    expect(stats.branches).to.include("feature_new-api");
+    // Branch names round-trip: table names use reversible base64url encoding
+    expect(stats.branches).to.include("feature/new-api");
     expect(stats.totalEntities).to.equal(0); // No LLM → no entities
     expect(stats.totalRelationships).to.equal(0);
     expect(stats.lastUpdated).to.be.a("number").and.be.greaterThan(0);
