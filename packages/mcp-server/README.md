@@ -29,19 +29,23 @@ flowchart LR
 
 ## MCP Tools
 
-The server registers nine tools:
+The server registers thirteen tools:
 
 | Tool                | Description                                                   | Parameters                                                                                                                        |
 | ------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `rag_query`         | Query a topic with RAG (supports agentic multi-step planning) | `topic` (string), `query` (string), `topK?` (number), `retrievalStrategy?` (`"vector"` \| `"hybrid"` \| `"ensemble"` \| `"bm25"`) |
+| `rag_query`         | Query a topic with RAG (supports agentic multi-step planning) | `topic` (string), `query` (string), `topK?` (number), `retrievalStrategy?` (`"vector"` \| `"hybrid"` \| `"ensemble"` \| `"bm25"` \| `"graph"` \| `"graph_hybrid"`) |
 | `rag_list_topics`   | List all available topics with metadata                       | _(none)_                                                                                                                          |
 | `rag_topic_stats`   | Get statistics for a topic                                    | `topic` (string)                                                                                                                  |
 | `rag_create_topic`  | Create a new topic                                            | `name` (string), `description?` (string)                                                                                          |
-| `rag_add_documents` | Add documents to a topic                                      | `topic` (string), `filePaths` (string[])                                                                                          |
+| `rag_add_documents` | Add documents to a topic (paths must be inside `RAGNAROK_ALLOWED_PATHS`) | `topic` (string), `filePaths` (string[])                                                                                 |
 | `rag_list_embedding_models` | List available embedding models                      | _(none)_                                                                                                                          |
 | `rag_embedding_info` | Get current embedding model info                              | _(none)_                                                                                                                          |
 | `rag_switch_embedding_model` | Switch the active embedding model                   | `model` (string)                                                                                                                  |
 | `rag_llm_status`     | Get LLM provider status and configuration                     | _(none)_                                                                                                                          |
+| `rag_list_reranker_models` | List available cross-encoder reranker models          | _(none)_                                                                                                                          |
+| `rag_reranker_info`  | Get current reranker configuration and status                 | _(none)_                                                                                                                          |
+| `rag_switch_reranker_model` | Switch the cross-encoder reranker model              | `model` (string)                                                                                                                  |
+| `rag_memory`         | Project memory: store, recall, forget (incl. `expired`), stats, list, decay, history, promote, links | `action` (string) plus action-specific fields (`content`, `query`, `id`, `scope`, `branch`, `tags`, `topK`, `olderThan`, `expired`, `limit`, `includeEntities`) |
 
 ---
 
@@ -66,6 +70,9 @@ All settings are read from environment variables at startup:
 | Variable                        | Default                   | Description                                  |
 | ------------------------------- | ------------------------- | -------------------------------------------- |
 | `RAGNAROK_STORAGE_DIR`          | `~/.ragnarok`             | Database & topic storage directory           |
+| `RAGNAROK_WORKING_DIR`          | `process.cwd()`           | Project root for git-branch-scoped memory    |
+| `RAGNAROK_ALLOWED_PATHS`        | _(the working dir)_       | Roots `rag_add_documents` may read, path-delimiter separated |
+| `RAGNAROK_LANGGRAPH_ENABLED`    | `false`                   | Run queries/indexing through the LangGraph pipeline (experimental) |
 | `RAGNAROK_EMBEDDING_MODEL`      | `Xenova/all-MiniLM-L6-v2` | Embedding model name (HuggingFace or remote)  |
 | `RAGNAROK_EMBEDDING_PROVIDER`   | `huggingface`             | Embedding provider: `huggingface`, `openai`, `ollama` |
 | `RAGNAROK_EMBEDDING_BASE_URL`   | _(empty)_                 | Remote embedding API base URL (required for openai/ollama) |
@@ -80,7 +87,8 @@ All settings are read from environment variables at startup:
 | `RAGNAROK_LLM_PROVIDER`         | `none`                    | LLM provider: `openai`, `anthropic`, `ollama`, `none` |
 | `RAGNAROK_LLM_API_KEY`          | _(empty)_                 | API key for OpenAI or Anthropic              |
 | `RAGNAROK_LLM_MODEL`            | _(per-provider)_          | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`) |
-| `RAGNAROK_LLM_BASE_URL`         | `http://localhost:11434`  | Base URL for Ollama (or OpenAI-compatible)   |
+| `RAGNAROK_LLM_BASE_URL`         | _(per-provider)_          | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set) |
+| `RAGNAROK_RERANKER_MODEL`       | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model           |
 | `RAGNAROK_API_KEY`              | _(empty)_                 | API key for HTTP auth (`Authorization: Bearer <key>`) |
 | `RAGNAROK_CORS_ORIGIN`         | `*`                       | Allowed CORS origin(s)                       |
 | `RAGNAROK_HTTP_HOST`           | `127.0.0.1`               | HTTP server bind address (`0.0.0.0` for Docker) |
@@ -108,7 +116,8 @@ APIs:
 
 ```bash
 # stdio mode (default) — for Claude Desktop, Cursor, VS Code MCP, etc.
-npx ragnarok-mcp
+# The package is scoped: npx must resolve @ragnarok/mcp-server (its bin is ragnarok-mcp)
+npx -y @ragnarok/mcp-server
 
 # or directly
 node packages/mcp-server/dist/index.js
@@ -118,7 +127,7 @@ node packages/mcp-server/dist/index.js
 
 ```bash
 # Start with HTTP transport
-RAGNAROK_API_KEY=your-secret npx ragnarok-mcp --http
+RAGNAROK_API_KEY=your-secret npx -y @ragnarok/mcp-server --http
 
 # Or with Docker
 cd packages/mcp-server
@@ -154,9 +163,10 @@ Add to your Claude Desktop `claude_desktop_config.json`:
   "mcpServers": {
     "ragnarok": {
       "command": "npx",
-      "args": ["ragnarok-mcp"],
+      "args": ["-y", "@ragnarok/mcp-server"],
       "env": {
         "RAGNAROK_STORAGE_DIR": "/path/to/storage",
+        "RAGNAROK_WORKING_DIR": "/path/to/your/project",
         "RAGNAROK_LOG_LEVEL": "info"
       }
     }
@@ -174,7 +184,7 @@ Add to your VS Code `settings.json`:
     "servers": {
       "ragnarok": {
         "command": "npx",
-        "args": ["ragnarok-mcp"]
+        "args": ["-y", "@ragnarok/mcp-server"]
       }
     }
   }
@@ -193,8 +203,8 @@ cd packages/mcp-server
 # Build and run
 docker compose up -d
 
-# Check health
-curl http://localhost:3000/health
+# Check health (Compose exposes port 4000 by default)
+curl http://localhost:4000/health
 
 # View logs
 docker compose logs -f

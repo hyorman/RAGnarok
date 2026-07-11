@@ -52,6 +52,13 @@ export interface EmbeddingBackend {
   isAvailable(): Promise<boolean>;
 
   /**
+   * Optional backend-specific availability probe for a concrete model identifier.
+   * Backends that support model-specific validation can implement this so callers
+   * don't have to mutate backend state just to check compatibility.
+   */
+  isAvailableForModel?(modelName?: string): Promise<boolean>;
+
+  /**
    * Return the embedding vector dimension, or `null` if not yet known
    * (i.e. before the first embedding is generated).
    */
@@ -63,6 +70,12 @@ export interface EmbeddingBackend {
    * for VS Code LM, the resolved provider model ID.
    */
   getModelId?(): string | null;
+
+  /**
+   * List the models this backend can serve (e.g. a remote API's catalogue).
+   * Optional — local backends rely on the ModelRegistry instead.
+   */
+  listModels?(): Promise<Array<{ id: string; name: string }>>;
 
   /**
    * Release any resources held by this backend.

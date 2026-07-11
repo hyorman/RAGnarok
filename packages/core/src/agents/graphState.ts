@@ -5,7 +5,6 @@
 
 import { Annotation } from "@langchain/langgraph";
 import type { Document as LangChainDocument } from "@langchain/core/documents";
-import type { ILLMMessage } from "../interfaces";
 import type { ExtractedEntity, ExtractedRelationship } from "./entityExtractorTypes";
 
 // ── Lightweight inline types to avoid heavy coupling ──
@@ -37,12 +36,6 @@ export const QueryPipelineState = Annotation.Root({
   query: Annotation<string>,
   topicId: Annotation<string>,
   options: Annotation<QueryPipelineOptions>,
-
-  // Conversation history — accumulates across turns
-  conversationHistory: Annotation<ILLMMessage[]>({
-    reducer: (left, right) => left.concat(right),
-    default: () => [],
-  }),
 
   // Query plan from QueryPlannerAgent
   plan: Annotation<QueryPlanRef | null>({

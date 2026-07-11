@@ -14,8 +14,18 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- proposed API accessed via runtime casts */
 
-import * as vscode from "vscode";
+import type * as VSCode from "vscode";
 import { EmbeddingBackend, Logger } from "@ragnarok/core";
+
+// Allow pure unit tests to inject an lmApi without requiring the VS Code runtime module.
+const vscodeApi = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the vscode module only exists inside the extension host; a static import would break unit tests, and dynamic import() cannot resolve it synchronously here
+    return require("vscode") as typeof VSCode;
+  } catch {
+    return undefined;
+  }
+})();
 
 /**
  * Thin wrapper around `vscode.lm.computeEmbeddings` that implements
@@ -24,17 +34,21 @@ import { EmbeddingBackend, Logger } from "@ragnarok/core";
 export class VscodeLmBackend implements EmbeddingBackend {
   readonly name = "vscodeLM" as const;
 
-  private modelId: string;
-  private logger: Logger;
+  private configuredModelId: string;
+  private resolvedModelId: string;
+  private readonly logger: Logger;
   private dimension: number | null = null;
   private initialized = false;
+  private readonly modelIdResolver?: () => string | undefined | null;
 
   /** The LM API surface — defaults to `vscode.lm`, injectable for testing. */
-  private lmApi: any;
+  private readonly lmApi: any;
 
-  constructor(modelId?: string, options?: { lmApi?: any }) {
-    this.modelId = modelId ?? "";
-    this.lmApi = options?.lmApi ?? (vscode.lm as any);
+  constructor(modelId?: string, options?: { lmApi?: any; modelIdResolver?: () => string | undefined | null }) {
+    this.configuredModelId = modelId ?? "";
+    this.resolvedModelId = modelId ?? "";
+    this.modelIdResolver = options?.modelIdResolver;
+    this.lmApi = options?.lmApi ?? (vscodeApi?.lm as any);
     this.logger = new Logger("VscodeLmBackend");
   }
 
@@ -43,8 +57,13 @@ export class VscodeLmBackend implements EmbeddingBackend {
   // ---------------------------------------------------------------------------
 
   async isAvailable(): Promise<boolean> {
+    return this.isAvailableForModel();
+  }
+
+  async isAvailableForModel(modelName?: string): Promise<boolean> {
     try {
       const lm = this.lmApi;
+      const requestedModelId = this.getRequestedModelId(modelName);
 
       // 1. Is the proposed API surface present?
       if (!lm || typeof lm.computeEmbeddings !== "function") {
@@ -60,15 +79,19 @@ export class VscodeLmBackend implements EmbeddingBackend {
       }
 
       // 3. If a specific model was requested, is it listed?
-      if (this.modelId && !models.includes(this.modelId)) {
-        this.logger.debug(`Configured model "${this.modelId}" not found in registered models: [${models.join(", ")}]`);
+      if (requestedModelId && !models.includes(requestedModelId)) {
+        this.logger.debug(
+          `Configured model "${requestedModelId}" not found in registered models: [${models.join(", ")}]`,
+        );
         return false;
       }
 
       // 4. Auto-select first model when none is configured
-      if (!this.modelId) {
-        this.modelId = models[0];
-        this.logger.info(`Auto-selected VS Code LM embedding model: ${this.modelId}`);
+      if (!requestedModelId) {
+        this.resolvedModelId = models[0];
+        this.logger.info(`Auto-selected VS Code LM embedding model: ${this.resolvedModelId}`);
+      } else {
+        this.resolvedModelId = requestedModelId;
       }
 
       return true;
@@ -83,11 +106,12 @@ export class VscodeLmBackend implements EmbeddingBackend {
   // ---------------------------------------------------------------------------
 
   async initialize(modelName?: string): Promise<void> {
-    if (modelName) {
-      this.modelId = modelName;
+    if (modelName !== undefined) {
+      this.configuredModelId = modelName;
     }
 
-    const available = await this.isAvailable();
+    const requestedModelId = this.getRequestedModelId(modelName);
+    const available = await this.isAvailableForModel(requestedModelId);
     if (!available) {
       let registeredModels: string[] = [];
       try {
@@ -97,14 +121,15 @@ export class VscodeLmBackend implements EmbeddingBackend {
       }
       throw new Error(
         `VS Code LM embedding backend is not available. ` +
-          `Ensure the proposed "embeddings" API is enabled and an embeddings provider is registered. ` +
+          `Use VS Code Insiders (or another build exposing the proposal), start it with ` +
+          `"--enable-proposed-api=hyorman.ragnarok", and ensure an embeddings provider is registered. ` +
           `Registered models: [${registeredModels.join(", ") || "none"}]` +
-          (this.modelId ? `. Requested model: "${this.modelId}"` : ""),
+          (requestedModelId ? `. Requested model: "${requestedModelId}"` : ""),
       );
     }
 
     this.initialized = true;
-    this.logger.info(`VS Code LM embedding backend initialized (model: ${this.modelId})`);
+    this.logger.info(`VS Code LM embedding backend initialized (model: ${this.getResolvedModelId()})`);
   }
 
   // ---------------------------------------------------------------------------
@@ -117,7 +142,7 @@ export class VscodeLmBackend implements EmbeddingBackend {
     }
 
     try {
-      const result: { values: number[] } = await this.lmApi.computeEmbeddings(this.modelId, text);
+      const result: { values: number[] } = await this.lmApi.computeEmbeddings(this.getResolvedModelId(), text);
 
       const values = result.values;
       if (!values || values.length === 0) {
@@ -229,7 +254,10 @@ export class VscodeLmBackend implements EmbeddingBackend {
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
       try {
-        const results: Array<{ values: number[] }> = await this.lmApi.computeEmbeddings(this.modelId, batchTexts);
+        const results: Array<{ values: number[] }> = await this.lmApi.computeEmbeddings(
+          this.getResolvedModelId(),
+          batchTexts,
+        );
         return results.map((r, idx) => {
           if (!r.values || r.values.length === 0) {
             throw new Error(`Empty embedding at index ${startIdx + idx}`);
@@ -306,12 +334,34 @@ export class VscodeLmBackend implements EmbeddingBackend {
   }
 
   getModelId(): string | null {
-    return this.modelId || null;
+    return this.resolvedModelId || this.getRequestedModelId() || null;
   }
 
   dispose(): void {
     this.initialized = false;
     this.dimension = null;
+    this.resolvedModelId = "";
     this.logger.info("VscodeLmBackend disposed");
+  }
+
+  private getRequestedModelId(modelName?: string): string {
+    if (modelName !== undefined) {
+      return modelName;
+    }
+
+    const resolvedFromConfig = this.modelIdResolver?.();
+    if (typeof resolvedFromConfig === "string") {
+      return resolvedFromConfig;
+    }
+
+    return this.configuredModelId;
+  }
+
+  private getResolvedModelId(): string {
+    const modelId = this.resolvedModelId || this.getRequestedModelId();
+    if (!modelId) {
+      throw new Error("No VS Code LM embedding model has been resolved");
+    }
+    return modelId;
   }
 }

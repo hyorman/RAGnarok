@@ -17,11 +17,11 @@ import { CONFIG } from "../constants";
 import { Logger } from "../logger";
 import { IConfigProvider, INotifier } from "../interfaces";
 import { EmbeddingBackend, EmbeddingBackendType } from "./embeddingBackend";
-import { ModelRegistry, AvailableModel } from "./modelRegistry";
+import { ModelRegistry, AvailableModel } from "../models/modelRegistry.js";
 import { cosineSimilarity as langchainCosineSimilarity } from "@langchain/core/utils/math";
 
 // Re-export for consumers that imported AvailableModel from here
-export type { AvailableModel } from "./modelRegistry";
+export type { AvailableModel } from "../models/modelRegistry.js";
 
 export class EmbeddingService {
   private logger: Logger;
@@ -270,6 +270,9 @@ export class EmbeddingService {
     if (!registered) {
       return false;
     }
+    if (typeof registered.isAvailableForModel === "function") {
+      return registered.isAvailableForModel(_modelName);
+    }
     return registered.isAvailable();
   }
 
@@ -347,6 +350,22 @@ export class EmbeddingService {
   }
 
   public async listAvailableModels(): Promise<AvailableModel[]> {
+    // A remote backend knows its own catalogue — the local curated HF
+    // registry would be misleading when embeddings come from an API.
+    if (this.activeBackend && this.activeBackendType !== "huggingface" && this.activeBackend.listModels) {
+      try {
+        const remoteModels = await this.activeBackend.listModels();
+        return remoteModels.map((m) => ({
+          name: m.name || m.id,
+          source: "remote" as AvailableModel["source"],
+          downloaded: true,
+        }));
+      } catch (error) {
+        this.logger.warn("Remote backend model listing failed — falling back to local registry", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     return this.modelRegistry.listAvailableModels();
   }
 

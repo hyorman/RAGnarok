@@ -36,7 +36,10 @@ export {
   RAGQueryParams,
   RAGQueryResult,
   ExportedTopicData,
+  TopicMatch,
 } from "./utils/types";
+export { extractKeywords, BASE_STOP_WORDS, QUERY_INTENT_WORDS } from "./utils/keywords";
+export type { ExtractKeywordsOptions } from "./utils/keywords";
 
 // Loaders
 export { DocumentLoaderFactory } from "./loaders/documentLoaderFactory";
@@ -57,7 +60,7 @@ export type { ChunkingOptions, ChunkingResult } from "./splitters/semanticChunke
 export type { EmbeddingBackend, EmbeddingBackendType } from "./embeddings/embeddingBackend";
 export { EmbeddingService } from "./embeddings/embeddingService";
 export type { AvailableModel } from "./embeddings/embeddingService";
-export { ModelRegistry } from "./embeddings/modelRegistry";
+export { ModelRegistry } from "./models/modelRegistry.js";
 export { HuggingFaceBackend } from "./embeddings/huggingFaceBackend";
 export { RemoteEmbeddingBackend } from "./embeddings/remoteEmbeddingBackend";
 export type { RemoteEmbeddingFormat } from "./embeddings/remoteEmbeddingBackend";
@@ -67,21 +70,114 @@ export { TransformersEmbeddings } from "./embeddings/langchainEmbeddings";
 export { VectorStoreFactory } from "./stores/vectorStoreFactory";
 export type { VectorStoreConfig, VectorStoreMetadata } from "./stores/vectorStoreFactory";
 
+// Knowledge Graph
+export {
+  EntityType,
+  RelationshipType,
+  GraphEntity,
+  GraphRelationship,
+  GraphCommunity,
+  KnowledgeGraphData,
+  KnowledgeGraphStats,
+  VALID_ENTITY_TYPES,
+  VALID_RELATIONSHIP_TYPES,
+} from "./utils/graphTypes";
+export { KnowledgeGraph } from "./stores/knowledgeGraph";
+export { KnowledgeGraphStore } from "./stores/knowledgeGraphStore";
+
 // Retrievers
 export { VectorRetriever } from "./retrievers/vectorRetriever";
 export { KeywordRetriever } from "./retrievers/keywordRetriever";
-export { HybridRetriever } from "./retrievers/hybridRetriever";
+export { HybridRetriever, DEFAULT_HYBRID_OPTIONS } from "./retrievers/hybridRetriever";
 export type { HybridSearchOptions } from "./retrievers/hybridRetriever";
-export { EnsembleRetrieverWrapper } from "./retrievers/ensembleRetriever";
+export { EnsembleRetrieverWrapper, DEFAULT_ENSEMBLE_OPTIONS } from "./retrievers/ensembleRetriever";
+export type { EnsembleSearchOptions } from "./retrievers/ensembleRetriever";
+export { GraphRetriever, DEFAULT_GRAPH_OPTIONS } from "./retrievers/graphRetriever";
+export type { GraphSearchOptions, GraphSearchResult } from "./retrievers/graphRetriever";
+export { GraphHybridRetriever, DEFAULT_GRAPH_HYBRID_OPTIONS } from "./retrievers/graphHybridRetriever";
+export type { GraphHybridSearchOptions, GraphHybridSearchResult } from "./retrievers/graphHybridRetriever";
+
+// Rerankers
+export type { Reranker, ScoredDocument, RerankerOptions } from "./rerankers/reranker";
+export { CrossEncoderReranker } from "./rerankers/crossEncoderReranker";
+export { RerankerModelRegistry } from "./models/rerankerModelRegistry.js";
+export type { AvailableRerankerModel } from "./models/rerankerModelRegistry.js";
 
 // Agents
 export { RAGAgent } from "./agents/ragAgent";
 export { QueryPlannerAgent } from "./agents/queryPlannerAgent";
+export { RAGQueryService, TopicEmptyError } from "./agents/ragQueryService";
+export { EntityExtractor } from "./agents/entityExtractor";
 export type { RAGAgentOptions, RetrievalResult } from "./agents/ragAgent";
 export type { QueryPlannerOptions, QueryPlan, SubQuery } from "./agents/queryPlannerAgent";
+export type {
+  ExtractedEntity,
+  ExtractedRelationship,
+  ExtractionResult,
+  ExtractionProgress,
+  EntityExtractorOptions,
+} from "./agents/entityExtractorTypes";
+// Runtime constant — a type-only re-export would erase it from the built API
+export { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "./agents/entityExtractorTypes";
+
+// LangGraph Pipelines
+export { createQueryGraph, executeQueryGraph } from "./agents/queryGraph";
+export type { QueryGraphDeps, ExecuteQueryGraphOptions } from "./agents/queryGraph";
+export { createIndexingGraph, executeIndexingGraph } from "./agents/indexingGraph";
+export type { IndexingGraphDeps } from "./agents/indexingGraph";
+export { LLMProviderChatModel } from "./agents/llmAdapter";
+export { LanceDBCheckpointSaver } from "./stores/lanceDBCheckpointer";
+export {
+  QueryPipelineState,
+  IndexingPipelineState,
+} from "./agents/graphState";
+export type {
+  QueryPipelineStateType,
+  IndexingPipelineStateType,
+  RetrievalResultEntry,
+  QueryPlanRef,
+} from "./agents/graphState";
 
 // Managers
 export { TopicManager } from "./managers/topicManager";
 export type { TopicManagerOptions, CreateTopicOptions, TopicStats, AddDocumentResult } from "./managers/topicManager";
 export { DocumentPipeline } from "./managers/documentPipeline";
 export type { PipelineOptions, PipelineProgress, PipelineResult } from "./managers/documentPipeline";
+
+// Standalone Memory Module
+export {
+  MemoryStore,
+  MemoryVectorStore,
+  MemoryGraph,
+  MemoryEntityExtractor,
+  MemoryMarkdownExporter,
+  MemoryDecayEngine,
+  MemoryScopeLinker,
+  GitBranchDetector,
+  DUPLICATE_SIMILARITY_THRESHOLD,
+  DEFAULT_TOP_K,
+  MEMORY_TABLE_PREFIX,
+  DECAY_LAMBDA,
+  MIN_CONFIDENCE_THRESHOLD,
+  DECAY_INTERVAL_MS,
+} from "./memory";
+export type {
+  MemoryStoreOptions,
+  MemoryScope,
+  MemoryEntry,
+  MemoryEntity as StandaloneMemoryEntity,
+  MemoryEntityType,
+  MemoryRelationship as StandaloneMemoryRelationship,
+  MemoryRelationshipType,
+  StoreOptions as MemoryStoreOpts,
+  RecallOptions as MemoryRecallOpts,
+  RecallResult as MemoryRecallResult,
+  ForgetOptions as MemoryForgetOpts,
+  MemoryStats as StandaloneMemoryStats,
+  MemoryGraphData,
+  DecayStatus,
+  ScopeLink,
+  ExtractedMemoryEntity,
+  ExtractedMemoryRelationship,
+  ExtractionResult as MemoryExtractionResult,
+} from "./memory";

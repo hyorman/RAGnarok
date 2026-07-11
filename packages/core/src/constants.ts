@@ -16,7 +16,6 @@ export const EXTENSION = {
  * Configuration keys
  */
 export const CONFIG = {
-  ROOT: "ragnarok",
   LOCAL_MODEL_PATH: "localModelPath",
   TOP_K: "topK",
   CHUNK_SIZE: "chunkSize",
@@ -24,13 +23,16 @@ export const CONFIG = {
   LOG_LEVEL: "logLevel",
   RETRIEVAL_STRATEGY: "retrievalStrategy",
   EMBEDDING_BACKEND: "embeddingBackend",
-  EMBEDDING_VSCODE_MODEL_ID: "embeddingVscodeModelId",
   MAX_ITERATIONS: "maxIterations",
   CONFIDENCE_THRESHOLD: "confidenceThreshold",
   LLM_MODEL: "llmModel",
-  INCLUDE_WORKSPACE: "includeWorkspaceContext",
   GAP_SCORE_THRESHOLD: "gapScoreThreshold",
   COMMON_DATABASE_PATH: "commonDatabasePath",
+  MEMORY_CONFIDENCE_THRESHOLD: "memoryConfidenceThreshold",
+  LANGGRAPH_ENABLED: "langGraphEnabled",
+  RERANKER_MODEL: "rerankerModel",
+  RERANKER_MAX_CANDIDATES: "rerankerMaxCandidates",
+  RERANKER_CANDIDATE_MULTIPLIER: "rerankerCandidateMultiplier",
 } as const;
 
 /**
@@ -39,4 +41,7 @@ export const CONFIG = {
 export const DEFAULTS = {
   LOCAL_MODEL_PATH: "",
   EMBEDDING_MODEL: "Xenova/all-MiniLM-L6-v2",
+  RERANKER_MODEL: "Xenova/ms-marco-MiniLM-L-6-v2",
+  RERANKER_MAX_CANDIDATES: 20,
+  RERANKER_CANDIDATE_MULTIPLIER: 4,
 } as const;

@@ -36,6 +36,7 @@ import { MemoryMarkdownExporter } from "./memoryMarkdownExporter";
 import { GitBranchDetector } from "./gitBranchDetector";
 import { MemoryDecayEngine } from "./memoryDecayEngine";
 import { MemoryScopeLinker } from "./memoryScopeLinker";
+import { cosineSimilarity } from "../utils/vectorMath";
 
 export interface MemoryStoreOptions {
   /** LanceDB storage directory */
@@ -701,7 +702,7 @@ export class MemoryStore {
       if (entry.isLatest === false) {
         continue;
       }
-      const similarity = this.cosineSimilarity(vector, entry.vector);
+      const similarity = cosineSimilarity(vector, entry.vector);
       if (similarity >= DUPLICATE_SIMILARITY_THRESHOLD) {
         return entry;
       }
@@ -939,13 +940,6 @@ export class MemoryStore {
     }
   }
 
-  private mergeContent(existing: string, incoming: string): string {
-    if (existing.includes(incoming)) {
-      return existing;
-    }
-    return `${existing}\n${incoming}`;
-  }
-
   /**
    * Mark memories.md stale and schedule a debounced regeneration.
    * Coalesces bursts of mutations into a single scan+write, and the
@@ -1049,21 +1043,5 @@ export class MemoryStore {
       return { scope: "branch", branch: key.slice("branch:".length) };
     }
     return { scope: "workspace" };
-  }
-
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length || a.length === 0) {
-      return 0;
-    }
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-    return denominator === 0 ? 0 : dotProduct / denominator;
   }
 }
