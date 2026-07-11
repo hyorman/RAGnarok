@@ -73,6 +73,18 @@ export class MemoryStore {
   // In-memory entry caches (lazy-loaded from LanceDB)
   private entryCache = new Map<string, MemoryEntry[]>();
 
+  // Debounced memories.md regeneration: every mutation used to rescan every
+  // scope twice (markdown + stats) and rewrite the file, and concurrent
+  // fire-and-forget writes could land out of order.
+  private markdownDirty = false;
+  private markdownFlushing = false;
+  private markdownTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Deferred recall-reinforcement persistence: bumping two counters used to
+  // rewrite the entire scope table (all rows + vectors) on every read.
+  private reinforcementDirty = new Set<string>();
+  private reinforcementTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(options: MemoryStoreOptions) {
     const lanceDbUri = path.join(options.storageDir, "memory-lancedb");
     this.vectorStore = new MemoryVectorStore(lanceDbUri);
@@ -172,10 +184,8 @@ export class MemoryStore {
     await this.persistEntries(scope, branch);
     await this.persistGraph(scope, branch);
 
-    // 5. Regenerate markdown (non-blocking)
-    this.regenerateMarkdown().catch((err) =>
-      this.logger.debug("Markdown regeneration failed", err),
-    );
+    // 5. Regenerate markdown (debounced)
+    this.scheduleMarkdownRegeneration();
 
     return entry;
   }
@@ -198,7 +208,8 @@ export class MemoryStore {
 
       // Reinforce accessed memories and return the UPDATED entries so callers
       // see post-increment accessCount/lastAccessedAt (the search results are
-      // detached copies read from LanceDB).
+      // detached copies read from LanceDB). Persistence is deferred and
+      // batched — reads must not rewrite the whole scope table synchronously.
       if (results.length > 0) {
         const entries = await this.getEntries(scope, branch);
         for (const result of results) {
@@ -209,7 +220,7 @@ export class MemoryStore {
             result.entry = cached;
           }
         }
-        await this.persistEntries(scope, branch);
+        this.scheduleReinforcementFlush(scope, branch);
       }
       allMemories.push(...results);
 
@@ -277,10 +288,8 @@ export class MemoryStore {
       count += await this.forgetByFilter(options);
     }
 
-    // Regenerate markdown (non-blocking)
-    this.regenerateMarkdown().catch((err) =>
-      this.logger.debug("Markdown regeneration failed", err),
-    );
+    // Regenerate markdown (debounced)
+    this.scheduleMarkdownRegeneration();
 
     return count;
   }
@@ -288,36 +297,64 @@ export class MemoryStore {
   // ── Stats ──────────────────────────────────────────────────────────
 
   async stats(): Promise<MemoryStats> {
-    const branches = await this.vectorStore.listBranches();
+    const snapshot = await this.loadAllScopes();
+    return this.computeStats(snapshot);
+  }
 
+  /** Load entries + graphs for the workspace and every branch, once. */
+  private async loadAllScopes(): Promise<{
+    branches: string[];
+    workspaceEntries: MemoryEntry[];
+    workspaceGraph: MemoryGraph;
+    branchEntries: Map<string, MemoryEntry[]>;
+    branchGraphs: Map<string, MemoryGraph>;
+  }> {
+    const branches = await this.vectorStore.listBranches();
+    const workspaceEntries = await this.getEntries("workspace");
+    const workspaceGraph = await this.getGraph("workspace");
+    const branchEntries = new Map<string, MemoryEntry[]>();
+    const branchGraphs = new Map<string, MemoryGraph>();
+    for (const branch of branches) {
+      branchEntries.set(branch, await this.getEntries("branch", branch));
+      branchGraphs.set(branch, await this.getGraph("branch", branch));
+    }
+    return { branches, workspaceEntries, workspaceGraph, branchEntries, branchGraphs };
+  }
+
+  /** Derive stats from an already-loaded scope snapshot (no extra scans). */
+  private computeStats(snapshot: {
+    branches: string[];
+    workspaceEntries: MemoryEntry[];
+    workspaceGraph: MemoryGraph;
+    branchEntries: Map<string, MemoryEntry[]>;
+    branchGraphs: Map<string, MemoryGraph>;
+  }): MemoryStats {
     let totalMemories = 0;
     let totalEntities = 0;
     let totalRelationships = 0;
-    let workspaceCount = 0;
     let branchCount = 0;
     let lastUpdated = 0;
     const entityTypes: Record<string, number> = {};
 
-    // Workspace stats
-    const wsEntries = await this.getEntries("workspace");
-    workspaceCount = wsEntries.length;
-    totalMemories += wsEntries.length;
-    for (const entry of wsEntries) {
+    const tallyGraph = (graph: MemoryGraph): void => {
+      totalEntities += graph.entityCount;
+      totalRelationships += graph.edgeCount;
+      for (const entity of graph.getAllEntities()) {
+        entityTypes[entity.type] = (entityTypes[entity.type] ?? 0) + 1;
+      }
+    };
+
+    const workspaceCount = snapshot.workspaceEntries.length;
+    totalMemories += workspaceCount;
+    for (const entry of snapshot.workspaceEntries) {
       if (entry.updatedAt > lastUpdated) {
         lastUpdated = entry.updatedAt;
       }
     }
+    tallyGraph(snapshot.workspaceGraph);
 
-    const wsGraph = await this.getGraph("workspace");
-    totalEntities += wsGraph.entityCount;
-    totalRelationships += wsGraph.edgeCount;
-    for (const entity of wsGraph.getAllEntities()) {
-      entityTypes[entity.type] = (entityTypes[entity.type] ?? 0) + 1;
-    }
-
-    // Branch stats
-    for (const branch of branches) {
-      const entries = await this.getEntries("branch", branch);
+    for (const branch of snapshot.branches) {
+      const entries = snapshot.branchEntries.get(branch) ?? [];
       branchCount += entries.length;
       totalMemories += entries.length;
       for (const entry of entries) {
@@ -325,12 +362,9 @@ export class MemoryStore {
           lastUpdated = entry.updatedAt;
         }
       }
-
-      const graph = await this.getGraph("branch", branch);
-      totalEntities += graph.entityCount;
-      totalRelationships += graph.edgeCount;
-      for (const entity of graph.getAllEntities()) {
-        entityTypes[entity.type] = (entityTypes[entity.type] ?? 0) + 1;
+      const graph = snapshot.branchGraphs.get(branch);
+      if (graph) {
+        tallyGraph(graph);
       }
     }
 
@@ -339,7 +373,7 @@ export class MemoryStore {
       totalEntities,
       totalRelationships,
       byScope: { workspace: workspaceCount, branch: branchCount },
-      branches,
+      branches: snapshot.branches,
       entityTypes,
       lastUpdated,
     };
@@ -473,12 +507,25 @@ export class MemoryStore {
     return combined;
   }
 
-  /** Clear auto-decay timer and release resources. */
-  dispose(): void {
+  /**
+   * Clear timers and flush pending writes (reinforcement counters and
+   * memories.md). Await this during shutdown so nothing is lost.
+   */
+  async dispose(): Promise<void> {
     if (this.autoDecayTimer) {
       clearInterval(this.autoDecayTimer);
       this.autoDecayTimer = null;
     }
+    if (this.markdownTimer) {
+      clearTimeout(this.markdownTimer);
+      this.markdownTimer = null;
+    }
+    if (this.reinforcementTimer) {
+      clearTimeout(this.reinforcementTimer);
+      this.reinforcementTimer = null;
+    }
+    await this.flushReinforcement();
+    await this.flushMarkdown();
   }
 
   // ── Cross-Scope Linking ─────────────────────────────────────────────
@@ -680,8 +727,10 @@ export class MemoryStore {
     const graph = await this.getGraph(scope, branch);
     const entityIds: string[] = [];
 
-    // Process extracted entities
+    // Partition into merges (existing entities) and brand-new entities so all
+    // new descriptions embed in ONE batch instead of K serial inference calls.
     const entityNameToId = new Map<string, string>();
+    const newEntities: typeof result.entities = [];
     for (const extracted of result.entities) {
       const existing = graph.findDuplicate(extracted.name, extracted.type);
 
@@ -699,14 +748,19 @@ export class MemoryStore {
         entityIds.push(existing.id);
         entityNameToId.set(extracted.name.toLowerCase(), existing.id);
       } else {
-        // New entity: embed description, assign UUID, add to graph
-        const entityVector = await this.embeddingService.embed(extracted.description);
+        newEntities.push(extracted);
+      }
+    }
+
+    if (newEntities.length > 0) {
+      const vectors = await this.embeddingService.embedBatch(newEntities.map((e) => e.description));
+      newEntities.forEach((extracted, i) => {
         const entity: MemoryEntity = {
           id: crypto.randomUUID(),
           name: extracted.name,
           type: extracted.type,
           description: extracted.description,
-          vector: entityVector,
+          vector: vectors[i],
           scope,
           branch,
           confidence: 1.0,
@@ -719,7 +773,7 @@ export class MemoryStore {
         graph.addEntity(entity);
         entityIds.push(entity.id);
         entityNameToId.set(extracted.name.toLowerCase(), entity.id);
-      }
+      });
     }
 
     // Process extracted relationships
@@ -892,41 +946,109 @@ export class MemoryStore {
     return `${existing}\n${incoming}`;
   }
 
+  /**
+   * Mark memories.md stale and schedule a debounced regeneration.
+   * Coalesces bursts of mutations into a single scan+write, and the
+   * flush loop serializes writes so they can't land out of order.
+   */
+  private scheduleMarkdownRegeneration(): void {
+    if (!this.markdownPath) {
+      return;
+    }
+    this.markdownDirty = true;
+    if (this.markdownTimer) {
+      return;
+    }
+    this.markdownTimer = setTimeout(() => {
+      this.markdownTimer = null;
+      void this.flushMarkdown();
+    }, 1_000);
+    this.markdownTimer.unref?.();
+  }
+
+  /** Write memories.md if stale. Single-flight; safe to call at shutdown. */
+  async flushMarkdown(): Promise<void> {
+    if (this.markdownFlushing) {
+      return;
+    }
+    this.markdownFlushing = true;
+    try {
+      while (this.markdownDirty) {
+        this.markdownDirty = false;
+        try {
+          await this.regenerateMarkdown();
+        } catch (err) {
+          this.logger.debug("Markdown regeneration failed", err);
+        }
+      }
+    } finally {
+      this.markdownFlushing = false;
+    }
+  }
+
   private async regenerateMarkdown(): Promise<void> {
     if (!this.markdownPath) {
       return;
     }
 
-    const workspaceEntries = await this.getEntries("workspace");
-    const wsGraph = await this.getGraph("workspace");
-    const branches = await this.vectorStore.listBranches();
+    // One scan feeds both the export and its stats section.
+    const snapshot = await this.loadAllScopes();
 
-    const branchEntries = new Map<string, MemoryEntry[]>();
     const branchEntities = new Map<string, MemoryEntity[]>();
     const branchRelationships = new Map<string, import("./types").MemoryRelationship[]>();
-
-    for (const branch of branches) {
-      branchEntries.set(branch, await this.getEntries("branch", branch));
-      const graph = await this.getGraph("branch", branch);
-      branchEntities.set(branch, graph.getAllEntities());
-      branchRelationships.set(branch, graph.getAllRelationships());
+    for (const branch of snapshot.branches) {
+      const graph = snapshot.branchGraphs.get(branch);
+      branchEntities.set(branch, graph?.getAllEntities() ?? []);
+      branchRelationships.set(branch, graph?.getAllRelationships() ?? []);
     }
 
-    const memoryStats = await this.stats();
-
     const markdown = this.exporter.generate({
-      workspaceEntries,
-      workspaceEntities: wsGraph.getAllEntities(),
-      workspaceRelationships: wsGraph.getAllRelationships(),
-      branchEntries,
+      workspaceEntries: snapshot.workspaceEntries,
+      workspaceEntities: snapshot.workspaceGraph.getAllEntities(),
+      workspaceRelationships: snapshot.workspaceGraph.getAllRelationships(),
+      branchEntries: snapshot.branchEntries,
       branchEntities,
       branchRelationships,
-      stats: memoryStats,
+      stats: this.computeStats(snapshot),
     });
 
     // Ensure directory exists
     await fs.mkdir(path.dirname(this.markdownPath), { recursive: true });
     await fs.writeFile(this.markdownPath, markdown, "utf-8");
+  }
+
+  /** Queue a scope for deferred reinforcement persistence. */
+  private scheduleReinforcementFlush(scope: MemoryScope, branch?: string): void {
+    this.reinforcementDirty.add(this.scopeKey(scope, branch));
+    if (this.reinforcementTimer) {
+      return;
+    }
+    this.reinforcementTimer = setTimeout(() => {
+      this.reinforcementTimer = null;
+      void this.flushReinforcement();
+    }, 2_000);
+    this.reinforcementTimer.unref?.();
+  }
+
+  /** Persist scopes with pending access-counter updates. */
+  async flushReinforcement(): Promise<void> {
+    const dirty = [...this.reinforcementDirty];
+    this.reinforcementDirty.clear();
+    for (const key of dirty) {
+      const { scope, branch } = this.parseScopeKey(key);
+      try {
+        await this.persistEntries(scope, branch);
+      } catch (err) {
+        this.logger.debug(`Reinforcement flush failed for ${key}`, err);
+      }
+    }
+  }
+
+  private parseScopeKey(key: string): { scope: MemoryScope; branch?: string } {
+    if (key.startsWith("branch:")) {
+      return { scope: "branch", branch: key.slice("branch:".length) };
+    }
+    return { scope: "workspace" };
   }
 
   private cosineSimilarity(a: number[], b: number[]): number {

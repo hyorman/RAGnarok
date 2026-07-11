@@ -26,8 +26,16 @@ import {
 
 export class MemoryVectorStore {
   private logger = new Logger("MemoryVectorStore");
+  // Memoized connection — every operation used to reconnect, so a single
+  // store() paid 5+ connects and each recall reconnected again.
+  private dbPromise: ReturnType<typeof connect> | null = null;
 
   constructor(private lanceDbUri: string) {}
+
+  private getDb(): ReturnType<typeof connect> {
+    this.dbPromise ??= connect(this.lanceDbUri);
+    return this.dbPromise;
+  }
 
   // ── Table naming ───────────────────────────────────────────────────
 
@@ -77,7 +85,7 @@ export class MemoryVectorStore {
   // ── Memory Entry CRUD ──────────────────────────────────────────────
 
   async saveEntries(entries: MemoryEntry[], scope: MemoryScope, branch?: string): Promise<void> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const tableName = this.entriesTable(scope, branch);
 
     if (entries.length === 0) {
@@ -123,7 +131,7 @@ export class MemoryVectorStore {
   }
 
   async loadEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const tableName = this.entriesTable(scope, branch);
 
     // Only a missing table means "no data". Any other failure (corrupt rows,
@@ -173,7 +181,7 @@ export class MemoryVectorStore {
     branch: string | undefined,
     topK: number,
   ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const tableName = this.entriesTable(scope, branch);
 
     const tableNames = await db.tableNames();
@@ -226,7 +234,7 @@ export class MemoryVectorStore {
   // ── Graph Persistence ──────────────────────────────────────────────
 
   async saveGraph(data: MemoryGraphData, scope: MemoryScope, branch?: string): Promise<void> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
 
     // Both tables are always reconciled: dropping the old table even when the
     // new collection is empty is what persists "the last entity/edge was
@@ -282,7 +290,7 @@ export class MemoryVectorStore {
   }
 
   async loadGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraphData | null> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const entitiesTableName = this.entitiesTable(scope, branch);
     const edgesTableName = this.edgesTable(scope, branch);
 
@@ -349,7 +357,7 @@ export class MemoryVectorStore {
   // ── Scope Management ───────────────────────────────────────────────
 
   async listBranches(): Promise<string[]> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const tableNames = await db.tableNames();
 
     const prefix = `${MEMORY_TABLE_PREFIX}-entries-branch-`;
@@ -366,7 +374,7 @@ export class MemoryVectorStore {
 
   /** List branches that have entity graph tables (may differ from entry branches). */
   async listEntityBranches(): Promise<string[]> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const tableNames = await db.tableNames();
 
     const prefix = `${MEMORY_TABLE_PREFIX}-entities-branch-`;
@@ -382,7 +390,7 @@ export class MemoryVectorStore {
   }
 
   async deleteBranchMemories(branch: string): Promise<void> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const tableNames = await db.tableNames();
 
     // Exact table names only — substring matching could drop tables of
@@ -401,7 +409,7 @@ export class MemoryVectorStore {
   }
 
   async deleteAll(): Promise<void> {
-    const db = await connect(this.lanceDbUri);
+    const db = await this.getDb();
     const tableNames = await db.tableNames();
 
     for (const tableName of tableNames) {
