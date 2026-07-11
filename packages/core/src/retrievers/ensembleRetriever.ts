@@ -1,9 +1,10 @@
 /**
  * Ensemble Retriever - Composite retriever using Reciprocal Rank Fusion
  *
- * Delegates retrieval to VectorRetriever and KeywordRetriever, then applies
- * RRF rank fusion to produce a single ranked list. Unlike HybridRetriever
- * which uses weighted score fusion, EnsembleRetriever fuses by rank position.
+ * Delegates retrieval to VectorRetriever and KeywordRetriever,
+ * then applies RRF rank fusion across both arms to produce a single ranked list.
+ * Unlike HybridRetriever which uses weighted score fusion, EnsembleRetriever fuses
+ * by rank position.
  */
 
 import { createHash } from "crypto";
@@ -11,17 +12,24 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import { VectorRetriever } from "./vectorRetriever";
 import { KeywordRetriever } from "./keywordRetriever";
 import { Logger } from "../logger";
+import { extractKeywords } from "../utils/keywords";
 
 export interface EnsembleSearchOptions {
   /** Number of results to return */
-  k?: number;
-
-  /** Weight for vector retriever (0-1, default 0.7) */
-  vectorWeight?: number;
-
-  /** Weight for BM25 retriever (0-1, default 0.3) */
-  bm25Weight?: number;
+  k: number;
+  /** Weight for vector retriever (0-1) */
+  vectorWeight: number;
+  /** Weight for BM25 retriever (0-1) */
+  bm25Weight: number;
+  /** RRF constant (default 60). Lower values (20-30) may work better for small corpora */
+  rrfK?: number;
 }
+
+/** Default ensemble search options (weights) */
+export const DEFAULT_ENSEMBLE_OPTIONS = {
+  vectorWeight: 0.5,
+  bm25Weight: 0.5,
+} as const;
 
 export interface EnsembleSearchResult {
   document: LangChainDocument;
@@ -36,30 +44,29 @@ export class EnsembleRetrieverWrapper {
   private vectorRetriever: VectorRetriever;
   private keywordRetriever: KeywordRetriever;
 
-  private readonly DEFAULT_K = 5;
-  private readonly DEFAULT_VECTOR_WEIGHT = 0.7;
-  private readonly DEFAULT_BM25_WEIGHT = 0.3;
-  private readonly RRF_CONSTANT = 60; // Standard RRF constant
+  private readonly RRF_CONSTANT: number;
 
-  constructor(vectorRetriever: VectorRetriever, keywordRetriever: KeywordRetriever) {
+  constructor(vectorRetriever: VectorRetriever, keywordRetriever: KeywordRetriever, rrfK = 60) {
     this.logger = new Logger("EnsembleRetriever");
     this.vectorRetriever = vectorRetriever;
     this.keywordRetriever = keywordRetriever;
+    this.RRF_CONSTANT = rrfK;
     this.logger.info("EnsembleRetriever initialized");
   }
 
   /**
    * Perform ensemble search using manual RRF
    */
-  public async search(query: string, options: EnsembleSearchOptions = {}): Promise<EnsembleSearchResult[]> {
+  public async search(query: string, options: EnsembleSearchOptions): Promise<EnsembleSearchResult[]> {
     if (!this.keywordRetriever.isInitialized()) {
       throw new Error("EnsembleRetriever not initialized. KeywordRetriever must be initialized first.");
     }
 
     const startTime = Date.now();
-    const k = options.k || this.DEFAULT_K;
-    let vectorWeight = options.vectorWeight ?? this.DEFAULT_VECTOR_WEIGHT;
-    let bm25Weight = options.bm25Weight ?? this.DEFAULT_BM25_WEIGHT;
+
+    const k = options.k;
+    let vectorWeight = options.vectorWeight;
+    let bm25Weight = options.bm25Weight;
 
     if (vectorWeight < 0 || bm25Weight < 0) {
       throw new Error("Weights must be non-negative");
@@ -83,17 +90,23 @@ export class EnsembleRetrieverWrapper {
       const fetchCount = k * 3;
 
       // Get results from both retrievers in parallel
+      // Vector arm gets natural language for optimal embedding quality;
+      // BM25 arm gets keyword-extracted query for better term matching.
+      const bm25Query = extractKeywords(query).join(" ") || query;
+
       const [vectorResults, bm25Results] = await Promise.all([
         this.vectorRetriever.getDocuments(query, fetchCount),
-        this.keywordRetriever.search(query, fetchCount),
+        this.keywordRetriever.search(bm25Query, fetchCount),
       ]);
 
       // Apply Reciprocal Rank Fusion (RRF)
+      const rrfK = options.rrfK ?? this.RRF_CONSTANT;
       const fusedResults = this.reciprocalRankFusion(
         vectorResults,
         bm25Results.map((r) => r.document),
         vectorWeight,
         bm25Weight,
+        rrfK,
       );
 
       // Limit to k results
@@ -131,15 +144,13 @@ export class EnsembleRetrieverWrapper {
     bm25Results: LangChainDocument[],
     vectorWeight: number,
     bm25Weight: number,
+    rrfK: number,
   ): LangChainDocument[] {
-    // Create a map of document ID -> RRF score
     const scoreMap = new Map<string, { doc: LangChainDocument; score: number }>();
 
-    // Add vector results with their ranks
     vectorResults.forEach((doc, index) => {
       const docId = this.getDocumentId(doc);
-      const rrf = vectorWeight / (this.RRF_CONSTANT + index + 1);
-
+      const rrf = vectorWeight / (rrfK + index + 1);
       if (scoreMap.has(docId)) {
         scoreMap.get(docId)!.score += rrf;
       } else {
@@ -147,11 +158,9 @@ export class EnsembleRetrieverWrapper {
       }
     });
 
-    // Add BM25 results with their ranks
     bm25Results.forEach((doc, index) => {
       const docId = this.getDocumentId(doc);
-      const rrf = bm25Weight / (this.RRF_CONSTANT + index + 1);
-
+      const rrf = bm25Weight / (rrfK + index + 1);
       if (scoreMap.has(docId)) {
         scoreMap.get(docId)!.score += rrf;
       } else {
@@ -159,12 +168,9 @@ export class EnsembleRetrieverWrapper {
       }
     });
 
-    // Sort by RRF score (descending)
-    const rankedResults = Array.from(scoreMap.values())
+    return Array.from(scoreMap.values())
       .sort((a, b) => b.score - a.score)
       .map((item) => item.doc);
-
-    return rankedResults;
   }
 
   /**

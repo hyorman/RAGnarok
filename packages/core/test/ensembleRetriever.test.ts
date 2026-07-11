@@ -4,7 +4,8 @@
 
 import { expect } from "chai";
 import { Document as LangChainDocument } from "@langchain/core/documents";
-import { EnsembleRetrieverWrapper, VectorRetriever, KeywordRetriever } from "../src/index";
+import { EnsembleRetrieverWrapper, VectorRetriever, KeywordRetriever, DEFAULT_ENSEMBLE_OPTIONS } from "../src/index";
+import { SEMANTIC_SMOKE_CORPUS, toLangChainDocuments } from "./helpers/fixtureCorpus";
 
 // Mock vector store
 class MockVectorStore {
@@ -34,28 +35,7 @@ class MockVectorStore {
 }
 
 describe("EnsembleRetriever", () => {
-  const testDocuments: LangChainDocument[] = [
-    {
-      pageContent: "Python is a high-level programming language",
-      metadata: { source: "test1.txt" },
-    },
-    {
-      pageContent: "JavaScript is used for web development",
-      metadata: { source: "test2.txt" },
-    },
-    {
-      pageContent: "TypeScript adds types to JavaScript",
-      metadata: { source: "test3.txt" },
-    },
-    {
-      pageContent: "Machine learning models process data",
-      metadata: { source: "test4.txt" },
-    },
-    {
-      pageContent: "React is a JavaScript library for building UIs",
-      metadata: { source: "test5.txt" },
-    },
-  ];
+  const testDocuments: LangChainDocument[] = toLangChainDocuments(SEMANTIC_SMOKE_CORPUS);
 
   let vectorStore: any;
   let vectorRetriever: VectorRetriever;
@@ -92,7 +72,7 @@ describe("EnsembleRetriever", () => {
     });
 
     it("should perform ensemble search", async () => {
-      const results = await retriever.search("programming language", { k: 3 });
+      const results = await retriever.search("programming language", { ...DEFAULT_ENSEMBLE_OPTIONS, k: 3 });
 
       expect(results).to.be.an("array");
       expect(results.length).to.be.at.most(3);
@@ -100,7 +80,7 @@ describe("EnsembleRetriever", () => {
     });
 
     it("should respect k parameter", async () => {
-      const results = await retriever.search("JavaScript", { k: 2 });
+      const results = await retriever.search("JavaScript", { ...DEFAULT_ENSEMBLE_OPTIONS, k: 2 });
       expect(results.length).to.be.at.most(2);
     });
 
@@ -109,7 +89,7 @@ describe("EnsembleRetriever", () => {
       const uninitRetriever = new EnsembleRetrieverWrapper(vectorRetriever, uninitKr);
 
       try {
-        await uninitRetriever.search("test");
+        await uninitRetriever.search("test", { ...DEFAULT_ENSEMBLE_OPTIONS, k: 5 });
         expect.fail("Should have thrown error");
       } catch (error: any) {
         expect(error.message).to.include("not initialized");
@@ -119,8 +99,8 @@ describe("EnsembleRetriever", () => {
     it("should support custom weights", async () => {
       const results = await retriever.search("Python", {
         k: 3,
-        vectorWeight: 0.7,
-        bm25Weight: 0.3,
+        vectorWeight: 0.6,
+        bm25Weight: 0.4,
       });
 
       expect(results).to.be.an("array");
@@ -153,7 +133,7 @@ describe("EnsembleRetriever", () => {
     });
 
     it("should return documents in correct format", async () => {
-      const results = await retriever.search("test query", { k: 2 });
+      const results = await retriever.search("test query", { ...DEFAULT_ENSEMBLE_OPTIONS, k: 2 });
 
       results.forEach((result) => {
         expect(result).to.have.property("document");
@@ -163,7 +143,7 @@ describe("EnsembleRetriever", () => {
     });
 
     it("should handle empty query gracefully", async () => {
-      const results = await retriever.search("", { k: 3 });
+      const results = await retriever.search("", { ...DEFAULT_ENSEMBLE_OPTIONS, k: 3 });
       expect(results).to.be.an("array");
     });
   });
@@ -175,7 +155,7 @@ describe("EnsembleRetriever", () => {
 
     it("should complete search in reasonable time", async () => {
       const startTime = Date.now();
-      await retriever.search("JavaScript programming", { k: 5 });
+      await retriever.search("JavaScript programming", { ...DEFAULT_ENSEMBLE_OPTIONS, k: 5 });
       const duration = Date.now() - startTime;
 
       expect(duration).to.be.lessThan(1000); // Should complete within 1 second

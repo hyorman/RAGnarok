@@ -10,11 +10,13 @@ import {
   EmbeddingService,
   Logger,
   CONFIG,
+  DEFAULTS,
   Topic,
   Document,
   RetrievalStrategy,
+  RerankerModelRegistry,
 } from "@ragnarok/core";
-import { COMMANDS, TREE_CONFIG_KEY, CONTEXT } from "./constants";
+import { COMMANDS, TREE_CONFIG_KEY, CONTEXT, VSCODE_CONFIG } from "./constants";
 
 const logger = new Logger("TopicTreeView");
 
@@ -174,7 +176,11 @@ export class TopicTreeItem extends vscode.TreeItem {
                 ? "🎭 Ensemble"
                 : value === RetrievalStrategy.BM25
                   ? "🔍 BM25"
-                  : "❓ Unknown"
+                  : value === RetrievalStrategy.GRAPH
+                    ? "🔗 Graph"
+                    : value === RetrievalStrategy.GRAPH_HYBRID
+                      ? "🔗🎯 Graph+Vector"
+                      : "❓ Unknown"
         }`;
       case TREE_CONFIG_KEY.EMBEDDING_MODEL:
         return `🤖 Embedding Model: ${value}`;
@@ -194,6 +200,8 @@ export class TopicTreeItem extends vscode.TreeItem {
         return `↔️ Chunk Overlap: ${value}`;
       case TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT:
         return `🏢 Include Workspace Context: ${value ? "✅" : "❌"}`;
+      case TREE_CONFIG_KEY.RERANKER_MODEL:
+        return `🔀 Reranker: ${value}`;
       default:
         return `${key}: ${value}`;
     }
@@ -359,6 +367,16 @@ export class TopicTreeItem extends vscode.TreeItem {
           this.tooltip = `Chunk Overlap: ${data.value} — Click to change`;
         }
 
+        if (data && data.key === TREE_CONFIG_KEY.RERANKER_MODEL) {
+          this.command = {
+            command: COMMANDS.SELECT_RERANKER_MODEL,
+            title: "Select Reranker Model",
+          };
+          this.contextValue = "config-reranker-model";
+          this.tooltip = `Reranker: ${data.value} — Click to change`;
+          this.iconPath = new vscode.ThemeIcon("filter");
+        }
+
         break;
 
       case "topic-stats":
@@ -433,7 +451,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
   }
 
   private async getConfigurationItems(): Promise<TopicTreeItem[]> {
-    const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+    const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
     const items: TopicTreeItem[] = [];
 
     const currentModel = this.embeddingService.getCurrentModel();
@@ -454,7 +472,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     const strategy = config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "hybrid");
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RETRIEVAL_STRATEGY, value: strategy }, "config-item"));
 
-    const topK = config.get<number>(CONFIG.TOP_K, 5);
+    const topK = config.get<number>(CONFIG.TOP_K, 10);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.TOP_K, value: topK }, "config-item"));
 
     const chunkSize = config.get<number>(CONFIG.CHUNK_SIZE, 1000);
@@ -466,7 +484,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     const llmModel = config.get<string>(CONFIG.LLM_MODEL, "gpt-4o-mini");
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.LLM_MODEL, value: llmModel }, "config-item"));
 
-    const includeWorkspace = config.get<boolean>(CONFIG.INCLUDE_WORKSPACE, true);
+    const includeWorkspace = config.get<boolean>(VSCODE_CONFIG.INCLUDE_WORKSPACE, true);
     items.push(
       new TopicTreeItem({ key: TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT, value: includeWorkspace }, "config-item"),
     );
@@ -476,6 +494,10 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
 
     const threshold = config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD, value: threshold }, "config-item"));
+
+    // Reranker model
+    const rerankerModel = config.get<string>(CONFIG.RERANKER_MODEL) ?? DEFAULTS.RERANKER_MODEL;
+    items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RERANKER_MODEL, value: rerankerModel }, "config-item"));
 
     return items;
   }
@@ -491,7 +513,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
       if (!lm || typeof lm.computeEmbeddings !== "function") {
         vscode.window.showWarningMessage(
           "VS Code LM Embeddings API is not available. " +
-            "Make sure you are running VS Code with the proposed API enabled and a provider (e.g. GitHub Copilot) installed.",
+            'Make sure you are running VS Code Insiders (or another build exposing the proposal) with "--enable-proposed-api=hyorman.ragnarok" and a provider (e.g. GitHub Copilot) installed.',
         );
         return;
       }
@@ -506,8 +528,8 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
         return;
       }
 
-      const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
-      const currentModelId = config.get<string>(CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
+      const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
+      const currentModelId = config.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
 
       const items: vscode.QuickPickItem[] = [
         {
@@ -533,7 +555,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
       const newModelId = picked.label.startsWith("$(sparkle)") ? "" : picked.label;
 
       await config.update(
-        CONFIG.EMBEDDING_VSCODE_MODEL_ID,
+        VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID,
         newModelId || undefined,
         vscode.ConfigurationTarget.Workspace,
       );
@@ -646,6 +668,89 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
   }
 
   /**
+   * List available reranker models and let the user pick one,
+   * or enter a custom HuggingFace cross-encoder model ID.
+   */
+  async selectRerankerModel(): Promise<void> {
+    const registry = RerankerModelRegistry.getInstance();
+    const models = await registry.listAvailableModels();
+    const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
+    const currentModel = config.get<string>(CONFIG.RERANKER_MODEL) ?? DEFAULTS.RERANKER_MODEL;
+
+    // Split into downloaded/bundled and available
+    const downloaded = models.filter((m) => m.downloaded);
+    const notDownloaded = models.filter((m) => !m.downloaded);
+
+    interface RerankerModelItem extends vscode.QuickPickItem {
+      modelId?: string;
+    }
+
+    const items: RerankerModelItem[] = [];
+
+    if (downloaded.length > 0) {
+      items.push({ label: "Downloaded / Bundled", kind: vscode.QuickPickItemKind.Separator });
+      for (const m of downloaded) {
+        items.push({
+          label: m.name,
+          description: m.name === currentModel ? "$(check) Active" : `(${m.source})`,
+          detail: "Ready to use — no download needed",
+          modelId: m.name,
+        });
+      }
+    }
+
+    if (notDownloaded.length > 0) {
+      items.push({ label: "Available for Download", kind: vscode.QuickPickItemKind.Separator });
+      for (const m of notDownloaded) {
+        items.push({
+          label: m.name,
+          description: `(${m.source})`,
+          detail: "Will be downloaded on first use",
+          modelId: m.name,
+        });
+      }
+    }
+
+    // Custom option
+    items.push({ label: "Custom", kind: vscode.QuickPickItemKind.Separator });
+    items.push({
+      label: "$(pencil) Enter custom model ID…",
+      detail: "Specify a HuggingFace cross-encoder model identifier",
+    });
+
+    const selected = await vscode.window.showQuickPick(items, {
+      placeHolder: `Select reranker model (current: ${currentModel})`,
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+
+    if (!selected) {
+      return;
+    }
+
+    let modelId = selected.modelId;
+    if (!modelId) {
+      // Custom entry
+      modelId = await vscode.window.showInputBox({
+        prompt: "Enter a HuggingFace cross-encoder model identifier",
+        placeHolder: "e.g., Xenova/ms-marco-MiniLM-L-12-v2",
+        validateInput: (value) => {
+          if (!value.includes("/")) {
+            return "Model ID should include namespace (e.g., Xenova/model-name)";
+          }
+          return null;
+        },
+      });
+    }
+
+    if (modelId) {
+      await config.update(CONFIG.RERANKER_MODEL, modelId, vscode.ConfigurationTarget.Workspace);
+      vscode.window.showInformationMessage(`Reranker model set to: ${modelId}`);
+      this.refresh();
+    }
+  }
+
+  /**
    * Discover available Copilot LLM models at runtime and let the user pick one.
    */
   async selectLLMModel(): Promise<void> {
@@ -665,7 +770,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
         return;
       }
 
-      const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+      const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
       const currentFamily = config.get<string>(CONFIG.LLM_MODEL, "gpt-4o-mini");
 
       const familyMap = new Map<string, { vendor: string; maxTokens: number; count: number }>();
@@ -739,7 +844,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
    * Handles booleans (toggle), enums (QuickPick), and numbers (InputBox).
    */
   async editConfigItem(configKey: string): Promise<void> {
-    const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+    const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
 
     const configMap: Record<
       string,
@@ -768,17 +873,19 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
       [TREE_CONFIG_KEY.RETRIEVAL_STRATEGY]: {
         settingKey: CONFIG.RETRIEVAL_STRATEGY,
         type: "enum",
-        options: ["hybrid", "vector", "ensemble", "bm25"],
+        options: ["hybrid", "vector", "ensemble", "bm25", "graph", "graph_hybrid"],
         optionLabels: {
-          hybrid: "Hybrid — 70% semantic + 30% keyword (recommended)",
+          hybrid: "Hybrid — 90% semantic + 10% keyword (recommended)",
           vector: "Vector — pure semantic similarity",
           ensemble: "Ensemble — RRF fusion (slower, more accurate)",
           bm25: "BM25 — pure keyword search (no embeddings)",
+          graph: "Graph — entity relationship traversal (requires knowledge graph)",
+          graph_hybrid: "Graph+Vector — 30% graph + 70% semantic (requires knowledge graph)",
         },
         label: "Retrieval Strategy",
       },
       [TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT]: {
-        settingKey: CONFIG.INCLUDE_WORKSPACE,
+        settingKey: VSCODE_CONFIG.INCLUDE_WORKSPACE,
         type: "boolean",
         label: "Include Workspace Context",
       },

@@ -6,7 +6,15 @@
 import { expect } from "chai";
 import * as path from "path";
 import * as fs from "fs";
-import { DocumentPipeline, PipelineProgress, EmbeddingService, IConfigProvider, INotifier, HuggingFaceBackend, ModelRegistry } from "../src/index";
+import {
+  DocumentPipeline,
+  PipelineProgress,
+  EmbeddingService,
+  IConfigProvider,
+  INotifier,
+  HuggingFaceBackend,
+  ModelRegistry,
+} from "../src/index";
 
 const mockConfig: IConfigProvider = {
   get: <T>(_key: string, defaultValue: T): T => defaultValue,

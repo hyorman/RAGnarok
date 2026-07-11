@@ -6,8 +6,31 @@
 import * as path from "path";
 import { runTests } from "@vscode/test-electron";
 
+const EXTENSION_HOST_ENV_KEYS = [
+  "ELECTRON_RUN_AS_NODE",
+  "ELECTRON_NO_ATTACH_CONSOLE",
+  "VSCODE_CODE_CACHE_PATH",
+  "VSCODE_CRASH_REPORTER_PROCESS_TYPE",
+  "VSCODE_CWD",
+  "VSCODE_ESM_ENTRYPOINT",
+  "VSCODE_HANDLES_UNCAUGHT_ERRORS",
+  "VSCODE_IPC_HOOK",
+  "VSCODE_NLS_CONFIG",
+  "VSCODE_PID",
+] as const;
+
 async function main() {
+  const savedEnv = new Map<string, string | undefined>();
   try {
+    // When tests are launched from inside a VS Code extension host, Electron/VS Code
+    // bootstrap variables leak into the child process. In particular,
+    // `ELECTRON_RUN_AS_NODE=1` makes the downloaded VS Code binary start as plain
+    // Node.js, which rejects VS Code-specific CLI flags.
+    for (const key of EXTENSION_HOST_ENV_KEYS) {
+      savedEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
+
     // The folder containing the Extension Manifest package.json
     const extensionDevelopmentPath = path.resolve(__dirname, "../../");
 
@@ -30,6 +53,14 @@ async function main() {
   } catch (err) {
     console.error("Failed to run tests:", err);
     process.exit(1);
+  } finally {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   }
 }
 

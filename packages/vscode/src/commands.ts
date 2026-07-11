@@ -64,6 +64,7 @@ export class CommandHandler {
       vscode.commands.registerCommand(COMMANDS.SELECT_HF_EMBEDDING_MODEL, () =>
         configDataProvider.selectHfEmbeddingModel(),
       ),
+      vscode.commands.registerCommand(COMMANDS.SELECT_RERANKER_MODEL, () => configDataProvider.selectRerankerModel()),
       vscode.commands.registerCommand(COMMANDS.SELECT_LLM_MODEL, () => configDataProvider.selectLLMModel()),
       vscode.commands.registerCommand(COMMANDS.EDIT_CONFIG_ITEM, (configKey: string) =>
         configDataProvider.editConfigItem(configKey),

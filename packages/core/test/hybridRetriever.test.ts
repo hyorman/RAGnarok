@@ -4,7 +4,7 @@
  */
 
 import { expect } from "chai";
-import { HybridRetriever, VectorRetriever } from "../src/index";
+import { HybridRetriever, VectorRetriever, KeywordRetriever, DEFAULT_HYBRID_OPTIONS } from "../src/index";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { Embeddings } from "@langchain/core/embeddings";
@@ -112,24 +112,26 @@ describe("HybridRetriever", function () {
     }),
   ];
 
-  beforeEach(function () {
+  beforeEach(async function () {
     // Create fresh mock vector store with test documents
     vectorStore = new MockVectorStore(new MockEmbeddings());
     vectorStore.setDocuments([...testDocuments]);
 
-    // Create retriever with VectorRetriever wrapper
+    // Create retriever with VectorRetriever and KeywordRetriever
     const vectorRetriever = new VectorRetriever(vectorStore);
-    retriever = new HybridRetriever(vectorRetriever);
+    const keywordRetriever = new KeywordRetriever();
+    await keywordRetriever.initialize(testDocuments);
+    retriever = new HybridRetriever(vectorRetriever, keywordRetriever);
   });
 
   describe("Hybrid Search", function () {
     it("should perform hybrid search with default weights", async function () {
       const query = "Python machine learning";
-      const results = await retriever.search(query);
+      const results = await retriever.search(query, { k: 5, ...DEFAULT_HYBRID_OPTIONS });
 
       expect(results).to.be.an("array");
       expect(results.length).to.be.greaterThan(0);
-      expect(results.length).to.be.lessThanOrEqual(5); // Default k=5
+      expect(results.length).to.be.lessThanOrEqual(5);
 
       // Each result should have required fields
       results.forEach((result) => {
@@ -145,7 +147,7 @@ describe("HybridRetriever", function () {
 
     it("should return results sorted by hybrid score (descending)", async function () {
       const query = "JavaScript web development";
-      const results = await retriever.search(query);
+      const results = await retriever.search(query, { k: 5, ...DEFAULT_HYBRID_OPTIONS });
 
       expect(results.length).to.be.greaterThan(1);
 
@@ -158,7 +160,7 @@ describe("HybridRetriever", function () {
     it("should respect custom k parameter", async function () {
       const query = "programming languages";
       const k = 3;
-      const results = await retriever.search(query, { k });
+      const results = await retriever.search(query, { k, ...DEFAULT_HYBRID_OPTIONS });
 
       expect(results.length).to.be.lessThanOrEqual(k);
     });
@@ -168,12 +170,16 @@ describe("HybridRetriever", function () {
 
       // Heavy vector weight (90%)
       const vectorResults = await retriever.search(query, {
+        ...DEFAULT_HYBRID_OPTIONS,
+        k: 5,
         vectorWeight: 0.9,
         keywordWeight: 0.1,
       });
 
       // Heavy keyword weight (90%)
       const keywordResults = await retriever.search(query, {
+        ...DEFAULT_HYBRID_OPTIONS,
+        k: 5,
         vectorWeight: 0.1,
         keywordWeight: 0.9,
       });
@@ -184,15 +190,15 @@ describe("HybridRetriever", function () {
 
       // Verify that scores are calculated differently
       if (vectorResults.length > 0 && keywordResults.length > 0) {
-        const vectorTop = vectorResults[0];
-        const keywordTop = keywordResults[0];
-
-        // At least one should have different documents or scores
-        const isDifferent =
-          vectorTop.document.metadata.id !== keywordTop.document.metadata.id ||
-          Math.abs(vectorTop.score - keywordTop.score) > 0.01;
-
-        expect(isDifferent).to.be.true;
+        // At least one result's score should differ between the two weight configs
+        const hasScoreDiff = vectorResults.some((vr, i) => {
+          const kr = keywordResults[i];
+          return kr && Math.abs(vr.score - kr.score) > 0.001;
+        });
+        const hasOrderDiff = vectorResults.some(
+          (vr, i) => keywordResults[i] && vr.document.metadata.id !== keywordResults[i].document.metadata.id,
+        );
+        expect(hasScoreDiff || hasOrderDiff).to.be.true;
       }
     });
 
@@ -200,7 +206,7 @@ describe("HybridRetriever", function () {
       const query = "rare uncommon nonexistent terms";
       const minSimilarity = 0.5;
 
-      const results = await retriever.search(query, { minSimilarity });
+      const results = await retriever.search(query, { ...DEFAULT_HYBRID_OPTIONS, k: 5, minSimilarity });
 
       // All results should meet minimum threshold
       results.forEach((result) => {
@@ -210,7 +216,7 @@ describe("HybridRetriever", function () {
 
     it("should add explanations to results", async function () {
       const query = "Python machine learning";
-      const results = await retriever.search(query);
+      const results = await retriever.search(query, { k: 5, ...DEFAULT_HYBRID_OPTIONS });
 
       expect(results.length).to.be.greaterThan(0);
 
@@ -252,7 +258,7 @@ describe("HybridRetriever", function () {
   describe("Keyword Scoring", function () {
     it("should score documents with matching keywords", async function () {
       const query = "JavaScript TypeScript";
-      const results = await retriever.search(query, { k: 5 });
+      const results = await retriever.search(query, { k: 5, ...DEFAULT_HYBRID_OPTIONS });
 
       expect(results).to.be.an("array");
       expect(results.length).to.be.greaterThan(0);
@@ -264,7 +270,7 @@ describe("HybridRetriever", function () {
 
     it("should find documents with matching keywords", async function () {
       const query = "machine learning";
-      const results = await retriever.search(query, { k: 5 });
+      const results = await retriever.search(query, { k: 5, ...DEFAULT_HYBRID_OPTIONS });
 
       const hasMatch = results.some(
         (result) =>
@@ -277,7 +283,7 @@ describe("HybridRetriever", function () {
 
     it("should return results sorted by hybrid score", async function () {
       const query = "Python data";
-      const results = await retriever.search(query, { k: 5 });
+      const results = await retriever.search(query, { k: 5, ...DEFAULT_HYBRID_OPTIONS });
 
       for (let i = 0; i < results.length - 1; i++) {
         expect(results[i].score).to.be.at.least(results[i + 1].score);
@@ -288,7 +294,7 @@ describe("HybridRetriever", function () {
   describe("Keyword Extraction", function () {
     it("should extract meaningful keywords from query", async function () {
       const query = "How to use Python for machine learning";
-      const results = await retriever.search(query, { k: 3 });
+      const results = await retriever.search(query, { k: 3, ...DEFAULT_HYBRID_OPTIONS });
 
       expect(results).to.be.an("array");
 

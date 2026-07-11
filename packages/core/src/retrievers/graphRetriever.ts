@@ -1,0 +1,355 @@
+/**
+ * GraphRetriever - Entity-aware retrieval using knowledge graph traversal
+ *
+ * Performs local search by: (1) identifying entities in the query via name matching
+ * and embedding similarity, (2) traversing the KG neighborhood via BFS,
+ * (3) scoring entities by match quality and hop distance, (4) collecting source chunks.
+ */
+
+import { Document as LangChainDocument } from "@langchain/core/documents";
+import { KnowledgeGraph } from "../stores/knowledgeGraph";
+import { VectorRetriever } from "./vectorRetriever";
+import { EmbeddingService } from "../embeddings/embeddingService";
+import { GraphEntity } from "../utils/graphTypes";
+import { Logger } from "../logger";
+
+export interface GraphSearchOptions {
+  /** Number of results to return */
+  k: number;
+  /** Maximum BFS hop depth from matched entities (default: 2) */
+  maxHopDepth?: number;
+  /** Score decay per hop (default: 0.5) */
+  hopDecay?: number;
+  /** Minimum score threshold (default: 0) */
+  minScore?: number;
+}
+
+/** Default graph search options */
+export const DEFAULT_GRAPH_OPTIONS = {
+  maxHopDepth: 2,
+  hopDecay: 0.5,
+  minScore: 0,
+} as const;
+
+export interface GraphSearchResult {
+  document: LangChainDocument;
+  score: number;
+  /** Entities that contributed to this result */
+  matchedEntities: string[];
+  /** Minimum hop distance from a matched entity */
+  hopDepth: number;
+}
+
+const MAX_DOCS_FOR_GRAPH_LOOKUP = 50_000;
+
+/**
+ * Graph retriever that leverages knowledge graph entity relationships
+ * to find relevant document chunks.
+ */
+export class GraphRetriever {
+  private logger: Logger;
+
+  constructor(
+    private knowledgeGraph: KnowledgeGraph,
+    private vectorRetriever: VectorRetriever,
+    private embeddingService: EmbeddingService,
+    private documentFetcher?: (limit: number) => Promise<LangChainDocument[]>,
+  ) {
+    this.logger = new Logger("GraphRetriever");
+  }
+
+  private chunkDocumentMapPromise: Promise<Map<string, LangChainDocument>> | null = null;
+
+  /**
+   * Local search: find entities matching the query, traverse their neighborhoods,
+   * and collect scored document chunks.
+   */
+  public async search(query: string, options: GraphSearchOptions): Promise<GraphSearchResult[]> {
+    const startTime = Date.now();
+    const maxHopDepth = options.maxHopDepth ?? 2;
+    const hopDecay = options.hopDecay ?? 0.5;
+    const minScore = options.minScore ?? 0;
+
+    this.logger.info("Starting graph search", {
+      query: query.substring(0, 100),
+      k: options.k,
+      maxHopDepth,
+    });
+
+    // Step 1: Find matching entities (name match + embedding similarity)
+    const matchedEntities = await this.findMatchingEntities(query, options.k * 2);
+
+    if (matchedEntities.length === 0) {
+      this.logger.info("No matching entities found, falling back to vector search");
+      return this.fallbackToVector(query, options.k);
+    }
+
+    this.logger.debug("Matched entities", {
+      count: matchedEntities.length,
+      names: matchedEntities.slice(0, 5).map((m) => m.entity.name),
+    });
+
+    // Step 2: BFS traverse neighborhoods and score by hop distance
+    const chunkScores = new Map<string, { score: number; entities: Set<string>; hopDepth: number }>();
+
+    for (const match of matchedEntities) {
+      // Collect source chunks from the matched entity itself
+      this.addChunkScores(chunkScores, match.entity, match.score, 0);
+
+      // Traverse neighbors via BFS
+      this.knowledgeGraph.traverseBFS(
+        match.entity.id,
+        (neighbor: GraphEntity, depth: number) => {
+          if (depth === 0) {
+            return;
+          } // Skip self (already handled)
+          const neighborScore = match.score * Math.pow(hopDecay, depth);
+          this.addChunkScores(chunkScores, neighbor, neighborScore, depth);
+        },
+        maxHopDepth,
+      );
+    }
+
+    // Step 3: Collect unique chunk IDs, sorted by score
+    const rankedChunkIds = Array.from(chunkScores.entries())
+      .filter(([, data]) => data.score >= minScore)
+      .sort((a, b) => b[1].score - a[1].score)
+      .slice(0, options.k * 2)
+      .map(([chunkId]) => chunkId);
+
+    if (rankedChunkIds.length === 0) {
+      this.logger.info("No chunks found from graph traversal, falling back to vector search");
+      return this.fallbackToVector(query, options.k);
+    }
+
+    // Step 4: Hydrate graph-derived chunk IDs to documents.
+    const resultsByKey = new Map<string, GraphSearchResult>();
+
+    await this.hydrateGraphChunkResults(rankedChunkIds, chunkScores, resultsByKey);
+
+    let vectorResults: Array<{ document: LangChainDocument; score: number }> = [];
+    try {
+      vectorResults = await this.vectorRetriever.search(query, options.k * 3);
+    } catch (error) {
+      this.logger.warn("Vector search failed during graph search; using graph-only results when available", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const vectorFallbacks: GraphSearchResult[] = [];
+
+    for (const vr of vectorResults) {
+      const chunkId = this.getChunkId(vr.document);
+      const resultKey = this.getResultKey(vr.document);
+
+      if (chunkId && chunkScores.has(chunkId)) {
+        const chunkData = chunkScores.get(chunkId)!;
+        resultsByKey.set(resultKey, {
+          document: vr.document,
+          score: Math.min(1, vr.score * 0.5 + chunkData.score * 0.5),
+          matchedEntities: Array.from(chunkData.entities),
+          hopDepth: chunkData.hopDepth,
+        });
+        continue;
+      }
+
+      if (!resultsByKey.has(resultKey)) {
+        vectorFallbacks.push({
+          document: vr.document,
+          score: vr.score * 0.8,
+          matchedEntities: [],
+          hopDepth: -1,
+        });
+      }
+    }
+
+    const results = Array.from(resultsByKey.values()).sort((a, b) => b.score - a.score);
+    for (const fallback of vectorFallbacks) {
+      if (results.length >= options.k) {
+        break;
+      }
+      results.push(fallback);
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    const finalResults = results.slice(0, options.k);
+
+    const searchTime = Date.now() - startTime;
+    this.logger.info("Graph search complete", {
+      resultCount: finalResults.length,
+      graphHits: finalResults.filter((r) => r.matchedEntities.length > 0).length,
+      searchTime,
+    });
+
+    return finalResults;
+  }
+
+  /**
+   * Find entities matching the query via name matching and embedding similarity.
+   */
+  private async findMatchingEntities(
+    query: string,
+    limit: number,
+  ): Promise<Array<{ entity: GraphEntity; score: number }>> {
+    const matchMap = new Map<string, { entity: GraphEntity; score: number }>();
+
+    // Method 1: Name matching — tokenize query and check against entity names
+    const queryTokens = query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length > 2);
+    const allEntities = this.knowledgeGraph.getAllEntities();
+
+    for (const entity of allEntities) {
+      const entityNameLower = entity.name.toLowerCase();
+      // Check if any query token matches the entity name
+      if (queryTokens.some((token) => entityNameLower.includes(token) || token.includes(entityNameLower))) {
+        const existing = matchMap.get(entity.id);
+        const nameScore = 0.8; // High score for name match
+        if (!existing || existing.score < nameScore) {
+          matchMap.set(entity.id, { entity, score: nameScore });
+        }
+      }
+    }
+
+    // Method 2: Embedding similarity — embed the query and search entity vectors
+    try {
+      const queryVector = await this.embeddingService.embed(query);
+      const embeddingResults = this.knowledgeGraph.searchEntitiesByEmbedding(queryVector, limit);
+
+      for (const { entity, score } of embeddingResults) {
+        // Normalize cosine similarity to [0, 1] range (it can be negative)
+        const normalizedScore = Math.max(0, Math.min(1, (score + 1) / 2));
+        const existing = matchMap.get(entity.id);
+        if (!existing || existing.score < normalizedScore) {
+          matchMap.set(entity.id, { entity, score: Math.max(existing?.score ?? 0, normalizedScore) });
+        }
+      }
+    } catch (error) {
+      this.logger.warn("Embedding search for entities failed, using name matching only", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Sort by score, limit results
+    return Array.from(matchMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  /**
+   * Add chunk scores from an entity, merging with existing scores.
+   */
+  private addChunkScores(
+    chunkScores: Map<string, { score: number; entities: Set<string>; hopDepth: number }>,
+    entity: GraphEntity,
+    score: number,
+    depth: number,
+  ): void {
+    for (const chunkId of entity.sourceChunkIds) {
+      const existing = chunkScores.get(chunkId);
+      if (existing) {
+        existing.score = Math.max(existing.score, score);
+        existing.entities.add(entity.name);
+        existing.hopDepth = Math.min(existing.hopDepth, depth);
+      } else {
+        chunkScores.set(chunkId, {
+          score,
+          entities: new Set([entity.name]),
+          hopDepth: depth,
+        });
+      }
+    }
+  }
+
+  /**
+   * Fallback to pure vector search when no graph entities match.
+   */
+  private async fallbackToVector(query: string, k: number): Promise<GraphSearchResult[]> {
+    const vectorResults = await this.vectorRetriever.search(query, k);
+    return vectorResults.map((vr) => ({
+      document: vr.document,
+      score: vr.score,
+      matchedEntities: [],
+      hopDepth: -1,
+    }));
+  }
+
+  private async hydrateGraphChunkResults(
+    rankedChunkIds: string[],
+    chunkScores: Map<string, { score: number; entities: Set<string>; hopDepth: number }>,
+    resultsByKey: Map<string, GraphSearchResult>,
+  ): Promise<void> {
+    if (!this.documentFetcher) {
+      return;
+    }
+
+    try {
+      const chunkDocumentMap = await this.getChunkDocumentMap();
+
+      for (const chunkId of rankedChunkIds) {
+        const document = chunkDocumentMap.get(chunkId);
+        const chunkData = chunkScores.get(chunkId);
+        if (!document || !chunkData) {
+          continue;
+        }
+
+        resultsByKey.set(this.getResultKey(document), {
+          document,
+          score: chunkData.score,
+          matchedEntities: Array.from(chunkData.entities),
+          hopDepth: chunkData.hopDepth,
+        });
+      }
+    } catch (error) {
+      this.logger.warn("Failed to hydrate graph chunk documents from table scan", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async getChunkDocumentMap(): Promise<Map<string, LangChainDocument>> {
+    if (!this.documentFetcher) {
+      return new Map();
+    }
+
+    if (!this.chunkDocumentMapPromise) {
+      this.chunkDocumentMapPromise = this.documentFetcher(MAX_DOCS_FOR_GRAPH_LOOKUP)
+        .then((documents) => {
+          const documentMap = new Map<string, LangChainDocument>();
+
+          for (const document of documents) {
+            const chunkId = this.getChunkId(document);
+            if (chunkId && !documentMap.has(chunkId)) {
+              documentMap.set(chunkId, document);
+            }
+          }
+
+          this.logger.debug("Indexed chunk documents for graph retrieval", {
+            documentCount: documents.length,
+            chunkCount: documentMap.size,
+          });
+
+          return documentMap;
+        })
+        .catch((error) => {
+          this.chunkDocumentMapPromise = null;
+          throw error;
+        });
+    }
+
+    return this.chunkDocumentMapPromise;
+  }
+
+  private getChunkId(document: LangChainDocument): string | null {
+    const rawChunkId = document.metadata?.chunkId;
+    if (typeof rawChunkId === "string" || typeof rawChunkId === "number") {
+      return String(rawChunkId);
+    }
+    return null;
+  }
+
+  private getResultKey(document: LangChainDocument): string {
+    return this.getChunkId(document) ?? document.pageContent.substring(0, 100);
+  }
+}

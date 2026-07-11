@@ -13,7 +13,7 @@
 
 import { expect } from "chai";
 import { INotifier } from "@ragnarok/core";
-import { VscodeLmBackend } from "../src/index";
+import { VscodeLmBackend } from "../src/vscodeLmBackend";
 
 // ---------------------------------------------------------------------------
 // Minimal LM API mock (enough for backend tests)
@@ -57,7 +57,7 @@ const createMockLmApi = (options?: {
   };
 };
 
-const mockNotifier: INotifier = {
+const _mockNotifier: INotifier = {
   showInfo: () => {},
   showWarning: () => {},
   showError: () => {},
@@ -68,9 +68,13 @@ const mockNotifier: INotifier = {
 // ---------------------------------------------------------------------------
 // Helper: create a backend with injected mock LM API
 // ---------------------------------------------------------------------------
-const createBackend = (modelId?: string, lmApiOptions?: Parameters<typeof createMockLmApi>[0]) => {
+const createBackend = (
+  modelId?: string,
+  lmApiOptions?: Parameters<typeof createMockLmApi>[0],
+  backendOptions?: { modelIdResolver?: () => string | undefined | null },
+) => {
   const lmApi = createMockLmApi(lmApiOptions);
-  return new VscodeLmBackend(modelId, { lmApi });
+  return new VscodeLmBackend(modelId, { lmApi, ...backendOptions });
 };
 
 describe("EmbeddingBackend Abstraction", function () {
@@ -105,7 +109,18 @@ describe("EmbeddingBackend Abstraction", function () {
       const available = await backend.isAvailable();
       expect(available).to.be.true;
       // The internal modelId should now be set
-      expect((backend as any).modelId).to.equal("auto-selected-model");
+      expect((backend as any).resolvedModelId).to.equal("auto-selected-model");
+    });
+
+    it("should use the configured model resolver when selecting a model", async () => {
+      const backend = createBackend(
+        undefined,
+        { models: ["model-a", "model-b"] },
+        { modelIdResolver: () => "model-b" },
+      );
+      const available = await backend.isAvailable();
+      expect(available).to.be.true;
+      expect(backend.getModelId()).to.equal("model-b");
     });
   });
 
@@ -148,6 +163,24 @@ describe("EmbeddingBackend Abstraction", function () {
       } catch (e: any) {
         expect(e.message).to.include("Provider not available");
       }
+    });
+
+    it("should re-resolve the configured model after dispose", async () => {
+      let configuredModel = "model-a";
+      const backend = createBackend(
+        undefined,
+        { models: ["model-a", "model-b"] },
+        { modelIdResolver: () => configuredModel },
+      );
+
+      await backend.initialize();
+      expect(backend.getModelId()).to.equal("model-a");
+
+      backend.dispose();
+      configuredModel = "model-b";
+
+      await backend.initialize();
+      expect(backend.getModelId()).to.equal("model-b");
     });
   });
 

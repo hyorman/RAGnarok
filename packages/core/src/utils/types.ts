@@ -10,6 +10,8 @@ export enum RetrievalStrategy {
   HYBRID = "hybrid",
   ENSEMBLE = "ensemble",
   BM25 = "bm25",
+  GRAPH = "graph",
+  GRAPH_HYBRID = "graph_hybrid",
 }
 
 /**
@@ -108,7 +110,6 @@ export interface RAGQueryResult {
     steps?: Array<{
       stepNumber: number;
       query: string;
-      strategy: string;
       resultsCount: number;
       confidence: number;
       reasoning: string;
@@ -117,6 +118,17 @@ export interface RAGQueryResult {
     queryComplexity?: "simple" | "moderate" | "complex";
     confidence?: number;
   };
+}
+
+/**
+ * Result of resolving a user-supplied topic name to a concrete Topic.
+ * Returned by TopicManager.resolveTopicByName().
+ */
+export interface TopicMatch {
+  topic: Topic;
+  matchType: "exact" | "similar" | "fallback";
+  /** All available topic names — included when the match is not exact */
+  availableTopics?: string[];
 }
 
 /**

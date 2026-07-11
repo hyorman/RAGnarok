@@ -8,3 +8,4 @@
 export { RAGTool } from "./ragTool";
 export { VscodeLmBackend } from "./vscodeLmBackend";
 export { WorkspaceContextProvider } from "./workspaceContext";
+export { VSCODE_CONFIG } from "./constants";

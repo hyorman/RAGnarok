@@ -28,12 +28,7 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
   private dimension: number | null = null;
   private logger: Logger;
 
-  constructor(options: {
-    baseUrl: string;
-    apiKey?: string;
-    format: RemoteEmbeddingFormat;
-    modelName?: string;
-  }) {
+  constructor(options: { baseUrl: string; apiKey?: string; format: RemoteEmbeddingFormat; modelName?: string }) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.apiKey = options.apiKey;
     this.format = options.format;
@@ -62,10 +57,7 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
       return false;
     }
     try {
-      const url =
-        this.format === "openai"
-          ? `${this.baseUrl}/models`
-          : `${this.baseUrl}/api/tags`;
+      const url = this.format === "openai" ? `${this.baseUrl}/models` : `${this.baseUrl}/api/tags`;
       const response = await this.fetchWithTimeout(url, { method: "GET" });
       return response.ok;
     } catch {
@@ -74,15 +66,12 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
   }
 
   async embed(text: string): Promise<number[]> {
-    const results = await this.callEmbedEndpoint([text || ' ']);
+    const results = await this.callEmbedEndpoint([text || " "]);
     return results[0];
   }
 
-  async embedBatch(
-    texts: string[],
-    progressCallback?: (progress: number) => void,
-  ): Promise<number[][]> {
-    const sanitized = texts.map((t) => t || ' ');
+  async embedBatch(texts: string[], progressCallback?: (progress: number) => void): Promise<number[][]> {
+    const sanitized = texts.map((t) => t || " ");
     if (sanitized.length <= BATCH_SIZE) {
       const result = await this.callEmbedEndpoint(sanitized);
       progressCallback?.(1);
@@ -158,8 +147,7 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
     await this.ensureOk(response, "OpenAI embeddings");
 
     const json: any = await response.json();
-    const sorted = (json.data as Array<{ embedding: number[]; index: number }>)
-      .sort((a, b) => a.index - b.index);
+    const sorted = (json.data as Array<{ embedding: number[]; index: number }>).sort((a, b) => a.index - b.index);
     const embeddings = sorted.map((d) => d.embedding);
     this.cacheDimension(embeddings);
     return embeddings;
@@ -231,10 +219,7 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
     return headers;
   }
 
-  private async fetchWithTimeout(
-    url: string,
-    init: RequestInit,
-  ): Promise<Response> {
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -243,9 +228,7 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
       if (error instanceof DOMException && error.name === "AbortError") {
         throw new Error(`Request to ${url} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
       }
-      throw new Error(
-        `Network error connecting to ${url}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new Error(`Network error connecting to ${url}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       clearTimeout(timer);
     }
@@ -259,9 +242,7 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
       } catch {
         // ignore read errors
       }
-      throw new Error(
-        `${context} request failed (HTTP ${response.status}): ${detail}`.trim(),
-      );
+      throw new Error(`${context} request failed (HTTP ${response.status}): ${detail}`.trim());
     }
   }
 

@@ -6,11 +6,18 @@
 import { expect } from "chai";
 import { LanceDB } from "@langchain/community/vectorstores/lancedb";
 import { connect } from "@lancedb/lancedb";
-import { Document as LangChainDocument } from "@langchain/core/documents";
-import { TransformersEmbeddings, EmbeddingService, IConfigProvider, INotifier, HuggingFaceBackend, ModelRegistry } from "../src/index";
+import {
+  TransformersEmbeddings,
+  EmbeddingService,
+  IConfigProvider,
+  INotifier,
+  HuggingFaceBackend,
+  ModelRegistry,
+} from "../src/index";
 import * as path from "path";
 import * as fs from "fs/promises";
 import * as os from "os";
+import { SEARCH_OPERATIONS_CORPUS, SEMANTIC_SMOKE_CORPUS, toLangChainDocuments } from "./helpers/fixtureCorpus";
 
 const mockConfig: IConfigProvider = {
   get: <T>(_key: string, defaultValue: T): T => defaultValue,
@@ -57,24 +64,11 @@ describe("LanceDB Integration", function () {
 
   describe("Document Creation and Search", function () {
     it("should create vector store and add documents", async function () {
-      const docs = [
-        new LangChainDocument({
-          pageContent: "Python is a high-level programming language",
-          metadata: { source: "test1.txt", chunkId: "chunk1" },
-        }),
-        new LangChainDocument({
-          pageContent: "JavaScript is used for web development",
-          metadata: { source: "test2.txt", chunkId: "chunk2" },
-        }),
-        new LangChainDocument({
-          pageContent: "TypeScript adds static typing to JavaScript",
-          metadata: { source: "test3.txt", chunkId: "chunk3" },
-        }),
-        new LangChainDocument({
-          pageContent: "Machine learning models process data",
-          metadata: { source: "test4.txt", chunkId: "chunk4" },
-        }),
-      ];
+      const docs = toLangChainDocuments(SEMANTIC_SMOKE_CORPUS.slice(0, 4), (entry, index) => ({
+        source: entry.source,
+        chunkId: `chunk${index + 1}`,
+        topic: entry.topic,
+      }));
 
       // Create vector store with documents
       const store = await LanceDB.fromDocuments(docs, embeddings, {
@@ -170,52 +164,43 @@ describe("LanceDB Integration", function () {
     });
   });
 
-  describe("Real Yellow Book Data Search", function () {
-    it("should search in actual yellow book database", async function () {
-      const realDbPath = process.env.TEST_DB_PATH;
-      if (!realDbPath) {
-        this.skip();
-        return;
-      }
-      const realTableName = process.env.TEST_TABLE_NAME || "topic-1762689493819-xmetedt";
+  describe("Fixture Corpus Data Search", function () {
+    it("should search fixture data that mimics a production corpus", async function () {
+      const fixtureDocs = toLangChainDocuments(SEARCH_OPERATIONS_CORPUS, (entry, index) => ({
+        source: entry.source,
+        chunkId: `fixture-${index + 1}`,
+        topic: entry.topic,
+      }));
 
-      try {
-        const db = await connect(realDbPath);
-        const tableNames = await db.tableNames();
+      const fixtureTableName = "fixture-corpus-table";
+      await LanceDB.fromDocuments(fixtureDocs, embeddings, {
+        uri: testDbPath,
+        tableName: fixtureTableName,
+      });
 
-        console.log(`\n=== Real Database Check ===`);
-        console.log(`Available tables: ${tableNames.join(", ")}`);
+      const db = await connect(testDbPath);
+      const table = await db.openTable(fixtureTableName);
+      const rowCount = await table.countRows();
+      const store = new LanceDB(embeddings, { table });
 
-        if (!tableNames.includes(realTableName)) {
-          console.log(`Table ${realTableName} not found - skipping test`);
-          this.skip();
-          return;
-        }
+      const results = await store.similaritySearch("search index record ingestion", 5);
 
-        const table = await db.openTable(realTableName);
-        const rowCount = await table.countRows();
-        console.log(`Table has ${rowCount} rows`);
+      console.log(`\n=== Fixture Corpus Search Results ===`);
+      console.log(`Query: "search index record ingestion"`);
+      console.log(`Rows indexed: ${rowCount}`);
+      console.log(`Results found: ${results.length}`);
 
-        const store = new LanceDB(embeddings, { table });
+      results.forEach((result, i) => {
+        console.log(`\n${i + 1}. ${result.pageContent.substring(0, 150)}...`);
+        console.log(`   Source: ${result.metadata.source}`);
+        console.log(`   Chunk: ${result.metadata.chunkId}`);
+      });
 
-        const results = await store.similaritySearch("DP source DP store", 5);
+      expect(rowCount).to.equal(fixtureDocs.length);
+      expect(results).to.have.length.greaterThan(0);
 
-        console.log(`\n=== Yellow Book Search Results ===`);
-        console.log(`Query: "DP source DP store"`);
-        console.log(`Results found: ${results.length}`);
-
-        results.forEach((result, i) => {
-          console.log(`\n${i + 1}. ${result.pageContent.substring(0, 150)}...`);
-          console.log(`   Source: ${result.metadata.source}`);
-          console.log(`   Chunk: ${result.metadata.chunkId}`);
-        });
-
-        expect(results).to.have.length.greaterThan(0);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.log(`Could not access real database: ${message}`);
-        this.skip();
-      }
+      const matchedSources = new Set(results.map((result) => String(result.metadata.source)));
+      expect(matchedSources.has("index-sync.txt") || matchedSources.has("document-ingestion.txt")).to.be.true;
     });
   });
 });

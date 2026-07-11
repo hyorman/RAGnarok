@@ -23,58 +23,6 @@ export class KeywordRetriever {
   private bm25Retriever?: BM25Retriever;
   private documents: LangChainDocument[] = [];
 
-  private readonly DEFAULT_K = 5;
-
-  // Stop words for keyword extraction (common English words + query-intent words)
-  private readonly STOP_WORDS = new Set([
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "by",
-    "for",
-    "from",
-    "has",
-    "he",
-    "in",
-    "is",
-    "it",
-    "its",
-    "of",
-    "on",
-    "that",
-    "the",
-    "to",
-    "was",
-    "will",
-    "with",
-    "what",
-    "when",
-    "where",
-    "who",
-    "how",
-    "this",
-    "these",
-    "those",
-    "they",
-    "their",
-    "there",
-    "which",
-    "can",
-    "could",
-    "would",
-    "should",
-    "do",
-    "does",
-    "did",
-    "have",
-    "had",
-    "been",
-  ]);
-
   constructor() {
     this.logger = new Logger("KeywordRetriever");
   }
@@ -92,7 +40,8 @@ export class KeywordRetriever {
 
     this.documents = documents;
     this.bm25Retriever = BM25Retriever.fromDocuments(this.documents, {
-      k: this.DEFAULT_K,
+      k: 100,
+      includeScore: true,
     });
 
     this.logger.info("Keyword retriever initialized", {
@@ -104,7 +53,7 @@ export class KeywordRetriever {
    * Perform BM25 keyword search (ranked retrieval).
    * Returns documents ordered by BM25 relevance.
    */
-  public async search(query: string, k: number = this.DEFAULT_K): Promise<KeywordSearchResult[]> {
+  public async search(query: string, k: number): Promise<KeywordSearchResult[]> {
     if (!this.bm25Retriever) {
       throw new Error("KeywordRetriever not initialized. Call initialize() first.");
     }
@@ -126,9 +75,15 @@ export class KeywordRetriever {
         searchTime,
       });
 
-      return limitedResults.map((doc: LangChainDocument) => ({
-        document: doc,
-      }));
+      return limitedResults.map((doc: LangChainDocument) => {
+        const bm25Score = doc.metadata?.bm25Score as number | undefined;
+        // Strip bm25Score from metadata to avoid polluting downstream ID hashing
+        if (bm25Score !== undefined) {
+          const { bm25Score: _, ...cleanMeta } = doc.metadata;
+          doc.metadata = cleanMeta;
+        }
+        return { document: doc, score: bm25Score };
+      });
     } catch (error) {
       this.logger.error("BM25 search failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -181,21 +136,6 @@ export class KeywordRetriever {
 
     // Normalize by number of keywords (0-1 range)
     return Math.min(1.0, score / keywords.length);
-  }
-
-  /**
-   * Extract keywords from query text, filtering stop words
-   */
-  public extractKeywords(query: string, customStopWords?: string[]): string[] {
-    const stopWords = customStopWords ? new Set([...this.STOP_WORDS, ...customStopWords]) : this.STOP_WORDS;
-
-    const tokens = query
-      .toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter((word) => word.length > 2 && !stopWords.has(word));
-
-    return [...new Set(tokens)];
   }
 
   /**

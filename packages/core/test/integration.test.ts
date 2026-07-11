@@ -11,26 +11,20 @@ import {
   RAGAgent,
   RetrievalStrategy,
   HybridRetriever,
+  DEFAULT_HYBRID_OPTIONS,
   VectorRetriever,
+  KeywordRetriever,
   EmbeddingService,
   SemanticChunker,
   QueryPlannerAgent,
   DEFAULTS,
-  IConfigProvider,
-  ILLMProvider,
   INotifier,
   HuggingFaceBackend,
   ModelRegistry,
 } from "../src/index";
-
-const mockConfig: IConfigProvider = {
-  get: <T>(_key: string, defaultValue: T): T => defaultValue,
-};
-
-const mockLLMProvider: ILLMProvider = {
-  selectModel: async () => null,
-  isAvailable: async () => false,
-};
+import { defaultQueryOptions, mockLLMProvider } from "./helpers/testDefaults";
+import { SEMANTIC_SMOKE_CORPUS, toLangChainDocuments } from "./helpers/fixtureCorpus";
+import { mockConfig } from "./helpers/realVectorStore";
 
 const mockNotifier: INotifier = {
   showInfo: () => {},
@@ -118,60 +112,54 @@ describe("Integration Tests", function () {
   describe("Component Integration: Planner + Retriever + Agent", function () {
     it("should integrate query planner with retriever", async function () {
       // Create vector store with test data
-      const docs = [
-        new LangChainDocument({
-          pageContent: "Python is a high-level programming language",
-          metadata: { chunkId: "py1", source: "python.txt" },
-        }),
-        new LangChainDocument({
-          pageContent: "JavaScript is used for web development",
-          metadata: { chunkId: "js1", source: "javascript.txt" },
-        }),
-      ];
+      const docs = toLangChainDocuments(SEMANTIC_SMOKE_CORPUS.slice(0, 2), (entry, index) => ({
+        chunkId: index === 0 ? "py1" : "js1",
+        source: entry.source,
+        topic: entry.topic,
+      }));
 
       const vectorStore = await TestVectorStore.fromDocuments(docs, testEmbeddings);
 
       // Test planner
-      const planner = new QueryPlannerAgent(mockConfig, mockLLMProvider);
-      const plan = await planner.createPlan("compare Python and JavaScript");
+      const planner = new QueryPlannerAgent(mockLLMProvider);
+      const plan = await planner.createPlan("compare Python and JavaScript", {
+        topicName: "",
+        workspaceContext: "",
+        topK: 5,
+        modelFamily: "gpt-4o",
+        retrievalStrategy: RetrievalStrategy.HYBRID,
+      });
 
       expect(plan).to.have.property("complexity");
-      expect(plan).to.have.property("strategy");
       expect(plan).to.have.property("subQueries");
 
       // Test retriever
       const vectorRetriever = new VectorRetriever(vectorStore);
-      const retriever = new HybridRetriever(vectorRetriever);
-      const results = await retriever.search("Python", { k: 5 });
+      const keywordRetriever = new KeywordRetriever();
+      await keywordRetriever.initialize(docs);
+      const retriever = new HybridRetriever(vectorRetriever, keywordRetriever);
+      const results = await retriever.search("Python", { k: 5, ...DEFAULT_HYBRID_OPTIONS });
 
       expect(results).to.be.an("array");
       expect(results.length).to.be.greaterThan(0);
     });
 
     it("should integrate all components in RAG workflow", async function () {
-      const docs = [
-        new LangChainDocument({
-          pageContent: "Python is excellent for data science and machine learning",
-          metadata: { chunkId: "py1" },
-        }),
-        new LangChainDocument({
-          pageContent: "JavaScript powers modern web applications and Node.js servers",
-          metadata: { chunkId: "js1" },
-        }),
-        new LangChainDocument({
-          pageContent: "TypeScript adds static typing to JavaScript",
-          metadata: { chunkId: "ts1" },
-        }),
-      ];
+      const docs = toLangChainDocuments(SEMANTIC_SMOKE_CORPUS.slice(0, 3), (_entry, index) => ({
+        chunkId: ["py1", "js1", "ts1"][index],
+      }));
 
       const vectorStore = await TestVectorStore.fromDocuments(docs, testEmbeddings);
 
       const agent = new RAGAgent(mockConfig, mockLLMProvider);
       await agent.initialize(vectorStore);
 
-      const result = await agent.query("What is Python used for?", {
-        topK: 3,
-      });
+      const result = await agent.query(
+        "What is Python used for?",
+        defaultQueryOptions({
+          topK: 3,
+        }),
+      );
 
       expect(result).to.have.property("query");
       expect(result).to.have.property("plan");
@@ -218,9 +206,12 @@ describe("Integration Tests", function () {
     });
 
     it("should execute complete simple query workflow", async function () {
-      const result = await ragAgent.query("What is Python?", {
-        topK: 3,
-      });
+      const result = await ragAgent.query(
+        "What is Python?",
+        defaultQueryOptions({
+          topK: 3,
+        }),
+      );
 
       expect(result.results).to.be.an("array");
       expect(result.results.length).to.be.at.most(3);
@@ -229,9 +220,12 @@ describe("Integration Tests", function () {
     });
 
     it("should return relevant results for queries", async function () {
-      const result = await ragAgent.query("Python programming", {
-        topK: 5,
-      });
+      const result = await ragAgent.query(
+        "Python programming",
+        defaultQueryOptions({
+          topK: 5,
+        }),
+      );
 
       // Results should be sorted by relevance
       for (let i = 1; i < result.results.length; i++) {
@@ -278,27 +272,32 @@ describe("Integration Tests", function () {
     });
 
     it("should handle complex comparison queries", async function () {
-      const result = await ragAgent.query("compare Python and JavaScript", {
-        topK: 5,
-      });
+      const result = await ragAgent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          topK: 5,
+        }),
+      );
 
       expect(result.plan.complexity).to.equal("complex");
-      expect(result.plan.strategy).to.equal("parallel");
       expect(result.results).to.be.an("array");
       expect(result.metadata.subQueriesExecuted).to.be.greaterThan(0);
     });
 
     it("should decompose queries into sub-queries", async function () {
-      const result = await ragAgent.query("Python and JavaScript and TypeScript programming");
+      const result = await ragAgent.query("Python and JavaScript and TypeScript programming", defaultQueryOptions());
 
       expect(result.plan.subQueries.length).to.be.greaterThan(1);
       expect(result.metadata.subQueriesExecuted).to.be.greaterThan(1);
     });
 
     it("should deduplicate results from multiple sub-queries", async function () {
-      const result = await ragAgent.query("JavaScript and TypeScript", {
-        topK: 10,
-      });
+      const result = await ragAgent.query(
+        "JavaScript and TypeScript",
+        defaultQueryOptions({
+          topK: 10,
+        }),
+      );
 
       // Check for unique chunk IDs
       const chunkIds = result.results.map((r) => r.document.metadata.chunkId);
@@ -307,10 +306,13 @@ describe("Integration Tests", function () {
     });
 
     it("should support iterative refinement when enabled", async function () {
-      const result = await ragAgent.query("Python features and use cases", {
-        maxIterations: 2,
-        confidenceThreshold: 0.8,
-      });
+      const result = await ragAgent.query(
+        "Python features and use cases",
+        defaultQueryOptions({
+          maxIterations: 2,
+          confidenceThreshold: 0.8,
+        }),
+      );
 
       expect(result.iterations).to.be.a("number");
       expect(result.iterations).to.be.at.least(1);
@@ -370,7 +372,7 @@ describe("Integration Tests", function () {
       const agent = new RAGAgent(mockConfig, mockLLMProvider);
 
       try {
-        await agent.query("test query");
+        await agent.query("test query", defaultQueryOptions());
         expect.fail("Should have thrown error");
       } catch (error) {
         expect(error).to.be.an("error");
@@ -384,7 +386,7 @@ describe("Integration Tests", function () {
       const agent = new RAGAgent(mockConfig, mockLLMProvider);
       await agent.initialize(emptyVectorStore);
 
-      const result = await agent.query("any query");
+      const result = await agent.query("any query", defaultQueryOptions());
 
       expect(result).to.be.an("object");
       expect(result.results).to.be.an("array");
@@ -409,7 +411,7 @@ describe("Integration Tests", function () {
 
       const queries = ["programming concepts", "best practices", "development tips"];
 
-      const results = await Promise.all(queries.map((q) => agent.query(q, { topK: 3 })));
+      const results = await Promise.all(queries.map((q) => agent.query(q, defaultQueryOptions({ topK: 3 }))));
 
       expect(results).to.have.lengthOf(3);
       results.forEach((result) => {
@@ -431,7 +433,7 @@ describe("Integration Tests", function () {
       await agent.initialize(vectorStore);
 
       const startTime = Date.now();
-      await agent.query("test query");
+      await agent.query("test query", defaultQueryOptions());
       const elapsed = Date.now() - startTime;
 
       expect(elapsed).to.be.lessThan(5000); // Should complete in under 5 seconds
@@ -452,14 +454,20 @@ describe("Integration Tests", function () {
       const agent = new RAGAgent(mockConfig, mockLLMProvider);
       await agent.initialize(vectorStore);
 
-      const vectorResult = await agent.query("test", {
-        retrievalStrategy: RetrievalStrategy.VECTOR,
-      });
+      const vectorResult = await agent.query(
+        "test",
+        defaultQueryOptions({
+          retrievalStrategy: RetrievalStrategy.VECTOR,
+        }),
+      );
       expect(vectorResult.metadata.strategy).to.equal(RetrievalStrategy.VECTOR);
 
-      const hybridResult = await agent.query("test", {
-        retrievalStrategy: RetrievalStrategy.HYBRID,
-      });
+      const hybridResult = await agent.query(
+        "test",
+        defaultQueryOptions({
+          retrievalStrategy: RetrievalStrategy.HYBRID,
+        }),
+      );
       expect(hybridResult.metadata.strategy).to.equal(RetrievalStrategy.HYBRID);
     });
 
@@ -478,9 +486,12 @@ describe("Integration Tests", function () {
       const agent = new RAGAgent(mockConfig, mockLLMProvider);
       await agent.initialize(vectorStore);
 
-      const result = await agent.query("document", {
-        topK: 3,
-      });
+      const result = await agent.query(
+        "document",
+        defaultQueryOptions({
+          topK: 3,
+        }),
+      );
 
       expect(result.results.length).to.be.at.most(3);
     });

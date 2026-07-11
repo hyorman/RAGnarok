@@ -24,7 +24,12 @@ export class TransformersEmbeddings extends Embeddings {
   private logger: Logger;
   private initialized = false;
 
-  constructor(fields?: EmbeddingsParams & { modelName?: string; backendType?: string; embeddingService?: EmbeddingService }) {
+  /** Cache of query text → embedding vector to avoid redundant model inferences. */
+  private queryCache = new Map<string, number[]>();
+
+  constructor(
+    fields?: EmbeddingsParams & { modelName?: string; backendType?: string; embeddingService?: EmbeddingService },
+  ) {
     super(fields ?? {});
     if (!fields?.embeddingService) {
       throw new Error("EmbeddingService must be provided");
@@ -40,6 +45,7 @@ export class TransformersEmbeddings extends Embeddings {
    */
   private async ensureInitialized(): Promise<void> {
     if (!this.initialized) {
+      this.queryCache.clear();
       if (this.backendType) {
         // Scoped init: ensure the specific backend is ready
         await this.embeddingService.initializeForBackend(this.backendType, this.modelName);
@@ -65,15 +71,26 @@ export class TransformersEmbeddings extends Embeddings {
   async embedQuery(query: string): Promise<number[]> {
     await this.ensureInitialized();
 
+    const cacheKey = `${this.backendType || "active"}:${query}`;
+    const cached = this.queryCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     this.logger.debug("Embedding query", {
       model: this.modelName || "default",
       backend: this.backendType || "active",
       queryPreview: query.substring(0, 50) + (query.length > 50 ? "..." : ""),
     });
 
+    let result: number[];
     if (this.backendType) {
-      return await this.embeddingService.embedWithBackend(this.backendType, query);
+      result = await this.embeddingService.embedWithBackend(this.backendType, query);
+    } else {
+      result = await this.embeddingService.embed(query);
     }
-    return await this.embeddingService.embed(query);
+
+    this.queryCache.set(cacheKey, result);
+    return result;
   }
 }

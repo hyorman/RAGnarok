@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import mockVscode from "../../../test/setup";
-import { TopicManager, CONFIG, RetrievalStrategy, IConfigProvider, ILLMProvider } from "@ragnarok/core";
-import { RAGTool, WorkspaceContextProvider } from "@ragnarok/vscode";
+import { TopicManager, RetrievalStrategy, IConfigProvider, ILLMProvider } from "@ragnarok/core";
+import { RAGTool, WorkspaceContextProvider, VSCODE_CONFIG } from "@ragnarok/vscode";
 
 const mockConfig: IConfigProvider = {
   get: <T>(_key: string, defaultValue: T): T => defaultValue,
@@ -10,21 +10,21 @@ const mockConfig: IConfigProvider = {
 describe("RAGTool workspace context gating", function () {
   let originalGetConfiguration: typeof mockVscode.workspace.getConfiguration;
   let originalGetContext: typeof WorkspaceContextProvider.getContext;
-  let originalRegisterCleanup: typeof TopicManager.registerAgentCacheCleanupCallback;
+  let originalSubscribe: typeof TopicManager.onAgentCacheCleanup.subscribe;
 
   beforeEach(function () {
     originalGetConfiguration = mockVscode.workspace.getConfiguration;
     originalGetContext = WorkspaceContextProvider.getContext;
-    originalRegisterCleanup = TopicManager.registerAgentCacheCleanupCallback;
+    originalSubscribe = TopicManager.onAgentCacheCleanup.subscribe;
 
-    TopicManager.registerAgentCacheCleanupCallback = () => undefined;
+    (TopicManager.onAgentCacheCleanup as any).subscribe = () => ({ unsubscribe: () => {} });
 
     mockVscode.workspace.getConfiguration = (section?: string) => {
       const baseConfig = originalGetConfiguration(section);
       return {
         ...baseConfig,
         get: <T>(key: string, defaultValue?: T): T => {
-          if (key === CONFIG.INCLUDE_WORKSPACE) {
+          if (key === VSCODE_CONFIG.INCLUDE_WORKSPACE) {
             return true as T;
           }
           return baseConfig.get(key, defaultValue);
@@ -36,7 +36,7 @@ describe("RAGTool workspace context gating", function () {
   afterEach(function () {
     mockVscode.workspace.getConfiguration = originalGetConfiguration;
     WorkspaceContextProvider.getContext = originalGetContext;
-    TopicManager.registerAgentCacheCleanupCallback = originalRegisterCleanup;
+    (TopicManager.onAgentCacheCleanup as any).subscribe = originalSubscribe;
   });
 
   async function createConfiguredTool(llmProvider: ILLMProvider) {
@@ -50,42 +50,37 @@ describe("RAGTool workspace context gating", function () {
     const tool = new RAGTool(mockTopicManager, mockEmbeddingService, mockConfig, llmProvider) as any;
     const capturedOptions: any[] = [];
 
-    tool.topicManager = Promise.resolve({
-      getTopicStats: async () => ({ documentCount: 1, chunkCount: 2 }),
-    });
-    tool.findBestMatchingTopic = async () => ({
-      topic: { id: "topic-1", name: "Docs" },
-      matchType: "exact",
-      availableTopics: undefined,
-    });
-    tool.getOrCreateAgent = async () => ({
-      query: async (_query: string, options: any) => {
-        capturedOptions.push(options);
-        return {
-          query: _query,
-          plan: {
-            originalQuery: _query,
-            complexity: "simple",
-            subQueries: [{ query: _query, reasoning: "Direct search", topK: 5, priority: "high" }],
-            strategy: "parallel",
-            explanation: "Simple query",
-          },
-          results: [
-            {
-              document: {
-                pageContent: "Result text",
-                metadata: { source: "doc.md", chunkIndex: 0 },
-              },
-              score: 0.9,
-              source: RetrievalStrategy.HYBRID,
-            },
-          ],
-          iterations: 1,
-          avgConfidence: 0.9,
-          confidenceMet: true,
-        };
+    // Stub the ragQueryService so we can capture the extraAgentOptions passed into it
+    const fakeResult = {
+      query: "q",
+      topicName: "Docs",
+      topicMatched: "exact",
+      results: [
+        {
+          text: "Result text",
+          documentName: "doc.md",
+          similarity: 0.9,
+          retrievalStrategy: RetrievalStrategy.HYBRID,
+          metadata: { chunkIndex: 0, position: "chars 0-0" },
+        },
+      ],
+      agenticMetadata: {
+        mode: "agentic" as const,
+        steps: [],
+        totalIterations: 1,
+        queryComplexity: "simple",
+        confidence: 0.9,
       },
-    });
+    };
+
+    tool.ragQueryService = {
+      executeQuery: async (_params: any, extraOpts: any) => {
+        capturedOptions.push(extraOpts);
+        return fakeResult;
+      },
+      clearAgentCache: () => undefined,
+      dispose: () => undefined,
+    };
 
     return { tool, capturedOptions };
   }
@@ -114,7 +109,7 @@ describe("RAGTool workspace context gating", function () {
 
     expect(contextCalls).to.equal(0);
     expect(capturedOptions).to.have.lengthOf(1);
-    expect(capturedOptions[0].workspaceContext).to.equal(undefined);
+    expect(capturedOptions[0]).to.equal(undefined);
   });
 
   it("should collect workspace context when LLM refinement is available", async function () {
@@ -151,7 +146,7 @@ describe("RAGTool workspace context gating", function () {
 
     expect(contextCalls).to.equal(1);
     expect(capturedOptions).to.have.lengthOf(1);
-    expect(capturedOptions[0].workspaceContext).to.be.a("string");
-    expect(capturedOptions[0].workspaceContext).to.include("src/index.ts");
+    expect(capturedOptions[0]).to.be.a("string");
+    expect(capturedOptions[0]).to.include("src/index.ts");
   });
 });

@@ -1,0 +1,436 @@
+/**
+ * Unit Tests for LangGraph Query Pipeline
+ * Tests graph structure, flow, memory recall, refinement loop, and error handling.
+ */
+
+import { expect } from "chai";
+import sinon from "sinon";
+import { Document as LangChainDocument } from "@langchain/core/documents";
+import {
+  createQueryGraph,
+  type QueryGraphDeps,
+  type IConfigProvider,
+  type ILLMProvider,
+  type INotifier,
+  type ILLMModel,
+  TopicManager,
+  EmbeddingService,
+  MemoryStore,
+  QueryPlannerAgent,
+  KnowledgeGraph,
+} from "../src/index";
+
+// ── Mock Factories ───────────────────────────────────────────────────
+
+function createMockConfig(overrides?: Record<string, unknown>): IConfigProvider {
+  const defaults: Record<string, unknown> = {
+    topK: 5,
+    retrievalStrategy: "hybrid",
+    maxIterations: 3,
+    confidenceThreshold: 0.7,
+    llmModel: "",
+    gapScoreThreshold: 0.4,
+    memoryConfidenceThreshold: 0.1,
+    ...overrides,
+  };
+  return {
+    get: <T>(key: string, defaultValue: T): T => (key in defaults ? (defaults[key] as T) : defaultValue),
+  };
+}
+
+function createMockLLMProvider(): ILLMProvider {
+  const model: ILLMModel = {
+    id: "test-model",
+    family: "test",
+    sendRequest: async () => {
+      async function* gen() {
+        yield '{"originalQuery":"q","complexity":"simple","subQueries":[{"query":"q","reasoning":"direct","topK":5}],"explanation":"simple search"}';
+      }
+      return gen();
+    },
+  };
+  return {
+    selectModel: sinon.stub().resolves(model),
+    isAvailable: sinon.stub().resolves(true),
+  };
+}
+
+function createMockNotifier(): INotifier {
+  return {
+    showInfo: sinon.stub(),
+    showWarning: sinon.stub(),
+    showError: sinon.stub(),
+    withProgress: sinon.stub().callsFake((_title, task) => task(() => {})),
+  };
+}
+
+/** Creates a mock vector store with similaritySearchWithScore */
+function createMockVectorStore(docs?: [LangChainDocument, number][]) {
+  const defaultDocs: [LangChainDocument, number][] = [
+    [
+      new LangChainDocument({
+        pageContent: "TypeScript is a typed superset of JavaScript",
+        metadata: { source: "doc1.md", chunkIndex: 0 },
+      }),
+      0.9,
+    ],
+    [
+      new LangChainDocument({
+        pageContent: "JavaScript runs in the browser",
+        metadata: { source: "doc2.md", chunkIndex: 0 },
+      }),
+      0.8,
+    ],
+  ];
+  return {
+    similaritySearchWithScore: sinon.stub().resolves(docs ?? defaultDocs),
+  };
+}
+
+function createMockTopicManager(
+  vectorStore?: any,
+  options?: {
+    knowledgeGraph?: KnowledgeGraph | null;
+    documents?: LangChainDocument[];
+  },
+) {
+  const defaultDocuments = options?.documents ?? [
+    new LangChainDocument({
+      pageContent: "TypeScript is a typed superset of JavaScript",
+      metadata: { source: "doc1.md", chunkIndex: 0, chunkId: "doc1-chunk-0" },
+    }),
+    new LangChainDocument({
+      pageContent: "JavaScript runs in the browser",
+      metadata: { source: "doc2.md", chunkIndex: 0, chunkId: "doc2-chunk-0" },
+    }),
+  ];
+
+  return {
+    getVectorStore: sinon.stub().resolves(vectorStore ?? createMockVectorStore()),
+    resolveTopicByName: sinon.stub().resolves({ topic: { id: "t1", name: "Test" }, matchType: "exact" }),
+    getTopicStats: sinon.stub().resolves({ documentCount: 5, chunkCount: 100 }),
+    getAllDocuments: sinon.stub().resolves(defaultDocuments),
+    getKnowledgeGraph: sinon.stub().resolves(options?.knowledgeGraph ?? null),
+    getKnowledgeGraphStore: sinon.stub().returns(null),
+    getEmbeddingService: sinon.stub().returns({}),
+  } as unknown as TopicManager;
+}
+
+function createMockEmbeddingService() {
+  return {
+    embed: sinon.stub().resolves([0.1, 0.2, 0.3]),
+    embedBatch: sinon.stub().resolves([[0.1, 0.2, 0.3]]),
+  } as unknown as EmbeddingService;
+}
+
+function createMockMemoryStore(memories?: Array<{ content: string }>) {
+  const defaultMemories = memories ?? [{ content: "Previous insight about TypeScript" }];
+  return {
+    recall: sinon.stub().resolves({
+      memories: defaultMemories.map((m) => ({
+        entry: {
+          id: "mem-1",
+          content: m.content,
+          scope: "global",
+          vector: [0.1],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          accessCount: 1,
+          lastAccessedAt: Date.now(),
+          tags: [],
+          entityIds: [],
+          metadata: {},
+        },
+        score: 0.85,
+      })),
+      entities: [],
+    }),
+    store: sinon.stub().resolves({
+      id: "mem-new",
+      content: "stored",
+      scope: "global",
+      vector: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      accessCount: 0,
+      lastAccessedAt: Date.now(),
+      tags: [],
+      entityIds: [],
+      metadata: {},
+    }),
+  } as unknown as MemoryStore;
+}
+
+function buildDeps(overrides?: Partial<QueryGraphDeps>): QueryGraphDeps {
+  return {
+    llmProvider: createMockLLMProvider(),
+    config: createMockConfig(),
+    notifier: createMockNotifier(),
+    embeddingService: createMockEmbeddingService(),
+    topicManager: createMockTopicManager(),
+    ...overrides,
+  };
+}
+
+// ── Tests ────────────────────────────────────────────────────────────
+
+describe("QueryGraph", function () {
+  this.timeout(30_000);
+
+  let planStub: sinon.SinonStub;
+
+  beforeEach(() => {
+    // Stub QueryPlannerAgent.createPlan to return a deterministic plan
+    planStub = sinon.stub(QueryPlannerAgent.prototype, "createPlan").resolves({
+      originalQuery: "test query",
+      complexity: "simple" as const,
+      subQueries: [{ query: "test query", reasoning: "direct search", topK: 5 }],
+      explanation: "Simple direct search",
+    });
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  describe("Graph creation", () => {
+    it("should create a compiled graph from deps", () => {
+      const deps = buildDeps();
+      const graph = createQueryGraph(deps);
+      expect(graph).to.be.an("object");
+      expect(graph.invoke).to.be.a("function");
+    });
+  });
+
+  describe("Simple query flow", () => {
+    it("should flow through nodes and return a result", async () => {
+      const deps = buildDeps();
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "What is TypeScript?",
+        topicId: "test-topic",
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "test" },
+        maxIterations: 3,
+        confidenceThreshold: 0.5, // low threshold so it passes evaluation
+      });
+
+      expect(result.result).to.be.an("object");
+      expect(result.error).to.be.null;
+      expect(result.iterations).to.be.greaterThan(0);
+      expect(result.retrievalResults).to.be.an("array").with.length.greaterThan(0);
+      expect(result.confidence).to.be.a("number");
+
+      // Verify plan was created
+      expect(planStub.calledOnce).to.be.true;
+
+      // Verify vector store was searched
+      const tm = deps.topicManager as any;
+      expect(tm.getVectorStore.calledOnce).to.be.true;
+    });
+
+    it("should use graph retrieval when strategy is graph and a knowledge graph is available", async () => {
+      const vectorStore = createMockVectorStore([]);
+      const knowledgeGraph = new KnowledgeGraph("t1");
+      knowledgeGraph.addEntity({
+        id: "ent-typescript",
+        name: "TypeScript",
+        type: "technology",
+        description: "A typed superset of JavaScript",
+        vector: [1, 0, 0],
+        sourceChunkIds: ["chunk-graph-1"],
+        confidence: 1,
+        strength: 0.8,
+        lastAccessedAt: Date.now(),
+        metadata: {},
+      });
+
+      const graphDoc = new LangChainDocument({
+        pageContent: "TypeScript adds static typing to JavaScript.",
+        metadata: { source: "graph-doc.md", chunkId: "chunk-graph-1", chunkIndex: 0 },
+      });
+
+      const tm = createMockTopicManager(vectorStore, {
+        knowledgeGraph,
+        documents: [graphDoc],
+      });
+      const deps = buildDeps({ topicManager: tm });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "TypeScript",
+        topicId: "t1",
+        options: { retrievalStrategy: "graph", topK: 5, modelFamily: "test" },
+        maxIterations: 1,
+        confidenceThreshold: 0,
+      });
+
+      expect((tm.getKnowledgeGraph as sinon.SinonStub).calledOnce).to.be.true;
+      expect(result.retrievalResults).to.be.an("array").with.length.greaterThan(0);
+      expect(result.retrievalResults[0].metadata?.retrievalStrategy).to.equal("graph");
+      expect(result.retrievalResults[0].metadata?.chunkId).to.equal("chunk-graph-1");
+    });
+
+    it("should include results in formatted output", async () => {
+      const deps = buildDeps();
+      const graph = createQueryGraph(deps);
+
+      const finalState = await graph.invoke({
+        query: "TypeScript",
+        topicId: "t1",
+        options: { retrievalStrategy: "vector", topK: 5, modelFamily: "" },
+        maxIterations: 1,
+        confidenceThreshold: 0.5,
+      });
+
+      const output = finalState.result as Record<string, unknown>;
+      expect(output).to.have.property("query", "TypeScript");
+      expect(output).to.have.property("results").that.is.an("array");
+      expect(output).to.have.property("confidence").that.is.a("number");
+      expect(output).to.have.property("metadata").that.is.an("object");
+    });
+  });
+
+  describe("Memory recall integration", () => {
+    it("should recall memories and add to context when memoryStore is provided", async () => {
+      const memoryStore = createMockMemoryStore();
+      const deps = buildDeps({ memoryStore });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "TypeScript features",
+        topicId: "t1",
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        maxIterations: 1,
+        confidenceThreshold: 0.5,
+      });
+
+      expect((memoryStore.recall as sinon.SinonStub).calledOnce).to.be.true;
+      expect(result.memoryContext).to.be.an("array").with.length.greaterThan(0);
+      expect(result.memoryContext[0]).to.include("Previous insight about TypeScript");
+    });
+
+    it("should skip memory recall gracefully when no memoryStore", async () => {
+      const deps = buildDeps({ memoryStore: undefined });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "TypeScript",
+        topicId: "t1",
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        maxIterations: 1,
+        confidenceThreshold: 0.5,
+      });
+
+      // Should still complete without error
+      expect(result.error).to.be.null;
+      expect(result.memoryContext).to.be.an("array").with.lengthOf(0);
+      expect(result.result).to.be.an("object");
+    });
+  });
+
+  describe("Refinement loop", () => {
+    it("should refine when confidence is below threshold", async () => {
+      // Create a vector store that returns low-score results
+      const lowScoreDocs: [LangChainDocument, number][] = [
+        [
+          new LangChainDocument({
+            pageContent: "Low relevance content",
+            metadata: { source: "low.md" },
+          }),
+          0.2,
+        ],
+      ];
+      const mockVs = createMockVectorStore(lowScoreDocs);
+      const deps = buildDeps({
+        topicManager: createMockTopicManager(mockVs),
+      });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "obscure topic",
+        topicId: "t1",
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        maxIterations: 3,
+        confidenceThreshold: 0.9, // high threshold to force refinement
+      });
+
+      // Should have iterated more than once due to low confidence
+      expect(result.iterations).to.be.greaterThan(1);
+      // Plan should have been created initially, then refine should modify plan
+      expect(planStub.calledOnce).to.be.true; // planQuery runs once; refine modifies plan directly
+    });
+
+    it("should cap iterations at maxIterations", async () => {
+      const lowScoreDocs: [LangChainDocument, number][] = [
+        [
+          new LangChainDocument({
+            pageContent: "Low relevance",
+            metadata: { source: "low.md" },
+          }),
+          0.1,
+        ],
+      ];
+      const mockVs = createMockVectorStore(lowScoreDocs);
+      const deps = buildDeps({
+        topicManager: createMockTopicManager(mockVs),
+      });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "impossible match",
+        topicId: "t1",
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        maxIterations: 2,
+        confidenceThreshold: 0.99, // unreachable threshold
+      });
+
+      // iterations is incremented in planQuery (1) and each refine (+1 per loop)
+      // maxIterations=2 means: planQuery(iter=1) → retrieve → evaluate → refine(iter=2) → retrieve → evaluate → exit
+      expect(result.iterations).to.be.at.most(3);
+      expect(result.result).to.be.an("object"); // Should still produce a result
+    });
+  });
+
+  describe("Error handling", () => {
+    it("should capture error when vector store retrieval fails", async () => {
+      const failingVs = {
+        similaritySearchWithScore: sinon.stub().rejects(new Error("DB connection lost")),
+      };
+      const deps = buildDeps({
+        topicManager: createMockTopicManager(failingVs),
+      });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "test",
+        topicId: "t1",
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        maxIterations: 1,
+        confidenceThreshold: 0.5,
+      });
+
+      // Retrieval errors are caught per sub-query and return empty results
+      // The graph should still complete (with 0 results / 0 confidence)
+      expect(result.retrievalResults).to.be.an("array");
+      expect(result.result).to.be.an("object");
+    });
+
+    it("should handle missing vector store for topic", async () => {
+      const tm = createMockTopicManager();
+      (tm.getVectorStore as sinon.SinonStub).resolves(null);
+      const deps = buildDeps({ topicManager: tm });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "test",
+        topicId: "nonexistent",
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        maxIterations: 1,
+        confidenceThreshold: 0.5,
+      });
+
+      expect(result.error).to.include("Failed to load vector store");
+    });
+  });
+});

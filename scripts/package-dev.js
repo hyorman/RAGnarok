@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Wrapper script for package:dev that detects current platform
- * and installs platform-specific dependencies before packaging
+ * Small wrapper for package:dev that detects the current platform/arch
+ * and delegates to build-vsix.js with the resolved target.
  */
 
 const { spawn } = require('child_process');
@@ -33,28 +33,20 @@ if (!platformName || !archName) {
 }
 
 const target = `${platformName}-${archName}`;
+const forwardedArgs = process.argv.slice(2);
+const buildScript = path.join(__dirname, 'build-vsix.js');
 
-// Run install-platform-deps.js with target, then vsce package
-const installScript = path.join(__dirname, 'install-platform-deps.js');
-const installProcess = spawn('node', [installScript, target], {
-  stdio: 'inherit',
-  shell: true
+// Delegate to the staging-based VSIX builder with the detected target.
+const buildProcess = spawn(process.execPath, [buildScript, target, ...forwardedArgs], {
+  stdio: 'inherit'
 });
 
-installProcess.on('close', (code) => {
-  if (code !== 0) {
-    console.error(`Failed to install platform dependencies for ${target}`);
-    process.exit(code);
-  }
+buildProcess.on('error', (error) => {
+  console.error(`Failed to run build-vsix.js for ${target}: ${error.message}`);
+  process.exit(1);
+});
 
-  // Run vsce package
-  const vsceProcess = spawn('npx', ['vsce', 'package'], {
-    stdio: 'inherit',
-    shell: true
-  });
-
-  vsceProcess.on('close', (code) => {
-    process.exit(code);
-  });
+buildProcess.on('close', (code) => {
+  process.exit(code ?? 1);
 });
 

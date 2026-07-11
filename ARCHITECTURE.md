@@ -9,11 +9,13 @@
 - [5. Iterative Refinement & Gap Analysis](#5-iterative-refinement--gap-analysis)
 - [6. Embedding Subsystem](#6-embedding-subsystem)
 - [7. Retrieval Strategies](#7-retrieval-strategies)
-- [8. Class Diagram](#8-class-diagram)
-- [9. Sequence Diagrams](#9-sequence-diagrams)
-- [10. Storage & Persistence](#10-storage--persistence)
-- [11. Configuration Reference](#11-configuration-reference)
-- [12. Commands Reference](#12-commands-reference)
+- [8. Knowledge Graph](#8-knowledge-graph)
+- [9. Memory Module](#9-memory-module)
+- [10. Class Diagram](#10-class-diagram)
+- [11. Sequence Diagrams](#11-sequence-diagrams)
+- [12. Storage & Persistence](#12-storage--persistence)
+- [13. Configuration Reference](#13-configuration-reference)
+- [14. Commands Reference](#14-commands-reference)
 
 ---
 
@@ -23,15 +25,17 @@ RAGnarōk is a VS Code extension that implements a full Retrieval-Augmented Gene
 
 ### Core Capabilities
 
-| Capability                  | Description                                                        |
-| --------------------------- | ------------------------------------------------------------------ |
-| **Multi-format ingestion**  | PDF, Markdown, HTML, plain text, GitHub repos, web pages           |
-| **Semantic chunking**       | Structure-aware splitting with heading metadata preservation       |
-| **Pluggable embedding backends** | HuggingFace (local ONNX), VS Code LM API, Remote (OpenAI/Ollama) |
-| **4 retrieval strategies**  | Vector, Hybrid, Ensemble (RRF), BM25                               |
-| **Agentic query planning**  | LLM-powered query decomposition with heuristic fallback            |
-| **Iterative refinement**    | Gap analysis → follow-up query generation → convergence detection  |
-| **Per-topic isolation**     | Independent vector stores, document caches, and metadata per topic |
+| Capability                       | Description                                                        |
+| -------------------------------- | ------------------------------------------------------------------ |
+| **Multi-format ingestion**       | PDF, Markdown, HTML, plain text, GitHub repos, web pages           |
+| **Semantic chunking**            | Structure-aware splitting with heading metadata preservation       |
+| **Pluggable embedding backends** | HuggingFace (local ONNX), VS Code LM API, Remote (OpenAI/Ollama)   |
+| **6 retrieval strategies**       | Vector, Hybrid, Ensemble (RRF), BM25, Graph, Graph-Hybrid          |
+| **Knowledge graph**              | LLM entity extraction, graphology graph, community detection       |
+| **Standalone memory**            | Workspace/branch-scoped persistent memory with entity graph        |
+| **Agentic query planning**       | LLM-powered query decomposition with heuristic fallback            |
+| **Iterative refinement**         | Gap analysis → follow-up query generation → convergence detection  |
+| **Per-topic isolation**          | Independent vector stores, document caches, and metadata per topic |
 
 ---
 
@@ -47,11 +51,12 @@ graph TB
     subgraph "Extension Core"
         EXT[extension.ts<br/>Activation & Wiring]
         CMD[CommandHandler<br/>Command Registry]
-        TOOL[RAGTool<br/>Copilot LM Tool]
+        TOOL[RAGTool<br/>Thin VS Code Adapter]
     end
 
-    subgraph "Agentic Layer"
-        AGENT[RAGAgent<br/>Orchestrator]
+    subgraph "Query Service Layer"
+        RQS[RAGQueryService<br/>Central Query Orchestrator]
+        AGENT[RAGAgent<br/>Per-Topic Executor]
         QP[QueryPlannerAgent<br/>Decomposition]
         LLM[VSCodeLLM<br/>LangChain Wrapper]
     end
@@ -90,15 +95,16 @@ graph TB
     EXT --> TM
     EXT --> ES
 
-    TOOL --> AGENT
+    TOOL --> RQS
+    RQS --> AGENT
     AGENT --> QP
     QP --> LLM
     AGENT --> HR
     AGENT --> ER
-    AGENT --> BM
+    AGENT --> KR
 
     HR --> ES
-    ER --> BM
+    ER --> KR
 
     ES --> HF
     ES --> VLM
@@ -123,8 +129,8 @@ graph TB
     classDef persist fill:#868e96,stroke:#495057,color:#fff
 
     class EXT,CMD,TOOL core
-    class AGENT,QP,LLM agent
-    class HR,ER,BM retrieval
+    class RQS,AGENT,QP,LLM agent
+    class HR,ER,VR,KR retrieval
     class ES,HF,VLM,MR embedding
     class TM,DP,VSF,DLF,SC storage
     class LANCE,META persist
@@ -265,10 +271,11 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    START([Copilot invokes RAG tool]) --> MATCH
+    START([Copilot / MCP invokes RAG query]) --> RQS
 
-    subgraph "Topic Resolution"
-        MATCH[Find matching topic<br/>exact → fuzzy → fallback]
+    subgraph "RAGQueryService"
+        RQS[RAGQueryService<br/>Central orchestrator] --> MATCH
+        MATCH[Resolve topic by name<br/>exact → fuzzy → semantic fallback]
         MATCH --> CACHE{Agent cached?}
         CACHE -->|Yes| REUSE[Reuse RAGAgent]
         CACHE -->|No| CREATE[Create RAGAgent<br/>+ initialize retrievers]
@@ -282,7 +289,7 @@ flowchart TD
         SCORE -->|Moderate/Complex| LLM_REF{LLM available?}
         LLM_REF -->|Yes| REFINE[LLM refinement<br/>Zod-validated output]
         LLM_REF -->|No| HEUR
-        REFINE --> QPLAN[QueryPlan<br/>sub-queries + strategy]
+        REFINE --> QPLAN[QueryPlan<br/>sub-queries + complexity]
         HEUR --> QPLAN
     end
 
@@ -556,12 +563,14 @@ classDiagram
 
 ### Strategy Comparison
 
-| Strategy             | Semantic | Keyword | Speed       | Memory | Best For                    |
-| -------------------- | -------- | ------- | ----------- | ------ | --------------------------- |
-| **Vector**           | Yes      | No      | Fast        | Medium | Pure semantic similarity    |
-| **Hybrid** (default) | Yes      | Yes     | Medium      | Medium | General purpose             |
-| **Ensemble (RRF)**   | Yes      | Yes     | Medium-Slow | High   | Robustness, multi-signal    |
-| **BM25**             | No       | Yes     | Fast        | High   | Exact term match, code, IDs |
+| Strategy             | Semantic | Keyword | Graph | Speed       | Memory | Best For                      |
+| -------------------- | -------- | ------- | ----- | ----------- | ------ | ----------------------------- |
+| **Vector**           | Yes      | No      | No    | Fast        | Medium | Pure semantic similarity      |
+| **Hybrid** (default) | Yes      | Yes     | No    | Medium      | Medium | General purpose               |
+| **Ensemble (RRF)**   | Yes      | Yes     | No    | Medium-Slow | High   | Robustness, multi-signal      |
+| **BM25**             | No       | Yes     | No    | Fast        | High   | Exact term match, code, IDs   |
+| **Graph**            | Yes      | No      | Yes   | Medium      | High   | Entity-aware, relationship Q  |
+| **Graph-Hybrid**     | Yes      | No      | Yes   | Medium      | High   | Best of graph + vector search |
 
 ### Hybrid Retrieval Scoring
 
@@ -574,7 +583,7 @@ flowchart LR
     KE --> KMATCH[Keyword Matching<br/>in documents]
     KMATCH --> KSCORE[keywordScore<br/>term frequency]
 
-    VSCORE --> FUSION["hybridScore =<br/>0.7 × vectorScore +<br/>0.3 × keywordScore"]
+    VSCORE --> FUSION["hybridScore =<br/>0.9 × vectorScore +<br/>0.1 × keywordScore"]
     KSCORE --> FUSION
 
     FUSION --> RANK[Sort by hybridScore<br/>Return topK]
@@ -610,11 +619,9 @@ classDiagram
     class KeywordRetriever {
         -bm25Retriever BM25Retriever
         -documents LangChainDocument[]
-        -STOP_WORDS Set~string~
         +initialize(documents) Promise~void~
         +search(query, k?) Promise~KeywordSearchResult[]~
         +scoreDocument(text, keywords, boosting?) number
-        +extractKeywords(query, customStopWords?) string[]
         +isInitialized() boolean
         +getDocumentCount() number
         +refresh(documents) Promise~void~
@@ -645,7 +652,133 @@ classDiagram
 
 ---
 
-## 8. Class Diagram
+## 8. Knowledge Graph
+
+The knowledge graph subsystem extracts structured entity–relationship data from documents and uses it for graph-aware retrieval.
+
+### Components
+
+| Component                | File                                 | Description                                                                                                                                                                                                                                                                             |
+| ------------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **KnowledgeGraph**       | `stores/knowledgeGraph.ts`           | In-memory directed graph (graphology). One per topic. Provides entity/relationship CRUD, BFS traversal, embedding similarity search, subgraph extraction, and community detection (Louvain).                                                                                            |
+| **KnowledgeGraphStore**  | `stores/knowledgeGraphStore.ts`      | LanceDB persistence layer. Serializes graph entities and relationships to/from LanceDB tables (`_kg_entities`, `_kg_relationships` per topic).                                                                                                                                          |
+| **EntityExtractor**      | `agents/entityExtractor.ts`          | LLM-powered extraction of entities and relationships from document chunks. Processes in configurable batches, validates output with Zod schemas, implements a circuit breaker (max consecutive failures), and supports cancellation via `AbortSignal`.                                  |
+| **GraphRetriever**       | `retrievers/graphRetriever.ts`       | Entity-aware retrieval: (1) match query to entities via name + embedding similarity, (2) BFS traverse neighborhoods with configurable hop depth (default: 2) and score decay (default: 0.5×/hop), (3) collect scored source chunks. Falls back to vector search when no entities match. |
+| **GraphHybridRetriever** | `retrievers/graphHybridRetriever.ts` | Weighted fusion of `GraphRetriever` and `VectorRetriever` results (default: 70% vector / 30% graph). Fetches candidates from both sources in parallel, fuses by chunkId, and falls back gracefully when either source is unavailable.                                                   |
+
+### Entity Extraction Flow
+
+```
+Document Chunks
+    │
+    ▼
+EntityExtractor.extractFromChunks(chunks, options)
+    │  ├── Batch processing (configurable batchSize)
+    │  ├── LLM prompt → Zod-validated JSON
+    │  ├── Circuit breaker (maxConsecutiveFailures)
+    │  └── AbortSignal support
+    ▼
+ExtractionResult { entities[], relationships[] }
+    │
+    ▼
+KnowledgeGraph.addEntity() / .addRelationship()
+    │
+    ▼
+KnowledgeGraphStore.save() → LanceDB tables
+```
+
+### Graph Search Flow
+
+```
+Query
+    │
+    ├──► Name matching (exact + fuzzy)
+    ├──► Embedding similarity search
+    ▼
+Matched Entities
+    │
+    ▼
+BFS Traversal (maxHopDepth, hopDecay)
+    │
+    ▼
+Scored Source Chunks (by entity score × hop decay)
+    │
+    ▼
+Ranked Results (top-k)
+```
+
+### Integration with RAGAgent
+
+The `RAGAgent` creates `GraphRetriever` and `GraphHybridRetriever` when a topic has a populated knowledge graph. The `QueryPlannerAgent` can select `graph` or `graph_hybrid` as the retrieval strategy based on query analysis.
+
+---
+
+## 9. Memory Module
+
+The standalone memory module (`packages/core/src/memory/`) provides persistent, workspace-scoped and branch-scoped memory with LLM entity extraction. It is fully independent from the RAG pipeline — it has its own types, stores, and graph.
+
+### Components
+
+| Component                  | File                               | Description                                                                                                                                                                                                              |
+| -------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **MemoryStore**            | `memory/memoryStore.ts`            | Main orchestrator. Coordinates vector store, entity graph, entity extraction, markdown export, and git branch detection. Manages in-memory caches with lazy-loading from LanceDB.                                        |
+| **MemoryVectorStore**      | `memory/memoryVectorStore.ts`      | LanceDB persistence for memory entries and entities. Separate DB directory (`memory-lancedb/`) from RAG vector stores. Supports scope + branch partitioning.                                                             |
+| **MemoryGraph**            | `memory/memoryGraph.ts`            | Graphology-based entity graph (one per scope partition). Stores `MemoryEntity` nodes and `MemoryRelationship` edges. Supports embedding similarity search and relationship traversal.                                    |
+| **MemoryEntityExtractor**  | `memory/memoryEntityExtractor.ts`  | LLM-powered entity extraction from memory content. Extracts typed entities (`fact`, `preference`, `concept`, `person`, `tool`, `project`, `convention`) and relationships. Gracefully degrades when no LLM is available. |
+| **GitBranchDetector**      | `memory/gitBranchDetector.ts`      | Detects the current git branch from the working directory. Used to automatically scope branch-level memories.                                                                                                            |
+| **MemoryMarkdownExporter** | `memory/memoryMarkdownExporter.ts` | Generates a human-readable `memories.md` file from stored memories.                                                                                                                                                      |
+
+### Memory Types
+
+| Type                   | Definition                                                                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **MemoryScope**        | `"workspace"` \| `"branch"`                                                                                                             |
+| **MemoryEntry**        | Raw memory: content, vector, scope, branch, tags, entityIds, access tracking                                                            |
+| **MemoryEntity**       | Graph node: typed (`fact`/`preference`/`concept`/`person`/`tool`/`project`/`convention`), embedded, with confidence and strength scores |
+| **MemoryRelationship** | Graph edge: typed (`related_to`/`depends_on`/`part_of`/`uses`/`prefers`/`contradicts`/`updates`), weighted                              |
+
+### Store / Recall / Forget Flow
+
+```
+store(content, scope?, branch?, tags?)
+    ├── Embed content
+    ├── Duplicate detection (cosine similarity ≥ 0.92 → merge)
+    ├── LLM entity extraction (optional)
+    ├── Persist to LanceDB + graph
+    └── Regenerate memories.md (async)
+
+recall(query, scope?, branch?, topK?)
+    ├── Embed query
+    ├── Search entries via vector store (across scopes)
+    ├── Reinforce accessed memories (accessCount++)
+    ├── Include graph entities (optional)
+    └── Deduplicate + sort by score
+
+forget(id?, scope?, branch?, olderThan?)
+    ├── Remove matching entries from cache + LanceDB
+    ├── Prune orphaned entities from graph
+    └── Regenerate memories.md
+```
+
+### MCP Integration
+
+The `rag_memory` tool is registered in the MCP server when a `MemoryStore` is available:
+
+| Action   | Required Params | Description                                                                       |
+| -------- | --------------- | --------------------------------------------------------------------------------- |
+| `store`  | `content`       | Store a new memory (optional: `scope`, `branch`, `tags`)                          |
+| `recall` | `query`         | Recall relevant memories (optional: `topK`, `scope`, `branch`, `includeEntities`) |
+| `forget` | —               | Forget memories by `id`, `scope`/`branch`, or `olderThan` (days)                  |
+| `stats`  | —               | Get memory statistics (counts, scopes, entity types)                              |
+| `list`   | —               | List recent memories (optional: `scope`, `branch`, `limit`)                       |
+
+### Future: LangGraph Orchestration
+
+A `LANGGRAPH_ENABLED` feature flag exists in `constants.ts` for a planned LangGraph integration (`@langchain/langgraph`). When implemented, LangGraph `StateGraph` will provide an alternative orchestration path for both the query pipeline (`RAGAgent`) and the ingestion pipeline (`DocumentPipeline`). The existing procedural flows will remain as the default fallback. See [Phase 4 plan](docs/knowledge-graph/phase-4-memory-langgraph.md) for details.
+
+---
+
+## 10. Class Diagram
 
 ### Full System Class Relationships
 
@@ -678,11 +811,20 @@ classDiagram
     }
 
     class RAGTool {
-        -agentCache Map~string, RAGAgent~
+        -ragQueryService RAGQueryService
         +register(context)$ Disposable
-        +executeQuery(params) Promise~RAGQueryResult~
+        -executeQuery(params) Promise~RAGQueryResult~
+    }
+
+    class RAGQueryService {
+        -ragAgents Map~string, RAGAgent~
+        -topicManager TopicManager
+        -config IConfigProvider
+        -llmProvider ILLMProvider
+        +executeQuery(params, workspaceContext?) Promise~RAGQueryResult~
+        +clearAgentCache(topicId?) void
+        +dispose() void
         -getOrCreateAgent(topicId) Promise~RAGAgent~
-        -findBestMatchingTopic(name)
     }
 
     %% Agents
@@ -767,8 +909,9 @@ classDiagram
     Extension --> TopicManager : initializes
     Extension --> EmbeddingService : initializes
 
-    RAGTool --> RAGAgent : creates/caches
-    RAGTool --> TopicManager : resolves topics
+    RAGTool --> RAGQueryService : delegates queries
+    RAGQueryService --> RAGAgent : creates/caches
+    RAGQueryService --> TopicManager : resolves topics
 
     RAGAgent --> QueryPlannerAgent : plans queries
     RAGAgent --> VectorRetriever : base vector search
@@ -795,7 +938,7 @@ classDiagram
 
 ---
 
-## 9. Sequence Diagrams
+## 11. Sequence Diagrams
 
 ### 9.1 Extension Activation
 
@@ -882,6 +1025,7 @@ sequenceDiagram
 sequenceDiagram
     participant COP as Copilot
     participant TOOL as RAGTool
+    participant RQS as RAGQueryService
     participant TM as TopicManager
     participant RA as RAGAgent
     participant QP as QueryPlannerAgent
@@ -889,10 +1033,11 @@ sequenceDiagram
     participant RET as Retriever
 
     COP->>TOOL: executeQuery({topic, query, topK})
-    TOOL->>TM: findBestMatchingTopic(topic)
-    TM-->>TOOL: Topic (exact|similar|fallback)
-    TOOL->>TOOL: getOrCreateAgent(topicId)
-    TOOL->>RA: query(query, agenticOptions)
+    TOOL->>RQS: executeQuery(params, workspaceContext)
+    RQS->>TM: resolveTopicByName(topic)
+    TM-->>RQS: TopicMatch (exact|similar|fallback)
+    RQS->>RQS: getOrCreateAgent(topicId)
+    RQS->>RA: query(query, agenticOptions)
 
     rect rgb(255, 245, 245)
         Note over RA,QP: Phase 1: Planning
@@ -903,7 +1048,7 @@ sequenceDiagram
             QP->>LLM: refinePlanWithLLM()
             LLM-->>QP: Zod-validated plan
         end
-        QP-->>RA: QueryPlan {subQueries, complexity, strategy}
+        QP-->>RA: QueryPlan {subQueries, complexity}
     end
 
     rect rgb(245, 255, 245)
@@ -934,8 +1079,9 @@ sequenceDiagram
     end
 
     RA->>RA: Final dedup + re-rank + topK
-    RA-->>TOOL: RAGResult
-    TOOL->>TOOL: Format RAGQueryResult + agenticMetadata
+    RA-->>RQS: RAGResult
+    RQS->>RQS: Format RAGQueryResult + agenticMetadata
+    RQS-->>TOOL: RAGQueryResult
     TOOL-->>COP: JSON response
 ```
 
@@ -975,7 +1121,7 @@ sequenceDiagram
 
 ---
 
-## 10. Storage & Persistence
+## 12. Storage & Persistence
 
 ### File System Layout
 
@@ -986,8 +1132,14 @@ ${extensionStorageDir}/
 │   ├── lancedb/
 │   │   ├── ${topicId}/               # Per-topic LanceDB table
 │   │   │   ├── ${topicId}.lance      # Vector data
+│   │   │   ├── _kg_entities.lance    # Knowledge graph entities (if populated)
+│   │   │   ├── _kg_relationships.lance # Knowledge graph relationships
 │   │   │   └── .lancedb/            # Table metadata/index
 │   │   └── ...
+│   ├── memory-lancedb/                # Standalone memory store (separate from RAG)
+│   │   ├── _memory_workspace.lance   # Workspace-scoped memories
+│   │   ├── _memory_branch_*.lance    # Branch-scoped memories
+│   │   └── _memory_entities_*.lance  # Memory entity vectors
 │   ├── documents/
 │   │   ├── ${topicId}.json           # Document metadata per topic
 │   │   └── ...
@@ -1057,16 +1209,16 @@ erDiagram
 
 ### Caching Strategy
 
-| Cache               | Scope          | Size Limit | Eviction        |
-| ------------------- | -------------- | ---------- | --------------- |
-| **RAGAgent**        | Per topic      | 10 agents  | LRU on overflow |
-| **VectorStore**     | Per topic      | 50 stores  | LRU on overflow |
-| **QueryPlan**       | Per query hash | 50 plans   | 1-minute TTL    |
-| **Topic documents** | Per topic      | Unbounded  | On topic delete |
+| Cache                             | Scope          | Size Limit | Eviction        |
+| --------------------------------- | -------------- | ---------- | --------------- |
+| **RAGAgent** (in RAGQueryService) | Per topic      | 10 agents  | LRU on overflow |
+| **VectorStore**                   | Per topic      | 50 stores  | LRU on overflow |
+| **QueryPlan**                     | Per query hash | 50 plans   | 1-minute TTL    |
+| **Topic documents**               | Per topic      | Unbounded  | On topic delete |
 
 ---
 
-## 11. Configuration Reference
+## 13. Configuration Reference
 
 All settings are under the `ragnarok.*` namespace.
 
@@ -1082,11 +1234,11 @@ All settings are under the `ragnarok.*` namespace.
 
 ### Embedding Settings
 
-| Setting                  | Type   | Default | Description                                    |
-| ------------------------ | ------ | ------- | ---------------------------------------------- |
-| `embeddingBackend`       | string | `auto`  | `auto` or any registered backend name          |
-| `embeddingVscodeModelId` | string | `""`    | VS Code LM model identifier                    |
-| `localModelPath`         | string | `""`    | Custom local model directory                   |
+| Setting                  | Type   | Default | Description                           |
+| ------------------------ | ------ | ------- | ------------------------------------- |
+| `embeddingBackend`       | string | `auto`  | `auto` or any registered backend name |
+| `embeddingVscodeModelId` | string | `""`    | VS Code LM model identifier           |
+| `localModelPath`         | string | `""`    | Custom local model directory          |
 
 ### Query Settings
 
@@ -1106,7 +1258,7 @@ All settings are under the `ragnarok.*` namespace.
 
 ---
 
-## 12. Commands Reference
+## 14. Commands Reference
 
 All commands are under the `ragnarok.*` namespace.
 

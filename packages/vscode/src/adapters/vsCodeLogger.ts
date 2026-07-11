@@ -5,6 +5,7 @@
 
 import * as vscode from "vscode";
 import { ILogger, ILoggerFactory, LogLevel, CONFIG } from "@ragnarok/core";
+import { VSCODE_CONFIG } from "../constants";
 
 export class VsCodeLogger implements ILogger {
   private static outputChannel: vscode.OutputChannel | null = null;
@@ -22,7 +23,7 @@ export class VsCodeLogger implements ILogger {
   }
 
   public static getConfiguredLogLevel(): LogLevel {
-    const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
+    const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
     const levelStr = config.get<string>(CONFIG.LOG_LEVEL, "info").toLowerCase();
     switch (levelStr) {
       case "debug":

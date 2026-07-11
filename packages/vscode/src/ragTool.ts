@@ -7,28 +7,25 @@ import * as vscode from "vscode";
 import {
   TopicManager,
   EmbeddingService,
-  RAGAgent,
-  QueryPlannerAgent,
   Logger,
   RAGQueryParams,
   RAGQueryResult,
-  RetrievalStrategy,
-  CONFIG,
   IConfigProvider,
   ILLMProvider,
+  RAGQueryService,
+  TopicEmptyError,
 } from "@ragnarok/core";
-import { TOOLS } from "./constants";
+import { TOOLS, VSCODE_CONFIG } from "./constants";
 import { WorkspaceContextProvider } from "./workspaceContext";
 
 const logger = new Logger("RAGTool");
 
 export class RAGTool {
-  private static readonly MAX_CACHED_AGENTS = 10;
   private embeddingService: EmbeddingService;
-  private topicManager: Promise<TopicManager>;
-  private ragAgents: Map<string, RAGAgent>; // One agent per topic
   private config: IConfigProvider;
   private llmProvider: ILLMProvider;
+  private ragQueryService: RAGQueryService;
+  private cleanupSubscription: { unsubscribe(): void };
 
   constructor(
     topicManager: TopicManager,
@@ -39,8 +36,10 @@ export class RAGTool {
     this.embeddingService = embeddingService;
     this.config = config;
     this.llmProvider = llmProvider;
-    this.topicManager = Promise.resolve(topicManager);
-    this.ragAgents = new Map();
+    this.ragQueryService = new RAGQueryService(topicManager, config, llmProvider);
+    this.cleanupSubscription = TopicManager.onAgentCacheCleanup.subscribe((topicId) =>
+      this.ragQueryService.clearAgentCache(topicId),
+    );
   }
 
   /**
@@ -57,10 +56,22 @@ export class RAGTool {
 
     // Register as a language model tool
     const ragTool = vscode.lm.registerTool(TOOLS.RAG_QUERY, {
-      invoke: async (options: vscode.LanguageModelToolInvocationOptions<RAGQueryParams>) => {
+      invoke: async (
+        options: vscode.LanguageModelToolInvocationOptions<RAGQueryParams>,
+        token: vscode.CancellationToken,
+      ) => {
         const params = options.input;
-        const result = await tool.executeQuery(params);
-        return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(JSON.stringify(result, null, 2))]);
+        // Convert VS Code CancellationToken to AbortSignal
+        const abortController = new AbortController();
+        const onCancel = token.onCancellationRequested(() => abortController.abort());
+        try {
+          const result = await tool.executeQuery(params, abortController.signal);
+          return new vscode.LanguageModelToolResult([
+            new vscode.LanguageModelTextPart(JSON.stringify(result, null, 2)),
+          ]);
+        } finally {
+          onCancel.dispose();
+        }
       },
       prepareInvocation: async (options: vscode.LanguageModelToolInvocationPrepareOptions<RAGQueryParams>) => {
         const params = options.input;
@@ -84,57 +95,19 @@ export class RAGTool {
   /**
    * Execute a RAG query (supports both simple and agentic modes)
    */
-  public async executeQuery(params: RAGQueryParams): Promise<RAGQueryResult> {
+  private async executeQuery(params: RAGQueryParams, signal?: AbortSignal): Promise<RAGQueryResult> {
     try {
       logger.info(`Executing RAG query: "${params.query}" for topic: "${params.topic}"`);
 
-      // Get configuration
-      const config = vscode.workspace.getConfiguration(CONFIG.ROOT);
-      const configTopK = config.get<number>(CONFIG.TOP_K, 5);
-      const topK = params.topK !== undefined ? params.topK : configTopK;
-
-      // Validate final topK value (after merging with config)
-      if (topK < 1 || topK > 20 || !Number.isInteger(topK)) {
-        throw new Error(`Invalid topK value: ${topK}. Must be an integer between 1 and 20.`);
-      }
-
-      // Initialize services
+      // Ensure embedding service is ready
       await this.embeddingService.initialize();
-      const topicManager = await this.topicManager;
 
-      // Find the topic with intelligent matching
-      const topicMatch = await this.findBestMatchingTopic(params.topic);
-
-      // Check if topic has any documents
-      const stats = await topicManager.getTopicStats(topicMatch.topic.id);
-      if (!stats || stats.documentCount === 0) {
-        throw new Error(
-          `Topic "${topicMatch.topic.name}" exists but has no documents. Add documents using the "RAG: Add Document to Topic" command.`,
-        );
-      }
-
-      logger.info(
-        `Topic matched: ${topicMatch.topic.name} (${topicMatch.matchType}), ${stats.documentCount} documents, ${stats.chunkCount} chunks`,
-      );
-
-      // Get retrieval strategy (from query params, or config, or default to hybrid)
-      const retrievalStrategy =
-        params.retrievalStrategy ??
-        (config.get<string>(CONFIG.RETRIEVAL_STRATEGY, RetrievalStrategy.HYBRID) as RetrievalStrategy);
-
-      // Get or create RAG agent for this topic
-      const agent = await this.getOrCreateAgent(topicMatch.topic.id);
-
-      logger.info("Using agentic RAG mode");
-
-      // Build agentic options from params and config
-      const agenticOptions = this.buildAgenticOptions(params, config, retrievalStrategy);
-
-      // Get workspace context only when LLM refinement is actually plausible
-      const includeWorkspace = config.get<boolean>(CONFIG.INCLUDE_WORKSPACE, true);
+      // Optionally inject workspace context when LLM refinement is plausible
+      const includeWorkspace = this.config.get<boolean>(VSCODE_CONFIG.INCLUDE_WORKSPACE, true);
       const canUseWorkspaceContext =
-        includeWorkspace && (await new QueryPlannerAgent(this.config, this.llmProvider).canRefineWithLLM(params.query));
+        includeWorkspace && params.query.trim().includes(" ") && (await this.llmProvider.isAvailable());
 
+      let workspaceContext: string | undefined;
       if (canUseWorkspaceContext) {
         const wsContext = await WorkspaceContextProvider.getContext({
           includeSelection: true,
@@ -142,67 +115,32 @@ export class RAGTool {
           includeWorkspace: true,
           maxCodeLength: 1000,
         });
-        // Convert workspace context to string for the agent
-        agenticOptions.workspaceContext = JSON.stringify(wsContext, null, 2);
+        workspaceContext = JSON.stringify(wsContext, null, 2);
       } else if (includeWorkspace) {
-        logger.debug("Skipping workspace context collection because LLM refinement is unavailable or not expected", {
+        logger.debug("Skipping workspace context: LLM refinement unavailable or not expected", {
           query: params.query.substring(0, 100),
-          modelFamily: agenticOptions.modelFamily,
         });
       }
 
-      // Execute agentic query with RAGAgent
-      const ragResult = await agent.query(params.query, agenticOptions);
-
-      // Convert RAGAgent result to agenticMetadata format
-      const agenticMetadata = {
-        mode: "agentic" as const,
-        steps: ragResult.plan.subQueries.map((sq: any, idx: number) => ({
-          stepNumber: idx + 1,
-          query: sq.query,
-          strategy: ragResult.plan.strategy,
-          resultsCount: ragResult.results.filter((r: any) => r.document?.metadata?.subQueryIndex === idx).length,
-          confidence: ragResult.avgConfidence,
-          reasoning: sq.reasoning,
-        })),
-        totalIterations: ragResult.iterations,
-        queryComplexity: ragResult.plan.complexity,
-        confidence: ragResult.avgConfidence,
-      };
-
-      // Format results for RAGQueryResult
-      const formattedResults: RAGQueryResult = {
-        query: params.query,
-        topicName: topicMatch.topic.name,
-        topicMatched: topicMatch.matchType,
-        requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
-        availableTopics: topicMatch.availableTopics,
-        agenticMetadata,
-        results: ragResult.results.map((result: any) => ({
-          text: result.document.pageContent,
-          documentName: result.document.metadata.source || "Unknown",
-          similarity: Math.round(result.score * 100) / 100,
-          retrievalStrategy: result.source || "unknown",
-          metadata: {
-            chunkIndex: result.document.metadata.chunkIndex || 0,
-            position: result.document.metadata.loc?.lines
-              ? `lines ${result.document.metadata.loc.lines.from}-${result.document.metadata.loc.lines.to}`
-              : `chars ${result.document.metadata.startPosition || 0}-${result.document.metadata.endPosition || 0}`,
-            headingPath: result.document.metadata.headingPath
-              ? Array.isArray(result.document.metadata.headingPath)
-                ? result.document.metadata.headingPath.join(" → ")
-                : result.document.metadata.headingPath
-              : undefined,
-            sectionTitle: result.document.metadata.sectionTitle,
-          },
-        })),
-      };
-
-      logger.info(
-        `Query completed: ${formattedResults.results.length} results, confidence: ${ragResult.avgConfidence.toFixed(2)}`,
-      );
-      return formattedResults;
+      // Delegate to the shared RAGQueryService
+      return await this.ragQueryService.executeQuery(params, workspaceContext, signal);
     } catch (error) {
+      if (error instanceof TopicEmptyError) {
+        // Return empty result with structured info instead of a generic error
+        return {
+          query: params.query,
+          topicName: error.topicName,
+          topicMatched: "fallback",
+          results: [],
+          agenticMetadata: {
+            mode: "agentic",
+            steps: [],
+            totalIterations: 0,
+            queryComplexity: "simple",
+            confidence: 0,
+          },
+        };
+      }
       const rawMessage = error instanceof Error ? error.message : String(error);
       logger.error(`RAG Query Failed: ${rawMessage}`);
       const sanitizedMessage = rawMessage
@@ -215,164 +153,12 @@ export class RAGTool {
   }
 
   /**
-   * Get or create RAG agent for a topic
+   * Dispose of all resources and clean up.
    */
-  private async getOrCreateAgent(topicId: string): Promise<RAGAgent> {
-    // Check cache first
-    if (this.ragAgents.has(topicId)) {
-      return this.ragAgents.get(topicId)!;
-    }
-
-    // Create new agent
-    logger.debug(`Creating new RAGAgent for topic: ${topicId}`);
-    const agent = new RAGAgent(this.config, this.llmProvider);
-
-    // Get vector store from TopicManager
-    let topicManager: TopicManager;
-    try {
-      topicManager = await this.topicManager;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(`Failed to initialize TopicManager: ${msg}`);
-    }
-    let vectorStore;
-    try {
-      vectorStore = await topicManager.getVectorStore(topicId);
-    } catch (error) {
-      throw new Error(
-        `Failed to load vector store for topic: ${topicId}. Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    if (!vectorStore) {
-      throw new Error(`Failed to load vector store for topic: ${topicId}`);
-    }
-
-    // Initialize agent with vector store and document fetcher (table scan avoids dimension mismatch)
-    const documentFetcher = (limit: number) => topicManager.getAllDocuments(topicId, limit);
-    await agent.initialize(vectorStore, { documentFetcher });
-
-    // Evict oldest entry if cache is full
-    if (this.ragAgents.size >= RAGTool.MAX_CACHED_AGENTS) {
-      const firstKey = this.ragAgents.keys().next().value;
-      if (firstKey) {
-        this.ragAgents.delete(firstKey);
-      }
-    }
-
-    // Cache the agent
-    this.ragAgents.set(topicId, agent);
-
-    return agent;
-  }
-
-  /**
-   * Clear agent cache for a specific topic
-   * This should be called when topics are deleted to prevent memory leaks
-   */
-  public clearAgentCache(topicId: string): void {
-    const deleted = this.ragAgents.delete(topicId);
-    if (deleted) {
-      logger.debug(`Cleared agent cache for topic: ${topicId}`);
-    }
-  }
-
-  /**
-   * Dispose of all resources and clean up
-   * Should be called when RAGTool is no longer needed
-   */
-  public dispose(): void {
+  private dispose(): void {
     logger.info("Disposing RAGTool");
-
-    // Clear all agent caches
-    const agentCount = this.ragAgents.size;
-    this.ragAgents.clear();
-
-    logger.info(`RAGTool disposed - cleared ${agentCount} agent(s)`);
-  }
-
-  /**
-   * Build agentic options from parameters and settings
-   * Note: All agentic configuration comes from VS Code settings only
-   */
-  private buildAgenticOptions(
-    params: RAGQueryParams,
-    config: vscode.WorkspaceConfiguration,
-    retrievalStrategy: RetrievalStrategy,
-  ): {
-    topK?: number;
-    maxIterations?: number;
-    confidenceThreshold?: number;
-    retrievalStrategy?: RetrievalStrategy;
-    workspaceContext?: string;
-    modelFamily?: string;
-  } {
-    return {
-      topK: params.topK ?? config.get<number>(CONFIG.TOP_K, 5),
-      maxIterations: config.get<number>(CONFIG.MAX_ITERATIONS, 3),
-      confidenceThreshold: config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7),
-      retrievalStrategy: retrievalStrategy,
-      modelFamily: config.get<string>(CONFIG.LLM_MODEL, "gpt-4o-mini"),
-    };
-  }
-
-  /**
-   * Find the best matching topic using semantic similarity
-   */
-  private async findBestMatchingTopic(requestedTopic: string): Promise<{
-    topic: any;
-    matchType: "exact" | "similar" | "fallback";
-    availableTopics?: string[];
-  }> {
-    // Get all available topics
-    const topicManager = await this.topicManager;
-    const allTopics = await topicManager.getAllTopics();
-
-    if (allTopics.length === 0) {
-      throw new Error(
-        'No topics found in the RAG database. Create a topic using the "RAG: Create New Topic" command first.',
-      );
-    }
-
-    // Try exact match first (case-insensitive)
-    const exactMatch = allTopics.find((t) => t.name.toLowerCase() === requestedTopic.toLowerCase());
-    if (exactMatch) {
-      logger.debug(`Exact topic match found: ${exactMatch.name}`);
-      return { topic: exactMatch, matchType: "exact" };
-    }
-
-    const topicNames = allTopics.map((t: any) => t.name);
-
-    // If only one topic exists, use it as fallback
-    if (allTopics.length === 1) {
-      logger.debug(`Single topic fallback: ${allTopics[0].name}`);
-      return {
-        topic: allTopics[0],
-        matchType: "fallback",
-        availableTopics: topicNames,
-      };
-    }
-
-    // Compute semantic similarity between requested topic and all available topics
-    logger.debug(`Computing semantic similarity for topic: ${requestedTopic}`);
-    const requestedEmbedding = await this.embeddingService.embed(requestedTopic);
-
-    const topicSimilarities = await Promise.all(
-      allTopics.map(async (topic: any) => {
-        const topicEmbedding = await this.embeddingService.embed(topic.name);
-        const similarity = this.embeddingService.cosineSimilarity(requestedEmbedding, topicEmbedding);
-        return { topic, similarity };
-      }),
-    );
-
-    // Sort by similarity and get the best match
-    topicSimilarities.sort((a: any, b: any) => b.similarity - a.similarity);
-    const bestMatch = topicSimilarities[0];
-
-    logger.debug(`Best matching topic: ${bestMatch.topic.name} (similarity: ${bestMatch.similarity.toFixed(3)})`);
-    return {
-      topic: bestMatch.topic,
-      matchType: "similar",
-      availableTopics: topicNames,
-    };
+    this.cleanupSubscription.unsubscribe();
+    this.ragQueryService.dispose();
+    logger.info("RAGTool disposed");
   }
 }

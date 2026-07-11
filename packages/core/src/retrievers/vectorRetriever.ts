@@ -29,7 +29,7 @@ export class VectorRetriever {
   /**
    * Perform vector similarity search with normalized scores
    */
-  public async search(query: string, k: number = 5): Promise<VectorSearchResult[]> {
+  public async search(query: string, k: number): Promise<VectorSearchResult[]> {
     this.logger.debug("Starting vector search", {
       query: query.substring(0, 100),
       k,
@@ -47,7 +47,7 @@ export class VectorRetriever {
    * Perform vector similarity search returning documents only (no scores).
    * Useful for rank-based fusion (e.g. RRF) where only ordering matters.
    */
-  public async getDocuments(query: string, k: number = 5): Promise<LangChainDocument[]> {
+  public async getDocuments(query: string, k: number): Promise<LangChainDocument[]> {
     return this.vectorStore.similaritySearch(query, k);
   }
 

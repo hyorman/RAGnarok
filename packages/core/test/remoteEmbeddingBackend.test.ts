@@ -51,10 +51,7 @@ const OPENAI_BATCH_RESPONSE = {
 };
 
 const OPENAI_MODELS_RESPONSE = {
-  data: [
-    { id: "text-embedding-3-small" },
-    { id: "text-embedding-3-large" },
-  ],
+  data: [{ id: "text-embedding-3-small" }, { id: "text-embedding-3-large" }],
 };
 
 const OLLAMA_EMBED_RESPONSE = {
@@ -116,9 +113,7 @@ describe("RemoteEmbeddingBackend", function () {
     });
 
     it("should embed a batch of texts", async () => {
-      mockFetch([
-        { method: "POST", pattern: "/embeddings", response: { status: 200, body: OPENAI_BATCH_RESPONSE } },
-      ]);
+      mockFetch([{ method: "POST", pattern: "/embeddings", response: { status: 200, body: OPENAI_BATCH_RESPONSE } }]);
       const results = await backend.embedBatch(["hello", "world"]);
       expect(results).to.have.length(2);
       expect(results[0]).to.deep.equal([0.1, 0.2, 0.3]);
@@ -146,9 +141,7 @@ describe("RemoteEmbeddingBackend", function () {
     });
 
     it("should handle API errors", async () => {
-      mockFetch([
-        { method: "POST", pattern: "/embeddings", response: { status: 500, body: "internal error" } },
-      ]);
+      mockFetch([{ method: "POST", pattern: "/embeddings", response: { status: 500, body: "internal error" } }]);
       try {
         await backend.embed("fail");
         expect.fail("should have thrown");
@@ -190,9 +183,7 @@ describe("RemoteEmbeddingBackend", function () {
     });
 
     it("should embed a batch of texts", async () => {
-      mockFetch([
-        { method: "POST", pattern: "/api/embed", response: { status: 200, body: OLLAMA_BATCH_RESPONSE } },
-      ]);
+      mockFetch([{ method: "POST", pattern: "/api/embed", response: { status: 200, body: OLLAMA_BATCH_RESPONSE } }]);
       const results = await backend.embedBatch(["hello", "world"]);
       expect(results).to.have.length(2);
       expect(results[0]).to.deep.equal([0.1, 0.2, 0.3]);
@@ -213,9 +204,7 @@ describe("RemoteEmbeddingBackend", function () {
 
   describe("isAvailable", () => {
     it("should return true when server is reachable", async () => {
-      mockFetch([
-        { method: "GET", pattern: "/models", response: { status: 200, body: OPENAI_MODELS_RESPONSE } },
-      ]);
+      mockFetch([{ method: "GET", pattern: "/models", response: { status: 200, body: OPENAI_MODELS_RESPONSE } }]);
       const backend = new RemoteEmbeddingBackend({
         baseUrl: "http://localhost:1234",
         format: "openai",
@@ -247,9 +236,7 @@ describe("RemoteEmbeddingBackend", function () {
 
   describe("error handling", () => {
     it("should throw on HTTP error", async () => {
-      mockFetch([
-        { method: "POST", pattern: "/embeddings", response: { status: 401, body: "unauthorized" } },
-      ]);
+      mockFetch([{ method: "POST", pattern: "/embeddings", response: { status: 401, body: "unauthorized" } }]);
       const backend = new RemoteEmbeddingBackend({
         baseUrl: "http://localhost:1234",
         format: "openai",

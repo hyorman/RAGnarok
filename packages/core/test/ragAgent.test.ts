@@ -4,8 +4,10 @@
  */
 
 import { expect } from "chai";
-import { RAGAgent, RetrievalStrategy, IConfigProvider, ILLMProvider } from "../src/index";
+import { RAGAgent, RetrievalStrategy } from "../src/index";
 import type { RetrievalResult, QueryPlan } from "../src/index";
+import { defaultQueryOptions, mockLLMProvider } from "./helpers/testDefaults";
+import { mockConfig } from "./helpers/realVectorStore";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { Embeddings } from "@langchain/core/embeddings";
@@ -128,15 +130,6 @@ class MockEmbeddings extends Embeddings {
   }
 }
 
-const mockConfig: IConfigProvider = {
-  get: <T>(_key: string, defaultValue: T): T => defaultValue,
-};
-
-const mockLLMProvider: ILLMProvider = {
-  selectModel: async () => null,
-  isAvailable: async () => false,
-};
-
 describe("RAGAgent", function () {
   this.timeout(30000); // 30 seconds for LLM tests
 
@@ -193,9 +186,12 @@ describe("RAGAgent", function () {
 
   describe("Full Query with Planning", function () {
     it("should execute full RAG query", async function () {
-      const result = await agent.query("What is Python?", {
-        topK: 3,
-      });
+      const result = await agent.query(
+        "What is Python?",
+        defaultQueryOptions({
+          topK: 3,
+        }),
+      );
 
       expect(result).to.have.property("query");
       expect(result).to.have.property("plan");
@@ -208,40 +204,42 @@ describe("RAGAgent", function () {
     });
 
     it("should create query plan", async function () {
-      const result = await agent.query("machine learning");
+      const result = await agent.query("machine learning", defaultQueryOptions());
 
       expect(result.plan).to.be.an("object");
       expect(result.plan).to.have.property("originalQuery");
       expect(result.plan).to.have.property("complexity");
       expect(result.plan).to.have.property("subQueries");
-      expect(result.plan).to.have.property("strategy");
     });
 
     it("should return results array", async function () {
-      const result = await agent.query("programming languages", {
-        topK: 5,
-      });
+      const result = await agent.query(
+        "programming languages",
+        defaultQueryOptions({
+          topK: 5,
+        }),
+      );
 
       expect(result.results).to.be.an("array");
       expect(result.results.length).to.be.at.most(5);
     });
 
     it("should calculate average confidence", async function () {
-      const result = await agent.query("JavaScript frameworks");
+      const result = await agent.query("JavaScript frameworks", defaultQueryOptions());
 
       expect(result.avgConfidence).to.be.a("number");
       expect(result.avgConfidence).to.be.within(0, 1);
     });
 
     it("should track execution time", async function () {
-      const result = await agent.query("Python");
+      const result = await agent.query("Python", defaultQueryOptions());
 
       expect(result.executionTime).to.be.a("number");
       expect(result.executionTime).to.be.at.least(0); // Can be 0 if very fast
     });
 
     it("should include metadata", async function () {
-      const result = await agent.query("test query");
+      const result = await agent.query("test query", defaultQueryOptions());
 
       expect(result.metadata).to.have.property("totalResults");
       expect(result.metadata).to.have.property("uniqueDocuments");
@@ -252,42 +250,57 @@ describe("RAGAgent", function () {
 
   describe("Query Options", function () {
     it("should accept topic name", async function () {
-      const result = await agent.query("programming", {
-        topicName: "Programming Languages",
-      });
+      const result = await agent.query(
+        "programming",
+        defaultQueryOptions({
+          topicName: "Programming Languages",
+        }),
+      );
 
       expect(result).to.be.an("object");
       expect(result.results).to.be.an("array");
     });
 
     it("should accept workspace context", async function () {
-      const result = await agent.query("refactoring", {
-        workspaceContext: "Current file: main.ts",
-      });
+      const result = await agent.query(
+        "refactoring",
+        defaultQueryOptions({
+          workspaceContext: "Current file: main.ts",
+        }),
+      );
 
       expect(result).to.be.an("object");
     });
 
     it("should accept retrieval strategy", async function () {
-      const vectorResult = await agent.query("test", {
-        retrievalStrategy: RetrievalStrategy.VECTOR,
-      });
+      const vectorResult = await agent.query(
+        "test",
+        defaultQueryOptions({
+          retrievalStrategy: RetrievalStrategy.VECTOR,
+        }),
+      );
 
       expect(vectorResult.metadata.strategy).to.equal(RetrievalStrategy.VECTOR);
     });
 
     it("should respect topK parameter", async function () {
-      const result = await agent.query("programming", {
-        topK: 2,
-      });
+      const result = await agent.query(
+        "programming",
+        defaultQueryOptions({
+          topK: 2,
+        }),
+      );
 
       expect(result.results.length).to.be.at.most(2);
     });
 
     it("should accept confidence threshold", async function () {
-      const result = await agent.query("test", {
-        confidenceThreshold: 0.5,
-      });
+      const result = await agent.query(
+        "test",
+        defaultQueryOptions({
+          confidenceThreshold: 0.5,
+        }),
+      );
 
       expect(result.confidenceMet).to.be.a("boolean");
     });
@@ -296,10 +309,13 @@ describe("RAGAgent", function () {
   describe("Iterative Refinement", function () {
     // UC-1: High confidence after first pass → stop immediately
     it("should stop after first pass when confidence threshold is met", async function () {
-      const result = await agent.query("Python programming", {
-        confidenceThreshold: 0.1, // Low threshold easily met
-        maxIterations: 5,
-      });
+      const result = await agent.query(
+        "Python programming",
+        defaultQueryOptions({
+          confidenceThreshold: 0.1, // Low threshold easily met
+          maxIterations: 5,
+        }),
+      );
 
       expect(result.confidenceMet).to.be.true;
       expect(result.iterations).to.equal(1);
@@ -307,10 +323,13 @@ describe("RAGAgent", function () {
 
     // UC-2: Low confidence triggers follow-up iterations
     it("should attempt iteration and stop when no progress is made", async function () {
-      const result = await agent.query("compare Python and JavaScript", {
-        maxIterations: 3,
-        confidenceThreshold: 0.99, // Impossibly high to force iteration
-      });
+      const result = await agent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 3,
+          confidenceThreshold: 0.99, // Impossibly high to force iteration
+        }),
+      );
 
       expect(result.iterations).to.be.a("number");
       // With mock store returning same docs, convergence stops early
@@ -320,10 +339,13 @@ describe("RAGAgent", function () {
 
     // UC-3: Comparison queries detect coverage imbalance
     it("should handle comparison queries with iterative refinement", async function () {
-      const result = await agent.query("difference between Python and JavaScript", {
-        maxIterations: 3,
-        confidenceThreshold: 0.99,
-      });
+      const result = await agent.query(
+        "difference between Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 3,
+          confidenceThreshold: 0.99,
+        }),
+      );
 
       expect(result.plan.complexity).to.equal("complex");
       expect(result.plan.subQueries.length).to.be.greaterThanOrEqual(2);
@@ -333,10 +355,13 @@ describe("RAGAgent", function () {
 
     // UC-4: Complex multi-part queries detect under-covered sub-queries
     it("should iterate for complex multi-part queries", async function () {
-      const result = await agent.query("What is Python? How does JavaScript work? Compare TypeScript features.", {
-        maxIterations: 3,
-        confidenceThreshold: 0.99,
-      });
+      const result = await agent.query(
+        "What is Python? How does JavaScript work? Compare TypeScript features.",
+        defaultQueryOptions({
+          maxIterations: 3,
+          confidenceThreshold: 0.99,
+        }),
+      );
 
       expect(result.plan.complexity).to.be.oneOf(["moderate", "complex"]);
       expect(result.iterations).to.be.at.least(1);
@@ -345,20 +370,26 @@ describe("RAGAgent", function () {
 
     // UC-5: Max iterations limit is respected
     it("should respect max iterations", async function () {
-      const result = await agent.query("complex query with multiple concepts", {
-        maxIterations: 2,
-        confidenceThreshold: 0.99,
-      });
+      const result = await agent.query(
+        "complex query with multiple concepts",
+        defaultQueryOptions({
+          maxIterations: 2,
+          confidenceThreshold: 0.99,
+        }),
+      );
 
       expect(result.iterations).to.be.at.most(2);
     });
 
     // UC-6: Convergence detection stops early when no improvement
     it("should converge and stop when no improvement between iterations", async function () {
-      const result = await agent.query("compare Python and JavaScript", {
-        maxIterations: 5,
-        confidenceThreshold: 0.99, // Won't be met
-      });
+      const result = await agent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 5,
+          confidenceThreshold: 0.99, // Won't be met
+        }),
+      );
 
       // Should stop before max iterations due to convergence
       expect(result.iterations).to.be.at.most(5);
@@ -367,9 +398,12 @@ describe("RAGAgent", function () {
 
     // Simple queries should bypass iterative refinement entirely
     it("should disable iterative refinement for simple queries", async function () {
-      const result = await agent.query("Python", {
-        maxIterations: 5,
-      });
+      const result = await agent.query(
+        "Python",
+        defaultQueryOptions({
+          maxIterations: 5,
+        }),
+      );
 
       // Simple queries use single-shot (plan.complexity === 'simple')
       expect(result.iterations).to.equal(1);
@@ -377,11 +411,14 @@ describe("RAGAgent", function () {
 
     // Results accumulate across iterations
     it("should accumulate results across iterations", async function () {
-      const result = await agent.query("compare Python and JavaScript", {
-        maxIterations: 3,
-        confidenceThreshold: 0.99,
-        topK: 10, // Higher topK to see accumulation
-      });
+      const result = await agent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 3,
+          confidenceThreshold: 0.99,
+          topK: 10, // Higher topK to see accumulation
+        }),
+      );
 
       expect(result.metadata.totalResults).to.be.at.least(1);
       // Total results should include documents from multiple iterations
@@ -390,10 +427,13 @@ describe("RAGAgent", function () {
 
     // avgConfidence is calculated correctly across all accumulated results
     it("should calculate avgConfidence across all results", async function () {
-      const result = await agent.query("compare Python and JavaScript", {
-        maxIterations: 2,
-        confidenceThreshold: 0.99,
-      });
+      const result = await agent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 2,
+          confidenceThreshold: 0.99,
+        }),
+      );
 
       expect(result.avgConfidence).to.be.a("number");
       expect(result.avgConfidence).to.be.within(0, 1);
@@ -401,11 +441,14 @@ describe("RAGAgent", function () {
 
     // Deduplication still works with multi-iteration results
     it("should deduplicate results from multiple iterations", async function () {
-      const result = await agent.query("compare Python and JavaScript", {
-        maxIterations: 3,
-        confidenceThreshold: 0.99,
-        topK: 10,
-      });
+      const result = await agent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 3,
+          confidenceThreshold: 0.99,
+          topK: 10,
+        }),
+      );
 
       // All results should have unique chunk IDs
       const chunkIds = result.results.map((r) => r.document.metadata.chunkId);
@@ -419,11 +462,14 @@ describe("RAGAgent", function () {
       const controller = new AbortController();
       controller.abort(); // pre-abort
 
-      const result = await agent.query("compare Python and JavaScript", {
-        maxIterations: 5,
-        confidenceThreshold: 0.99,
-        signal: controller.signal,
-      });
+      const result = await agent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 5,
+          confidenceThreshold: 0.99,
+          signal: controller.signal,
+        }),
+      );
 
       // Pre-aborted signal should stop at 0 iterations (aborted before first iteration)
       expect(result.iterations).to.be.at.most(1);
@@ -432,15 +478,14 @@ describe("RAGAgent", function () {
 
   describe("Parallel Execution", function () {
     it("should execute parallel sub-queries", async function () {
-      const result = await agent.query("Python versus JavaScript");
+      const result = await agent.query("Python versus JavaScript", defaultQueryOptions());
 
       // Comparison query should use parallel strategy
-      expect(result.plan.strategy).to.equal("parallel");
       expect(result.metadata.subQueriesExecuted).to.be.greaterThan(0);
     });
 
     it("should handle multiple parallel queries", async function () {
-      const result = await agent.query("Python and JavaScript and TypeScript");
+      const result = await agent.query("Python and JavaScript and TypeScript", defaultQueryOptions());
 
       expect(result.results).to.be.an("array");
       expect(result.results.length).to.be.greaterThan(0);
@@ -451,7 +496,7 @@ describe("RAGAgent", function () {
     it("should execute sequential sub-queries", async function () {
       // Long queries might use sequential
       const longQuery = "What are the steps to learn Python programming from beginner to advanced level";
-      const result = await agent.query(longQuery);
+      const result = await agent.query(longQuery, defaultQueryOptions());
 
       expect(result.results).to.be.an("array");
     });
@@ -459,16 +504,19 @@ describe("RAGAgent", function () {
 
   describe("Result Deduplication", function () {
     it("should deduplicate results with same chunkId", async function () {
-      const result = await agent.query("Python", {
-        topK: 10,
-      });
+      const result = await agent.query(
+        "Python",
+        defaultQueryOptions({
+          topK: 10,
+        }),
+      );
 
       // Check metadata shows deduplication happened
       expect(result.metadata.uniqueDocuments).to.be.at.most(result.metadata.totalResults);
     });
 
     it("should preserve unique documents", async function () {
-      const result = await agent.query("programming");
+      const result = await agent.query("programming", defaultQueryOptions());
 
       const chunkIds = result.results.map((r) => r.document.metadata.chunkId);
       const uniqueIds = new Set(chunkIds);
@@ -480,9 +528,12 @@ describe("RAGAgent", function () {
 
   describe("Result Ranking", function () {
     it("should rank results by score", async function () {
-      const result = await agent.query("Python", {
-        topK: 5,
-      });
+      const result = await agent.query(
+        "Python",
+        defaultQueryOptions({
+          topK: 5,
+        }),
+      );
 
       // Check scores are in descending order
       for (let i = 1; i < result.results.length; i++) {
@@ -491,9 +542,12 @@ describe("RAGAgent", function () {
     });
 
     it("should return highest scoring results", async function () {
-      const result = await agent.query("JavaScript", {
-        topK: 3,
-      });
+      const result = await agent.query(
+        "JavaScript",
+        defaultQueryOptions({
+          topK: 3,
+        }),
+      );
 
       expect(result.results.length).to.be.at.most(3);
 
@@ -509,7 +563,7 @@ describe("RAGAgent", function () {
       const uninitializedAgent = new RAGAgent(mockConfig, mockLLMProvider);
 
       try {
-        await uninitializedAgent.query("test");
+        await uninitializedAgent.query("test", defaultQueryOptions());
         expect.fail("Should have thrown error");
       } catch (error) {
         expect(error).to.be.an("error");
@@ -518,29 +572,24 @@ describe("RAGAgent", function () {
     });
 
     it("should handle empty query gracefully", async function () {
-      const result = await agent.query("");
+      const result = await agent.query("", defaultQueryOptions());
 
       expect(result).to.be.an("object");
       expect(result.results).to.be.an("array");
-    });
-
-    it("should handle invalid options gracefully", async function () {
-      const result = await agent.query("test", {
-        topK: -1, // Invalid topK
-      });
-
-      expect(result).to.be.an("object");
     });
   });
 
   describe("Configuration Management", function () {
     it("should accept configuration via query options", async function () {
       // Configuration is now passed as options to query methods
-      const result = await agent.query("test query", {
-        maxIterations: 2,
-        confidenceThreshold: 0.8,
-        retrievalStrategy: RetrievalStrategy.HYBRID,
-      });
+      const result = await agent.query(
+        "test query",
+        defaultQueryOptions({
+          maxIterations: 2,
+          confidenceThreshold: 0.8,
+          retrievalStrategy: RetrievalStrategy.HYBRID,
+        }),
+      );
 
       expect(result).to.have.property("iterations");
       expect(result).to.have.property("avgConfidence");
@@ -557,14 +606,14 @@ describe("RAGAgent", function () {
 
   describe("Query Plan Integration", function () {
     it("should use query planner for complex queries", async function () {
-      const result = await agent.query("compare React and Vue frameworks");
+      const result = await agent.query("compare React and Vue frameworks", defaultQueryOptions());
 
       expect(result.plan.complexity).to.equal("complex");
       expect(result.plan.subQueries.length).to.be.greaterThan(0);
     });
 
     it("should use simple plan for simple queries", async function () {
-      const result = await agent.query("Python");
+      const result = await agent.query("Python", defaultQueryOptions());
 
       expect(result.plan.complexity).to.equal("simple");
       expect(result.plan.subQueries).to.have.lengthOf(1);
@@ -573,7 +622,7 @@ describe("RAGAgent", function () {
 
   describe("Result Structure", function () {
     it("should include document in results", async function () {
-      const result = await agent.query("test");
+      const result = await agent.query("test", defaultQueryOptions());
 
       result.results.forEach((r) => {
         expect(r.document).to.be.an("object");
@@ -583,7 +632,7 @@ describe("RAGAgent", function () {
     });
 
     it("should include score in results", async function () {
-      const result = await agent.query("test");
+      const result = await agent.query("test", defaultQueryOptions());
 
       result.results.forEach((r) => {
         expect(r.score).to.be.a("number");
@@ -592,7 +641,7 @@ describe("RAGAgent", function () {
     });
 
     it("should include source in results", async function () {
-      const result = await agent.query("test");
+      const result = await agent.query("test", defaultQueryOptions());
 
       result.results.forEach((r) => {
         expect(r.source).to.be.oneOf(["vector", "hybrid", "keyword", "ensemble", "bm25"]);
@@ -604,7 +653,7 @@ describe("RAGAgent", function () {
     it("should complete query in reasonable time", async function () {
       const startTime = Date.now();
 
-      await agent.query("Python programming");
+      await agent.query("Python programming", defaultQueryOptions());
 
       const elapsed = Date.now() - startTime;
       expect(elapsed).to.be.lessThan(5000); // 5 seconds
@@ -613,7 +662,7 @@ describe("RAGAgent", function () {
     it("should handle multiple queries", async function () {
       const queries = ["Python", "JavaScript", "TypeScript"];
 
-      const results = await Promise.all(queries.map((q) => agent.query(q, { topK: 2 })));
+      const results = await Promise.all(queries.map((q) => agent.query(q, defaultQueryOptions({ topK: 2 }))));
 
       expect(results).to.have.lengthOf(3);
       results.forEach((result) => {
@@ -628,10 +677,9 @@ describe("RAGAgent", function () {
         originalQuery: "Python programming",
         complexity: "moderate",
         subQueries: [
-          { query: "Python basics", reasoning: "r", topK: 5, priority: "high" },
-          { query: "Python advanced", reasoning: "r", topK: 5, priority: "medium" },
+          { query: "Python basics", reasoning: "r", topK: 5 },
+          { query: "Python advanced", reasoning: "r", topK: 5 },
         ],
-        strategy: "parallel",
         explanation: "test",
       };
 
@@ -673,10 +721,9 @@ describe("RAGAgent", function () {
         originalQuery: "compare Python and Rust",
         complexity: "complex",
         subQueries: [
-          { query: "Python features", reasoning: "r", topK: 5, priority: "high" },
-          { query: "Rust features", reasoning: "r", topK: 5, priority: "high" },
+          { query: "Python features", reasoning: "r", topK: 5 },
+          { query: "Rust features", reasoning: "r", topK: 5 },
         ],
-        strategy: "parallel",
         explanation: "test",
       };
 
@@ -709,10 +756,9 @@ describe("RAGAgent", function () {
         originalQuery: "architecture patterns",
         complexity: "moderate",
         subQueries: [
-          { query: "design patterns", reasoning: "r", topK: 5, priority: "high" },
-          { query: "microservices", reasoning: "r", topK: 5, priority: "medium" },
+          { query: "design patterns", reasoning: "r", topK: 5 },
+          { query: "microservices", reasoning: "r", topK: 5 },
         ],
-        strategy: "parallel",
         explanation: "test",
       };
 
@@ -749,10 +795,9 @@ describe("RAGAgent", function () {
         originalQuery: "compare React and Angular",
         complexity: "complex",
         subQueries: [
-          { query: "React features", reasoning: "r", topK: 5, priority: "high" },
-          { query: "Angular features", reasoning: "r", topK: 5, priority: "high" },
+          { query: "React features", reasoning: "r", topK: 5 },
+          { query: "Angular features", reasoning: "r", topK: 5 },
         ],
-        strategy: "parallel",
         explanation: "test",
       };
 
@@ -797,11 +842,10 @@ describe("RAGAgent", function () {
         originalQuery: "test",
         complexity: "moderate",
         subQueries: [
-          { query: "q1", reasoning: "r", topK: 5, priority: "high" },
-          { query: "q2", reasoning: "r", topK: 5, priority: "high" },
-          { query: "q3", reasoning: "r", topK: 5, priority: "medium" },
+          { query: "q1", reasoning: "r", topK: 5 },
+          { query: "q2", reasoning: "r", topK: 5 },
+          { query: "q3", reasoning: "r", topK: 5 },
         ],
-        strategy: "parallel",
         explanation: "test",
       };
 
@@ -835,8 +879,7 @@ describe("RAGAgent", function () {
       const plan: QueryPlan = {
         originalQuery: "test",
         complexity: "moderate",
-        subQueries: [{ query: "q1", reasoning: "r", topK: 5, priority: "high" }],
-        strategy: "parallel",
+        subQueries: [{ query: "q1", reasoning: "r", topK: 5 }],
         explanation: "test",
       };
 
@@ -852,7 +895,6 @@ describe("RAGAgent", function () {
         originalQuery: "test",
         complexity: "simple",
         subQueries: [],
-        strategy: "sequential",
         explanation: "test",
       };
 
@@ -909,10 +951,13 @@ describe("RAGAgent", function () {
     });
 
     it("should complete iterative refinement with query-aware results", async function () {
-      const result = await qaAgent.query("compare Python and JavaScript", {
-        maxIterations: 3,
-        confidenceThreshold: 0.99,
-      });
+      const result = await qaAgent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 3,
+          confidenceThreshold: 0.99,
+        }),
+      );
 
       expect(result.iterations).to.be.at.least(1);
       expect(result.results).to.be.an("array");
@@ -925,10 +970,9 @@ describe("RAGAgent", function () {
         originalQuery: "compare Python and Rust",
         complexity: "complex",
         subQueries: [
-          { query: "Python features", reasoning: "reason", topK: 3, priority: "high" },
-          { query: "Rust features", reasoning: "reason", topK: 3, priority: "high" },
+          { query: "Python features", reasoning: "reason", topK: 3 },
+          { query: "Rust features", reasoning: "reason", topK: 3 },
         ],
-        strategy: "parallel",
         explanation: "Compare two languages",
       };
 
@@ -963,11 +1007,14 @@ describe("RAGAgent", function () {
     });
 
     it("should accumulate unique results across iterations", async function () {
-      const result = await qaAgent.query("compare Python and JavaScript", {
-        maxIterations: 3,
-        confidenceThreshold: 0.99,
-        topK: 10,
-      });
+      const result = await qaAgent.query(
+        "compare Python and JavaScript",
+        defaultQueryOptions({
+          maxIterations: 3,
+          confidenceThreshold: 0.99,
+          topK: 10,
+        }),
+      );
 
       // Results from multiple iterations should all be unique
       const chunkIds = result.results.map((r) => r.document.metadata.chunkId).filter(Boolean);

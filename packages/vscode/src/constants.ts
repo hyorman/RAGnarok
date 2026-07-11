@@ -6,6 +6,18 @@
 export { EXTENSION, CONFIG, DEFAULTS } from "@ragnarok/core";
 
 /**
+ * VS Code-specific configuration keys (not shared with core or MCP)
+ */
+export const VSCODE_CONFIG = {
+  /** VS Code settings section prefix for `vscode.workspace.getConfiguration()` */
+  ROOT: "ragnarok",
+  /** Whether to include workspace context in RAG queries */
+  INCLUDE_WORKSPACE: "includeWorkspaceContext",
+  /** VS Code language-model embedding model id */
+  EMBEDDING_VSCODE_MODEL_ID: "embeddingVscodeModelId",
+} as const;
+
+/**
  * Tool identifiers
  */
 export const TOOLS = {
@@ -28,6 +40,7 @@ export const COMMANDS = {
   SET_EMBEDDING_MODEL: "ragnarok.setEmbeddingModel",
   SELECT_VSCODE_EMBEDDING_MODEL: "ragnarok.selectVscodeEmbeddingModel",
   SELECT_HF_EMBEDDING_MODEL: "ragnarok.selectHfEmbeddingModel",
+  SELECT_RERANKER_MODEL: "ragnarok.selectRerankerModel",
   SELECT_LLM_MODEL: "ragnarok.selectLLMModel",
   EDIT_CONFIG_ITEM: "ragnarok.editConfigItem",
   ADD_GITHUB_TOKEN: "ragnarok.addGithubToken",
@@ -75,4 +88,5 @@ export const TREE_CONFIG_KEY = {
   INCLUDE_WORKSPACE_CONTEXT: "include-workspace-context",
   MAX_ITERATIONS: "max-iterations",
   CONFIDENCE_THRESHOLD: "confidence-threshold",
+  RERANKER_MODEL: "reranker-model",
 } as const;
