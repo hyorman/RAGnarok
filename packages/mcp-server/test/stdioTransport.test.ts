@@ -80,7 +80,10 @@ class StdioHarness {
       return Promise.resolve(existing);
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms waiting for message`)), timeoutMs);
+      const timer = setTimeout(
+        () => reject(new Error(`Timed out after ${timeoutMs}ms waiting for message`)),
+        timeoutMs,
+      );
       this.waiters.push({
         predicate,
         resolve: (m) => {

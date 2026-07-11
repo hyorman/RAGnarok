@@ -362,9 +362,7 @@ describe("MCP Tools (registerTools)", () => {
 
   describe("rag_create_topic", () => {
     it("returns created topic details", async () => {
-      topicManager.createTopic.resolves(
-        makeTopic({ id: "new-id", name: "my-topic", description: "desc" }),
-      );
+      topicManager.createTopic.resolves(makeTopic({ id: "new-id", name: "my-topic", description: "desc" }));
 
       const result = await handlers.rag_create_topic({ name: "my-topic", description: "desc" });
       const body = parseResponse(result);
@@ -609,9 +607,7 @@ describe("MCP Tools (registerTools)", () => {
 
   describe("rag_switch_embedding_model", () => {
     it("switches model, propagates to topic management, and returns previous/new names", async () => {
-      embeddingService.getCurrentModel
-        .onFirstCall().returns("old-model")
-        .onSecondCall().returns("new-model");
+      embeddingService.getCurrentModel.onFirstCall().returns("old-model").onSecondCall().returns("new-model");
       embeddingService.initialize.resolves();
 
       const result = await handlers.rag_switch_embedding_model({ model: "new-model" });
@@ -845,9 +841,12 @@ describe("MCP Tools (registerTools)", () => {
 
       it("calls switchModel on the reranker", async () => {
         const mockReranker = {
-          getCurrentModel: sinon.stub()
-            .onFirstCall().returns("Xenova/ms-marco-MiniLM-L-6-v2")
-            .onSecondCall().returns("Xenova/ms-marco-MiniLM-L-12-v2"),
+          getCurrentModel: sinon
+            .stub()
+            .onFirstCall()
+            .returns("Xenova/ms-marco-MiniLM-L-6-v2")
+            .onSecondCall()
+            .returns("Xenova/ms-marco-MiniLM-L-12-v2"),
           switchModel: sinon.stub().resolves(),
         };
         rerankerHandlers = captureHandlersWithReranker(
@@ -864,9 +863,12 @@ describe("MCP Tools (registerTools)", () => {
 
       it("returns previous and new model names on success", async () => {
         const mockReranker = {
-          getCurrentModel: sinon.stub()
-            .onFirstCall().returns("Xenova/ms-marco-MiniLM-L-6-v2")
-            .onSecondCall().returns("Xenova/ms-marco-MiniLM-L-12-v2"),
+          getCurrentModel: sinon
+            .stub()
+            .onFirstCall()
+            .returns("Xenova/ms-marco-MiniLM-L-6-v2")
+            .onSecondCall()
+            .returns("Xenova/ms-marco-MiniLM-L-12-v2"),
           switchModel: sinon.stub().resolves(),
         };
         rerankerHandlers = captureHandlersWithReranker(

@@ -17,12 +17,7 @@
 
 import { connect } from "@lancedb/lancedb";
 import { Logger } from "../logger";
-import {
-  MemoryEntry,
-  MemoryGraphData,
-  MemoryScope,
-  MEMORY_TABLE_PREFIX,
-} from "./types";
+import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "./types";
 
 export class MemoryVectorStore {
   private logger = new Logger("MemoryVectorStore");

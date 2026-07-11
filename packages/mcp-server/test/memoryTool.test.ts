@@ -566,8 +566,22 @@ describe("rag_memory tool", () => {
   describe("history", () => {
     it("calls memoryStore.getVersionHistory() and returns versions", async () => {
       const versions = [
-        makeEntry({ id: "mem-1-v2", content: "updated", version: 2, isLatest: true, confidence: 0.85, supersededBy: undefined }),
-        makeEntry({ id: "mem-1-v1", content: "original", version: 1, isLatest: false, confidence: 0.5, supersededBy: "mem-1-v2" }),
+        makeEntry({
+          id: "mem-1-v2",
+          content: "updated",
+          version: 2,
+          isLatest: true,
+          confidence: 0.85,
+          supersededBy: undefined,
+        }),
+        makeEntry({
+          id: "mem-1-v1",
+          content: "original",
+          version: 1,
+          isLatest: false,
+          confidence: 0.5,
+          supersededBy: "mem-1-v2",
+        }),
       ];
       memoryStore.getVersionHistory.resolves(versions);
 

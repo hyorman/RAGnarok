@@ -66,26 +66,36 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
   }
 
   private async getCheckpointTable(): Promise<Table | null> {
-    if (this.checkpointTable) {return this.checkpointTable;}
+    if (this.checkpointTable) {
+      return this.checkpointTable;
+    }
     const db = await this.getDb();
     const tables = await db.tableNames();
-    if (!tables.includes(CHECKPOINTS_TABLE)) {return null;}
+    if (!tables.includes(CHECKPOINTS_TABLE)) {
+      return null;
+    }
     this.checkpointTable = await db.openTable(CHECKPOINTS_TABLE);
     return this.checkpointTable;
   }
 
   private async getWritesTable(): Promise<Table | null> {
-    if (this.writesTable) {return this.writesTable;}
+    if (this.writesTable) {
+      return this.writesTable;
+    }
     const db = await this.getDb();
     const tables = await db.tableNames();
-    if (!tables.includes(WRITES_TABLE)) {return null;}
+    if (!tables.includes(WRITES_TABLE)) {
+      return null;
+    }
     this.writesTable = await db.openTable(WRITES_TABLE);
     return this.writesTable;
   }
 
   private async ensureCheckpointTable(): Promise<Table> {
     const existing = await this.getCheckpointTable();
-    if (existing) {return existing;}
+    if (existing) {
+      return existing;
+    }
     const db = await this.getDb();
     const seed: CheckpointRow[] = [
       {
@@ -98,17 +108,16 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
         created_at: 0,
       },
     ];
-    this.checkpointTable = await db.createTable(
-      CHECKPOINTS_TABLE,
-      seed as unknown as Record<string, unknown>[],
-    );
+    this.checkpointTable = await db.createTable(CHECKPOINTS_TABLE, seed as unknown as Record<string, unknown>[]);
     await this.checkpointTable.delete("thread_id = '__seed__'");
     return this.checkpointTable;
   }
 
   private async ensureWritesTable(): Promise<Table> {
     const existing = await this.getWritesTable();
-    if (existing) {return existing;}
+    if (existing) {
+      return existing;
+    }
     const db = await this.getDb();
     const seed: WriteRow[] = [
       {
@@ -122,10 +131,7 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
         value: "null",
       },
     ];
-    this.writesTable = await db.createTable(
-      WRITES_TABLE,
-      seed as unknown as Record<string, unknown>[],
-    );
+    this.writesTable = await db.createTable(WRITES_TABLE, seed as unknown as Record<string, unknown>[]);
     await this.writesTable.delete("thread_id = '__seed__'");
     return this.writesTable;
   }
@@ -136,18 +142,16 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
     checkpointId: string,
   ): Promise<CheckpointPendingWrite[]> {
     const table = await this.getWritesTable();
-    if (!table) {return [];}
+    if (!table) {
+      return [];
+    }
     const rows = await table
       .query()
       .where(
         `thread_id = '${escapeSQL(threadId)}' AND checkpoint_ns = '${escapeSQL(checkpointNs)}' AND checkpoint_id = '${escapeSQL(checkpointId)}'`,
       )
       .toArray();
-    return rows.map((row) => [
-      row.task_id as string,
-      row.channel as string,
-      JSON.parse(row.value as string),
-    ]);
+    return rows.map((row) => [row.task_id as string, row.channel as string, JSON.parse(row.value as string)]);
   }
 
   async getTuple(config: RunnableConfig): Promise<CheckpointTuple | undefined> {
@@ -156,7 +160,9 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
     const checkpointId = getCheckpointId(config);
 
     const table = await this.getCheckpointTable();
-    if (!table) {return undefined;}
+    if (!table) {
+      return undefined;
+    }
 
     let rows: Record<string, unknown>[];
     if (checkpointId) {
@@ -171,18 +177,16 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
       // Get the latest checkpoint for this thread
       rows = await table
         .query()
-        .where(
-          `thread_id = '${escapeSQL(threadId)}' AND checkpoint_ns = '${escapeSQL(checkpointNs)}'`,
-        )
+        .where(`thread_id = '${escapeSQL(threadId)}' AND checkpoint_ns = '${escapeSQL(checkpointNs)}'`)
         .toArray();
       // Sort by created_at desc and take the first
-      rows.sort(
-        (a, b) => (b.created_at as number) - (a.created_at as number),
-      );
+      rows.sort((a, b) => (b.created_at as number) - (a.created_at as number));
       rows = rows.slice(0, 1);
     }
 
-    if (rows.length === 0) {return undefined;}
+    if (rows.length === 0) {
+      return undefined;
+    }
 
     const row = rows[0];
     const checkpoint: Checkpoint = JSON.parse(row.data as string);
@@ -190,11 +194,7 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
     const parentCheckpointId = row.parent_checkpoint_id as string;
     const resolvedId = row.checkpoint_id as string;
 
-    const pendingWrites = await this.loadPendingWrites(
-      threadId,
-      checkpointNs,
-      resolvedId,
-    );
+    const pendingWrites = await this.loadPendingWrites(threadId, checkpointNs, resolvedId);
 
     const tuple: CheckpointTuple = {
       config: {
@@ -222,22 +222,19 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
     return tuple;
   }
 
-  async *list(
-    config: RunnableConfig,
-    options?: CheckpointListOptions,
-  ): AsyncGenerator<CheckpointTuple> {
+  async *list(config: RunnableConfig, options?: CheckpointListOptions): AsyncGenerator<CheckpointTuple> {
     const { limit, before, filter } = options ?? {};
     const threadId = config.configurable?.thread_id as string;
     const checkpointNs = (config.configurable?.checkpoint_ns ?? "") as string;
 
     const table = await this.getCheckpointTable();
-    if (!table) {return;}
+    if (!table) {
+      return;
+    }
 
     const rows = await table
       .query()
-      .where(
-        `thread_id = '${escapeSQL(threadId)}' AND checkpoint_ns = '${escapeSQL(checkpointNs)}'`,
-      )
+      .where(`thread_id = '${escapeSQL(threadId)}' AND checkpoint_ns = '${escapeSQL(checkpointNs)}'`)
       .toArray();
 
     // Sort by created_at desc (newest first)
@@ -257,22 +254,18 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
       // Apply metadata filter
       if (
         filter &&
-        !Object.entries(filter).every(
-          ([key, value]) => (metadata as Record<string, unknown>)[key] === value,
-        )
+        !Object.entries(filter).every(([key, value]) => (metadata as Record<string, unknown>)[key] === value)
       ) {
         continue;
       }
 
-      if (limit !== undefined && yielded >= limit) {break;}
+      if (limit !== undefined && yielded >= limit) {
+        break;
+      }
 
       const checkpoint: Checkpoint = JSON.parse(row.data as string);
       const parentCheckpointId = row.parent_checkpoint_id as string;
-      const pendingWrites = await this.loadPendingWrites(
-        threadId,
-        checkpointNs,
-        cpId,
-      );
+      const pendingWrites = await this.loadPendingWrites(threadId, checkpointNs, cpId);
 
       const tuple: CheckpointTuple = {
         config: {
@@ -313,9 +306,7 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
     const parentCheckpointId = (config.configurable?.checkpoint_id ?? "") as string;
 
     if (!threadId) {
-      throw new Error(
-        'Failed to put checkpoint. Missing required "thread_id" in configurable.',
-      );
+      throw new Error('Failed to put checkpoint. Missing required "thread_id" in configurable.');
     }
 
     const prepared = copyCheckpoint(checkpoint);
@@ -351,24 +342,16 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
     };
   }
 
-  async putWrites(
-    config: RunnableConfig,
-    writes: PendingWrite[],
-    taskId: string,
-  ): Promise<void> {
+  async putWrites(config: RunnableConfig, writes: PendingWrite[], taskId: string): Promise<void> {
     const threadId = config.configurable?.thread_id as string;
     const checkpointNs = (config.configurable?.checkpoint_ns ?? "") as string;
     const checkpointId = config.configurable?.checkpoint_id as string;
 
     if (!threadId) {
-      throw new Error(
-        'Failed to put writes. Missing required "thread_id" in configurable.',
-      );
+      throw new Error('Failed to put writes. Missing required "thread_id" in configurable.');
     }
     if (!checkpointId) {
-      throw new Error(
-        'Failed to put writes. Missing required "checkpoint_id" in configurable.',
-      );
+      throw new Error('Failed to put writes. Missing required "checkpoint_id" in configurable.');
     }
 
     const table = await this.ensureWritesTable();

@@ -35,10 +35,7 @@ export class TopicEmptyError extends Error {
   public readonly topicName: string;
 
   constructor(topicName: string) {
-    super(
-      `Topic "${topicName}" exists but has no documents. ` +
-        `Add documents to the topic before querying.`,
-    );
+    super(`Topic "${topicName}" exists but has no documents. ` + `Add documents to the topic before querying.`);
     this.name = "TopicEmptyError";
     this.topicName = topicName;
   }
@@ -204,8 +201,7 @@ export class RAGQueryService {
     }
 
     const retrievalStrategy =
-      params.retrievalStrategy ??
-      (this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "") as RetrievalStrategy);
+      params.retrievalStrategy ?? (this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "") as RetrievalStrategy);
 
     const agentOptions: RAGAgentOptions = {
       topicName: topicMatch.topic.name,
@@ -313,12 +309,10 @@ export class RAGQueryService {
       showInfo: () => {},
       showWarning: () => {},
       showError: () => {},
-      withProgress: async <T>(_title: string, task: (report: (msg: string) => void) => Promise<T>) =>
-        task(() => {}),
+      withProgress: async <T>(_title: string, task: (report: (msg: string) => void) => Promise<T>) => task(() => {}),
     };
 
-    const embeddingService =
-      this.embeddingService ?? this.topicManager.getEmbeddingService();
+    const embeddingService = this.embeddingService ?? this.topicManager.getEmbeddingService();
     const reranker = await this.getOrCreateReranker();
 
     const deps: QueryGraphDeps = {
@@ -335,22 +329,15 @@ export class RAGQueryService {
       // Compile once and reuse — the compiled graph caches per-topic agents.
       this.compiledQueryGraph ??= createQueryGraph(deps);
 
-      const graphResult = await executeQueryGraph(
-        deps,
-        params.query,
-        topicMatch.topic.id,
-        {
-          retrievalStrategy:
-            params.retrievalStrategy ??
-            this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, ""),
-          topK: params.topK ?? this.config.get<number>(CONFIG.TOP_K, 5),
-          modelFamily: this.config.get<string>(CONFIG.LLM_MODEL, ""),
-          maxIterations: this.config.get<number>(CONFIG.MAX_ITERATIONS, 3),
-          confidenceThreshold: this.config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7),
-          signal,
-          compiledGraph: this.compiledQueryGraph,
-        },
-      );
+      const graphResult = await executeQueryGraph(deps, params.query, topicMatch.topic.id, {
+        retrievalStrategy: params.retrievalStrategy ?? this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, ""),
+        topK: params.topK ?? this.config.get<number>(CONFIG.TOP_K, 5),
+        modelFamily: this.config.get<string>(CONFIG.LLM_MODEL, ""),
+        maxIterations: this.config.get<number>(CONFIG.MAX_ITERATIONS, 3),
+        confidenceThreshold: this.config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7),
+        signal,
+        compiledGraph: this.compiledQueryGraph,
+      });
 
       return this.mapGraphResult(graphResult, params, topicMatch);
     } catch (error) {
@@ -358,10 +345,9 @@ export class RAGQueryService {
       if (signal?.aborted) {
         throw error;
       }
-      this.logger.warn(
-        "LangGraph query pipeline failed, falling back to existing flow",
-        { error: error instanceof Error ? error.message : String(error) },
-      );
+      this.logger.warn("LangGraph query pipeline failed, falling back to existing flow", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       // Fall back: run through the standard procedural path (bypass flag)
       return this.executeQueryLegacy(params, workspaceContext, signal);
     }
@@ -393,9 +379,7 @@ export class RAGQueryService {
         steps: plan?.subQueries.map((sq, idx) => ({
           stepNumber: idx + 1,
           query: sq.query,
-          resultsCount: results.filter(
-            (r) => (r.metadata?.subQuery as string) === sq.query,
-          ).length,
+          resultsCount: results.filter((r) => (r.metadata?.subQuery as string) === sq.query).length,
           confidence,
           reasoning: sq.reasoning,
         })),
@@ -453,7 +437,9 @@ export class RAGQueryService {
     // Evict oldest if cache is full
     if (this.ragAgents.size >= MAX_CACHED_AGENTS) {
       const firstKey = this.ragAgents.keys().next().value;
-      if (firstKey) {this.ragAgents.delete(firstKey);}
+      if (firstKey) {
+        this.ragAgents.delete(firstKey);
+      }
     }
     this.ragAgents.set(topicId, agent);
 

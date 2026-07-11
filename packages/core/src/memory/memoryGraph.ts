@@ -6,12 +6,7 @@
 import Graph from "graphology";
 import { Logger } from "../logger";
 import { cosineSimilarity } from "../utils/vectorMath";
-import {
-  MemoryEntity,
-  MemoryRelationship,
-  MemoryGraphData,
-  MemoryEntityType,
-} from "./types";
+import { MemoryEntity, MemoryRelationship, MemoryGraphData, MemoryEntityType } from "./types";
 
 export class MemoryGraph {
   private graph: Graph;

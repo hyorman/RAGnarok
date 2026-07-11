@@ -167,9 +167,15 @@ describe("MCP Server", () => {
       provider = new EnvConfigProvider(mcpConfig);
 
       // Restore
-      if (savedProvider !== undefined) {process.env.RAGNAROK_EMBEDDING_PROVIDER = savedProvider;}
-      if (savedUrl !== undefined) {process.env.RAGNAROK_EMBEDDING_BASE_URL = savedUrl;}
-      if (savedKey !== undefined) {process.env.RAGNAROK_EMBEDDING_API_KEY = savedKey;}
+      if (savedProvider !== undefined) {
+        process.env.RAGNAROK_EMBEDDING_PROVIDER = savedProvider;
+      }
+      if (savedUrl !== undefined) {
+        process.env.RAGNAROK_EMBEDDING_BASE_URL = savedUrl;
+      }
+      if (savedKey !== undefined) {
+        process.env.RAGNAROK_EMBEDDING_API_KEY = savedKey;
+      }
     });
 
     it("should return mapped values for known CONFIG keys", () => {

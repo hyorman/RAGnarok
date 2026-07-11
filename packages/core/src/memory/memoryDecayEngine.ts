@@ -19,12 +19,7 @@
  */
 
 import { Logger } from "../logger";
-import {
-  MemoryEntry,
-  DecayStatus,
-  DECAY_LAMBDA,
-  MIN_CONFIDENCE_THRESHOLD,
-} from "./types";
+import { MemoryEntry, DecayStatus, DECAY_LAMBDA, MIN_CONFIDENCE_THRESHOLD } from "./types";
 import { MemoryGraph } from "./memoryGraph";
 
 export class MemoryDecayEngine {
@@ -84,9 +79,7 @@ export class MemoryDecayEngine {
 
         // Clean up orphaned graph entities
         for (const entityId of entry.entityIds) {
-          const stillReferenced = entries.some((e) =>
-            e.entityIds.includes(entityId),
-          );
+          const stillReferenced = entries.some((e) => e.entityIds.includes(entityId));
           if (!stillReferenced) {
             graph.removeEntity(entityId);
           }
@@ -121,8 +114,7 @@ export class MemoryDecayEngine {
       }
 
       const isTTLExpired = !!entry.expiresAt && entry.expiresAt < now;
-      const isConfidenceExpired =
-        !isFact && projectedConfidence < this.minConfidence;
+      const isConfidenceExpired = !isFact && projectedConfidence < this.minConfidence;
 
       if (isTTLExpired || isConfidenceExpired) {
         expiredCount++;

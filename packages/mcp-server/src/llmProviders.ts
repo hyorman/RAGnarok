@@ -279,7 +279,9 @@ export function createLLMProvider(config: McpConfig): ILLMProvider {
         return new NullProvider();
       }
       const openaiModel = config.llmModel || "gpt-4o-mini";
-      logger.info(`Using OpenAI provider (model: ${openaiModel}${config.llmBaseUrl ? `, baseUrl: ${config.llmBaseUrl}` : ""})`);
+      logger.info(
+        `Using OpenAI provider (model: ${openaiModel}${config.llmBaseUrl ? `, baseUrl: ${config.llmBaseUrl}` : ""})`,
+      );
       return new OpenAILLMProvider(config.llmApiKey, openaiModel, config.llmBaseUrl || undefined);
     }
 

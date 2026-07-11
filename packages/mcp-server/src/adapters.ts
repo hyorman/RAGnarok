@@ -96,4 +96,3 @@ export class ConsoleNotifier implements INotifier {
     });
   }
 }
-

@@ -242,9 +242,7 @@ function createRefineNode(deps: QueryGraphDeps) {
 
     for (const sq of state.plan.subQueries) {
       const scores = resultsBySubQuery.get(sq.query) ?? [];
-      const avgScore = scores.length > 0
-        ? scores.reduce((a, b) => a + b, 0) / scores.length
-        : 0;
+      const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
 
       if (avgScore < gapThreshold) {
         // Broaden the query by appending context
@@ -287,10 +285,7 @@ function createMemorizeNode(deps: QueryGraphDeps) {
       return {};
     }
 
-    const memoryThreshold = deps.config.get<number>(
-      CONFIG.MEMORY_CONFIDENCE_THRESHOLD,
-      0.1,
-    );
+    const memoryThreshold = deps.config.get<number>(CONFIG.MEMORY_CONFIDENCE_THRESHOLD, 0.1);
 
     if (state.confidence < memoryThreshold || state.retrievalResults.length === 0) {
       return {};
@@ -298,9 +293,7 @@ function createMemorizeNode(deps: QueryGraphDeps) {
 
     try {
       // Store a summary of the top result as a memory
-      const topResult = state.retrievalResults
-        .slice()
-        .sort((a, b) => b.score - a.score)[0];
+      const topResult = state.retrievalResults.slice().sort((a, b) => b.score - a.score)[0];
 
       const memoryContent =
         `Query: ${state.query}\n` +
@@ -385,10 +378,7 @@ function getRetrievalResultKey(result: RetrievalResultEntry): string {
  * Conditional routing: decide whether to refine or proceed to memorize.
  */
 function shouldRefine(state: QueryPipelineStateType): "refine" | "memorize" {
-  if (
-    state.confidence >= state.confidenceThreshold ||
-    state.iterations >= state.maxIterations
-  ) {
+  if (state.confidence >= state.confidenceThreshold || state.iterations >= state.maxIterations) {
     logger.debug("Proceeding to memorize", {
       confidence: state.confidence,
       threshold: state.confidenceThreshold,
@@ -475,15 +465,11 @@ export async function executeQueryGraph(
   threadId?: string,
 ): Promise<Record<string, unknown>> {
   const retrievalStrategy =
-    options?.retrievalStrategy ??
-    deps.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, RetrievalStrategy.VECTOR);
+    options?.retrievalStrategy ?? deps.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, RetrievalStrategy.VECTOR);
   const topK = options?.topK ?? deps.config.get<number>(CONFIG.TOP_K, 5);
   const modelFamily = options?.modelFamily ?? deps.config.get<string>(CONFIG.LLM_MODEL, "");
-  const maxIterations =
-    options?.maxIterations ?? deps.config.get<number>(CONFIG.MAX_ITERATIONS, 3);
-  const confidenceThreshold =
-    options?.confidenceThreshold ??
-    deps.config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7);
+  const maxIterations = options?.maxIterations ?? deps.config.get<number>(CONFIG.MAX_ITERATIONS, 3);
+  const confidenceThreshold = options?.confidenceThreshold ?? deps.config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7);
 
   const initialState: Partial<QueryPipelineStateType> = {
     query,

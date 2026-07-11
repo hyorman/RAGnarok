@@ -447,10 +447,10 @@ copilot-rag/
 └── scripts/           # Build and packaging helpers
 ```
 
-| Package | Description |
-|---------|-------------|
-| **`@ragnarok/core`** | Loaders, chunkers, embeddings, retrievers, agents, stores — all platform-agnostic with dependency injection |
-| **`@ragnarok/vscode`** | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point |
+| Package                    | Description                                                                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`@ragnarok/core`**       | Loaders, chunkers, embeddings, retrievers, agents, stores — all platform-agnostic with dependency injection                                                    |
+| **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                   |
 | **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio + HTTP transports) |
 
 ### Build & Test Commands
@@ -471,18 +471,18 @@ npm run clean            # Clean all build artifacts
 
 The MCP server exposes these tools to any MCP-compatible agent:
 
-| Tool | Description |
-|------|-------------|
-| `rag_query` | Query a topic with agentic RAG (supports all retrieval strategies) |
-| `rag_list_topics` | List available topics |
-| `rag_topic_stats` | Get statistics for a topic |
-| `rag_create_topic` | Create a new topic |
-| `rag_add_documents` | Add documents to a topic |
-| `rag_list_embedding_models` | List available embedding models |
-| `rag_embedding_info` | Get current embedding model info |
-| `rag_switch_embedding_model` | Switch the active embedding model |
-| `rag_llm_status` | Get current LLM provider status |
-| `rag_memory` | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped) |
+| Tool                         | Description                                                                              |
+| ---------------------------- | ---------------------------------------------------------------------------------------- |
+| `rag_query`                  | Query a topic with agentic RAG (supports all retrieval strategies)                       |
+| `rag_list_topics`            | List available topics                                                                    |
+| `rag_topic_stats`            | Get statistics for a topic                                                               |
+| `rag_create_topic`           | Create a new topic                                                                       |
+| `rag_add_documents`          | Add documents to a topic                                                                 |
+| `rag_list_embedding_models`  | List available embedding models                                                          |
+| `rag_embedding_info`         | Get current embedding model info                                                         |
+| `rag_switch_embedding_model` | Switch the active embedding model                                                        |
+| `rag_llm_status`             | Get current LLM provider status                                                          |
+| `rag_memory`                 | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped) |
 
 ---
 

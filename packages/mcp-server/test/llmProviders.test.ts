@@ -5,12 +5,7 @@
 
 import { expect } from "chai";
 import { McpConfig } from "../src/config";
-import {
-  createLLMProvider,
-  OpenAILLMProvider,
-  AnthropicLLMProvider,
-  OllamaLLMProvider,
-} from "../src/llmProviders";
+import { createLLMProvider, OpenAILLMProvider, AnthropicLLMProvider, OllamaLLMProvider } from "../src/llmProviders";
 
 /** Helper to build a McpConfig with sensible defaults, overriding specific fields. */
 function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
@@ -133,9 +128,7 @@ describe("LLM Providers", function () {
     });
 
     it("returns an OllamaLLMProvider even when llmApiKey is empty", function () {
-      const provider = createLLMProvider(
-        makeConfig({ llmProvider: "ollama", llmApiKey: "" }),
-      );
+      const provider = createLLMProvider(makeConfig({ llmProvider: "ollama", llmApiKey: "" }));
       expect(provider).to.be.instanceOf(OllamaLLMProvider);
     });
   });

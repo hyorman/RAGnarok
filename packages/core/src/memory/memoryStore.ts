@@ -90,9 +90,7 @@ export class MemoryStore {
     const lanceDbUri = path.join(options.storageDir, "memory-lancedb");
     this.vectorStore = new MemoryVectorStore(lanceDbUri);
     this.embeddingService = options.embeddingService;
-    this.extractor = options.llmProvider
-      ? new MemoryEntityExtractor(options.llmProvider)
-      : null;
+    this.extractor = options.llmProvider ? new MemoryEntityExtractor(options.llmProvider) : null;
     this.exporter = new MemoryMarkdownExporter();
     this.branchDetector = new GitBranchDetector(options.workingDir);
     this.markdownPath = options.markdownPath ?? null;
@@ -101,9 +99,7 @@ export class MemoryStore {
 
     if (options.decayOptions?.autoDecayIntervalMs) {
       this.autoDecayTimer = setInterval(() => {
-        this.runDecay().catch((err) =>
-          this.logger.debug("Auto-decay cycle failed", err),
-        );
+        this.runDecay().catch((err) => this.logger.debug("Auto-decay cycle failed", err));
       }, options.decayOptions.autoDecayIntervalMs);
     }
   }
@@ -415,9 +411,7 @@ export class MemoryStore {
     results.sort((a, b) => b.updatedAt - a.updatedAt);
 
     // Filter superseded entries unless explicitly requested
-    const filtered = includeSuperseded
-      ? results
-      : results.filter((e) => e.isLatest !== false);
+    const filtered = includeSuperseded ? results : results.filter((e) => e.isLatest !== false);
 
     return filtered.slice(0, limit);
   }
@@ -447,7 +441,9 @@ export class MemoryStore {
     let current: MemoryEntry | undefined = entry;
     while (current?.previousVersionId) {
       const prev = byId.get(current.previousVersionId);
-      if (!prev || versions.has(prev.id)) {break;}
+      if (!prev || versions.has(prev.id)) {
+        break;
+      }
       versions.set(prev.id, prev);
       current = prev;
     }
@@ -456,15 +452,15 @@ export class MemoryStore {
     current = entry;
     while (current?.supersededBy) {
       const next = byId.get(current.supersededBy);
-      if (!next || versions.has(next.id)) {break;}
+      if (!next || versions.has(next.id)) {
+        break;
+      }
       versions.set(next.id, next);
       current = next;
     }
 
     // Sort newest first (by version number, fallback to updatedAt)
-    return [...versions.values()].sort(
-      (a, b) => (b.version ?? 1) - (a.version ?? 1),
-    );
+    return [...versions.values()].sort((a, b) => (b.version ?? 1) - (a.version ?? 1));
   }
 
   // ── Decay ───────────────────────────────────────────────────────────
@@ -551,11 +547,7 @@ export class MemoryStore {
    * @param entryIds — optional list of specific entry IDs to promote
    */
   async promoteToWorkspace(branch: string, entryIds?: string[]): Promise<number> {
-    const count = await this.scopeLinker.promoteToWorkspace(
-      `branch:${branch}`,
-      "workspace",
-      entryIds,
-    );
+    const count = await this.scopeLinker.promoteToWorkspace(`branch:${branch}`, "workspace", entryIds);
     // Invalidate workspace caches so next access reloads from store
     this.invalidateCache("workspace");
     return count;
@@ -564,10 +556,7 @@ export class MemoryStore {
   /**
    * Find entities matching name+type across all scopes.
    */
-  async findLinkedEntities(
-    name: string,
-    type: string,
-  ): Promise<Array<{ scope: string; entity: MemoryEntity }>> {
+  async findLinkedEntities(name: string, type: string): Promise<Array<{ scope: string; entity: MemoryEntity }>> {
     return this.scopeLinker.findLinkedEntities(name, type);
   }
 
@@ -618,9 +607,7 @@ export class MemoryStore {
     return entries;
   }
 
-  private async findEntryById(
-    id: string,
-  ): Promise<(MemoryEntry & { scope: MemoryScope; branch?: string }) | null> {
+  private async findEntryById(id: string): Promise<(MemoryEntry & { scope: MemoryScope; branch?: string }) | null> {
     const wsEntries = await this.getEntries("workspace");
     const wsMatch = wsEntries.find((e) => e.id === id);
     if (wsMatch) {
@@ -914,11 +901,7 @@ export class MemoryStore {
     return count;
   }
 
-  private async cleanupOrphanedEntities(
-    removedEntry: MemoryEntry,
-    scope: MemoryScope,
-    branch?: string,
-  ): Promise<void> {
+  private async cleanupOrphanedEntities(removedEntry: MemoryEntry, scope: MemoryScope, branch?: string): Promise<void> {
     const graph = await this.getGraph(scope, branch);
     const entries = await this.getEntries(scope, branch);
 

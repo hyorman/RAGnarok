@@ -131,7 +131,9 @@ describe("MemoryVectorStore", function () {
       // Normalize
       for (const vec of [closeVec, farVec]) {
         const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
-        for (let i = 0; i < vec.length; i++) { vec[i] /= norm; }
+        for (let i = 0; i < vec.length; i++) {
+          vec[i] /= norm;
+        }
       }
 
       const entries = [
@@ -370,10 +372,7 @@ describe("MemoryVectorStore", function () {
         "branch",
         "del-branch",
       );
-      await freshStore.saveGraph(
-        { entities: [createTestEntity()], relationships: [] },
-        "workspace",
-      );
+      await freshStore.saveGraph({ entities: [createTestEntity()], relationships: [] }, "workspace");
 
       // Verify data exists
       expect(await freshStore.loadEntries("workspace")).to.have.length.greaterThan(0);
@@ -394,16 +393,8 @@ describe("MemoryVectorStore", function () {
       await fs.mkdir(listDir, { recursive: true });
       const listStore = new MemoryVectorStore(listDir);
 
-      await listStore.saveEntries(
-        [createTestEntry({ scope: "branch", branch: "main" })],
-        "branch",
-        "main",
-      );
-      await listStore.saveEntries(
-        [createTestEntry({ scope: "branch", branch: "develop" })],
-        "branch",
-        "develop",
-      );
+      await listStore.saveEntries([createTestEntry({ scope: "branch", branch: "main" })], "branch", "main");
+      await listStore.saveEntries([createTestEntry({ scope: "branch", branch: "develop" })], "branch", "develop");
       // Workspace entries should not appear in branch list
       await listStore.saveEntries([createTestEntry()], "workspace");
 

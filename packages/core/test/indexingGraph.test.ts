@@ -26,9 +26,7 @@ function createMockLLMProvider(): ILLMProvider {
     sendRequest: async () => {
       async function* gen() {
         yield JSON.stringify({
-          entities: [
-            { name: "TypeScript", type: "technology", description: "A typed superset of JavaScript" },
-          ],
+          entities: [{ name: "TypeScript", type: "technology", description: "A typed superset of JavaScript" }],
           relationships: [
             { source: "TypeScript", target: "JavaScript", type: "extends", description: "TS extends JS", weight: 0.9 },
           ],
@@ -86,16 +84,14 @@ describe("IndexingGraph", function () {
       .resolves([{ documents: testDocs, fileType: "markdown", fileName: "doc.md", fileSize: 100, loadTime: 5 }]);
 
     // Stub SemanticChunker.chunkDocuments to return test chunks
-    chunkStub = sinon
-      .stub(SemanticChunker.prototype, "chunkDocuments")
-      .resolves({
-        chunks: testChunks,
-        chunkCount: 1,
-        strategy: "semantic",
-        documentCount: 1,
-        processingTime: 10,
-        stats: { avgChunkSize: 45, minChunkSize: 45, maxChunkSize: 45, totalCharacters: 45 },
-      });
+    chunkStub = sinon.stub(SemanticChunker.prototype, "chunkDocuments").resolves({
+      chunks: testChunks,
+      chunkCount: 1,
+      strategy: "semantic",
+      documentCount: 1,
+      processingTime: 10,
+      stats: { avgChunkSize: 45, minChunkSize: 45, maxChunkSize: 45, totalCharacters: 45 },
+    });
   });
 
   afterEach(() => {
@@ -160,24 +156,22 @@ describe("IndexingGraph", function () {
       };
       (tm.getKnowledgeGraphStore as sinon.SinonStub).returns(mockKgStore);
 
-      const extractStub = sinon
-        .stub(EntityExtractor.prototype, "extractFromChunks")
-        .resolves({
-          entities: [
-            { name: "TypeScript", type: "technology", description: "A typed superset of JS" },
-            { name: "JavaScript", type: "technology", description: "A scripting language" },
-          ],
-          relationships: [
-            { source: "TypeScript", target: "JavaScript", type: "extends", description: "TS extends JS", weight: 0.9 },
-          ],
-        });
+      const extractStub = sinon.stub(EntityExtractor.prototype, "extractFromChunks").resolves({
+        entities: [
+          { name: "TypeScript", type: "technology", description: "A typed superset of JS" },
+          { name: "JavaScript", type: "technology", description: "A scripting language" },
+        ],
+        relationships: [
+          { source: "TypeScript", target: "JavaScript", type: "extends", description: "TS extends JS", weight: 0.9 },
+        ],
+      });
 
-      const embedEntitiesStub = sinon
-        .stub(EntityExtractor.prototype, "embedEntities")
-        .resolves(new Map([
+      const embedEntitiesStub = sinon.stub(EntityExtractor.prototype, "embedEntities").resolves(
+        new Map([
           ["typescript::technology", [0.1, 0.2, 0.3]],
           ["javascript::technology", [0.3, 0.2, 0.1]],
-        ]));
+        ]),
+      );
 
       const deps: IndexingGraphDeps = {
         topicManager: tm,
@@ -215,9 +209,7 @@ describe("IndexingGraph", function () {
   describe("Error handling", () => {
     it("should capture load errors and route around dependent stages", async () => {
       loadStub.restore();
-      sinon
-        .stub(DocumentLoaderFactory.prototype, "loadDocuments")
-        .rejects(new Error("File not found"));
+      sinon.stub(DocumentLoaderFactory.prototype, "loadDocuments").rejects(new Error("File not found"));
 
       const tm = createMockTopicManager();
       const deps: IndexingGraphDeps = { topicManager: tm };

@@ -12,10 +12,7 @@ import fs from "fs";
 export function findAssetsModelsDir(): string | null {
   let dir = __dirname;
   for (let i = 0; i < 6; i++) {
-    const candidates = [
-      path.join(dir, "assets", "models"),
-      path.join(dir, "packages", "core", "assets", "models"),
-    ];
+    const candidates = [path.join(dir, "assets", "models"), path.join(dir, "packages", "core", "assets", "models")];
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
         return candidate;

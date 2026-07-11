@@ -59,7 +59,9 @@ export function registerTools(
       retrievalStrategy: z
         .enum(["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid"])
         .optional()
-        .describe("Retrieval strategy: vector, hybrid, ensemble, bm25, graph (entity relationship traversal), or graph_hybrid (graph + semantic)"),
+        .describe(
+          "Retrieval strategy: vector, hybrid, ensemble, bm25, graph (entity relationship traversal), or graph_hybrid (graph + semantic)",
+        ),
     },
     async ({ topic, query, topK, retrievalStrategy }) => {
       try {
@@ -509,50 +511,43 @@ export function registerTools(
   // ────────────────────────────────────────────────────────────
 
   // rag_llm_status — Get current LLM provider status
-  server.tool(
-    "rag_llm_status",
-    "Get the current LLM provider status and configuration",
-    {},
-    async () => {
-      try {
-        const available = await llmProvider.isAvailable();
-        const model = available ? await llmProvider.selectModel() : null;
+  server.tool("rag_llm_status", "Get the current LLM provider status and configuration", {}, async () => {
+    try {
+      const available = await llmProvider.isAvailable();
+      const model = available ? await llmProvider.selectModel() : null;
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  available,
-                  model: model
-                    ? { id: model.id, family: model.family }
-                    : null,
-                  hint: !available
-                    ? "Set RAGNAROK_LLM_PROVIDER to 'openai', 'anthropic', or 'ollama' and provide the required API key to enable agentic query planning."
-                    : undefined,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                available,
+                model: model ? { id: model.id, family: model.family } : null,
+                hint: !available
+                  ? "Set RAGNAROK_LLM_PROVIDER to 'openai', 'anthropic', or 'ollama' and provide the required API key to enable agentic query planning."
+                  : undefined,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  });
 
   // ────────────────────────────────────────────────────────────
   // Reranker management tools
@@ -587,7 +582,12 @@ export function registerTools(
         };
       } catch (error) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+            },
+          ],
           isError: true,
         };
       }
@@ -595,31 +595,31 @@ export function registerTools(
   );
 
   // rag_reranker_info — Get current reranker configuration and status
-  server.tool(
-    "rag_reranker_info",
-    "Get current reranker configuration and status",
-    {},
-    async () => {
-      try {
-        const result = {
-          enabled: reranker != null,
-          currentModel: reranker?.getCurrentModel() ?? null,
-          isAvailable: reranker?.isAvailable() ?? false,
-          maxCandidates: config?.rerankerMaxCandidates ?? null,
-          candidateMultiplier: config?.rerankerCandidateMultiplier ?? null,
-        };
+  server.tool("rag_reranker_info", "Get current reranker configuration and status", {}, async () => {
+    try {
+      const result = {
+        enabled: reranker != null,
+        currentModel: reranker?.getCurrentModel() ?? null,
+        isAvailable: reranker?.isAvailable() ?? false,
+        maxCandidates: config?.rerankerMaxCandidates ?? null,
+        candidateMultiplier: config?.rerankerCandidateMultiplier ?? null,
+      };
 
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
-          isError: true,
-        };
-      }
-    },
-  );
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  });
 
   // rag_switch_reranker_model — Switch to a different cross-encoder reranker model
   server.tool(
@@ -653,7 +653,12 @@ export function registerTools(
         };
       } catch (error) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+            },
+          ],
           isError: true,
         };
       }
@@ -682,12 +687,7 @@ export function registerTools(
           .max(50_000)
           .optional()
           .describe("Memory content to store (required for 'store' action)"),
-        query: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe("Search query (required for 'recall' action)"),
+        query: z.string().trim().min(1).optional().describe("Search query (required for 'recall' action)"),
         topK: z
           .number()
           .int()
@@ -699,12 +699,7 @@ export function registerTools(
           .boolean()
           .optional()
           .describe("Include related graph entities in recall results (default: false)"),
-        id: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe("Memory entry ID (for 'forget' or 'history' action)"),
+        id: z.string().trim().min(1).optional().describe("Memory entry ID (for 'forget' or 'history' action)"),
         olderThan: z
           .number()
           .int()
@@ -742,20 +737,7 @@ export function registerTools(
           .optional()
           .describe("Max entries to return (for 'list' action, default: 50)"),
       },
-      async ({
-        action,
-        content,
-        query,
-        topK,
-        includeEntities,
-        id,
-        olderThan,
-        expired,
-        scope,
-        branch,
-        tags,
-        limit,
-      }) => {
+      async ({ action, content, query, topK, includeEntities, id, olderThan, expired, scope, branch, tags, limit }) => {
         try {
           // Branch scope explicitly requested but unresolvable must be an
           // error, not a silent fall-back to workspace scope: the caller
@@ -887,11 +869,7 @@ export function registerTools(
                 content: [
                   {
                     type: "text" as const,
-                    text: JSON.stringify(
-                      { action: "forget", forgottenCount: count },
-                      null,
-                      2,
-                    ),
+                    text: JSON.stringify({ action: "forget", forgottenCount: count }, null, 2),
                   },
                 ],
               };
@@ -937,9 +915,7 @@ export function registerTools(
                         action: "list",
                         memories: entries.map((e) => ({
                           id: e.id,
-                          content:
-                            e.content.slice(0, 200) +
-                            (e.content.length > 200 ? "..." : ""),
+                          content: e.content.slice(0, 200) + (e.content.length > 200 ? "..." : ""),
                           scope: e.scope,
                           branch: e.branch,
                           tags: e.tags,
@@ -1001,9 +977,7 @@ export function registerTools(
                         entryId: id,
                         versions: versions.map((v) => ({
                           id: v.id,
-                          content:
-                            v.content.slice(0, 200) +
-                            (v.content.length > 200 ? "..." : ""),
+                          content: v.content.slice(0, 200) + (v.content.length > 200 ? "..." : ""),
                           version: v.version ?? 1,
                           isLatest: v.isLatest ?? true,
                           confidence: v.confidence ?? 1.0,
@@ -1032,17 +1006,13 @@ export function registerTools(
                   isError: true,
                 };
               }
-              const entryIds = id ? id.split(",").map(s => s.trim()) : undefined;
+              const entryIds = id ? id.split(",").map((s) => s.trim()) : undefined;
               const promoted = await memoryStore.promoteToWorkspace(branch, entryIds);
               return {
                 content: [
                   {
                     type: "text" as const,
-                    text: JSON.stringify(
-                      { action: "promote", branch, promotedCount: promoted },
-                      null,
-                      2,
-                    ),
+                    text: JSON.stringify({ action: "promote", branch, promotedCount: promoted }, null, 2),
                   },
                 ],
               };
@@ -1081,8 +1051,7 @@ export function registerTools(
               {
                 type: "text" as const,
                 text: JSON.stringify({
-                  error:
-                    error instanceof Error ? error.message : String(error),
+                  error: error instanceof Error ? error.message : String(error),
                 }),
               },
             ],
@@ -1091,4 +1060,5 @@ export function registerTools(
         }
       },
     );
-  }}
+  }
+}

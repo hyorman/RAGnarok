@@ -106,7 +106,9 @@ export class KnowledgeGraph {
     const results: Array<{ entity: GraphEntity; score: number }> = [];
     this.graph.forEachNode((node, attrs) => {
       const entityVector = attrs.vector as number[] | undefined;
-      if (!entityVector || entityVector.length === 0) {return;}
+      if (!entityVector || entityVector.length === 0) {
+        return;
+      }
       const score = cosineSimilarity(queryVector, entityVector);
       results.push({ entity: this.nodeToEntity(node), score });
     });
@@ -140,7 +142,9 @@ export class KnowledgeGraph {
   }
 
   getRelationship(id: string): GraphRelationship | null {
-    if (!this.graph.hasEdge(id)) {return null;}
+    if (!this.graph.hasEdge(id)) {
+      return null;
+    }
     return this.edgeToRelationship(id);
   }
 
@@ -162,10 +166,7 @@ export class KnowledgeGraph {
 
   // ── Graph traversal ────────────────────────────────────────────────
 
-  getNeighbors(
-    entityId: string,
-    options?: { direction?: "in" | "out" | "both"; maxDepth?: number },
-  ): GraphEntity[] {
+  getNeighbors(entityId: string, options?: { direction?: "in" | "out" | "both"; maxDepth?: number }): GraphEntity[] {
     const direction = options?.direction ?? "both";
     const maxDepth = options?.maxDepth ?? 1;
     if (!this.graph.hasNode(entityId)) {
@@ -202,9 +203,7 @@ export class KnowledgeGraph {
 
   getSubgraph(entityIds: string[]): KnowledgeGraphData {
     const idSet = new Set(entityIds);
-    const entities = entityIds
-      .filter((id) => this.graph.hasNode(id))
-      .map((id) => this.nodeToEntity(id));
+    const entities = entityIds.filter((id) => this.graph.hasNode(id)).map((id) => this.nodeToEntity(id));
     const relationships = this.graph
       .edges()
       .filter((edge) => {
@@ -267,7 +266,9 @@ export class KnowledgeGraph {
 
   detectCommunities(options?: { resolution?: number }): Map<number, string[]> {
     const communityMap = new Map<number, string[]>();
-    if (this.graph.order === 0) {return communityMap;}
+    if (this.graph.order === 0) {
+      return communityMap;
+    }
 
     louvain.assign(this.graph, { resolution: options?.resolution ?? 1.0 });
 
@@ -358,7 +359,9 @@ export class KnowledgeGraph {
   }
 
   private countConnectedComponents(): number {
-    if (this.graph.order === 0) {return 0;}
+    if (this.graph.order === 0) {
+      return 0;
+    }
     const visited = new Set<string>();
     let components = 0;
     for (const node of this.graph.nodes()) {

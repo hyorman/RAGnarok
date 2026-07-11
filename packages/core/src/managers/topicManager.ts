@@ -14,7 +14,14 @@ import AdmZip from "adm-zip";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { IConfigProvider, ILLMProvider, INotifier } from "../interfaces";
-import { Topic, TopicsIndex, Document as TopicDocument, ExportedTopicData, TopicSource, TopicMatch } from "../utils/types";
+import {
+  Topic,
+  TopicsIndex,
+  Document as TopicDocument,
+  ExportedTopicData,
+  TopicSource,
+  TopicMatch,
+} from "../utils/types";
 import { DocumentPipeline, PipelineOptions, PipelineResult } from "./documentPipeline";
 import { executeIndexingGraph } from "../agents/indexingGraph";
 import { VectorStoreFactory } from "../stores/vectorStoreFactory";
@@ -322,12 +329,18 @@ export class TopicManager {
    * Load the knowledge graph for a topic (returns null if none exists)
    */
   public async getKnowledgeGraph(topicId: string): Promise<KnowledgeGraph | null> {
-    if (!this.knowledgeGraphStore) {return null;}
+    if (!this.knowledgeGraphStore) {
+      return null;
+    }
     try {
       const hasGraph = await this.knowledgeGraphStore.hasGraph(topicId);
-      if (!hasGraph) {return null;}
+      if (!hasGraph) {
+        return null;
+      }
       const data = await this.knowledgeGraphStore.loadGraph(topicId);
-      if (!data) {return null;}
+      if (!data) {
+        return null;
+      }
       return KnowledgeGraph.fromJSON(data);
     } catch (error) {
       this.logger.warn("Failed to load knowledge graph", {
@@ -878,8 +891,6 @@ export class TopicManager {
       return null;
     }
   }
-
-
 
   /**
    * Refresh topics from disk

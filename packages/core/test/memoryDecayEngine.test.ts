@@ -1,11 +1,7 @@
 import { expect } from "chai";
 import { MemoryDecayEngine } from "../src/memory/memoryDecayEngine";
 import { MemoryGraph } from "../src/memory/memoryGraph";
-import {
-  MemoryEntry,
-  MemoryEntity,
-  MIN_CONFIDENCE_THRESHOLD,
-} from "../src/memory/types";
+import { MemoryEntry, MemoryEntity, MIN_CONFIDENCE_THRESHOLD } from "../src/memory/types";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -141,9 +137,7 @@ describe("MemoryDecayEngine", function () {
         accessCount: 50,
       });
 
-      expect(engine.effectiveConfidence(high, graph)).to.be.greaterThan(
-        engine.effectiveConfidence(low, graph),
-      );
+      expect(engine.effectiveConfidence(high, graph)).to.be.greaterThan(engine.effectiveConfidence(low, graph));
     });
 
     it("should never decay fact entries", function () {
@@ -210,10 +204,7 @@ describe("MemoryDecayEngine", function () {
 
   describe("expireStale", function () {
     it("should remove entries with confidence below threshold", function () {
-      const entries = [
-        makeEntry({ id: "low", confidence: 0.05 }),
-        makeEntry({ id: "high", confidence: 0.8 }),
-      ];
+      const entries = [makeEntry({ id: "low", confidence: 0.05 }), makeEntry({ id: "high", confidence: 0.8 })];
       const removed = engine.expireStale(entries, graph);
 
       expect(removed).to.have.length(1);
@@ -263,9 +254,7 @@ describe("MemoryDecayEngine", function () {
         metadata: {},
       });
 
-      const entries = [
-        makeEntry({ id: "entry-to-remove", confidence: 0.01, entityIds: [entityId] }),
-      ];
+      const entries = [makeEntry({ id: "entry-to-remove", confidence: 0.01, entityIds: [entityId] })];
       engine.expireStale(entries, graph);
 
       expect(graph.getEntity(entityId)).to.be.null;
@@ -315,9 +304,7 @@ describe("MemoryDecayEngine", function () {
 
   describe("getDecayStatus", function () {
     it("should not modify entries", function () {
-      const entries = [
-        makeEntry({ lastAccessedAt: Date.now() - 30 * DAY_MS, confidence: 1.0 }),
-      ];
+      const entries = [makeEntry({ lastAccessedAt: Date.now() - 30 * DAY_MS, confidence: 1.0 })];
       const originalConfidence = entries[0].confidence;
       engine.getDecayStatus(entries, graph);
 
@@ -403,9 +390,7 @@ describe("MemoryDecayEngine", function () {
     });
 
     it("should handle entries referencing non-existent graph entities", function () {
-      const entries = [
-        makeEntry({ confidence: 0.01, entityIds: ["nonexistent-entity"] }),
-      ];
+      const entries = [makeEntry({ confidence: 0.01, entityIds: ["nonexistent-entity"] })];
       // Should not throw
       const removed = engine.expireStale(entries, graph);
       expect(removed).to.have.length(1);

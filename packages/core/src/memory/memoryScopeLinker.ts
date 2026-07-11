@@ -8,13 +8,7 @@
 import { Logger } from "../logger";
 import { cosineSimilarity } from "../utils/vectorMath";
 import { MemoryVectorStore } from "./memoryVectorStore";
-import {
-  MemoryEntity,
-  MemoryGraphData,
-  MemoryRelationship,
-  ScopeLink,
-  DUPLICATE_SIMILARITY_THRESHOLD,
-} from "./types";
+import { MemoryEntity, MemoryGraphData, MemoryRelationship, ScopeLink, DUPLICATE_SIMILARITY_THRESHOLD } from "./types";
 
 export class MemoryScopeLinker {
   private logger = new Logger("MemoryScopeLinker");
@@ -62,9 +56,7 @@ export class MemoryScopeLinker {
       }
     }
 
-    this.logger.debug(
-      `Discovered ${links.length} cross-scope links between "${sourceScope}" and "${targetScope}"`,
-    );
+    this.logger.debug(`Discovered ${links.length} cross-scope links between "${sourceScope}" and "${targetScope}"`);
     return links;
   }
 
@@ -79,11 +71,7 @@ export class MemoryScopeLinker {
    *
    * Returns count of entries promoted.
    */
-  async promoteToWorkspace(
-    branchScope: string,
-    workspaceScope: string,
-    entryIds?: string[],
-  ): Promise<number> {
+  async promoteToWorkspace(branchScope: string, workspaceScope: string, entryIds?: string[]): Promise<number> {
     const branch = this.extractBranch(branchScope);
     if (!branch) {
       this.logger.warn(`Invalid branch scope: "${branchScope}"`);
@@ -94,9 +82,7 @@ export class MemoryScopeLinker {
     const workspaceEntries = await this.vectorStore.loadEntries("workspace");
 
     // Filter to requested IDs if provided
-    const candidates = entryIds
-      ? branchEntries.filter((e) => entryIds.includes(e.id))
-      : branchEntries;
+    const candidates = entryIds ? branchEntries.filter((e) => entryIds.includes(e.id)) : branchEntries;
 
     // Dedup: skip entries whose embedding is too similar to existing workspace entries
     const toPromote = candidates.filter((e) => {
@@ -105,10 +91,7 @@ export class MemoryScopeLinker {
       }
       for (const ws of workspaceEntries) {
         if (ws.vector && ws.vector.length > 0) {
-          const similarity = cosineSimilarity(
-            Array.from(e.vector),
-            Array.from(ws.vector),
-          );
+          const similarity = cosineSimilarity(Array.from(e.vector), Array.from(ws.vector));
           if (similarity >= DUPLICATE_SIMILARITY_THRESHOLD) {
             return false;
           }
@@ -124,7 +107,11 @@ export class MemoryScopeLinker {
     // Merge the referenced slice of the branch graph into the workspace graph.
     // Yields a branch-entity-ID → workspace-entity-ID remap for the entries.
     const promotedIds = new Set(toPromote.map((e) => e.id));
-    const entityIdRemap = await this.mergeGraphForPromotion(branch, toPromote.flatMap((e) => e.entityIds), promotedIds);
+    const entityIdRemap = await this.mergeGraphForPromotion(
+      branch,
+      toPromote.flatMap((e) => e.entityIds),
+      promotedIds,
+    );
 
     // Re-scope entries to workspace, remapping entity references and
     // converting vectors to plain arrays for LanceDB
@@ -147,9 +134,7 @@ export class MemoryScopeLinker {
     const merged = [...normalized, ...promoted];
     await this.vectorStore.saveEntries(merged, "workspace");
 
-    this.logger.debug(
-      `Promoted ${promoted.length} entries from branch "${branch}" to workspace`,
-    );
+    this.logger.debug(`Promoted ${promoted.length} entries from branch "${branch}" to workspace`);
     return promoted.length;
   }
 
@@ -224,9 +209,7 @@ export class MemoryScopeLinker {
 
     // Copy relationships whose endpoints both resolved into the workspace,
     // skipping duplicates (same remapped source/target/type).
-    const existingRelKeys = new Set(
-      workspaceGraph.relationships.map((r) => `${r.sourceId}|${r.targetId}|${r.type}`),
-    );
+    const existingRelKeys = new Set(workspaceGraph.relationships.map((r) => `${r.sourceId}|${r.targetId}|${r.type}`));
     for (const rel of branchGraph.relationships) {
       const sourceId = remap.get(rel.sourceId) ?? this.workspaceEntityId(workspaceGraph, rel.sourceId);
       const targetId = remap.get(rel.targetId) ?? this.workspaceEntityId(workspaceGraph, rel.targetId);

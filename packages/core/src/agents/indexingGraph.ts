@@ -26,11 +26,7 @@ import { SemanticChunker } from "../splitters/semanticChunker";
 import { EntityExtractor } from "./entityExtractor";
 import { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "./entityExtractorTypes";
 import { KnowledgeGraph } from "../stores/knowledgeGraph";
-import {
-  IndexingPipelineState,
-  IndexingPipelineStateType,
-  IndexingPipelineUpdateType,
-} from "./graphState";
+import { IndexingPipelineState, IndexingPipelineStateType, IndexingPipelineUpdateType } from "./graphState";
 import { upsertExtractedGraphData } from "../utils/knowledgeGraphAssembly";
 import { Logger } from "../logger";
 

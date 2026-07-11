@@ -311,9 +311,8 @@ export class DocumentPipeline {
             maxConsecutiveFailures,
             entityTypes,
             onProgress: (p) => {
-              const extractProgress = chunkingResult.chunkCount > 0
-                ? 30 + (p.processedChunks / p.totalChunks) * 15
-                : 30;
+              const extractProgress =
+                chunkingResult.chunkCount > 0 ? 30 + (p.processedChunks / p.totalChunks) * 15 : 30;
               this.reportProgress(options.onProgress, {
                 stage: "extracting",
                 progress: extractProgress,

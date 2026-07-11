@@ -5,11 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import { MemoryScopeLinker } from "../src/memory/memoryScopeLinker";
 import { MemoryVectorStore } from "../src/memory/memoryVectorStore";
-import {
-  MemoryEntry,
-  MemoryEntity,
-  MemoryScope,
-} from "../src/memory/types";
+import { MemoryEntry, MemoryEntity, MemoryScope } from "../src/memory/types";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

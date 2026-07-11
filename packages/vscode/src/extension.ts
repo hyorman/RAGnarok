@@ -4,7 +4,15 @@
  */
 
 import * as vscode from "vscode";
-import { TopicManager, EmbeddingService, Logger, setLoggerFactory, CONFIG, HuggingFaceBackend, ModelRegistry } from "@ragnarok/core";
+import {
+  TopicManager,
+  EmbeddingService,
+  Logger,
+  setLoggerFactory,
+  CONFIG,
+  HuggingFaceBackend,
+  ModelRegistry,
+} from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
 import { VsCodeConfigProvider } from "./adapters/vsCodeConfigProvider";
 import { VsCodeNotifier } from "./adapters/vsCodeNotifier";
