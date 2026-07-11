@@ -6,12 +6,16 @@
 import { expect } from "chai";
 import http from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { startHttpTransport } from "../src/httpServer";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { startHttpTransport, HttpTransportHandle } from "../src/httpServer";
 import { McpConfig, loadConfig } from "../src/config";
 
 function createTestConfig(overrides: Partial<McpConfig> = {}): McpConfig {
   return {
     storageDir: "/tmp/ragnarok-test",
+    workingDir: "",
+    allowedPaths: [],
     embeddingModel: "test-model",
     chunkSize: 1000,
     chunkOverlap: 200,
@@ -39,10 +43,25 @@ function createTestConfig(overrides: Partial<McpConfig> = {}): McpConfig {
   };
 }
 
+/** Factory producing a fresh test McpServer with one tool. */
+function testServerFactory(): () => McpServer {
+  return () => {
+    const server = new McpServer({ name: "test-server", version: "0.0.1" });
+    server.tool("test_ping", "A test tool", {}, async () => ({
+      content: [{ type: "text", text: "pong" }],
+    }));
+    return server;
+  };
+}
+
+function serverPort(handle: HttpTransportHandle): number {
+  return (handle.httpServer.address() as { port: number }).port;
+}
+
 /** Make an HTTP request and return status + parsed JSON body */
 function httpRequest(
   url: string,
-  options: http.RequestOptions = {},
+  options: http.RequestOptions & { _body?: string } = {},
 ): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const req = http.request(url, options, (res) => {
@@ -60,8 +79,8 @@ function httpRequest(
       });
     });
     req.on("error", reject);
-    if (options.method === "POST" && (options as any)._body) {
-      req.write((options as any)._body);
+    if (options._body) {
+      req.write(options._body);
     }
     req.end();
   });
@@ -134,28 +153,17 @@ describe("HTTP Transport", function () {
   // ---------------------------------------------------------------------------
 
   describe("startHttpTransport()", () => {
-    let server: http.Server | undefined;
+    let handle: HttpTransportHandle | undefined;
 
-    afterEach((done) => {
-      if (server) {
-        server.close(() => done());
-        server = undefined;
-      } else {
-        done();
-      }
+    afterEach(async () => {
+      await handle?.shutdown();
+      handle = undefined;
     });
 
     it("should start and expose a /health endpoint", async () => {
-      const mcpServer = new McpServer({ name: "test-server", version: "0.0.1" });
-      mcpServer.tool("test_ping", "A test tool", {}, async () => ({
-        content: [{ type: "text", text: "pong" }],
-      }));
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
 
-      const config = createTestConfig();
-      server = await startHttpTransport(mcpServer, config);
-
-      const addr = server!.address() as { port: number };
-      const { status, body } = await httpRequest(`http://127.0.0.1:${addr.port}/health`);
+      const { status, body } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/health`);
 
       expect(status).to.equal(200);
       expect(body).to.have.property("status", "ok");
@@ -164,23 +172,135 @@ describe("HTTP Transport", function () {
     });
 
     it("should allow /mcp requests when no API key is configured", async () => {
-      const mcpServer = new McpServer({ name: "test-server", version: "0.0.1" });
-      mcpServer.tool("test_ping", "A test tool", {}, async () => ({
-        content: [{ type: "text", text: "pong" }],
-      }));
+      handle = await startHttpTransport(testServerFactory(), createTestConfig({ apiKey: "" }));
 
-      const config = createTestConfig({ apiKey: "" });
-      server = await startHttpTransport(mcpServer, config);
-
-      const addr = server!.address() as { port: number };
       // POST to /mcp without auth — should NOT 401
-      const { status } = await httpRequest(`http://127.0.0.1:${addr.port}/mcp`, {
+      const { status } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
 
       // The transport may reject the body shape, but it should not be 401
       expect(status).to.not.equal(401);
+    });
+
+    it("should reject non-initialize requests without a session ID", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+
+      const { status, body } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        _body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+      expect(status).to.equal(400);
+      expect(body?.error?.message).to.include("session");
+    });
+
+    it("should reject requests carrying an unknown session ID", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+
+      const { status } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "mcp-session-id": "no-such-session",
+        },
+        _body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+      expect(status).to.equal(400);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Multi-session support
+  // ---------------------------------------------------------------------------
+
+  describe("multi-session support", () => {
+    let handle: HttpTransportHandle | undefined;
+
+    afterEach(async () => {
+      await handle?.shutdown();
+      handle = undefined;
+    });
+
+    it("serves two concurrent client sessions independently", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+      const url = new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`);
+
+      const clientA = new Client({ name: "client-a", version: "1.0.0" });
+      const clientB = new Client({ name: "client-b", version: "1.0.0" });
+      const transportA = new StreamableHTTPClientTransport(url);
+      const transportB = new StreamableHTTPClientTransport(url);
+
+      // A stateful transport serves ONE session; a second concurrent client
+      // must get its own session instead of hijacking or breaking the first.
+      await clientA.connect(transportA);
+      await clientB.connect(transportB);
+
+      const toolsA = await clientA.listTools();
+      const toolsB = await clientB.listTools();
+      expect(toolsA.tools.map((t) => t.name)).to.include("test_ping");
+      expect(toolsB.tools.map((t) => t.name)).to.include("test_ping");
+
+      await clientA.close();
+
+      // B keeps working after A is gone
+      const toolsAfter = await clientB.listTools();
+      expect(toolsAfter.tools.map((t) => t.name)).to.include("test_ping");
+
+      await clientB.close();
+    });
+
+    it("terminates a session via DELETE and rejects further use of its ID", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+      const url = new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`);
+
+      const client = new Client({ name: "client", version: "1.0.0" });
+      const transport = new StreamableHTTPClientTransport(url);
+      await client.connect(transport);
+
+      const sessionId = transport.sessionId;
+      expect(sessionId, "client transport received no session ID").to.be.a("string");
+
+      // DELETE /mcp with the session ID = explicit termination
+      await transport.terminateSession();
+
+      const { status } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "mcp-session-id": sessionId!,
+        },
+        _body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/list" }),
+      });
+      expect(status).to.equal(400);
+    });
+
+    it("shutdown() closes active sessions and stops listening", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+      const port = serverPort(handle);
+      const url = new URL(`http://127.0.0.1:${port}/mcp`);
+
+      const client = new Client({ name: "client", version: "1.0.0" });
+      await client.connect(new StreamableHTTPClientTransport(url));
+
+      await handle.shutdown();
+      handle = undefined;
+
+      let refused = false;
+      try {
+        await httpRequest(`http://127.0.0.1:${port}/health`);
+      } catch {
+        refused = true;
+      }
+      expect(refused, "server still accepting connections after shutdown").to.equal(true);
     });
   });
 
@@ -190,28 +310,17 @@ describe("HTTP Transport", function () {
 
   describe("API key authentication", () => {
     const TEST_API_KEY = "test-secret-key-12345";
-    let server: http.Server | undefined;
+    let handle: HttpTransportHandle | undefined;
 
-    afterEach((done) => {
-      if (server) {
-        server.close(() => done());
-        server = undefined;
-      } else {
-        done();
-      }
+    afterEach(async () => {
+      await handle?.shutdown();
+      handle = undefined;
     });
 
     it("should return 401 when API key is configured but no Authorization header sent", async () => {
-      const mcpServer = new McpServer({ name: "test-server", version: "0.0.1" });
-      mcpServer.tool("test_ping", "A test tool", {}, async () => ({
-        content: [{ type: "text", text: "pong" }],
-      }));
+      handle = await startHttpTransport(testServerFactory(), createTestConfig({ apiKey: TEST_API_KEY }));
 
-      const config = createTestConfig({ apiKey: TEST_API_KEY });
-      server = await startHttpTransport(mcpServer, config);
-
-      const addr = server!.address() as { port: number };
-      const { status, body } = await httpRequest(`http://127.0.0.1:${addr.port}/mcp`, {
+      const { status, body } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -221,16 +330,9 @@ describe("HTTP Transport", function () {
     });
 
     it("should return 401 when Authorization header has wrong key", async () => {
-      const mcpServer = new McpServer({ name: "test-server", version: "0.0.1" });
-      mcpServer.tool("test_ping", "A test tool", {}, async () => ({
-        content: [{ type: "text", text: "pong" }],
-      }));
+      handle = await startHttpTransport(testServerFactory(), createTestConfig({ apiKey: TEST_API_KEY }));
 
-      const config = createTestConfig({ apiKey: TEST_API_KEY });
-      server = await startHttpTransport(mcpServer, config);
-
-      const addr = server!.address() as { port: number };
-      const { status, body } = await httpRequest(`http://127.0.0.1:${addr.port}/mcp`, {
+      const { status, body } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -243,16 +345,9 @@ describe("HTTP Transport", function () {
     });
 
     it("should pass through when correct Bearer token is provided", async () => {
-      const mcpServer = new McpServer({ name: "test-server", version: "0.0.1" });
-      mcpServer.tool("test_ping", "A test tool", {}, async () => ({
-        content: [{ type: "text", text: "pong" }],
-      }));
+      handle = await startHttpTransport(testServerFactory(), createTestConfig({ apiKey: TEST_API_KEY }));
 
-      const config = createTestConfig({ apiKey: TEST_API_KEY });
-      server = await startHttpTransport(mcpServer, config);
-
-      const addr = server!.address() as { port: number };
-      const { status } = await httpRequest(`http://127.0.0.1:${addr.port}/mcp`, {
+      const { status } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -81,9 +81,11 @@ describe("MCP Server", () => {
       expect(config.llmModel).to.equal("");
     });
 
-    it("should default llmBaseUrl to 'http://localhost:11434'", () => {
+    it("should default llmBaseUrl to empty (each provider applies its own default)", () => {
+      // A global Ollama default would silently route OpenAI/Anthropic
+      // requests to localhost; the Ollama factory applies its own fallback.
       const config = loadConfig();
-      expect(config.llmBaseUrl).to.equal("http://localhost:11434");
+      expect(config.llmBaseUrl).to.equal("");
     });
 
     it("should read values from environment variables", () => {
@@ -120,10 +122,31 @@ describe("MCP Server", () => {
       expect(config.embeddingModel).to.equal("custom/model-v2");
     });
 
-    it("should produce NaN for non-numeric RAGNAROK_CHUNK_SIZE", () => {
+    it("should reject non-numeric RAGNAROK_CHUNK_SIZE at startup", () => {
       process.env.RAGNAROK_CHUNK_SIZE = "abc";
-      const config = loadConfig();
-      expect(config.chunkSize).to.be.NaN;
+      expect(() => loadConfig()).to.throw(/chunkSize/);
+    });
+
+    it("should reject an invalid RAGNAROK_LLM_PROVIDER at startup", () => {
+      process.env.RAGNAROK_LLM_PROVIDER = "chatgpt";
+      expect(() => loadConfig()).to.throw(/llmProvider/);
+    });
+
+    it("should reject openai provider without an API key", () => {
+      process.env.RAGNAROK_LLM_PROVIDER = "openai";
+      delete process.env.RAGNAROK_LLM_API_KEY;
+      expect(() => loadConfig()).to.throw(/RAGNAROK_LLM_API_KEY/);
+    });
+
+    it("should reject an out-of-range port", () => {
+      process.env.RAGNAROK_PORT = "70000";
+      expect(() => loadConfig()).to.throw(/port/);
+    });
+
+    it("should reject chunk overlap >= chunk size", () => {
+      process.env.RAGNAROK_CHUNK_SIZE = "200";
+      process.env.RAGNAROK_CHUNK_OVERLAP = "200";
+      expect(() => loadConfig()).to.throw(/chunkOverlap/);
     });
   });
 

@@ -16,6 +16,8 @@ import {
 function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
   return {
     storageDir: "/tmp/ragnarok-test",
+    workingDir: "",
+    allowedPaths: [],
     embeddingModel: "Xenova/all-MiniLM-L6-v2",
     chunkSize: 1000,
     chunkOverlap: 200,
@@ -29,7 +31,7 @@ function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     llmProvider: "none",
     llmApiKey: "",
     llmModel: "",
-    llmBaseUrl: "http://localhost:11434",
+    llmBaseUrl: "",
     embeddingProvider: "huggingface",
     embeddingBaseUrl: "",
     embeddingApiKey: "",
@@ -87,6 +89,25 @@ describe("LLM Providers", function () {
     it("returns an OpenAILLMProvider with default model when llmModel is empty", function () {
       const provider = createLLMProvider(makeConfig({ llmProvider: "openai", llmApiKey: "sk-test-key" }));
       expect(provider).to.be.instanceOf(OpenAILLMProvider);
+    });
+
+    it("does NOT route OpenAI to a local Ollama URL when no base URL is configured", function () {
+      // Regression: a global llmBaseUrl default of http://localhost:11434
+      // used to send every OpenAI request to local Ollama.
+      const provider = createLLMProvider(makeConfig({ llmProvider: "openai", llmApiKey: "sk-test-key" }));
+      expect((provider as any).baseUrl).to.equal(undefined);
+    });
+
+    it("forwards an explicitly configured base URL to the OpenAI provider", function () {
+      const provider = createLLMProvider(
+        makeConfig({ llmProvider: "openai", llmApiKey: "sk-test-key", llmBaseUrl: "https://proxy.example.com/v1" }),
+      );
+      expect((provider as any).baseUrl).to.equal("https://proxy.example.com/v1");
+    });
+
+    it("defaults Ollama to http://localhost:11434 when no base URL is configured", function () {
+      const provider = createLLMProvider(makeConfig({ llmProvider: "ollama" }));
+      expect((provider as any).baseUrl).to.equal("http://localhost:11434");
     });
 
     it("returns an AnthropicLLMProvider when configured with key", function () {

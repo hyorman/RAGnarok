@@ -123,6 +123,19 @@ export class RAGQueryService {
   }
 
   /**
+   * Inject a shared reranker instance so the SAME object serves queries and
+   * management tooling — a model switch through the management tools then
+   * affects query behaviour instead of only a parallel private instance.
+   * The service will not construct its own lazy reranker after this.
+   */
+  public setReranker(reranker: Reranker): void {
+    this.cachedReranker = reranker;
+    // Cached agents and the compiled graph hold the previous reranker.
+    this.ragAgents.clear();
+    this.compiledQueryGraph = null;
+  }
+
+  /**
    * Execute a RAG query end-to-end.
    *
    * `topK` and `retrievalStrategy` from `params` override config defaults.

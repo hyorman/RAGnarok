@@ -10,7 +10,7 @@
 
 import { Mutex } from "async-mutex";
 import { EmbeddingBackend } from "./embeddingBackend";
-import { ModelRegistry } from "./modelRegistry";
+import { ModelRegistry } from "../models/modelRegistry.js";
 import { Logger } from "../logger";
 import { INotifier } from "../interfaces";
 
@@ -32,6 +32,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
   private initMutex: Mutex = new Mutex();
   private initPromise: Promise<void> | null = null;
   private initError: Error | null = null;
+  private initErrorModel: string | null = null;
   private logger: Logger;
   private transformers: TransformersModule | null = null;
   private dimension: number | null = null;
@@ -58,7 +59,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
   }
 
   async initialize(modelName?: string): Promise<void> {
-    const targetModel = modelName ?? (this.pipeline ? this.currentModel : null) ?? this.modelRegistry.getDefaultModel();
+    const targetModel = modelName ?? this.currentModel ?? this.modelRegistry.getDefaultModel();
 
     try {
       await this.initializeModel(targetModel);
@@ -194,6 +195,8 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     this.lastSuccessfulModel = null;
     this.transformers = null;
     this.initPromise = null;
+    this.initError = null;
+    this.initErrorModel = null;
     this.dimension = null;
     this.logger.info("HuggingFaceBackend disposed");
   }
@@ -223,8 +226,17 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     }
 
     await this.initMutex.runExclusive(async () => {
+      // A failed model is cached to avoid re-downloading a known-broken model
+      // within the session. Scope the short-circuit to the SAME model so that a
+      // different target (e.g. the initialize() fallback) still gets a fresh
+      // attempt instead of inheriting an unrelated failure.
       if (this.initError) {
-        throw this.initError;
+        if (this.initErrorModel === targetModel) {
+          throw this.initError;
+        }
+        // A different model is being attempted; drop the stale failure.
+        this.initError = null;
+        this.initErrorModel = null;
       }
 
       if (this.pipeline && this.currentModel === targetModel) {
@@ -245,9 +257,12 @@ export class HuggingFaceBackend implements EmbeddingBackend {
 
       try {
         await this.initPromise;
+        this.initError = null;
+        this.initErrorModel = null;
         this.logger.info(`Successfully initialized model: ${targetModel}`);
       } catch (error) {
         this.initError = error instanceof Error ? error : new Error(String(error));
+        this.initErrorModel = targetModel;
         this.logger.error(`Failed to initialize model: ${targetModel}`, error);
         throw this.initError;
       } finally {

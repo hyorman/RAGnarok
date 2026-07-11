@@ -11,11 +11,13 @@
  *
  * Environment variables:
  *   RAGNAROK_STORAGE_DIR      — Database storage directory (default: ~/.ragnarok)
+ *   RAGNAROK_WORKING_DIR      — Project root for git-branch-scoped memory (default: process.cwd())
+ *   RAGNAROK_ALLOWED_PATHS    — Roots rag_add_documents may read, path-delimiter separated (default: the working dir)
  *   RAGNAROK_EMBEDDING_MODEL  — Embedding model (default: Xenova/all-MiniLM-L6-v2)
  *   RAGNAROK_LLM_PROVIDER     — LLM provider: openai, anthropic, ollama, none (default: none)
  *   RAGNAROK_LLM_API_KEY      — API key for OpenAI or Anthropic
  *   RAGNAROK_LLM_MODEL        — LLM model name (default: gpt-4o-mini)
- *   RAGNAROK_LLM_BASE_URL     — Ollama base URL (default: http://localhost:11434)
+ *   RAGNAROK_LLM_BASE_URL     — LLM API base URL override (Ollama defaults to http://localhost:11434; OpenAI/Anthropic use their official endpoints unless set)
  *   RAGNAROK_LANGGRAPH_ENABLED — Run queries/indexing through the LangGraph pipeline (default: false, experimental)
  *   RAGNAROK_PORT             — HTTP server port (default: 3000)
  *   RAGNAROK_EMBEDDING_PROVIDER   — Embedding provider: huggingface, openai, ollama (default: huggingface)
@@ -42,11 +44,11 @@ import {
   CrossEncoderReranker,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
-import { loadConfig } from "./config";
+import { loadConfig, getServerVersion } from "./config";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
-import { startHttpTransport } from "./httpServer";
+import { startHttpTransport, HttpTransportHandle } from "./httpServer";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -107,47 +109,100 @@ async function main(): Promise<void> {
 
   logger.info(`Loaded ${topicManager.getAllTopics().length} topic(s) from ${config.storageDir}`);
 
-  // Create MCP server
-  const server = new McpServer({
-    name: "ragnarok",
-    version: "0.3.0",
-  });
-
   // Register tools
   const ragQueryService = new RAGQueryService(topicManager, configProvider, llmProvider);
   TopicManager.onAgentCacheCleanup.subscribe((topicId) => ragQueryService.clearAgentCache(topicId));
 
   // Create standalone memory store
+  // Branch-scoped memory needs the PROJECT's directory, not the server's.
+  // Global MCP clients often launch servers from a home/app directory, which
+  // would silently mis-scope branch memories without an explicit working dir.
+  const workingDir = config.workingDir || process.cwd();
+  if (!config.workingDir) {
+    logger.warn(
+      `RAGNAROK_WORKING_DIR not set — using process.cwd() (${workingDir}) for git branch detection. ` +
+        "Set it when the server is launched outside the project directory.",
+    );
+  }
+  // Downstream consumers (tools) read the RESOLVED working dir from config.
+  config.workingDir = workingDir;
   const memoryStore = new MemoryStore({
     storageDir: config.storageDir,
     embeddingService,
     llmProvider,
-    workingDir: process.cwd(),
+    workingDir,
     markdownPath: path.join(config.storageDir, "memories.md"),
   });
 
   ragQueryService.setGraphDeps({ memoryStore, notifier, embeddingService });
 
   // Create reranker (always-on — gracefully degrades if ONNX model unavailable)
-  let reranker: CrossEncoderReranker | null = null;
-  reranker = new CrossEncoderReranker(config.rerankerModel, {
+  const reranker = new CrossEncoderReranker(config.rerankerModel, {
     maxCandidates: config.rerankerMaxCandidates,
   });
+  // Share the SAME instance with the query path so rag_switch_reranker_model
+  // affects query behaviour, not just the management tools' private copy.
+  ragQueryService.setReranker(reranker);
 
-  registerTools(server, topicManager, llmProvider, embeddingService, ragQueryService, memoryStore, reranker, config);
+  // Server factory: stdio uses a single instance; the HTTP transport creates
+  // one server+transport pair per client session (all sharing the services).
+  const createMcpServer = (): McpServer => {
+    const server = new McpServer({
+      name: "ragnarok",
+      version: getServerVersion(),
+    });
+    registerTools(server, topicManager, llmProvider, embeddingService, ragQueryService, memoryStore, reranker, config);
+    return server;
+  };
 
   // Start transport
   const useHttp = process.argv.includes("--http");
 
+  let httpHandle: HttpTransportHandle | null = null;
+  let stdioServer: McpServer | null = null;
+
   if (useHttp) {
-    await startHttpTransport(server, config);
+    httpHandle = await startHttpTransport(createMcpServer, config);
   } else {
     // stdio transport for local agents (default)
     logger.info("Starting stdio transport");
+    stdioServer = createMcpServer();
     const transport = new StdioServerTransport();
-    await server.connect(transport);
+    await stdioServer.connect(transport);
     logger.info("RAGnarōk MCP server running (stdio)");
   }
+
+  // Graceful shutdown: close transports, then release native/model resources
+  // and pending timers (memory auto-decay, ONNX sessions, LanceDB handles).
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    logger.info(`Received ${signal} — shutting down`);
+
+    try {
+      if (httpHandle) {
+        await httpHandle.shutdown();
+      }
+      if (stdioServer) {
+        await stdioServer.close();
+      }
+      await memoryStore.dispose();
+      ragQueryService.dispose();
+      reranker.dispose();
+      topicManager.dispose();
+      embeddingService.dispose();
+      logger.info("Shutdown complete");
+    } catch (error) {
+      logger.error("Error during shutdown", error);
+    }
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 main().catch((error) => {

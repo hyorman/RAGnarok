@@ -7,6 +7,7 @@
  * - CORS
  * - Rate limiting
  * - Health endpoint
+ * - Multiple concurrent client sessions
  * - Graceful shutdown
  */
 
@@ -15,17 +16,33 @@ import { createServer, Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Logger } from "@ragnarok/core";
-import { McpConfig } from "./config";
+import { McpConfig, getServerVersion } from "./config";
+
+export interface HttpTransportHandle {
+  httpServer: Server;
+  /** Close all client sessions and stop accepting connections. Idempotent. */
+  shutdown(): Promise<void>;
+}
 
 /**
  * Start the MCP server with HTTP transport.
  *
- * @param server - Configured McpServer instance with tools registered
+ * A stateful StreamableHTTPServerTransport manages exactly ONE session, and
+ * an McpServer instance binds to exactly one transport — so each client
+ * session gets its own server+transport pair (created via `createMcpServer`),
+ * keyed by the SDK-issued mcp-session-id. Tool handlers share the underlying
+ * services, which are singletons owned by the caller.
+ *
+ * @param createMcpServer - Factory producing a fully tool-registered McpServer
  * @param config - MCP server configuration
- * @returns Promise that resolves when the server is listening
+ * @returns Handle with the listening http.Server and a shutdown function
  */
-export async function startHttpTransport(server: McpServer, config: McpConfig): Promise<Server> {
+export async function startHttpTransport(
+  createMcpServer: () => McpServer,
+  config: McpConfig,
+): Promise<HttpTransportHandle> {
   const logger = new Logger("HTTP-Transport");
 
   // Create Express app with MCP SDK's built-in middleware
@@ -56,17 +73,7 @@ export async function startHttpTransport(server: McpServer, config: McpConfig): 
     logger.warn("cors not available — skipping CORS middleware");
   }
 
-  // Read version from package.json at startup
-  let serverVersion = "unknown";
-  try {
-    const { readFileSync } = await import("fs");
-    const { resolve } = await import("path");
-    const pkgPath = resolve(__dirname, "../../package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-    serverVersion = pkg.version;
-  } catch {
-    // Fallback if package.json is not resolvable
-  }
+  const serverVersion = getServerVersion();
 
   // Health endpoint
   app.get("/health", (_req, res) => {
@@ -92,24 +99,62 @@ export async function startHttpTransport(server: McpServer, config: McpConfig): 
       }
     : (_req: any, _res: any, next: any) => next();
 
-  // Create streaming HTTP transport (stateful — supports multi-turn sessions)
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
+  // Active sessions: mcp-session-id → transport (each with its own McpServer)
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
 
-  // Connect MCP server to the transport
-  await server.connect(transport);
-  logger.info("MCP server connected to HTTP transport");
+  app.all("/mcp", authMiddleware, async (req, res) => {
+    try {
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      let transport = sessionId ? sessions.get(sessionId) : undefined;
 
-  // Mount the MCP endpoint
-  app.all("/mcp", authMiddleware, (req, res) => {
-    transport.handleRequest(req, res, req.body);
+      if (!transport) {
+        // Only an initialize request may open a new session.
+        if (req.method !== "POST" || !isInitializeRequest(req.body)) {
+          res.status(400).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Bad Request: no valid session ID provided" },
+            id: null,
+          });
+          return;
+        }
+
+        const newTransport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => {
+            sessions.set(sid, newTransport);
+            logger.debug(`Session initialized: ${sid}`);
+          },
+        });
+        // DELETE /mcp (session termination) and transport errors both end
+        // here — drop the session so its resources can be collected.
+        newTransport.onclose = () => {
+          if (newTransport.sessionId) {
+            sessions.delete(newTransport.sessionId);
+            logger.debug(`Session closed: ${newTransport.sessionId}`);
+          }
+        };
+
+        await createMcpServer().connect(newTransport);
+        transport = newTransport;
+      }
+
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      logger.error("Failed to handle MCP request", error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal server error" },
+          id: null,
+        });
+      }
+    }
   });
 
   // Start HTTP server
   const httpServer = createServer(app);
 
-  return new Promise<Server>((resolve) => {
+  await new Promise<void>((resolve) => {
     httpServer.listen(config.port, config.httpHost, () => {
       logger.info(`RAGnarōk MCP server running at http://${config.httpHost}:${config.port}`);
       logger.info(`  MCP endpoint: http://${config.httpHost}:${config.port}/mcp`);
@@ -119,7 +164,33 @@ export async function startHttpTransport(server: McpServer, config: McpConfig): 
       } else {
         logger.warn("  API key authentication: disabled (set RAGNAROK_API_KEY to enable)");
       }
-      resolve(httpServer);
+      resolve();
     });
   });
+
+  let shutdownStarted = false;
+  const shutdown = async (): Promise<void> => {
+    if (shutdownStarted) {
+      return;
+    }
+    shutdownStarted = true;
+    logger.info(`Shutting down HTTP transport (${sessions.size} active session(s))`);
+
+    for (const [sid, transport] of [...sessions]) {
+      try {
+        await transport.close();
+      } catch (error) {
+        logger.debug(`Error closing session ${sid}`, error);
+      }
+    }
+    sessions.clear();
+
+    await new Promise<void>((resolve) => {
+      httpServer.close(() => resolve());
+      // Don't wait forever on lingering keep-alive connections.
+      httpServer.closeAllConnections?.();
+    });
+  };
+
+  return { httpServer, shutdown };
 }

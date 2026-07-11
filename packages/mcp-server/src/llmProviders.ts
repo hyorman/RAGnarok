@@ -295,8 +295,9 @@ export function createLLMProvider(config: McpConfig): ILLMProvider {
 
     case "ollama": {
       const ollamaModel = config.llmModel || "llama3";
-      logger.info(`Using Ollama provider (model: ${ollamaModel}, url: ${config.llmBaseUrl})`);
-      return new OllamaLLMProvider(config.llmBaseUrl, ollamaModel);
+      const ollamaUrl = config.llmBaseUrl || "http://localhost:11434";
+      logger.info(`Using Ollama provider (model: ${ollamaModel}, url: ${ollamaUrl})`);
+      return new OllamaLLMProvider(ollamaUrl, ollamaModel);
     }
 
     case "none":

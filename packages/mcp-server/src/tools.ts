@@ -20,6 +20,7 @@
  * - rag_memory: Store, recall, forget, list, stats, decay, history, promote, or links for project memories
  */
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -52,9 +53,9 @@ export function registerTools(
     "rag_query",
     "Query a RAG topic to find relevant information. Supports both simple retrieval and agentic multi-step query planning.",
     {
-      topic: z.string().describe("The name of the topic to search within"),
-      query: z.string().describe("The search query or question"),
-      topK: z.number().optional().describe("Number of top results to return (default: 10)"),
+      topic: z.string().trim().min(1).describe("The name of the topic to search within"),
+      query: z.string().trim().min(1).describe("The search query or question"),
+      topK: z.number().int().min(1).max(20).optional().describe("Number of top results to return (default: 10)"),
       retrievalStrategy: z
         .enum(["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid"])
         .optional()
@@ -174,8 +175,8 @@ export function registerTools(
     "rag_create_topic",
     "Create a new RAG topic for organizing documents",
     {
-      name: z.string().describe("Name for the new topic"),
-      description: z.string().optional().describe("Description of the topic"),
+      name: z.string().trim().min(1).max(100).describe("Name for the new topic"),
+      description: z.string().max(2000).optional().describe("Description of the topic"),
     },
     async ({ name, description }) => {
       try {
@@ -216,53 +217,100 @@ export function registerTools(
   );
 
   // rag_add_documents — Add documents to a topic
+  //
+  // Paths are restricted to the configured allowlist roots
+  // (RAGNAROK_ALLOWED_PATHS, defaulting to the working directory): a remote
+  // authenticated client must not be able to index — and thus read back —
+  // arbitrary files on the server. Symlinks are resolved before containment
+  // checks so a link inside an allowed root can't escape it.
+  const allowedRootsPromise = (async () => {
+    const configured = config?.allowedPaths?.length ? config.allowedPaths : [config?.workingDir || process.cwd()];
+    const roots: string[] = [];
+    for (const root of configured) {
+      try {
+        roots.push(await fs.realpath(path.resolve(root)));
+      } catch {
+        // Nonexistent roots can't contain anything — skip.
+      }
+    }
+    return roots;
+  })();
+
+  async function assertPathAllowed(filePath: string): Promise<string> {
+    let real: string;
+    try {
+      real = await fs.realpath(path.resolve(filePath));
+    } catch {
+      throw new Error(`File not found or unreadable: ${filePath}`);
+    }
+    const roots = await allowedRootsPromise;
+    const contained = roots.some((root) => real === root || real.startsWith(root + path.sep));
+    if (!contained) {
+      throw new Error(
+        `Path not allowed: ${filePath}. Allowed roots: ${roots.join(", ") || "(none)"} — configure RAGNAROK_ALLOWED_PATHS to widen access.`,
+      );
+    }
+    return real;
+  }
+
   server.tool(
     "rag_add_documents",
-    "Add one or more documents to a RAG topic. Supports PDF, Markdown, HTML, and plain text files.",
+    "Add one or more documents to a RAG topic. Supports PDF, Markdown, HTML, and plain text files. " +
+      "Paths must be inside the server's allowed roots (RAGNAROK_ALLOWED_PATHS).",
     {
-      topic: z.string().describe("The name of the topic to add documents to"),
-      filePaths: z.array(z.string()).describe("Array of file paths to add"),
+      topic: z.string().trim().min(1).describe("The name of the topic to add documents to"),
+      filePaths: z.array(z.string().trim().min(1)).min(1).max(100).describe("Array of file paths to add"),
     },
     async ({ topic, filePaths }) => {
       try {
-        // Validate file paths to prevent path traversal attacks
-        for (const filePath of filePaths) {
-          const resolved = path.resolve(filePath);
-          // Reject paths where resolving eliminates '..' segments (traversal attempt)
-          if (path.isAbsolute(filePath)) {
-            if (resolved !== path.normalize(filePath)) {
-              throw new Error(`Invalid file path (path traversal detected): ${filePath}`);
-            }
-          } else {
-            // For relative paths, ensure no '..' path segments exist
-            const segments = filePath.split(/[/\\]/);
-            if (segments.includes("..")) {
-              throw new Error(`Invalid file path (parent directory traversal not allowed): ${filePath}`);
-            }
-          }
-        }
-
         const topicMatch = await topicManager.resolveTopicByName(topic);
         const matchedTopic = topicMatch.topic;
 
-        const results = await topicManager.addDocuments(matchedTopic.id, filePaths);
+        // Per-file processing so the response reports the actual outcome of
+        // every file instead of claiming blanket success.
+        const files: Array<{ path: string; status: "added" | "failed"; chunkCount?: number; error?: string }> = [];
+        for (const filePath of filePaths) {
+          try {
+            const realPath = await assertPathAllowed(filePath);
+            const results = await topicManager.addDocuments(matchedTopic.id, [realPath]);
+            if (results.length > 0) {
+              files.push({
+                path: filePath,
+                status: "added",
+                chunkCount: results.reduce((sum, r) => sum + r.pipelineResult.metadata.chunksStored, 0),
+              });
+            } else {
+              files.push({ path: filePath, status: "failed", error: "document processing failed (see server logs)" });
+            }
+          } catch (error) {
+            files.push({
+              path: filePath,
+              status: "failed",
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
 
+        const added = files.filter((f) => f.status === "added");
         return {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify(
                 {
-                  success: true,
+                  success: added.length > 0,
+                  partial: added.length > 0 && added.length < files.length,
                   topic: matchedTopic.name,
-                  documentsAdded: filePaths.length,
-                  results,
+                  documentsAdded: added.length,
+                  documentsFailed: files.length - added.length,
+                  files,
                 },
                 null,
                 2,
               ),
             },
           ],
+          isError: added.length === 0,
         };
       } catch (error) {
         return {
@@ -377,16 +425,49 @@ export function registerTools(
   // rag_switch_embedding_model — Switch the active embedding model
   server.tool(
     "rag_switch_embedding_model",
-    "Switch the active embedding model. The model will be downloaded if not already cached.",
+    "Switch the active embedding model. The model will be downloaded if not already cached. " +
+      "Rejected when standalone memory holds vectors of a different dimension.",
     {
-      model: z.string().describe("Embedding model identifier (e.g. 'Xenova/all-MiniLM-L6-v2')"),
+      model: z.string().trim().min(1).describe("Embedding model identifier (e.g. 'Xenova/all-MiniLM-L6-v2')"),
     },
     async ({ model }) => {
       try {
         const previousModel = embeddingService.getCurrentModel();
+        const previousDimension = (await embeddingService.embed("dimension probe")).length;
 
         // Re-initialize the embedding service with the new model
         await embeddingService.initialize(model);
+        const newDimension = (await embeddingService.embed("dimension probe")).length;
+
+        // Standalone memory tables carry vectors of the old dimension and
+        // have no per-scope model metadata — a silent switch would make every
+        // recall fail. Reject and roll back while memory data exists.
+        if (newDimension !== previousDimension && memoryStore) {
+          const memStats = await memoryStore.stats();
+          if (memStats.totalMemories > 0) {
+            await embeddingService.initialize(previousModel);
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    error:
+                      `Cannot switch to ${model}: its embedding dimension (${newDimension}) differs from ` +
+                      `the current model's (${previousDimension}) and ${memStats.totalMemories} stored ` +
+                      "memories use the current dimension. Forget all memories first or keep the current model.",
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+
+        // Propagate the switch to topic management: rebuilds the vector store
+        // factory and document pipeline and clears per-topic caches. Without
+        // this the old factory silently switches the shared backend back on
+        // the next topic operation.
+        await topicManager.reinitializeWithNewModel();
 
         const newModel = embeddingService.getCurrentModel();
 
@@ -596,14 +677,22 @@ export function registerTools(
           .describe("The memory operation to perform"),
         content: z
           .string()
+          .trim()
+          .min(1)
+          .max(50_000)
           .optional()
           .describe("Memory content to store (required for 'store' action)"),
         query: z
           .string()
+          .trim()
+          .min(1)
           .optional()
           .describe("Search query (required for 'recall' action)"),
         topK: z
           .number()
+          .int()
+          .min(1)
+          .max(50)
           .optional()
           .describe("Number of results to return (default: 10, for 'recall' action)"),
         includeEntities: z
@@ -612,10 +701,15 @@ export function registerTools(
           .describe("Include related graph entities in recall results (default: false)"),
         id: z
           .string()
+          .trim()
+          .min(1)
           .optional()
           .describe("Memory entry ID (for 'forget' or 'history' action)"),
         olderThan: z
           .number()
+          .int()
+          .min(0)
+          .max(3650)
           .optional()
           .describe("Forget memories older than N days (for 'forget' action)"),
         expired: z
@@ -630,14 +724,21 @@ export function registerTools(
           .describe("Memory scope (default: 'workspace' for store, both for recall)"),
         branch: z
           .string()
+          .trim()
+          .min(1)
+          .max(255)
           .optional()
           .describe("Git branch name (auto-detected if scope is 'branch' and not provided)"),
         tags: z
-          .array(z.string())
+          .array(z.string().trim().min(1).max(100))
+          .max(20)
           .optional()
           .describe("Tags to attach to memory (for 'store' action)"),
         limit: z
           .number()
+          .int()
+          .min(1)
+          .max(500)
           .optional()
           .describe("Max entries to return (for 'list' action, default: 50)"),
       },
@@ -656,6 +757,29 @@ export function registerTools(
         limit,
       }) => {
         try {
+          // Branch scope explicitly requested but unresolvable must be an
+          // error, not a silent fall-back to workspace scope: the caller
+          // would store/read memories in a scope they didn't ask for.
+          if (scope === "branch" && !branch && (action === "store" || action === "recall" || action === "list")) {
+            const detected = memoryStore.getCurrentBranch();
+            if (!detected) {
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: JSON.stringify({
+                      error:
+                        "Branch scope requested but no git branch could be detected in the working directory " +
+                        "(not a git repo or detached HEAD). Pass 'branch' explicitly or set RAGNAROK_WORKING_DIR " +
+                        "to the project root.",
+                    }),
+                  },
+                ],
+                isError: true,
+              };
+            }
+          }
+
           switch (action) {
             case "store": {
               if (!content) {
@@ -780,7 +904,16 @@ export function registerTools(
                   {
                     type: "text" as const,
                     text: JSON.stringify(
-                      { action: "stats", ...memStats },
+                      {
+                        action: "stats",
+                        ...memStats,
+                        // Surface where branch detection actually points so
+                        // mis-scoped setups are visible instead of silent.
+                        workspace: {
+                          workingDir: config?.workingDir || process.cwd(),
+                          detectedBranch: memoryStore.getCurrentBranch(),
+                        },
+                      },
                       null,
                       2,
                     ),
