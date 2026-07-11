@@ -270,3 +270,61 @@ describe("MemoryStore restart persistence", function () {
     expect(listed.map((e) => e.id)).to.deep.equal([keep.id]);
   });
 });
+
+// ── Concurrency (single instance, interleaved operations) ────────────
+
+describe("MemoryStore concurrent operations", function () {
+  this.timeout(60000);
+
+  let tempDir: string;
+  let store: MemoryStore;
+
+  beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-concurrent-test-"));
+    store = new MemoryStore({
+      storageDir: tempDir,
+      embeddingService: createMockEmbeddingService(),
+      workingDir: tempDir,
+      markdownPath: null,
+    });
+  });
+
+  afterEach(async function () {
+    await store.dispose();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("handles concurrent stores into one scope without losing entries", async function () {
+    const contents = Array.from({ length: 8 }, (_, i) => `concurrent workspace memory number ${i}`);
+    await Promise.all(contents.map((content) => store.store({ content })));
+
+    const listed = await store.list({ scope: "workspace", limit: 100 });
+    expect(listed.map((e) => e.content).sort()).to.deep.equal([...contents].sort());
+  });
+
+  it("handles concurrent store/recall/forget across scopes without rejections", async function () {
+    const seeded = await store.store({ content: "seed memory for concurrent mix" });
+
+    const operations: Array<Promise<unknown>> = [
+      store.store({ content: "mixed op one" }),
+      store.store({ content: "branch op", scope: "branch", branch: "feat/concurrent" }),
+      store.recall({ query: "seed memory", scope: "workspace" }),
+      store.forget({ id: seeded.id }),
+      store.recall({ query: "mixed", scope: "workspace" }),
+    ];
+
+    // Every operation must settle without throwing; interleaving must not
+    // corrupt either scope.
+    await Promise.all(operations);
+
+    const workspace = await store.list({ scope: "workspace", limit: 100 });
+    expect(
+      workspace.some((e) => e.id === seeded.id),
+      "forgotten entry survived",
+    ).to.equal(false);
+    expect(workspace.some((e) => e.content === "mixed op one")).to.equal(true);
+
+    const branch = await store.list({ scope: "branch", branch: "feat/concurrent", limit: 100 });
+    expect(branch.map((e) => e.content)).to.deep.equal(["branch op"]);
+  });
+});

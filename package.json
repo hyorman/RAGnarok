@@ -447,6 +447,7 @@
     "test:mcp": "npm test --workspace=packages/mcp-server",
     "test:mcp:compiled": "npm exec --workspace=packages/mcp-server mocha",
     "test:all": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:vscode:compiled && npm run test:mcp:compiled",
+    "test:fast": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:mcp:compiled",
     "test:pack": "node scripts/pack-smoke.mjs",
     "bench:beir": "npm run bench:beir --workspace=packages/core",
     "bench:frames": "npm run bench:frames --workspace=packages/core",

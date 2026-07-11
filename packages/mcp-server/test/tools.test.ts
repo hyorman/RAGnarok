@@ -92,6 +92,7 @@ function captureHandlers(deps: {
   embeddingService: sinon.SinonStubbedInstance<EmbeddingService>;
   ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   mcpConfig?: McpConfig;
+  memoryStore?: unknown;
 }): Record<string, ToolHandler> {
   const handlers: Record<string, ToolHandler> = {};
   const server = new McpServer({ name: "test", version: "0.0.0" });
@@ -111,7 +112,7 @@ function captureHandlers(deps: {
     deps.llmProvider as unknown as ILLMProvider,
     deps.embeddingService as unknown as EmbeddingService,
     deps.ragQueryService as unknown as RAGQueryService,
-    undefined,
+    deps.memoryStore as never,
     undefined,
     deps.mcpConfig,
   );
@@ -631,6 +632,40 @@ describe("MCP Tools (registerTools)", () => {
 
       expect(result.isError).to.equal(true);
       expect(parseResponse(result).error).to.equal("switch failed");
+    });
+
+    it("rejects a dimension-changing switch while memory holds data, and rolls back", async () => {
+      const memoryStore = {
+        stats: sinon.stub().resolves({ totalMemories: 3 }),
+        getCurrentBranch: sinon.stub().returns(null),
+      };
+      handlers = captureHandlers({
+        topicManager,
+        config,
+        llmProvider,
+        embeddingService,
+        ragQueryService,
+        memoryStore,
+      });
+
+      embeddingService.getCurrentModel.returns("old-model");
+      // Probe before switch: 384 dims; probe after switch: 768 dims
+      (embeddingService.embed as sinon.SinonStub)
+        .onFirstCall()
+        .resolves(new Array(384).fill(0))
+        .onSecondCall()
+        .resolves(new Array(768).fill(0));
+
+      const result = await handlers.rag_switch_embedding_model({ model: "bigger-model" });
+      const body = parseResponse(result);
+
+      expect(result.isError).to.equal(true);
+      expect(body.error).to.include("dimension");
+      // Rolled back: initialize called with the new model, then the old one
+      const initCalls = (embeddingService.initialize as sinon.SinonStub).getCalls().map((c) => c.args[0]);
+      expect(initCalls).to.deep.equal(["bigger-model", "old-model"]);
+      // The topic-side reinit must NOT run for a rejected switch
+      expect((topicManager.reinitializeWithNewModel as sinon.SinonStub).called).to.equal(false);
     });
   });
 

@@ -16,6 +16,7 @@
  */
 
 import { connect } from "@lancedb/lancedb";
+import { Mutex } from "async-mutex";
 import { Logger } from "../logger";
 import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "./types";
 
@@ -24,12 +25,56 @@ export class MemoryVectorStore {
   // Memoized connection — every operation used to reconnect, so a single
   // store() paid 5+ connects and each recall reconnected again.
   private dbPromise: ReturnType<typeof connect> | null = null;
+  // Persistence is drop-table + recreate, so data operations must not
+  // interleave: a concurrent save would race the drop ("table already
+  // exists") and an overlapping read can hit files deleted mid-drop.
+  private opMutex = new Mutex();
 
   constructor(private lanceDbUri: string) {}
 
   private getDb(): ReturnType<typeof connect> {
     this.dbPromise ??= connect(this.lanceDbUri);
     return this.dbPromise;
+  }
+
+  /** Serialize a data operation against the drop-and-recreate persistence. */
+  private locked<T>(operation: () => Promise<T>): Promise<T> {
+    return this.opMutex.runExclusive(operation);
+  }
+
+  // ── Public API (serialized) ────────────────────────────────────────
+
+  async saveEntries(entries: MemoryEntry[], scope: MemoryScope, branch?: string): Promise<void> {
+    return this.locked(() => this.saveEntriesUnlocked(entries, scope, branch));
+  }
+
+  async loadEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
+    return this.locked(() => this.loadEntriesUnlocked(scope, branch));
+  }
+
+  async searchEntries(
+    queryVector: number[],
+    scope: MemoryScope,
+    branch: string | undefined,
+    topK: number,
+  ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
+    return this.locked(() => this.searchEntriesUnlocked(queryVector, scope, branch, topK));
+  }
+
+  async saveGraph(data: MemoryGraphData, scope: MemoryScope, branch?: string): Promise<void> {
+    return this.locked(() => this.saveGraphUnlocked(data, scope, branch));
+  }
+
+  async loadGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraphData | null> {
+    return this.locked(() => this.loadGraphUnlocked(scope, branch));
+  }
+
+  async deleteBranchMemories(branch: string): Promise<void> {
+    return this.locked(() => this.deleteBranchMemoriesUnlocked(branch));
+  }
+
+  async deleteAll(): Promise<void> {
+    return this.locked(() => this.deleteAllUnlocked());
   }
 
   // ── Table naming ───────────────────────────────────────────────────
@@ -79,7 +124,7 @@ export class MemoryVectorStore {
 
   // ── Memory Entry CRUD ──────────────────────────────────────────────
 
-  async saveEntries(entries: MemoryEntry[], scope: MemoryScope, branch?: string): Promise<void> {
+  private async saveEntriesUnlocked(entries: MemoryEntry[], scope: MemoryScope, branch?: string): Promise<void> {
     const db = await this.getDb();
     const tableName = this.entriesTable(scope, branch);
 
@@ -125,7 +170,7 @@ export class MemoryVectorStore {
     }
   }
 
-  async loadEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
+  private async loadEntriesUnlocked(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
     const db = await this.getDb();
     const tableName = this.entriesTable(scope, branch);
 
@@ -170,7 +215,7 @@ export class MemoryVectorStore {
     }
   }
 
-  async searchEntries(
+  private async searchEntriesUnlocked(
     queryVector: number[],
     scope: MemoryScope,
     branch: string | undefined,
@@ -228,7 +273,7 @@ export class MemoryVectorStore {
 
   // ── Graph Persistence ──────────────────────────────────────────────
 
-  async saveGraph(data: MemoryGraphData, scope: MemoryScope, branch?: string): Promise<void> {
+  private async saveGraphUnlocked(data: MemoryGraphData, scope: MemoryScope, branch?: string): Promise<void> {
     const db = await this.getDb();
 
     // Both tables are always reconciled: dropping the old table even when the
@@ -284,7 +329,7 @@ export class MemoryVectorStore {
     }
   }
 
-  async loadGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraphData | null> {
+  private async loadGraphUnlocked(scope: MemoryScope, branch?: string): Promise<MemoryGraphData | null> {
     const db = await this.getDb();
     const entitiesTableName = this.entitiesTable(scope, branch);
     const edgesTableName = this.edgesTable(scope, branch);
@@ -384,7 +429,7 @@ export class MemoryVectorStore {
     return Array.from(branches);
   }
 
-  async deleteBranchMemories(branch: string): Promise<void> {
+  private async deleteBranchMemoriesUnlocked(branch: string): Promise<void> {
     const db = await this.getDb();
     const tableNames = await db.tableNames();
 
@@ -403,7 +448,7 @@ export class MemoryVectorStore {
     }
   }
 
-  async deleteAll(): Promise<void> {
+  private async deleteAllUnlocked(): Promise<void> {
     const db = await this.getDb();
     const tableNames = await db.tableNames();
 

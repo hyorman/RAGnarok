@@ -405,6 +405,55 @@ describe("MemoryVectorStore", function () {
     });
   });
 
+  // ── Corruption is a hard failure, not an empty store ────────────────
+
+  describe("Corrupt data handling", function () {
+    it("throws on corrupt rows instead of reporting an empty store", async function () {
+      const dir = path.join(tempDir, "corrupt-test");
+      await fs.mkdir(dir, { recursive: true });
+      const s = new MemoryVectorStore(dir);
+
+      await s.saveEntries([createTestEntry({ content: "valid entry" })], "workspace");
+
+      // Corrupt the table out-of-band: same schema, but tags is invalid JSON.
+      const { connect } = await import("@lancedb/lancedb");
+      const db = await connect(dir);
+      await db.dropTable("_memory-entries-workspace");
+      await db.createTable("_memory-entries-workspace", [
+        {
+          id: "corrupt-row",
+          content: "corrupt",
+          scope: "workspace",
+          branch: "",
+          vector: randomVector(),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          accessCount: 0,
+          lastAccessedAt: Date.now(),
+          tags: "{{{ not json",
+          entityIds: "[]",
+          metadata: "{}",
+          confidence: 1.0,
+          expiresAt: 0,
+          isLatest: 1,
+          supersededBy: "",
+          previousVersionId: "",
+          version: 1,
+        },
+      ]);
+
+      // Returning [] here would let the next save overwrite recoverable data.
+      let thrown: Error | null = null;
+      try {
+        await s.loadEntries("workspace");
+      } catch (error) {
+        thrown = error as Error;
+      }
+      expect(thrown, "corrupt rows must fail loudly").to.not.be.null;
+      expect(thrown!.message).to.include("Memory store read failed");
+    });
+  });
+
   // ── Table Naming / Branch Encoding ─────────────────────────────────
 
   describe("Table naming", function () {

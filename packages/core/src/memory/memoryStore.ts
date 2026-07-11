@@ -73,6 +73,9 @@ export class MemoryStore {
   private graphCache = new Map<string, MemoryGraph>();
   // In-memory entry caches (lazy-loaded from LanceDB)
   private entryCache = new Map<string, MemoryEntry[]>();
+  // In-flight cache loads, so concurrent misses share one result
+  private graphLoads = new Map<string, Promise<MemoryGraph>>();
+  private entryLoads = new Map<string, Promise<MemoryEntry[]>>();
 
   // Debounced memories.md regeneration: every mutation used to rescan every
   // scope twice (markdown + stats) and rewrite the file, and concurrent
@@ -584,27 +587,50 @@ export class MemoryStore {
 
   private async getGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraph> {
     const key = this.scopeKey(scope, branch);
-    let graph = this.graphCache.get(key);
-
-    if (!graph) {
-      const data = await this.vectorStore.loadGraph(scope, branch);
-      graph = data ? MemoryGraph.fromJSON(data) : new MemoryGraph();
-      this.graphCache.set(key, graph);
+    const cached = this.graphCache.get(key);
+    if (cached) {
+      return cached;
     }
 
-    return graph;
+    // Single-flight: concurrent cache misses must share one load, or each
+    // caller gets its OWN graph object and mutations to the losers are lost.
+    let loading = this.graphLoads.get(key);
+    if (!loading) {
+      loading = this.vectorStore
+        .loadGraph(scope, branch)
+        .then((data) => {
+          const graph = data ? MemoryGraph.fromJSON(data) : new MemoryGraph();
+          this.graphCache.set(key, graph);
+          return graph;
+        })
+        .finally(() => this.graphLoads.delete(key));
+      this.graphLoads.set(key, loading);
+    }
+    return loading;
   }
 
   private async getEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
     const key = this.scopeKey(scope, branch);
-    let entries = this.entryCache.get(key);
-
-    if (!entries) {
-      entries = await this.vectorStore.loadEntries(scope, branch);
-      this.entryCache.set(key, entries);
+    const cached = this.entryCache.get(key);
+    if (cached) {
+      return cached;
     }
 
-    return entries;
+    // Single-flight: two concurrent misses would otherwise each load and
+    // cache their OWN array — entries pushed onto the losing array never
+    // persist (lost update).
+    let loading = this.entryLoads.get(key);
+    if (!loading) {
+      loading = this.vectorStore
+        .loadEntries(scope, branch)
+        .then((entries) => {
+          this.entryCache.set(key, entries);
+          return entries;
+        })
+        .finally(() => this.entryLoads.delete(key));
+      this.entryLoads.set(key, loading);
+    }
+    return loading;
   }
 
   private async findEntryById(id: string): Promise<(MemoryEntry & { scope: MemoryScope; branch?: string }) | null> {
