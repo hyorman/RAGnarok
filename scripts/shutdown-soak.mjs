@@ -14,10 +14,13 @@ try {
       const child = spawn(process.execPath, [entry], {
         cwd: root,
         env: {
-          ...process.env,
+          // Scrub developer RAGNAROK_* config so the soak is deterministic.
+          ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("RAGNAROK_"))),
           RAGNAROK_STORAGE_DIR: storageDir,
           RAGNAROK_LOG_LEVEL: "error",
-          RAGNAROK_RERANKER_ENABLED: "false",
+          // Exercise the ONNX-session lifecycle — the historical SIGABRT
+          // source. Startup warm-up loads the model; shutdown disposes it.
+          RAGNAROK_RERANKER_ENABLED: "true",
         },
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -26,7 +29,7 @@ try {
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error(`shutdown iteration ${iteration} timed out`));
-      }, 20_000);
+      }, 45_000);
       child.stderr.on("data", (chunk) => (stderr += chunk));
       child.stdout.on("data", (chunk) => {
         stdout += chunk;
