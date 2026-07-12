@@ -14,6 +14,8 @@ import {
   ILLMProvider,
   RAGQueryService,
   TopicEmptyError,
+  MemoryStore,
+  LanceDBCheckpointSaver,
 } from "@ragnarok/core";
 import { TOOLS, VSCODE_CONFIG } from "./constants";
 import { WorkspaceContextProvider } from "./workspaceContext";
@@ -32,11 +34,14 @@ export class RAGTool {
     embeddingService: EmbeddingService,
     config: IConfigProvider,
     llmProvider: ILLMProvider,
+    memoryStore?: MemoryStore,
+    checkpointer?: LanceDBCheckpointSaver,
   ) {
     this.embeddingService = embeddingService;
     this.config = config;
     this.llmProvider = llmProvider;
     this.ragQueryService = new RAGQueryService(topicManager, config, llmProvider);
+    this.ragQueryService.setGraphDeps({ memoryStore, embeddingService, checkpointer });
     this.cleanupSubscription = TopicManager.onAgentCacheCleanup.subscribe((topicId) =>
       this.ragQueryService.clearAgentCache(topicId),
     );
@@ -51,8 +56,10 @@ export class RAGTool {
     embeddingService: EmbeddingService,
     config: IConfigProvider,
     llmProvider: ILLMProvider,
+    memoryStore?: MemoryStore,
+    checkpointer?: LanceDBCheckpointSaver,
   ): vscode.Disposable {
-    const tool = new RAGTool(topicManager, embeddingService, config, llmProvider);
+    const tool = new RAGTool(topicManager, embeddingService, config, llmProvider, memoryStore, checkpointer);
 
     // Register as a language model tool
     const ragTool = vscode.lm.registerTool(TOOLS.RAG_QUERY, {
@@ -158,7 +165,7 @@ export class RAGTool {
   private dispose(): void {
     logger.info("Disposing RAGTool");
     this.cleanupSubscription.unsubscribe();
-    this.ragQueryService.dispose();
+    void this.ragQueryService.dispose();
     logger.info("RAGTool disposed");
   }
 }

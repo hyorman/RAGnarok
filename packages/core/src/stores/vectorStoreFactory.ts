@@ -17,11 +17,15 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { LanceDB } from "@langchain/community/vectorstores/lancedb";
 import { connect } from "@lancedb/lancedb";
+import type { Connection, Table } from "@lancedb/lancedb";
+import { Bool, Field, FixedSizeList, Float32, Float64, Schema, Utf8 } from "apache-arrow";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
+import { atomicWriteJson, STORAGE_FORMAT_VERSION } from "../utils/storageV2";
+import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 export interface VectorStoreConfig {
   topicId: string;
@@ -29,12 +33,14 @@ export interface VectorStoreConfig {
 }
 
 export interface VectorStoreMetadata {
+  schemaVersion: typeof STORAGE_FORMAT_VERSION;
   topicId: string;
   documentCount: number;
   chunkCount: number;
   embeddingModel: string;
   /** Backend type used to create these embeddings (may be absent for legacy data). */
   embeddingBackend?: string;
+  embeddingFingerprint: EmbeddingFingerprint;
   createdAt: number;
   updatedAt: number;
 }
@@ -48,6 +54,8 @@ export class VectorStoreFactory {
   private lanceDbUri: string;
   private metadataDropWarningShown = false;
   private embeddingService: EmbeddingService;
+  private connections = new Map<string, Connection>();
+  private tables = new Set<Table>();
 
   constructor(storageDir: string, embeddingModel: string, embeddingService: EmbeddingService) {
     this.logger = new Logger("VectorStoreFactory");
@@ -74,7 +82,7 @@ export class VectorStoreFactory {
       await fs.mkdir(this.lanceDbUri, { recursive: true });
 
       // Test connection to LanceDB
-      const db = await connect(this.lanceDbUri);
+      const db = await this.getConnection(this.lanceDbUri);
       const tables = await db.tableNames();
 
       this.logger.info("LanceDB ready", {
@@ -94,7 +102,11 @@ export class VectorStoreFactory {
     return this.embeddingModel;
   }
 
-  public async createStore(config: VectorStoreConfig, initialDocuments?: LangChainDocument[]): Promise<void> {
+  public async createStore(
+    config: VectorStoreConfig,
+    initialDocuments?: LangChainDocument[],
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.logger.info("Creating vector store", {
       topicId: config.topicId,
       documentCount: initialDocuments?.length || 0,
@@ -102,7 +114,7 @@ export class VectorStoreFactory {
 
     try {
       // Connect to LanceDB
-      const db = await connect(this.lanceDbUri);
+      const db = await this.getConnection(this.lanceDbUri);
 
       // Check if table exists and drop it to start fresh
       const tableNames = await db.tableNames();
@@ -111,17 +123,16 @@ export class VectorStoreFactory {
         this.logger.debug("Dropped existing table", { topicId: config.topicId });
       }
 
-      // If we have initial documents, create with them
-      // Otherwise create an empty vector store that's ready for documents
       const docs = initialDocuments && initialDocuments.length > 0 ? initialDocuments : [];
-
-      // Normalize metadata to ensure schema consistency
       const normalizedDocs = docs.length > 0 ? this.normalizeDocumentMetadata(docs) : docs;
-
-      const store = await LanceDB.fromDocuments(normalizedDocs, this.createEmbeddings(this.embeddingModel), {
-        uri: this.lanceDbUri,
-        tableName: config.topicId,
-      });
+      signal?.throwIfAborted();
+      const fingerprint = await this.embeddingService.getFingerprint(signal);
+      const table = await db.createEmptyTable(config.topicId, this.createDocumentSchema(fingerprint.dimension));
+      this.tables.add(table);
+      const store = new LanceDB(this.createEmbeddings(this.embeddingModel), { table });
+      if (normalizedDocs.length > 0) {
+        await this.reconcileDocuments(config.topicId, normalizedDocs, signal);
+      }
 
       if (this.storeCache.size >= VectorStoreFactory.MAX_CACHE_SIZE) {
         const firstKey = this.storeCache.keys().next().value;
@@ -129,7 +140,7 @@ export class VectorStoreFactory {
           this.storeCache.delete(firstKey);
         }
       }
-      this.storeCache.set(config.topicId, store);
+      this.storeCache.set(`${this.lanceDbUri}::${config.topicId}`, store);
       this.logger.info("Vector store created successfully", {
         topicId: config.topicId,
         hasInitialDocs: normalizedDocs.length > 0,
@@ -146,19 +157,17 @@ export class VectorStoreFactory {
   public async loadStore(topicId: string, customStorageDir?: string): Promise<VectorStore | null> {
     this.logger.info("Loading vector store", { topicId, customStorageDir: customStorageDir || "default" });
 
-    // Note: Verify cache key handling if same topic ID exists in both (though getVectorStore handles this)
-    const cachedStore = this.storeCache.get(topicId);
+    const targetLanceDbUri = customStorageDir ? path.join(customStorageDir, "lancedb") : this.lanceDbUri;
+    const cacheKey = `${targetLanceDbUri}::${topicId}`;
+    const cachedStore = this.storeCache.get(cacheKey);
     if (cachedStore) {
       this.logger.debug("Returning cached store", { topicId });
       return cachedStore;
     }
 
     try {
-      // Determine URI
-      const targetLanceDbUri = customStorageDir ? path.join(customStorageDir, "lancedb") : this.lanceDbUri;
-
       // Connect to LanceDB database
-      const db = await connect(targetLanceDbUri);
+      const db = await this.getConnection(targetLanceDbUri);
       const tableNames = await db.tableNames();
 
       if (!tableNames.includes(topicId)) {
@@ -167,7 +176,7 @@ export class VectorStoreFactory {
       }
 
       // Read metadata to know which model was used
-      const metadata = await this.getStoreMetadata(topicId);
+      const metadata = await this.getStoreMetadata(topicId, customStorageDir);
 
       if (!metadata) {
         this.logger.warn("Vector store metadata missing — cannot verify embedding model compatibility", {
@@ -200,6 +209,7 @@ export class VectorStoreFactory {
 
       // Open existing table
       const table = await db.openTable(topicId);
+      this.tables.add(table);
 
       // Create vector store from existing table (per LangChain docs)
       const store = new LanceDB(embeddings, { table });
@@ -210,7 +220,7 @@ export class VectorStoreFactory {
           this.storeCache.delete(firstKey);
         }
       }
-      this.storeCache.set(topicId, store);
+      this.storeCache.set(cacheKey, store);
       this.logger.info("Vector store loaded successfully", { topicId });
       return store;
     } catch (error) {
@@ -223,9 +233,9 @@ export class VectorStoreFactory {
     }
   }
 
-  public async getStoreMetadata(topicId: string): Promise<VectorStoreMetadata | null> {
+  public async getStoreMetadata(topicId: string, customStorageDir?: string): Promise<VectorStoreMetadata | null> {
     try {
-      const metadataPath = this.getMetadataPath(topicId);
+      const metadataPath = this.getMetadataPath(topicId, customStorageDir);
       try {
         await fs.access(metadataPath);
       } catch {
@@ -247,6 +257,16 @@ export class VectorStoreFactory {
     const metadata = await this.getStoreMetadata(topicId);
     if (!metadata) {
       return;
+    }
+    if (metadata.embeddingFingerprint) {
+      const current = await this.embeddingService.getFingerprint();
+      if (JSON.stringify(metadata.embeddingFingerprint) !== JSON.stringify(current)) {
+        throw new Error(
+          `Embedding model mismatch (fingerprint mismatch) for topic ${topicId}. Existing vectors use ` +
+            `${metadata.embeddingFingerprint.backendKind}/${metadata.embeddingFingerprint.model}; current is ` +
+            `${current.backendKind}/${current.model}. Recreate the topic or restore the original embedding configuration.`,
+        );
+      }
     }
     if (metadata.embeddingModel && metadata.embeddingModel !== this.embeddingModel) {
       const error = new Error(
@@ -274,15 +294,17 @@ export class VectorStoreFactory {
       const metadataPath = this.getMetadataPath(topicId);
       await fs.mkdir(path.dirname(metadataPath), { recursive: true });
       const fullMetadata: VectorStoreMetadata = {
+        schemaVersion: STORAGE_FORMAT_VERSION,
         topicId,
         documentCount: metadata.documentCount || 0,
         chunkCount: metadata.chunkCount || 0,
         embeddingModel: metadata.embeddingModel || this.embeddingModel,
         embeddingBackend: metadata.embeddingBackend || "",
+        embeddingFingerprint: metadata.embeddingFingerprint ?? (await this.embeddingService.getFingerprint()),
         createdAt: metadata.createdAt || Date.now(),
         updatedAt: Date.now(),
       };
-      await fs.writeFile(metadataPath, JSON.stringify(fullMetadata, null, 2), "utf-8");
+      await atomicWriteJson(metadataPath, fullMetadata);
       this.logger.info("Vector store metadata saved successfully", { topicId });
     } catch (error) {
       this.logger.error("Failed to save vector store metadata", {
@@ -296,10 +318,14 @@ export class VectorStoreFactory {
   public async deleteStore(topicId: string): Promise<void> {
     this.logger.info("Deleting vector store", { topicId });
     try {
-      this.storeCache.delete(topicId);
+      for (const key of this.storeCache.keys()) {
+        if (key.endsWith(`::${topicId}`)) {
+          this.storeCache.delete(key);
+        }
+      }
 
       // Drop the LanceDB table if it exists
-      const db = await connect(this.lanceDbUri);
+      const db = await this.getConnection(this.lanceDbUri);
 
       const tableNames = await db.tableNames();
       if (tableNames.includes(topicId)) {
@@ -330,24 +356,10 @@ export class VectorStoreFactory {
 
   public async addDocuments(topicId: string, store: VectorStore, documents: LangChainDocument[]): Promise<void> {
     this.logger.info("Adding documents to vector store", { topicId, documentCount: documents.length });
+    void store; // Compatibility parameter; writes use the native durable reconciliation path.
     try {
-      // Normalize metadata to prevent schema mismatches
-      const normalizedDocuments = this.normalizeDocumentMetadata(documents);
-
-      const BATCH_SIZE = 500;
-      for (let i = 0; i < normalizedDocuments.length; i += BATCH_SIZE) {
-        const batch = normalizedDocuments.slice(i, Math.min(i + BATCH_SIZE, normalizedDocuments.length));
-        const progressPercent = Math.round(((i + batch.length) / normalizedDocuments.length) * 100);
-        this.logger.info(`Adding document batch to vector store`, {
-          topicId,
-          batchStart: i,
-          batchEnd: i + batch.length,
-          totalDocuments: normalizedDocuments.length,
-          progress: `${progressPercent}%`,
-        });
-        await store.addDocuments(batch);
-      }
-      this.logger.info("Documents added successfully", { topicId, documentCount: normalizedDocuments.length });
+      await this.reconcileDocuments(topicId, documents);
+      this.logger.info("Documents reconciled successfully", { topicId, documentCount: documents.length });
     } catch (error) {
       this.logger.error("Failed to add documents", {
         error: error instanceof Error ? error.message : String(error),
@@ -356,6 +368,92 @@ export class VectorStoreFactory {
       });
       throw error;
     }
+  }
+
+  /** Upsert stable chunks and remove obsolete chunks for each affected source. */
+  public async reconcileDocuments(
+    topicId: string,
+    documents: LangChainDocument[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (documents.length === 0) {
+      return;
+    }
+    const normalized = this.normalizeDocumentMetadata(documents);
+    const db = await this.getConnection(this.lanceDbUri);
+    const table = await db.openTable(topicId);
+    this.tables.add(table);
+    signal?.throwIfAborted();
+    const vectors = await this.embeddingService.embedBatch(
+      normalized.map((document) => document.pageContent),
+      undefined,
+      signal,
+    );
+    signal?.throwIfAborted();
+    const rows: Array<Record<string, unknown>> = normalized.map((document, index) => ({
+      vector: vectors[index],
+      text: document.pageContent,
+      document_id: String(document.metadata.documentId),
+      chunk_id: String(document.metadata.chunkId),
+      ...document.metadata,
+    }));
+    const byDocument = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const documentId = String(row.documentId);
+      const sourceRows = byDocument.get(documentId) ?? [];
+      sourceRows.push(row);
+      byDocument.set(documentId, sourceRows);
+    }
+    for (const [documentId, sourceRows] of byDocument) {
+      signal?.throwIfAborted();
+      const escaped = documentId.replace(/'/g, "''");
+      await table
+        .mergeInsert("chunk_id")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .whenNotMatchedBySourceDelete({ where: `document_id = '${escaped}'` })
+        .execute(sourceRows);
+    }
+  }
+
+  public async getStoredStats(topicId: string): Promise<{ documentCount: number; chunkCount: number }> {
+    const db = await this.getConnection(this.lanceDbUri);
+    if (!(await db.tableNames()).includes(topicId)) {
+      return { documentCount: 0, chunkCount: 0 };
+    }
+    const table = await db.openTable(topicId);
+    this.tables.add(table);
+    const rows = await table.query().select(["document_id"]).limit(1_000_000).toArray();
+    return {
+      documentCount: new Set(rows.map((row) => String(row.document_id))).size,
+      chunkCount: rows.length,
+    };
+  }
+
+  public async getDocumentChunkCount(topicId: string, documentId: string): Promise<number> {
+    const db = await this.getConnection(this.lanceDbUri);
+    if (!(await db.tableNames()).includes(topicId)) {
+      return 0;
+    }
+    const table = await db.openTable(topicId);
+    this.tables.add(table);
+    const escaped = documentId.replace(/'/g, "''");
+    return (await table.query().where(`document_id = '${escaped}'`).select(["chunk_id"]).toArray()).length;
+  }
+
+  public async removeDocument(topicId: string, documentId: string): Promise<string[]> {
+    const db = await this.getConnection(this.lanceDbUri);
+    if (!(await db.tableNames()).includes(topicId)) {
+      return [];
+    }
+    const table = await db.openTable(topicId);
+    this.tables.add(table);
+    const escaped = documentId.replace(/'/g, "''");
+    const rows = await table.query().where(`document_id = '${escaped}'`).select(["chunkId"]).toArray();
+    if (rows.length > 0) {
+      await table.delete(`document_id = '${escaped}'`);
+    }
+    return rows.map((row) => String(row.chunkId));
   }
 
   /**
@@ -373,7 +471,7 @@ export class VectorStoreFactory {
     try {
       const targetUri = customStorageDir ? path.join(customStorageDir, "lancedb") : this.lanceDbUri;
 
-      const db = await connect(targetUri);
+      const db = await this.getConnection(targetUri);
       const tableNames = await db.tableNames();
       if (!tableNames.includes(topicId)) {
         this.logger.warn("Table not found for getAllDocuments", { topicId });
@@ -381,6 +479,7 @@ export class VectorStoreFactory {
       }
 
       const table = await db.openTable(topicId);
+      this.tables.add(table);
       const rows = await table.query().limit(limit).toArray();
 
       // Debug: log first row's column keys and text preview
@@ -395,7 +494,7 @@ export class VectorStoreFactory {
       const documents = rows.map((row: Record<string, unknown>) => {
         const metadata: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(row)) {
-          if (key !== "text" && key !== "vector") {
+          if (key !== "text" && key !== "vector" && key !== "document_id" && key !== "chunk_id") {
             metadata[key] = value;
           }
         }
@@ -430,6 +529,14 @@ export class VectorStoreFactory {
 
     // Clear all cached stores
     this.storeCache.clear();
+    for (const table of this.tables) {
+      table.close();
+    }
+    this.tables.clear();
+    for (const connection of this.connections.values()) {
+      connection.close();
+    }
+    this.connections.clear();
 
     this.logger.info("VectorStoreFactory disposed");
   }
@@ -446,6 +553,10 @@ export class VectorStoreFactory {
       // source attribution in query results.
       const allowedFields = [
         "source",
+        "sourceType",
+        "sourceDescriptor",
+        "sourceRevision",
+        "documentId",
         "fileName",
         "filePath",
         "fileType",
@@ -454,6 +565,8 @@ export class VectorStoreFactory {
         "chunkIndex",
         "totalChunks",
         "loc",
+        "loc_lines_from",
+        "loc_lines_to",
         "isMarkdown",
         "preserveStructure",
         "chunkId",
@@ -461,9 +574,33 @@ export class VectorStoreFactory {
         "endPosition",
         "headingPath",
         "sectionTitle",
+        "headingLevel",
       ];
 
-      const normalizedMetadata: Record<string, any> = {};
+      const normalizedMetadata: Record<string, any> = {
+        source: "",
+        sourceType: "file",
+        sourceDescriptor: "{}",
+        sourceRevision: "",
+        documentId: "",
+        chunkId: "",
+        fileName: "",
+        filePath: "",
+        fileType: "text",
+        fileSize: 0,
+        loadedAt: 0,
+        chunkIndex: 0,
+        totalChunks: 0,
+        loc_lines_from: 0,
+        loc_lines_to: 0,
+        isMarkdown: false,
+        preserveStructure: false,
+        startPosition: 0,
+        endPosition: 0,
+        headingPath: "[]",
+        headingLevel: 0,
+        sectionTitle: "",
+      };
 
       // Copy only allowed fields
       for (const field of allowedFields) {
@@ -474,8 +611,8 @@ export class VectorStoreFactory {
 
       // Convert loc object to simple fields if present (for compatibility)
       if (doc.metadata.loc && typeof doc.metadata.loc === "object") {
-        normalizedMetadata.loc_lines_from = doc.metadata.loc.lines?.from;
-        normalizedMetadata.loc_lines_to = doc.metadata.loc.lines?.to;
+        normalizedMetadata.loc_lines_from = doc.metadata.loc.lines?.from ?? 0;
+        normalizedMetadata.loc_lines_to = doc.metadata.loc.lines?.to ?? 0;
         delete normalizedMetadata.loc; // Remove complex object
       }
 
@@ -501,8 +638,54 @@ export class VectorStoreFactory {
     });
   }
 
-  private getMetadataPath(topicId: string): string {
-    return path.join(this.storageDir, `vector-${topicId}-metadata.json`);
+  private getMetadataPath(topicId: string, customStorageDir?: string): string {
+    return path.join(customStorageDir ?? this.storageDir, `vector-${topicId}-metadata.json`);
+  }
+
+  private async getConnection(uri: string): Promise<Connection> {
+    let connection = this.connections.get(uri);
+    if (!connection || !connection.isOpen()) {
+      connection = await connect(uri);
+      this.connections.set(uri, connection);
+    }
+    return connection;
+  }
+
+  private createDocumentSchema(dimension: number): Schema {
+    const stringFields = [
+      "text",
+      "source",
+      "sourceType",
+      "sourceDescriptor",
+      "sourceRevision",
+      "documentId",
+      "document_id",
+      "chunkId",
+      "chunk_id",
+      "fileName",
+      "filePath",
+      "fileType",
+      "headingPath",
+      "sectionTitle",
+    ].map((name) => new Field(name, new Utf8(), false));
+    const numberFields = [
+      "fileSize",
+      "loadedAt",
+      "chunkIndex",
+      "totalChunks",
+      "loc_lines_from",
+      "loc_lines_to",
+      "startPosition",
+      "endPosition",
+      "headingLevel",
+    ].map((name) => new Field(name, new Float64(), false));
+    return new Schema([
+      new Field("vector", new FixedSizeList(dimension, new Field("item", new Float32(), false)), false),
+      ...stringFields,
+      ...numberFields,
+      new Field("isMarkdown", new Bool(), false),
+      new Field("preserveStructure", new Bool(), false),
+    ]);
   }
 
   private createEmbeddings(modelName: string, backendType?: string): TransformersEmbeddings {

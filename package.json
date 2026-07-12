@@ -170,6 +170,32 @@
           "markdownDescription": "**Reranker Model** — The HuggingFace cross-encoder model to use for reranking. Default is `Xenova/ms-marco-MiniLM-L-6-v2` (23MB, fast). Alternatives: `Xenova/ms-marco-MiniLM-L-12-v2` (more accurate), `Xenova/ms-marco-TinyBERT-L-2-v2` (fastest).",
           "order": 13
         },
+        "ragnarok.rerankerEnabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable bundled cross-encoder reranking. Querying degrades to first-stage ranking if model initialization fails.",
+          "order": 12.5
+        },
+        "ragnarok.queryMemoryEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Opt in to automatic storage of high-confidence query insights. Disabled by default.",
+          "order": 16
+        },
+        "ragnarok.checkpointRetentionMs": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 604800000,
+          "markdownDescription": "Retain successful LangGraph query and ingestion checkpoints for debugging (milliseconds). `0` deletes them immediately.",
+          "order": 16.5
+        },
+        "ragnarok.memoryIncludeAuto": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show reserved auto-generated memory entries in memory listings.",
+          "order": 17
+        },
         "ragnarok.rerankerMaxCandidates": {
           "type": "number",
           "default": 20,
@@ -449,6 +475,8 @@
     "test:all": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:vscode:compiled && npm run test:mcp:compiled",
     "test:fast": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:mcp:compiled",
     "test:pack": "node scripts/pack-smoke.mjs",
+    "test:shutdown-soak": "node scripts/shutdown-soak.mjs",
+    "verify:models": "node scripts/verify-model-manifest.mjs",
     "bench:beir": "npm run bench:beir --workspace=packages/core",
     "bench:frames": "npm run bench:frames --workspace=packages/core",
     "inspect:chunks": "npm run compile && node scripts/inspect-chunks.js",
@@ -478,7 +506,7 @@
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.2",
     "chai": "^5.1.2",
-    "esbuild": "^0.27.4",
+    "esbuild": "0.28.1",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "mocha": "^11.0.1",
@@ -491,9 +519,10 @@
   "dependencies": {
     "@huggingface/transformers": "^3.7.6",
     "@lancedb/lancedb": "^0.19.1",
-    "@langchain/community": "^1.0.0",
-    "@langchain/core": "^1.1.40",
-    "@langchain/textsplitters": "^1.0.0",
+    "@langchain/community": "1.1.29",
+    "@langchain/core": "1.2.2",
+    "@langchain/textsplitters": "1.0.1",
+    "@napi-rs/canvas": "0.1.80",
     "adm-zip": "^0.5.16",
     "apache-arrow": "^18.1.0",
     "archiver": "^7.0.1",
@@ -501,7 +530,7 @@
     "cheerio": "^1.1.2",
     "glob": "^10.4.5",
     "ignore": "^7.0.5",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "2.4.5"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",
@@ -525,7 +554,9 @@
   },
   "overrides": {
     "diff": "8.0.3",
-    "serialize-javascript": "7.0.3",
+    "serialize-javascript": "7.0.5",
+    "form-data": "4.0.6",
+    "ws": "8.21.0",
     "@langchain/community": {
       "pdf-parse": "$pdf-parse"
     }

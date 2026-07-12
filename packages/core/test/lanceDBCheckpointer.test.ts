@@ -42,6 +42,7 @@ describe("LanceDBCheckpointSaver", function () {
   });
 
   after(async function () {
+    saver.dispose();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -159,5 +160,22 @@ describe("LanceDBCheckpointSaver", function () {
     expect(tuple!.checkpoint.id).to.equal(cp2.id);
     expect(tuple!.parentConfig).to.not.be.undefined;
     expect(tuple!.parentConfig!.configurable!.checkpoint_id).to.equal(cp1.id);
+  });
+
+  it("purges retained checkpoints by age and thread prefix", async function () {
+    await saver.put(makeConfig("query:expired"), makeCheckpoint(), makeMetadata(0), {});
+    await saver.put(makeConfig("ingest:retained"), makeCheckpoint(), makeMetadata(0), {});
+
+    expect(await saver.deleteOlderThan(Date.now() + 1, "query:")).to.equal(1);
+    expect(await saver.getTuple(makeConfig("query:expired"))).to.be.undefined;
+    expect(await saver.getTuple(makeConfig("ingest:retained"))).to.not.be.undefined;
+  });
+
+  it("deletes a completed thread after its retention window", async function () {
+    const threadId = "query:scheduled";
+    await saver.put(makeConfig(threadId), makeCheckpoint(), makeMetadata(0), {});
+    saver.deleteThreadAfter(threadId, 5);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(await saver.getTuple(makeConfig(threadId))).to.be.undefined;
   });
 });

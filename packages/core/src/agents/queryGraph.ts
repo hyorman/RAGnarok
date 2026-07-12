@@ -27,6 +27,10 @@ import { RetrievalStrategy } from "../utils/types";
 import { CONFIG } from "../constants";
 import { Logger } from "../logger";
 import type { Reranker } from "../rerankers/reranker";
+import { Document as LangChainDocument } from "@langchain/core/documents";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import type { QueryPlan } from "./queryPlannerAgent";
+import type { RetrievalResult } from "./ragAgent";
 
 // ── Dependencies ─────────────────────────────────────────────────────
 
@@ -50,7 +54,8 @@ const logger = new Logger("QueryGraph");
  * Skips gracefully when no memory store is available.
  */
 function createRecallMemoryNode(deps: QueryGraphDeps) {
-  return async (state: QueryPipelineStateType): Promise<QueryPipelineUpdateType> => {
+  return async (state: QueryPipelineStateType, runtime?: RunnableConfig): Promise<QueryPipelineUpdateType> => {
+    runtime?.signal?.throwIfAborted();
     if (!deps.memoryStore) {
       logger.debug("No memory store, skipping recall");
       return {};
@@ -60,12 +65,18 @@ function createRecallMemoryNode(deps: QueryGraphDeps) {
       const result = await deps.memoryStore.recall({
         query: state.query,
         topK: 3,
+        reinforce: false,
+        includeAuto: false,
+        signal: runtime?.signal,
       });
       const memoryContext = result.memories.map((m) => m.entry.content);
 
       logger.debug("Recalled memories", { count: memoryContext.length });
       return { memoryContext };
     } catch (error) {
+      if (runtime?.signal?.aborted) {
+        throw error;
+      }
       logger.warn("Memory recall failed, continuing without context", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -79,7 +90,8 @@ function createRecallMemoryNode(deps: QueryGraphDeps) {
  * Includes memory context in the workspace context string.
  */
 function createPlanQueryNode(deps: QueryGraphDeps) {
-  return async (state: QueryPipelineStateType): Promise<QueryPipelineUpdateType> => {
+  return async (state: QueryPipelineStateType, runtime?: RunnableConfig): Promise<QueryPipelineUpdateType> => {
+    runtime?.signal?.throwIfAborted();
     const planner = new QueryPlannerAgent(deps.llmProvider);
 
     // Build workspace context enriched with memory
@@ -94,6 +106,7 @@ function createPlanQueryNode(deps: QueryGraphDeps) {
       retrievalStrategy: state.options.retrievalStrategy as RetrievalStrategy,
       topK: state.options.topK,
       modelFamily: state.options.modelFamily,
+      signal: runtime?.signal,
     });
 
     logger.info("Query plan created", {
@@ -130,7 +143,8 @@ function createRetrieveNode(deps: QueryGraphDeps) {
   // queries across topics without thrashing the cache on topic switches.
   const agentCache = new Map<string, RAGAgent>();
 
-  return async (state: QueryPipelineStateType): Promise<QueryPipelineUpdateType> => {
+  return async (state: QueryPipelineStateType, runtime?: RunnableConfig): Promise<QueryPipelineUpdateType> => {
+    runtime?.signal?.throwIfAborted();
     if (!state.plan || state.plan.subQueries.length === 0) {
       logger.warn("No plan or empty sub-queries, skipping retrieval");
       return {};
@@ -165,6 +179,7 @@ function createRetrieveNode(deps: QueryGraphDeps) {
       retrievalStrategy,
       topK: state.options.topK,
       modelFamily: state.options.modelFamily,
+      signal: runtime?.signal,
     });
 
     const allResults: RetrievalResultEntry[] = retrievalResults.map((result) => ({
@@ -192,7 +207,15 @@ function createRetrieveNode(deps: QueryGraphDeps) {
  */
 function createEvaluateNode(_deps: QueryGraphDeps) {
   return async (state: QueryPipelineStateType): Promise<QueryPipelineUpdateType> => {
-    const results = state.retrievalResults;
+    const seen = new Set<string>();
+    const results = state.retrievalResults.filter((result) => {
+      const key = getRetrievalResultKey(result);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
     if (results.length === 0) {
       return { confidence: 0 };
     }
@@ -221,55 +244,47 @@ function createEvaluateNode(_deps: QueryGraphDeps) {
  * Updates the plan with new sub-queries targeting low-scoring areas.
  */
 function createRefineNode(deps: QueryGraphDeps) {
+  const refinementAgent = new RAGAgent(deps.config, deps.llmProvider);
   return async (state: QueryPipelineStateType): Promise<QueryPipelineUpdateType> => {
     if (!state.plan) {
       return {};
     }
 
-    // Identify sub-queries with poor coverage
-    const gapThreshold = deps.config.get<number>(CONFIG.GAP_SCORE_THRESHOLD, 0.4);
-    const resultsBySubQuery = new Map<string, number[]>();
-
-    for (const r of state.retrievalResults) {
-      const sq = (r.metadata?.subQuery as string) ?? "";
-      if (!resultsBySubQuery.has(sq)) {
-        resultsBySubQuery.set(sq, []);
-      }
-      resultsBySubQuery.get(sq)!.push(r.score);
-    }
-
-    const refinedSubQueries: QueryPlanRef["subQueries"] = [];
-
-    for (const sq of state.plan.subQueries) {
-      const scores = resultsBySubQuery.get(sq.query) ?? [];
-      const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
-
-      if (avgScore < gapThreshold) {
-        // Broaden the query by appending context
-        refinedSubQueries.push({
-          query: `${sq.query} overview context`,
-          reasoning: `Refinement of "${sq.query}" (avg score: ${avgScore.toFixed(2)})`,
-          topK: sq.topK,
-        });
-      }
-    }
-
-    // If no gaps found, re-search with the original query broadened
-    if (refinedSubQueries.length === 0) {
-      refinedSubQueries.push({
-        query: `${state.query} summary`,
-        reasoning: "Broadened original query for additional coverage",
-        topK: state.options.topK,
-      });
-    }
+    const plan: QueryPlan = {
+      originalQuery: state.plan.originalQuery,
+      complexity: state.plan.complexity,
+      subQueries: state.plan.subQueries,
+      explanation: state.plan.explanation,
+    };
+    const existingResults: RetrievalResult[] = state.retrievalResults.map((result) => ({
+      document: new LangChainDocument({ pageContent: result.content, metadata: result.metadata ?? {} }),
+      score: result.score,
+      source: (result.metadata?.retrievalStrategy as RetrievalStrategy) ?? RetrievalStrategy.VECTOR,
+      subQuery: result.metadata?.subQuery as string | undefined,
+      originalSubQuery: result.metadata?.originalSubQuery as string | undefined,
+    }));
+    const gaps = refinementAgent.analyzeGaps(
+      plan,
+      existingResults,
+      state.options.retrievalStrategy as RetrievalStrategy,
+    );
+    const followUp = await refinementAgent.generateFollowUpPlan(plan, gaps, existingResults, {
+      topicName: state.topicId,
+      workspaceContext: "",
+      topK: state.options.topK,
+      retrievalStrategy: state.options.retrievalStrategy as RetrievalStrategy,
+      maxIterations: state.maxIterations,
+      confidenceThreshold: state.confidenceThreshold,
+      modelFamily: state.options.modelFamily,
+    });
+    const refinedSubQueries = followUp?.subQueries ?? [];
 
     logger.debug("Refined plan", { newSubQueries: refinedSubQueries.length });
 
     return {
       plan: {
-        ...state.plan,
+        ...(followUp ?? state.plan),
         subQueries: refinedSubQueries,
-        explanation: `${state.plan.explanation} (refined iteration ${state.iterations})`,
       },
       iterations: state.iterations + 1,
     };
@@ -281,11 +296,15 @@ function createRefineNode(deps: QueryGraphDeps) {
  */
 function createMemorizeNode(deps: QueryGraphDeps) {
   return async (state: QueryPipelineStateType): Promise<QueryPipelineUpdateType> => {
-    if (!deps.memoryStore) {
+    if (
+      state.options.allowMemoryWrites === false ||
+      !deps.memoryStore ||
+      !deps.config.get<boolean>(CONFIG.QUERY_MEMORY_ENABLED, false)
+    ) {
       return {};
     }
 
-    const memoryThreshold = deps.config.get<number>(CONFIG.MEMORY_CONFIDENCE_THRESHOLD, 0.1);
+    const memoryThreshold = Math.max(0.7, deps.config.get<number>(CONFIG.MEMORY_CONFIDENCE_THRESHOLD, 0.7));
 
     if (state.confidence < memoryThreshold || state.retrievalResults.length === 0) {
       return {};
@@ -301,7 +320,7 @@ function createMemorizeNode(deps: QueryGraphDeps) {
 
       await deps.memoryStore.store({
         content: memoryContent,
-        tags: ["query-insight", state.topicId],
+        tags: ["auto:query-insight", state.topicId],
       });
 
       logger.debug("Stored query insight in memory");
@@ -344,6 +363,12 @@ function createFormatOutputNode(_deps: QueryGraphDeps) {
       confidence: state.confidence,
       iterations: state.iterations,
       plan: state.plan,
+      subQueryCounts: Object.fromEntries(
+        (state.plan?.subQueries ?? []).map((subQuery) => [
+          subQuery.query,
+          unique.filter((entry) => entry.metadata?.subQuery === subQuery.query).length,
+        ]),
+      ),
       metadata: {
         totalRetrieved: state.retrievalResults.length,
         uniqueResults: unique.length,
@@ -438,6 +463,8 @@ export interface ExecuteQueryGraphOptions {
   confidenceThreshold?: number;
   /** Abort signal — cancels the run between graph steps. */
   signal?: AbortSignal;
+  /** False for reader-token sessions: disables automatic query-memory writes. */
+  allowMemoryWrites?: boolean;
   /**
    * Reuse a previously compiled graph (see createQueryGraph). Compiling per
    * query discards the per-topic RAGAgent cache inside the retrieve node, so
@@ -478,6 +505,7 @@ export async function executeQueryGraph(
       retrievalStrategy,
       topK,
       modelFamily,
+      allowMemoryWrites: options?.allowMemoryWrites ?? true,
     },
     maxIterations,
     confidenceThreshold,

@@ -35,10 +35,16 @@ export interface Document {
   topicId: string;
   name: string;
   filePath: string;
-  fileType: "pdf" | "markdown" | "html";
+  fileType: "pdf" | "markdown" | "html" | "text" | "web" | "github";
+  source?: DocumentSource;
   addedAt: number;
   chunkCount: number;
 }
+
+export type DocumentSource =
+  | { type: "file"; path: string }
+  | { type: "url"; url: string }
+  | { type: "github"; url: string; branch?: string };
 
 export interface TextChunk {
   id: string;
@@ -104,6 +110,10 @@ export interface RAGQueryResult {
   topicMatched: "exact" | "similar" | "fallback";
   requestedTopic?: string;
   availableTopics?: string[];
+  graphUsed?: boolean;
+  fallbackReason?: string;
+  matchedEntities?: string[];
+  hopDepth?: number;
   // Agentic RAG results
   agenticMetadata?: {
     mode: "simple" | "agentic";

@@ -4,6 +4,7 @@
  */
 
 import { expect } from "chai";
+import sinon from "sinon";
 import { CrossEncoderReranker } from "../src/index";
 import type { ScoredDocument } from "../src/index";
 import { sigmoid } from "../src/rerankers/reranker";
@@ -301,6 +302,20 @@ describe("CrossEncoderReranker", function () {
       expect(result[0].score).to.equal(0.9);
       expect(result[1].score).to.equal(0.8);
     });
+
+    it("propagates cancellation instead of degrading to stale first-stage results", async () => {
+      const controller = new AbortController();
+      (reranker as any).model = async () => {
+        controller.abort(new Error("reranking cancelled"));
+        return { logits: { dims: [1, 1], data: new Float32Array([1]) } };
+      };
+      try {
+        await reranker.rerank("query", [makeDoc("candidate", 0.9)], 1, controller.signal);
+        expect.fail("expected cancellation");
+      } catch (error) {
+        expect((error as Error).message).to.equal("reranking cancelled");
+      }
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -431,17 +446,26 @@ describe("CrossEncoderReranker", function () {
   // -----------------------------------------------------------------------
 
   describe("switchModel", () => {
-    it("should update current model name", async () => {
+    it("should retain the working model when replacement initialization fails", async () => {
       const r = new CrossEncoderReranker("Xenova/ms-marco-MiniLM-L-6-v2");
-      // switchModel will fail to load the new model (no pipeline available in test)
-      // but should update the model name before attempting to load
+      const workingModel = { id: "working-model" };
+      const workingTokenizer = { id: "working-tokenizer" };
+      (r as any).model = workingModel;
+      (r as any).tokenizer = workingTokenizer;
+      const initialize = sinon.stub(CrossEncoderReranker.prototype, "initialize").rejects(new Error("probe failed"));
+      let failed = false;
       try {
         await r.switchModel("Xenova/ms-marco-MiniLM-L-12-v2");
       } catch {
-        // Expected — model loading fails in unit tests
+        failed = true;
+      } finally {
+        initialize.restore();
       }
-      expect(r.getCurrentModel()).to.equal("Xenova/ms-marco-MiniLM-L-12-v2");
-      r.dispose();
+      expect(failed).to.equal(true);
+      expect(r.getCurrentModel()).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
+      expect((r as any).model).to.equal(workingModel);
+      expect((r as any).tokenizer).to.equal(workingTokenizer);
+      await r.dispose();
     });
 
     it("should be no-op when switching to same model that is loaded", async () => {

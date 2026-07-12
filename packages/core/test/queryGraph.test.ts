@@ -210,7 +210,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "What is TypeScript?",
         topicId: "test-topic",
-        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "test" },
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "test", allowMemoryWrites: true },
         maxIterations: 3,
         confidenceThreshold: 0.5, // low threshold so it passes evaluation
       });
@@ -260,7 +260,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "TypeScript",
         topicId: "t1",
-        options: { retrievalStrategy: "graph", topK: 5, modelFamily: "test" },
+        options: { retrievalStrategy: "graph", topK: 5, modelFamily: "test", allowMemoryWrites: true },
         maxIterations: 1,
         confidenceThreshold: 0,
       });
@@ -278,7 +278,7 @@ describe("QueryGraph", function () {
       const finalState = await graph.invoke({
         query: "TypeScript",
         topicId: "t1",
-        options: { retrievalStrategy: "vector", topK: 5, modelFamily: "" },
+        options: { retrievalStrategy: "vector", topK: 5, modelFamily: "", allowMemoryWrites: true },
         maxIterations: 1,
         confidenceThreshold: 0.5,
       });
@@ -300,7 +300,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "TypeScript features",
         topicId: "t1",
-        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "", allowMemoryWrites: true },
         maxIterations: 1,
         confidenceThreshold: 0.5,
       });
@@ -317,7 +317,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "TypeScript",
         topicId: "t1",
-        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "", allowMemoryWrites: true },
         maxIterations: 1,
         confidenceThreshold: 0.5,
       });
@@ -326,6 +326,58 @@ describe("QueryGraph", function () {
       expect(result.error).to.be.null;
       expect(result.memoryContext).to.be.an("array").with.lengthOf(0);
       expect(result.result).to.be.an("object");
+    });
+
+    it("propagates cancellation through memory, planning, retrieval, and reranking", async () => {
+      const controller = new AbortController();
+      const memoryStore = createMockMemoryStore();
+      let rerankerSignalAborted = false;
+      const rerank = sinon
+        .stub()
+        .callsFake(async (_query: string, _documents: LangChainDocument[], _topK: number, signal?: AbortSignal) => {
+          expect(signal).to.have.property("aborted", false);
+          setTimeout(() => controller.abort(new Error("cancel during graph reranking")), 0);
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("reranker signal was not cancelled")), 100);
+            signal?.addEventListener(
+              "abort",
+              () => {
+                rerankerSignalAborted = true;
+                clearTimeout(timeout);
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          });
+          return [];
+        });
+      const deps = buildDeps({
+        memoryStore,
+        reranker: { rerank, isAvailable: () => true, dispose: async () => {} } as any,
+      });
+      const graph = createQueryGraph(deps);
+
+      let caught: unknown;
+      try {
+        await graph.invoke(
+          {
+            query: "TypeScript",
+            topicId: "t1",
+            options: { retrievalStrategy: "vector", topK: 5, modelFamily: "", allowMemoryWrites: true },
+            maxIterations: 1,
+            confidenceThreshold: 0.5,
+          },
+          { signal: controller.signal },
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).to.be.instanceOf(Error);
+      expect((memoryStore.recall as sinon.SinonStub).firstCall.args[0].signal).to.have.property("aborted");
+      expect(planStub.firstCall.args[1].signal).to.have.property("aborted");
+      expect(rerank.calledOnce).to.equal(true);
+      expect(rerankerSignalAborted).to.equal(true);
     });
   });
 
@@ -350,7 +402,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "obscure topic",
         topicId: "t1",
-        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "", allowMemoryWrites: true },
         maxIterations: 3,
         confidenceThreshold: 0.9, // high threshold to force refinement
       });
@@ -380,7 +432,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "impossible match",
         topicId: "t1",
-        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "", allowMemoryWrites: true },
         maxIterations: 2,
         confidenceThreshold: 0.99, // unreachable threshold
       });
@@ -405,7 +457,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "test",
         topicId: "t1",
-        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "", allowMemoryWrites: true },
         maxIterations: 1,
         confidenceThreshold: 0.5,
       });
@@ -425,7 +477,7 @@ describe("QueryGraph", function () {
       const result = await graph.invoke({
         query: "test",
         topicId: "nonexistent",
-        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "" },
+        options: { retrievalStrategy: "hybrid", topK: 5, modelFamily: "", allowMemoryWrites: true },
         maxIterations: 1,
         confidenceThreshold: 0.5,
       });

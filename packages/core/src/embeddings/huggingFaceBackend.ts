@@ -86,7 +86,8 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     }
   }
 
-  async embed(text: string): Promise<number[]> {
+  async embed(text: string, signal?: AbortSignal): Promise<number[]> {
+    signal?.throwIfAborted();
     if (!this.pipeline) {
       await this.initialize();
     }
@@ -101,6 +102,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
         pooling: "mean",
         normalize: true,
       });
+      signal?.throwIfAborted();
 
       const embedding = Array.from((output as any).data) as number[];
       this.dimension = embedding.length;
@@ -112,7 +114,12 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     }
   }
 
-  async embedBatch(texts: string[], progressCallback?: (progress: number) => void): Promise<number[][]> {
+  async embedBatch(
+    texts: string[],
+    progressCallback?: (progress: number) => void,
+    signal?: AbortSignal,
+  ): Promise<number[][]> {
+    signal?.throwIfAborted();
     if (!this.pipeline) {
       await this.initialize();
     }
@@ -133,6 +140,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
       let processedCount = 0;
 
       for (let i = 0; i < texts.length; i += batchSize) {
+        signal?.throwIfAborted();
         const batch = texts.slice(i, i + batchSize);
 
         if (texts.length > 100) {
@@ -150,6 +158,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
         });
 
         const batchEmbeddings = await Promise.all(batchPromises);
+        signal?.throwIfAborted();
         embeddings.push(...batchEmbeddings);
         processedCount += batchEmbeddings.length;
 
@@ -189,7 +198,8 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     return this.dimension;
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
+    const pipeline = this.pipeline;
     this.pipeline = null;
     this.currentModel = this.modelRegistry.getDefaultModel();
     this.lastSuccessfulModel = null;
@@ -198,6 +208,9 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     this.initError = null;
     this.initErrorModel = null;
     this.dimension = null;
+    if (pipeline && typeof pipeline.dispose === "function") {
+      await pipeline.dispose();
+    }
     this.logger.info("HuggingFaceBackend disposed");
   }
 
@@ -213,6 +226,10 @@ export class HuggingFaceBackend implements EmbeddingBackend {
   /** Implements {@link EmbeddingBackend.getModelId}. */
   getModelId(): string | null {
     return this.currentModel;
+  }
+
+  getFingerprintInfo(): { providerFormat: string; revision: string; endpointHash: string } {
+    return { providerFormat: "transformers.js", revision: "bundled-or-huggingface-main", endpointHash: "local" };
   }
 
   // ---------------------------------------------------------------------------
@@ -281,13 +298,14 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const title = `Loading embedding model: ${modelName}${attempt > 1 ? ` (Attempt ${attempt}/${maxRetries})` : ""}`;
+        let candidatePipeline: FeatureExtractionPipeline | null = null;
 
         await this.notifier.withProgress(title, async (report) => {
           report("Downloading and initializing...");
 
           const resolvedModelName = this.modelRegistry.resolveModelIdentifier(modelName);
 
-          this.pipeline = await pipeline("feature-extraction", resolvedModelName, {
+          candidatePipeline = await pipeline("feature-extraction", resolvedModelName, {
             progress_callback: (progressData: any) => {
               if (progressData.status === "progress" && progressData.progress) {
                 const percent = Math.round(progressData.progress);
@@ -297,12 +315,14 @@ export class HuggingFaceBackend implements EmbeddingBackend {
           });
 
           // Validate the pipeline by testing with dummy text
-          await this.pipeline("test", { pooling: "mean", normalize: true });
+          await candidatePipeline!("test", { pooling: "mean", normalize: true });
 
           report("Model loaded successfully!");
         });
 
         const previousModel = this.currentModel;
+        const previousPipeline = this.pipeline;
+        this.pipeline = candidatePipeline;
         this.currentModel = modelName;
         this.lastSuccessfulModel = modelName;
         this.logger.info(`Embedding model initialized successfully: ${modelName}`);
@@ -311,13 +331,18 @@ export class HuggingFaceBackend implements EmbeddingBackend {
           this.logger.debug(`Model changed from "${previousModel}" to "${modelName}", firing event`);
           this.onModelChanged?.(modelName);
         }
+        if (
+          previousPipeline &&
+          previousPipeline !== candidatePipeline &&
+          typeof previousPipeline.dispose === "function"
+        ) {
+          await previousPipeline.dispose();
+        }
 
         return;
       } catch (error: any) {
         lastError = error;
         this.logger.warn(`Initialization attempt ${attempt} failed:`, error.message);
-        this.pipeline = null;
-
         if (attempt < maxRetries) {
           const backoffMs = 1000 * Math.pow(2, attempt - 1);
           this.logger.debug(`Waiting ${backoffMs}ms before retry...`);

@@ -16,7 +16,7 @@ import { EventEmitter } from "events";
 import { CONFIG } from "../constants";
 import { Logger } from "../logger";
 import { IConfigProvider, INotifier } from "../interfaces";
-import { EmbeddingBackend, EmbeddingBackendType } from "./embeddingBackend";
+import { EmbeddingBackend, EmbeddingBackendType, EmbeddingFingerprint } from "./embeddingBackend";
 import { ModelRegistry, AvailableModel } from "../models/modelRegistry.js";
 import { cosineSimilarity as langchainCosineSimilarity } from "@langchain/core/utils/math";
 
@@ -165,8 +165,51 @@ export class EmbeddingService {
     this.logger.info("Backend selection reset; will re-resolve on next initialization");
   }
 
+  /** Resolve and initialize the configured backend before replacing the active one. */
+  public async reselectBackendTransactional(modelName?: string): Promise<void> {
+    const resolved = await this.resolveBackend();
+    await this.selectBackendTransactional(resolved, modelName);
+  }
+
+  public async selectBackendTransactional(backendType: string, modelName?: string): Promise<void> {
+    const replacement = this.registeredBackends.find((backend) => backend.name === backendType);
+    if (!replacement) {
+      throw new Error(`Embedding backend "${backendType}" not registered`);
+    }
+    const prefix = `${backendType}:`;
+    const rawModel = modelName?.startsWith(prefix) ? modelName.slice(prefix.length) : modelName;
+    await replacement.initialize(rawModel || undefined);
+    const previous = this.activeBackend;
+    this.activeBackend = replacement;
+    this.activeBackendType = backendType;
+    this.backendResolved = true;
+    if (previous && previous !== replacement) {
+      await previous.dispose();
+    }
+  }
+
   public getActiveBackendType(): string {
     return this.activeBackendType;
+  }
+
+  /** Stable identity for the exact semantic vector space currently in use. */
+  public async getFingerprint(signal?: AbortSignal): Promise<EmbeddingFingerprint> {
+    signal?.throwIfAborted();
+    await this.ensureBackend();
+    const backend = this.activeBackend!;
+    let dimension = backend.getDimension();
+    if (!dimension) {
+      dimension = (await backend.embed("RAGnarok embedding fingerprint probe", signal)).length;
+    }
+    const details = backend.getFingerprintInfo?.() ?? {};
+    return {
+      backendKind: backend.name,
+      providerFormat: details.providerFormat ?? backend.name,
+      model: backend.getModelId?.() ?? "auto",
+      revision: details.revision ?? "unknown",
+      dimension,
+      endpointHash: details.endpointHash ?? "local",
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -215,12 +258,18 @@ export class EmbeddingService {
   // Embedding operations (polymorphic dispatch)
   // ---------------------------------------------------------------------------
 
-  public async embed(text: string): Promise<number[]> {
-    return this.executeWithFallback((backend) => backend.embed(text), "embed");
+  public async embed(text: string, signal?: AbortSignal): Promise<number[]> {
+    signal?.throwIfAborted();
+    return this.executeWithFallback((backend) => backend.embed(text, signal), "embed");
   }
 
-  public async embedBatch(texts: string[], progressCallback?: (progress: number) => void): Promise<number[][]> {
-    return this.executeWithFallback((backend) => backend.embedBatch(texts, progressCallback), "embedBatch");
+  public async embedBatch(
+    texts: string[],
+    progressCallback?: (progress: number) => void,
+    signal?: AbortSignal,
+  ): Promise<number[][]> {
+    signal?.throwIfAborted();
+    return this.executeWithFallback((backend) => backend.embedBatch(texts, progressCallback, signal), "embedBatch");
   }
 
   // ---------------------------------------------------------------------------
@@ -380,11 +429,11 @@ export class EmbeddingService {
     this.notifier.showInfo("Embedding model cache cleared. Model will reload on next use.");
   }
 
-  public dispose(): void {
+  public async dispose(): Promise<void> {
     this.logger.info("Disposing EmbeddingService");
 
     for (const backend of this.registeredBackends) {
-      backend.dispose();
+      await backend.dispose();
     }
 
     this.activeBackend = null;
@@ -404,7 +453,7 @@ export class EmbeddingService {
 
   private async switchToFallback(): Promise<void> {
     if (this.activeBackend) {
-      this.activeBackend.dispose();
+      await this.activeBackend.dispose();
     }
     const fallback = this.registeredBackends[this.registeredBackends.length - 1];
     if (!fallback) {

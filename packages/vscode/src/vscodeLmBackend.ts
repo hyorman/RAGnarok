@@ -12,8 +12,6 @@
  * @see https://github.com/microsoft/vscode/issues/212083
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- proposed API accessed via runtime casts */
-
 import type * as VSCode from "vscode";
 import { EmbeddingBackend, Logger } from "@ragnarok/core";
 

@@ -20,7 +20,8 @@ COPY packages/mcp-server/ packages/mcp-server/
 
 # Build both packages
 RUN npm run build --workspace=@ragnarok/core && \
-    npm run build --workspace=@ragnarok/mcp-server
+    npm run build --workspace=@ragnarok/mcp-server && \
+    npm prune --omit=dev --ignore-scripts
 
 # ─── Runtime stage ─────────────────────────────────────
 FROM node:22-slim AS runtime
@@ -49,10 +50,13 @@ ENV RAGNAROK_STORAGE_DIR=/data/ragnarok
 ENV RAGNAROK_HTTP_HOST=0.0.0.0
 ENV RAGNAROK_PORT=4000
 
+RUN mkdir -p /data/ragnarok && chown -R node:node /data/ragnarok /app
+USER node
+
 EXPOSE 4000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:' + (process.env.RAGNAROK_PORT || 4000) + '/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://localhost:' + (process.env.RAGNAROK_PORT || 4000) + '/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 CMD ["node", "packages/mcp-server/dist/index.js", "--http"]

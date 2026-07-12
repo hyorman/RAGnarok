@@ -24,13 +24,14 @@ export interface RerankerOptions {
 /** Reranker contract implemented by cross-encoder backends */
 export interface Reranker {
   /** Re-score candidates using the cross-encoder model */
-  rerank(query: string, candidates: ScoredDocument[], topK: number): Promise<ScoredDocument[]>;
+  rerank(query: string, candidates: ScoredDocument[], topK: number, signal?: AbortSignal): Promise<ScoredDocument[]>;
   /** Initialize the model (lazy — called on first rerank if not called explicitly) */
   initialize(): Promise<void>;
   /** Whether the reranker is ready for use */
   isAvailable(): boolean;
+  getMaxCandidates?(): number;
   /** Release resources */
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
 
 /** Sigmoid function for normalizing logits to [0,1] */

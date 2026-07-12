@@ -16,6 +16,8 @@
  */
 
 import { connect } from "@lancedb/lancedb";
+import type { Connection, Table } from "@lancedb/lancedb";
+import { Field, FixedSizeList, Float32, Float64, Schema, Utf8 } from "apache-arrow";
 import { Mutex } from "async-mutex";
 import { Logger } from "../logger";
 import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "./types";
@@ -25,6 +27,8 @@ export class MemoryVectorStore {
   // Memoized connection — every operation used to reconnect, so a single
   // store() paid 5+ connects and each recall reconnected again.
   private dbPromise: ReturnType<typeof connect> | null = null;
+  private db: Connection | null = null;
+  private openTables = new Set<Table>();
   // Persistence is drop-table + recreate, so data operations must not
   // interleave: a concurrent save would race the drop ("table already
   // exists") and an overlapping read can hit files deleted mid-drop.
@@ -33,7 +37,10 @@ export class MemoryVectorStore {
   constructor(private lanceDbUri: string) {}
 
   private getDb(): ReturnType<typeof connect> {
-    this.dbPromise ??= connect(this.lanceDbUri);
+    this.dbPromise ??= connect(this.lanceDbUri).then((db) => {
+      this.db = db;
+      return db;
+    });
     return this.dbPromise;
   }
 
@@ -128,24 +135,12 @@ export class MemoryVectorStore {
     const db = await this.getDb();
     const tableName = this.entriesTable(scope, branch);
 
-    if (entries.length === 0) {
-      // Deleting the last entry must be persisted: drop the stale table.
-      // (LanceDB cannot create a table from zero rows without a schema.)
-      try {
-        await this.dropTableIfExists(db, tableName);
-      } catch (error) {
-        this.logger.error(`Failed to drop emptied table ${tableName}`, error);
-        throw error;
-      }
-      return;
-    }
-
     const rows = entries.map((e) => ({
       id: e.id,
       content: e.content,
       scope: e.scope,
       branch: e.branch ?? "",
-      vector: e.vector,
+      vector: Array.from(e.vector),
       createdAt: e.createdAt,
       updatedAt: e.updatedAt,
       accessCount: e.accessCount,
@@ -162,8 +157,26 @@ export class MemoryVectorStore {
     }));
 
     try {
-      await this.dropTableIfExists(db, tableName);
-      await db.createTable(tableName, rows);
+      const tableNames = await db.tableNames();
+      if (!tableNames.includes(tableName)) {
+        if (entries.length === 0) {
+          return;
+        }
+        const created = await db.createEmptyTable(tableName, this.entriesSchema(entries[0].vector.length));
+        this.openTables.add(created);
+      }
+      const table = await db.openTable(tableName);
+      this.openTables.add(table);
+      if (rows.length === 0) {
+        await table.delete("true");
+      } else {
+        await table
+          .mergeInsert("id")
+          .whenMatchedUpdateAll()
+          .whenNotMatchedInsertAll()
+          .whenNotMatchedBySourceDelete()
+          .execute(rows);
+      }
     } catch (error) {
       this.logger.error(`Failed to save entries to ${tableName}`, error);
       throw error;
@@ -192,7 +205,7 @@ export class MemoryVectorStore {
         content: row.content as string,
         scope: row.scope as MemoryScope,
         branch: (row.branch as string) || undefined,
-        vector: row.vector as number[],
+        vector: Array.from(row.vector as ArrayLike<number>),
         createdAt: row.createdAt as number,
         updatedAt: row.updatedAt as number,
         accessCount: row.accessCount as number,
@@ -245,7 +258,7 @@ export class MemoryVectorStore {
           content: row.content as string,
           scope: row.scope as MemoryScope,
           branch: (row.branch as string) || undefined,
-          vector: row.vector as number[],
+          vector: Array.from(row.vector as ArrayLike<number>),
           createdAt: row.createdAt as number,
           updatedAt: row.updatedAt as number,
           accessCount: row.accessCount as number,
@@ -276,30 +289,43 @@ export class MemoryVectorStore {
   private async saveGraphUnlocked(data: MemoryGraphData, scope: MemoryScope, branch?: string): Promise<void> {
     const db = await this.getDb();
 
-    // Both tables are always reconciled: dropping the old table even when the
-    // new collection is empty is what persists "the last entity/edge was
-    // removed". Recreate only when there are rows.
-
     const entitiesTableName = this.entitiesTable(scope, branch);
     try {
-      await this.dropTableIfExists(db, entitiesTableName);
-      if (data.entities.length > 0) {
-        const entityRows = data.entities.map((e) => ({
-          id: e.id,
-          name: e.name,
-          type: e.type,
-          description: e.description,
-          vector: e.vector,
-          scope: e.scope,
-          branch: e.branch ?? "",
-          confidence: e.confidence,
-          strength: e.strength,
-          createdAt: e.createdAt,
-          updatedAt: e.updatedAt,
-          sourceMemoryIds: JSON.stringify(e.sourceMemoryIds),
-          metadata: JSON.stringify(e.metadata),
-        }));
-        await db.createTable(entitiesTableName, entityRows);
+      const entityRows = data.entities.map((e) => ({
+        id: e.id,
+        name: e.name,
+        type: e.type,
+        description: e.description,
+        vector: Array.from(e.vector),
+        scope: e.scope,
+        branch: e.branch ?? "",
+        confidence: e.confidence,
+        strength: e.strength,
+        createdAt: e.createdAt,
+        updatedAt: e.updatedAt,
+        sourceMemoryIds: JSON.stringify(e.sourceMemoryIds),
+        metadata: JSON.stringify(e.metadata),
+      }));
+      let tableNames = await db.tableNames();
+      if (!tableNames.includes(entitiesTableName) && entityRows.length > 0) {
+        this.openTables.add(
+          await db.createEmptyTable(entitiesTableName, this.entitiesSchema(data.entities[0].vector.length)),
+        );
+      }
+      tableNames = await db.tableNames();
+      if (tableNames.includes(entitiesTableName)) {
+        const table = await db.openTable(entitiesTableName);
+        this.openTables.add(table);
+        if (entityRows.length === 0) {
+          await table.delete("true");
+        } else {
+          await table
+            .mergeInsert("id")
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .whenNotMatchedBySourceDelete()
+            .execute(entityRows);
+        }
       }
     } catch (error) {
       this.logger.error(`Failed to save entities to ${entitiesTableName}`, error);
@@ -308,20 +334,35 @@ export class MemoryVectorStore {
 
     const edgesTableName = this.edgesTable(scope, branch);
     try {
-      await this.dropTableIfExists(db, edgesTableName);
-      if (data.relationships.length > 0) {
-        const edgeRows = data.relationships.map((r) => ({
-          id: r.id,
-          sourceId: r.sourceId,
-          targetId: r.targetId,
-          type: r.type,
-          description: r.description,
-          weight: r.weight,
-          scope: r.scope,
-          branch: r.branch ?? "",
-          metadata: JSON.stringify(r.metadata),
-        }));
-        await db.createTable(edgesTableName, edgeRows);
+      const edgeRows = data.relationships.map((r) => ({
+        id: r.id,
+        sourceId: r.sourceId,
+        targetId: r.targetId,
+        type: r.type,
+        description: r.description,
+        weight: r.weight,
+        scope: r.scope,
+        branch: r.branch ?? "",
+        metadata: JSON.stringify(r.metadata),
+      }));
+      let tableNames = await db.tableNames();
+      if (!tableNames.includes(edgesTableName) && edgeRows.length > 0) {
+        this.openTables.add(await db.createEmptyTable(edgesTableName, this.edgesSchema()));
+      }
+      tableNames = await db.tableNames();
+      if (tableNames.includes(edgesTableName)) {
+        const table = await db.openTable(edgesTableName);
+        this.openTables.add(table);
+        if (edgeRows.length === 0) {
+          await table.delete("true");
+        } else {
+          await table
+            .mergeInsert("id")
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .whenNotMatchedBySourceDelete()
+            .execute(edgeRows);
+        }
       }
     } catch (error) {
       this.logger.error(`Failed to save edges to ${edgesTableName}`, error);
@@ -347,7 +388,7 @@ export class MemoryVectorStore {
             name: row.name as string,
             type: row.type as string,
             description: row.description as string,
-            vector: row.vector as number[],
+            vector: Array.from(row.vector as ArrayLike<number>),
             scope: row.scope as MemoryScope,
             branch: (row.branch as string) || undefined,
             confidence: row.confidence as number,
@@ -457,5 +498,63 @@ export class MemoryVectorStore {
         await db.dropTable(tableName);
       }
     }
+  }
+
+  async dispose(): Promise<void> {
+    await this.locked(async () => {
+      for (const table of this.openTables) {
+        table.close();
+      }
+      this.openTables.clear();
+      this.db?.close();
+      this.db = null;
+      this.dbPromise = null;
+    });
+  }
+
+  private vectorField(dimension: number): Field {
+    return new Field("vector", new FixedSizeList(dimension, new Field("item", new Float32(), false)), false);
+  }
+
+  private entriesSchema(dimension: number): Schema {
+    const strings = [
+      "id",
+      "content",
+      "scope",
+      "branch",
+      "tags",
+      "entityIds",
+      "metadata",
+      "supersededBy",
+      "previousVersionId",
+    ].map((name) => new Field(name, new Utf8(), false));
+    const numbers = [
+      "createdAt",
+      "updatedAt",
+      "accessCount",
+      "lastAccessedAt",
+      "confidence",
+      "expiresAt",
+      "isLatest",
+      "version",
+    ].map((name) => new Field(name, new Float64(), false));
+    return new Schema([...strings.slice(0, 4), this.vectorField(dimension), ...strings.slice(4), ...numbers]);
+  }
+
+  private entitiesSchema(dimension: number): Schema {
+    const strings = ["id", "name", "type", "description", "scope", "branch", "sourceMemoryIds", "metadata"].map(
+      (name) => new Field(name, new Utf8(), false),
+    );
+    const numbers = ["confidence", "strength", "createdAt", "updatedAt"].map(
+      (name) => new Field(name, new Float64(), false),
+    );
+    return new Schema([...strings.slice(0, 4), this.vectorField(dimension), ...strings.slice(4), ...numbers]);
+  }
+
+  private edgesSchema(): Schema {
+    const strings = ["id", "sourceId", "targetId", "type", "description", "scope", "branch", "metadata"].map(
+      (name) => new Field(name, new Utf8(), false),
+    );
+    return new Schema([...strings, new Field("weight", new Float64(), false)]);
   }
 }

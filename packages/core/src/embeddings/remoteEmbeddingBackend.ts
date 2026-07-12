@@ -7,6 +7,7 @@
 
 import { EmbeddingBackend } from "./embeddingBackend";
 import { Logger } from "../logger";
+import { createHash } from "crypto";
 
 export type RemoteEmbeddingFormat = "openai" | "ollama";
 
@@ -65,15 +66,24 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
     }
   }
 
-  async embed(text: string): Promise<number[]> {
-    const results = await this.callEmbedEndpoint([text || " "]);
+  async embed(text: string, signal?: AbortSignal): Promise<number[]> {
+    const results = await this.callEmbedEndpoint([text || " "], signal);
     return results[0];
   }
 
-  async embedBatch(texts: string[], progressCallback?: (progress: number) => void): Promise<number[][]> {
+  async embedBatch(
+    texts: string[],
+    progressCallback?: (progress: number) => void,
+    signal?: AbortSignal,
+  ): Promise<number[][]> {
+    signal?.throwIfAborted();
+    if (texts.length === 0) {
+      progressCallback?.(1);
+      return [];
+    }
     const sanitized = texts.map((t) => t || " ");
     if (sanitized.length <= BATCH_SIZE) {
-      const result = await this.callEmbedEndpoint(sanitized);
+      const result = await this.callEmbedEndpoint(sanitized, signal);
       progressCallback?.(1);
       return result;
     }
@@ -82,7 +92,8 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
     const results: number[][] = [];
     for (let i = 0; i < sanitized.length; i += BATCH_SIZE) {
       const batch = sanitized.slice(i, i + BATCH_SIZE);
-      const batchResults = await this.callEmbedEndpoint(batch);
+      signal?.throwIfAborted();
+      const batchResults = await this.callEmbedEndpoint(batch, signal);
       results.push(...batchResults);
       progressCallback?.(Math.min((i + batch.length) / sanitized.length, 1));
     }
@@ -95,6 +106,14 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
 
   getModelId(): string | null {
     return this.modelName;
+  }
+
+  getFingerprintInfo(): { providerFormat: string; revision: string; endpointHash: string } {
+    return {
+      providerFormat: this.format,
+      revision: "remote",
+      endpointHash: createHash("sha256").update(this.baseUrl.toLowerCase()).digest("hex"),
+    };
   }
 
   dispose(): void {
@@ -119,18 +138,18 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
   // Private – API calls
   // ---------------------------------------------------------------------------
 
-  private async callEmbedEndpoint(texts: string[]): Promise<number[][]> {
+  private async callEmbedEndpoint(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (!this.modelName) {
       throw new Error("Model not configured — call initialize() first");
     }
 
     if (this.format === "openai") {
-      return this.embedOpenAI(texts);
+      return this.embedOpenAI(texts, signal);
     }
-    return this.embedOllama(texts);
+    return this.embedOllama(texts, signal);
   }
 
-  private async embedOpenAI(texts: string[]): Promise<number[][]> {
+  private async embedOpenAI(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     const url = `${this.baseUrl}/embeddings`;
     const body = {
       input: texts.length === 1 ? texts[0] : texts,
@@ -142,18 +161,33 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
       method: "POST",
       headers: this.buildHeaders(),
       body: JSON.stringify(body),
+      signal,
     });
 
     await this.ensureOk(response, "OpenAI embeddings");
 
     const json: any = await response.json();
-    const sorted = (json.data as Array<{ embedding: number[]; index: number }>).sort((a, b) => a.index - b.index);
+    if (!Array.isArray(json?.data)) {
+      throw new Error("OpenAI embeddings response is missing the data array");
+    }
+    if (json.data.length !== texts.length) {
+      throw new Error(`OpenAI embeddings returned ${json.data.length} result(s); expected ${texts.length}`);
+    }
+    const indices = new Set<number>();
+    for (const item of json.data) {
+      if (!Number.isInteger(item?.index) || item.index < 0 || item.index >= texts.length || indices.has(item.index)) {
+        throw new Error("OpenAI embeddings response contains invalid or duplicate indices");
+      }
+      indices.add(item.index);
+    }
+    const sorted = [...(json.data as Array<{ embedding: number[]; index: number }>)].sort((a, b) => a.index - b.index);
     const embeddings = sorted.map((d) => d.embedding);
+    this.validateEmbeddings(embeddings, texts.length, "OpenAI");
     this.cacheDimension(embeddings);
     return embeddings;
   }
 
-  private async embedOllama(texts: string[]): Promise<number[][]> {
+  private async embedOllama(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     const url = `${this.baseUrl}/api/embed`;
     const body = {
       model: this.modelName,
@@ -164,12 +198,14 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
 
     await this.ensureOk(response, "Ollama embeddings");
 
     const json: any = await response.json();
-    const embeddings: number[][] = json.embeddings;
+    const embeddings: number[][] = json?.embeddings;
+    this.validateEmbeddings(embeddings, texts.length, "Ollama");
     this.cacheDimension(embeddings);
     return embeddings;
   }
@@ -220,17 +256,18 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
     try {
-      return await fetch(url, { ...init, signal: controller.signal });
+      return await fetch(url, { ...init, signal });
     } catch (error: unknown) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (init.signal?.aborted) {
+        throw init.signal.reason ?? error;
+      }
+      if (timeoutSignal.aborted) {
         throw new Error(`Request to ${url} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
       }
       throw new Error(`Network error connecting to ${url}: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -250,6 +287,32 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
     if (this.dimension === null && embeddings.length > 0 && embeddings[0].length > 0) {
       this.dimension = embeddings[0].length;
       this.logger.debug(`Cached embedding dimension: ${this.dimension}`);
+    }
+  }
+
+  private validateEmbeddings(value: unknown, expectedCount: number, provider: string): asserts value is number[][] {
+    if (!Array.isArray(value) || value.length !== expectedCount) {
+      throw new Error(
+        `${provider} embeddings returned ${Array.isArray(value) ? value.length : "an invalid payload"}; expected ${expectedCount}`,
+      );
+    }
+    let dimension: number | null = null;
+    value.forEach((vector, index) => {
+      if (!Array.isArray(vector) || vector.length === 0) {
+        throw new Error(`${provider} embedding at index ${index} is empty or invalid`);
+      }
+      if (!vector.every((component) => typeof component === "number" && Number.isFinite(component))) {
+        throw new Error(`${provider} embedding at index ${index} contains a non-finite value`);
+      }
+      dimension ??= vector.length;
+      if (vector.length !== dimension) {
+        throw new Error(
+          `${provider} embeddings have inconsistent dimensions: expected ${dimension}, got ${vector.length} at index ${index}`,
+        );
+      }
+    });
+    if (this.dimension !== null && dimension !== null && dimension !== this.dimension) {
+      throw new Error(`${provider} embedding dimension changed from ${this.dimension} to ${dimension}`);
     }
   }
 }

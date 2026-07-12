@@ -4,12 +4,19 @@
  */
 
 import { connect } from "@lancedb/lancedb";
+import type { Connection, Table } from "@lancedb/lancedb";
+import { Field, FixedSizeList, Float32, Float64, Schema, Utf8 } from "apache-arrow";
+import { Mutex } from "async-mutex";
 import { Logger } from "../logger";
 import { GraphEntity, GraphRelationship, KnowledgeGraphData } from "../utils/graphTypes";
 
 export class KnowledgeGraphStore {
   private lanceDbUri: string;
   private logger: Logger;
+  private dbPromise: Promise<Connection> | null = null;
+  private db: Connection | null = null;
+  private tables = new Set<Table>();
+  private mutex = new Mutex();
 
   constructor(lanceDbUri: string) {
     this.lanceDbUri = lanceDbUri;
@@ -17,6 +24,10 @@ export class KnowledgeGraphStore {
   }
 
   async saveGraph(topicId: string, data: KnowledgeGraphData): Promise<void> {
+    return this.mutex.runExclusive(() => this.saveGraphUnlocked(topicId, data));
+  }
+
+  private async saveGraphUnlocked(topicId: string, data: KnowledgeGraphData): Promise<void> {
     const entityTableName = `kg-entities-${topicId}`;
     const edgeTableName = `kg-edges-${topicId}`;
 
@@ -27,16 +38,7 @@ export class KnowledgeGraphStore {
     });
 
     try {
-      const db = await connect(this.lanceDbUri);
-
-      // Drop existing tables if they exist
-      const tableNames = await db.tableNames();
-      if (tableNames.includes(entityTableName)) {
-        await db.dropTable(entityTableName);
-      }
-      if (tableNames.includes(edgeTableName)) {
-        await db.dropTable(edgeTableName);
-      }
+      const db = await this.getDb();
 
       // Convert entities to flat rows
       const entityRows = data.entities.map((e) => ({
@@ -44,7 +46,7 @@ export class KnowledgeGraphStore {
         name: e.name,
         type: e.type,
         description: e.description,
-        vector: e.vector,
+        vector: Array.from(e.vector),
         sourceChunkIds: JSON.stringify(e.sourceChunkIds),
         confidence: e.confidence,
         strength: e.strength,
@@ -65,12 +67,42 @@ export class KnowledgeGraphStore {
         metadata: JSON.stringify(r.metadata),
       }));
 
-      // Create tables (LanceDB createTable needs at least 1 row)
-      if (entityRows.length > 0) {
-        await db.createTable(entityTableName, entityRows);
+      let tableNames = await db.tableNames();
+      if (!tableNames.includes(entityTableName) && entityRows.length > 0) {
+        this.tables.add(await db.createEmptyTable(entityTableName, this.entitySchema(entityRows[0].vector.length)));
       }
-      if (edgeRows.length > 0) {
-        await db.createTable(edgeTableName, edgeRows);
+      tableNames = await db.tableNames();
+      if (tableNames.includes(entityTableName)) {
+        const table = await db.openTable(entityTableName);
+        this.tables.add(table);
+        if (entityRows.length === 0) {
+          await table.delete("true");
+        } else {
+          await table
+            .mergeInsert("id")
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .whenNotMatchedBySourceDelete()
+            .execute(entityRows);
+        }
+      }
+      if (!tableNames.includes(edgeTableName) && edgeRows.length > 0) {
+        this.tables.add(await db.createEmptyTable(edgeTableName, this.edgeSchema()));
+      }
+      tableNames = await db.tableNames();
+      if (tableNames.includes(edgeTableName)) {
+        const table = await db.openTable(edgeTableName);
+        this.tables.add(table);
+        if (edgeRows.length === 0) {
+          await table.delete("true");
+        } else {
+          await table
+            .mergeInsert("id")
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .whenNotMatchedBySourceDelete()
+            .execute(edgeRows);
+        }
       }
 
       this.logger.info("Knowledge graph saved successfully", {
@@ -94,7 +126,7 @@ export class KnowledgeGraphStore {
     this.logger.debug("Loading knowledge graph", { topicId });
 
     try {
-      const db = await connect(this.lanceDbUri);
+      const db = await this.getDb();
       const tableNames = await db.tableNames();
 
       if (!tableNames.includes(entityTableName)) {
@@ -104,12 +136,14 @@ export class KnowledgeGraphStore {
 
       // Load entities
       const entityTable = await db.openTable(entityTableName);
+      this.tables.add(entityTable);
       const entityRows = await entityTable.query().limit(100000).toArray();
 
       // Load edges if table exists
       let edgeRows: Record<string, unknown>[] = [];
       if (tableNames.includes(edgeTableName)) {
         const edgeTable = await db.openTable(edgeTableName);
+        this.tables.add(edgeTable);
         edgeRows = await edgeTable.query().limit(100000).toArray();
       }
 
@@ -176,7 +210,7 @@ export class KnowledgeGraphStore {
     this.logger.info("Deleting knowledge graph", { topicId });
 
     try {
-      const db = await connect(this.lanceDbUri);
+      const db = await this.getDb();
       const tableNames = await db.tableNames();
 
       if (tableNames.includes(entityTableName)) {
@@ -202,7 +236,7 @@ export class KnowledgeGraphStore {
     const entityTableName = `kg-entities-${topicId}`;
 
     try {
-      const db = await connect(this.lanceDbUri);
+      const db = await this.getDb();
       const tableNames = await db.tableNames();
       return tableNames.includes(entityTableName);
     } catch (error) {
@@ -212,5 +246,52 @@ export class KnowledgeGraphStore {
       });
       throw error;
     }
+  }
+
+  dispose(): void {
+    for (const table of this.tables) {
+      table.close();
+    }
+    this.tables.clear();
+    this.db?.close();
+    this.db = null;
+    this.dbPromise = null;
+  }
+
+  private getDb(): Promise<Connection> {
+    this.dbPromise ??= connect(this.lanceDbUri).then((db) => {
+      this.db = db;
+      return db;
+    });
+    return this.dbPromise;
+  }
+
+  private entitySchema(dimension: number): Schema {
+    return new Schema([
+      new Field("id", new Utf8(), false),
+      new Field("name", new Utf8(), false),
+      new Field("type", new Utf8(), false),
+      new Field("description", new Utf8(), false),
+      new Field("vector", new FixedSizeList(dimension, new Field("item", new Float32(), false)), false),
+      new Field("sourceChunkIds", new Utf8(), false),
+      new Field("confidence", new Float64(), false),
+      new Field("strength", new Float64(), false),
+      new Field("lastAccessedAt", new Float64(), false),
+      new Field("metadata", new Utf8(), false),
+    ]);
+  }
+
+  private edgeSchema(): Schema {
+    return new Schema([
+      new Field("id", new Utf8(), false),
+      new Field("sourceId", new Utf8(), false),
+      new Field("targetId", new Utf8(), false),
+      new Field("type", new Utf8(), false),
+      new Field("weight", new Float64(), false),
+      new Field("description", new Utf8(), false),
+      new Field("sourceChunkIds", new Utf8(), false),
+      new Field("confidence", new Float64(), false),
+      new Field("metadata", new Utf8(), false),
+    ]);
   }
 }

@@ -20,6 +20,7 @@ export interface QueryPipelineOptions {
   retrievalStrategy: string;
   topK: number;
   modelFamily: string;
+  allowMemoryWrites: boolean;
 }
 
 export interface QueryPlanRef {

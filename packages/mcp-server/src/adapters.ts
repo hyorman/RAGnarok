@@ -28,8 +28,11 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.GAP_SCORE_THRESHOLD]: 0.3,
       [CONFIG.COMMON_DATABASE_PATH]: "",
       [CONFIG.RERANKER_MODEL]: this.mcpConfig.rerankerModel,
+      [CONFIG.RERANKER_ENABLED]: this.mcpConfig.rerankerEnabled,
       [CONFIG.RERANKER_MAX_CANDIDATES]: this.mcpConfig.rerankerMaxCandidates,
       [CONFIG.RERANKER_CANDIDATE_MULTIPLIER]: this.mcpConfig.rerankerCandidateMultiplier,
+      [CONFIG.QUERY_MEMORY_ENABLED]: this.mcpConfig.queryMemoryEnabled,
+      [CONFIG.CHECKPOINT_RETENTION_MS]: this.mcpConfig.checkpointRetentionMs,
     };
 
     if (key in mapping) {

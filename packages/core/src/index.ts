@@ -29,6 +29,7 @@ export {
   Topic,
   TopicSource,
   Document,
+  DocumentSource,
   TextChunk,
   TopicData,
   TopicsIndex,
@@ -57,7 +58,12 @@ export { SemanticChunker } from "./splitters/semanticChunker";
 export type { ChunkingOptions, ChunkingResult } from "./splitters/semanticChunker";
 
 // Embeddings
-export type { EmbeddingBackend, EmbeddingBackendType } from "./embeddings/embeddingBackend";
+export type {
+  EmbeddingBackend,
+  EmbeddingBackendType,
+  EmbeddingFingerprint,
+  EmbeddingFingerprintInfo,
+} from "./embeddings/embeddingBackend";
 export { EmbeddingService } from "./embeddings/embeddingService";
 export type { AvailableModel } from "./embeddings/embeddingService";
 export { ModelRegistry } from "./models/modelRegistry.js";
@@ -158,6 +164,19 @@ export {
   MIN_CONFIDENCE_THRESHOLD,
   DECAY_INTERVAL_MS,
 } from "./memory";
+
+// Storage format and durable JSON helpers
+export {
+  STORAGE_FORMAT_VERSION,
+  STORAGE_FORMAT_FILENAME,
+  atomicWriteFile,
+  atomicWriteJson,
+  ensureStorageFormatV2,
+  resetStorageToV2,
+} from "./utils/storageV2";
+export type { StorageFormatMarker } from "./utils/storageV2";
+export { acquireStorageLock, StorageLockHeldError, STORAGE_LOCK_FILENAME } from "./utils/storageLock";
+export type { StorageLockHandle, StorageLockOptions } from "./utils/storageLock";
 export type {
   MemoryStoreOptions,
   MemoryScope,

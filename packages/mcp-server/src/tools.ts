@@ -22,6 +22,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -38,6 +39,8 @@ import {
 import type { AvailableModel } from "@ragnarok/core";
 import type { McpConfig } from "./config";
 
+export type MutationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
+
 export function registerTools(
   server: McpServer,
   topicManager: TopicManager,
@@ -47,9 +50,46 @@ export function registerTools(
   memoryStore?: MemoryStore,
   reranker?: CrossEncoderReranker | null,
   config?: McpConfig,
+  accessRole: "reader" | "writer" = "writer",
+  runMutation: MutationRunner = (operation) => operation(),
+  deployment: "local" | "shared" = "local",
 ): void {
+  const writerOnly = () => {
+    if (accessRole !== "writer") {
+      throw new Error("Writer token required for this operation");
+    }
+  };
+  const readOnlyAnnotations = {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  };
+  const writeAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+  const destructiveAnnotations = { ...writeAnnotations, destructiveHint: true };
+  const networkWriteAnnotations = { ...writeAnnotations, openWorldHint: true };
+  // Shared deployments serve multiple parties; label every tool so an agent
+  // that also sees a local RAGnarōk server can route between them deliberately.
+  const describeTool = (description: string): string =>
+    deployment === "shared" ? `[Team shared KB] ${description}` : description;
+  const rawTool = server.tool.bind(server) as (...args: unknown[]) => unknown;
+  const registerTool = ((name: string, description: string, ...rest: unknown[]) =>
+    rawTool(name, describeTool(description), ...rest)) as McpServer["tool"];
+  const registerWriteTool = (accessRole === "writer" ? registerTool : () => undefined) as McpServer["tool"];
+  const toolJson = (value: unknown) => ({
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+  });
+  const toolError = (error: unknown) => ({
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+      },
+    ],
+    isError: true,
+  });
   // rag_query — Query a topic with RAG
-  server.tool(
+  registerTool(
     "rag_query",
     "Query a RAG topic to find relevant information. Supports both simple retrieval and agentic multi-step query planning.",
     {
@@ -63,14 +103,19 @@ export function registerTools(
           "Retrieval strategy: vector, hybrid, ensemble, bm25, graph (entity relationship traversal), or graph_hybrid (graph + semantic)",
         ),
     },
-    async ({ topic, query, topK, retrievalStrategy }) => {
+    async ({ topic, query, topK, retrievalStrategy }, extra) => {
       try {
-        const result = await ragQueryService.executeQuery({
-          topic,
-          query,
-          topK,
-          retrievalStrategy: retrievalStrategy as RetrievalStrategy | undefined,
-        });
+        const result = await ragQueryService.executeQuery(
+          {
+            topic,
+            query,
+            topK,
+            retrievalStrategy: retrievalStrategy as RetrievalStrategy | undefined,
+          },
+          undefined,
+          extra?.signal,
+          accessRole === "reader",
+        );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         };
@@ -100,7 +145,7 @@ export function registerTools(
   );
 
   // rag_list_topics — List available topics
-  server.tool("rag_list_topics", "List all available RAG topics with their metadata", {}, async () => {
+  registerTool("rag_list_topics", "List all available RAG topics with their metadata", {}, async () => {
     try {
       const topics = topicManager.getAllTopics();
       const topicList = topics.map((t) => ({
@@ -136,7 +181,7 @@ export function registerTools(
   });
 
   // rag_topic_stats — Get statistics for a topic
-  server.tool(
+  registerTool(
     "rag_topic_stats",
     "Get detailed statistics for a specific RAG topic",
     {
@@ -173,7 +218,7 @@ export function registerTools(
   );
 
   // rag_create_topic — Create a new topic
-  server.tool(
+  registerWriteTool(
     "rag_create_topic",
     "Create a new RAG topic for organizing documents",
     {
@@ -182,7 +227,8 @@ export function registerTools(
     },
     async ({ name, description }) => {
       try {
-        const topic = await topicManager.createTopic({ name, description });
+        writerOnly();
+        const topic = await runMutation(() => topicManager.createTopic({ name, description }));
         return {
           content: [
             {
@@ -226,7 +272,15 @@ export function registerTools(
   // arbitrary files on the server. Symlinks are resolved before containment
   // checks so a link inside an allowed root can't escape it.
   const allowedRootsPromise = (async () => {
-    const configured = config?.allowedPaths?.length ? config.allowedPaths : [config?.workingDir || process.cwd()];
+    const configured = config?.allowedPaths?.length ? [...config.allowedPaths] : [config?.workingDir || process.cwd()];
+    if (config?.exportDir) {
+      try {
+        await fs.mkdir(config.exportDir, { recursive: true });
+        configured.push(config.exportDir);
+      } catch {
+        // Export operations will report the concrete permission error when invoked.
+      }
+    }
     const roots: string[] = [];
     for (const root of configured) {
       try {
@@ -255,7 +309,7 @@ export function registerTools(
     return real;
   }
 
-  server.tool(
+  registerWriteTool(
     "rag_add_documents",
     "Add one or more documents to a RAG topic. Supports PDF, Markdown, HTML, and plain text files. " +
       "Paths must be inside the server's allowed roots (RAGNAROK_ALLOWED_PATHS).",
@@ -263,8 +317,9 @@ export function registerTools(
       topic: z.string().trim().min(1).describe("The name of the topic to add documents to"),
       filePaths: z.array(z.string().trim().min(1)).min(1).max(100).describe("Array of file paths to add"),
     },
-    async ({ topic, filePaths }) => {
+    async ({ topic, filePaths }, extra) => {
       try {
+        writerOnly();
         const topicMatch = await topicManager.resolveTopicByName(topic);
         const matchedTopic = topicMatch.topic;
 
@@ -274,7 +329,11 @@ export function registerTools(
         for (const filePath of filePaths) {
           try {
             const realPath = await assertPathAllowed(filePath);
-            const results = await topicManager.addDocuments(matchedTopic.id, [realPath]);
+            const results = await runMutation(() =>
+              topicManager.addDocuments(matchedTopic.id, [realPath], {
+                ...(extra?.signal ? { signal: extra.signal } : {}),
+              }),
+            );
             if (results.length > 0) {
               files.push({
                 path: filePath,
@@ -335,7 +394,7 @@ export function registerTools(
   // ────────────────────────────────────────────────────────────
 
   // rag_list_embedding_models — List all available embedding models
-  server.tool(
+  registerTool(
     "rag_list_embedding_models",
     "List available embedding models (curated, bundled, local, and downloaded)",
     {},
@@ -382,7 +441,7 @@ export function registerTools(
   );
 
   // rag_embedding_info — Get information about the current embedding model
-  server.tool(
+  registerTool(
     "rag_embedding_info",
     "Get information about the currently active embedding model and backend",
     {},
@@ -425,7 +484,7 @@ export function registerTools(
   );
 
   // rag_switch_embedding_model — Switch the active embedding model
-  server.tool(
+  registerWriteTool(
     "rag_switch_embedding_model",
     "Switch the active embedding model. The model will be downloaded if not already cached. " +
       "Rejected when standalone memory holds vectors of a different dimension.",
@@ -434,32 +493,31 @@ export function registerTools(
     },
     async ({ model }) => {
       try {
+        writerOnly();
         const previousModel = embeddingService.getCurrentModel();
-        const previousDimension = (await embeddingService.embed("dimension probe")).length;
+        const hasFingerprintGuard = typeof (memoryStore as any)?.validateEmbeddingFingerprint === "function";
+        const previousDimension = hasFingerprintGuard ? 0 : (await embeddingService.embed("dimension probe")).length;
 
         // Re-initialize the embedding service with the new model
-        await embeddingService.initialize(model);
-        const newDimension = (await embeddingService.embed("dimension probe")).length;
+        await runMutation(() => embeddingService.initialize(model));
 
-        // Standalone memory tables carry vectors of the old dimension and
-        // have no per-scope model metadata — a silent switch would make every
-        // recall fail. Reject and roll back while memory data exists.
-        if (newDimension !== previousDimension && memoryStore) {
-          const memStats = await memoryStore.stats();
-          if (memStats.totalMemories > 0) {
+        if (memoryStore) {
+          try {
+            if (hasFingerprintGuard) {
+              await memoryStore.validateEmbeddingFingerprint();
+            } else {
+              const newDimension = (await embeddingService.embed("dimension probe")).length;
+              const memStats = await memoryStore.stats();
+              if (memStats.totalMemories > 0 && newDimension !== previousDimension) {
+                throw new Error(
+                  `Cannot switch embedding dimension from ${previousDimension} to ${newDimension} while memories exist`,
+                );
+              }
+            }
+          } catch (error) {
             await embeddingService.initialize(previousModel);
             return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({
-                    error:
-                      `Cannot switch to ${model}: its embedding dimension (${newDimension}) differs from ` +
-                      `the current model's (${previousDimension}) and ${memStats.totalMemories} stored ` +
-                      "memories use the current dimension. Forget all memories first or keep the current model.",
-                  }),
-                },
-              ],
+              content: [{ type: "text" as const, text: JSON.stringify({ error: (error as Error).message }) }],
               isError: true,
             };
           }
@@ -469,7 +527,7 @@ export function registerTools(
         // factory and document pipeline and clears per-topic caches. Without
         // this the old factory silently switches the shared backend back on
         // the next topic operation.
-        await topicManager.reinitializeWithNewModel();
+        await runMutation(() => topicManager.reinitializeWithNewModel());
 
         const newModel = embeddingService.getCurrentModel();
 
@@ -511,7 +569,7 @@ export function registerTools(
   // ────────────────────────────────────────────────────────────
 
   // rag_llm_status — Get current LLM provider status
-  server.tool("rag_llm_status", "Get the current LLM provider status and configuration", {}, async () => {
+  registerTool("rag_llm_status", "Get the current LLM provider status and configuration", {}, async () => {
     try {
       const available = await llmProvider.isAvailable();
       const model = available ? await llmProvider.selectModel() : null;
@@ -554,7 +612,7 @@ export function registerTools(
   // ────────────────────────────────────────────────────────────
 
   // rag_list_reranker_models — List available cross-encoder reranker models
-  server.tool(
+  registerTool(
     "rag_list_reranker_models",
     "List available cross-encoder reranker models with their status",
     {},
@@ -566,7 +624,7 @@ export function registerTools(
 
         const result = {
           currentModel,
-          enabled: reranker != null,
+          enabled: reranker !== null && reranker !== undefined,
           isAvailable: reranker?.isAvailable() ?? false,
           models: models.map((m) => ({
             name: m.name,
@@ -595,10 +653,10 @@ export function registerTools(
   );
 
   // rag_reranker_info — Get current reranker configuration and status
-  server.tool("rag_reranker_info", "Get current reranker configuration and status", {}, async () => {
+  registerTool("rag_reranker_info", "Get current reranker configuration and status", {}, async () => {
     try {
       const result = {
-        enabled: reranker != null,
+        enabled: reranker !== null && reranker !== undefined,
         currentModel: reranker?.getCurrentModel() ?? null,
         isAvailable: reranker?.isAvailable() ?? false,
         maxCandidates: config?.rerankerMaxCandidates ?? null,
@@ -622,7 +680,7 @@ export function registerTools(
   });
 
   // rag_switch_reranker_model — Switch to a different cross-encoder reranker model
-  server.tool(
+  registerWriteTool(
     "rag_switch_reranker_model",
     "Switch to a different cross-encoder reranker model",
     {
@@ -630,6 +688,7 @@ export function registerTools(
     },
     async ({ model }) => {
       try {
+        writerOnly();
         if (!reranker) {
           return {
             content: [{ type: "text" as const, text: JSON.stringify({ error: "Reranker is not available." }) }],
@@ -638,7 +697,7 @@ export function registerTools(
         }
 
         const previousModel = reranker.getCurrentModel();
-        await reranker.switchModel(model);
+        await runMutation(() => reranker.switchModel(model));
         const newModel = reranker.getCurrentModel();
 
         const result = {
@@ -665,12 +724,226 @@ export function registerTools(
     },
   );
 
+  registerTool(
+    "rag_list_documents",
+    "List indexed sources for a topic",
+    { topic: z.string().min(1) },
+    readOnlyAnnotations,
+    async ({ topic }) => {
+      try {
+        const match = await topicManager.resolveTopicByName(topic);
+        const documents = topicManager
+          .listDocuments(match.topic.id)
+          .map((document) => ({ ...document, documentId: document.id }));
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ topic: match.topic.name, documents, count: documents.length }, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  registerWriteTool(
+    "rag_delete_topic",
+    "Permanently delete a local topic and all of its data",
+    { topic: z.string().min(1), confirm: z.literal(true) },
+    destructiveAnnotations,
+    async ({ topic }) => {
+      try {
+        writerOnly();
+        const match = await topicManager.resolveTopicByName(topic);
+        await runMutation(() => topicManager.deleteTopic(match.topic.id));
+        return toolJson({ success: true, deletedTopic: match.topic.name });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  registerWriteTool(
+    "rag_remove_document",
+    "Permanently remove one indexed source from a topic",
+    { topic: z.string().min(1), documentId: z.string().min(1), confirm: z.literal(true) },
+    destructiveAnnotations,
+    async ({ topic, documentId }) => {
+      try {
+        writerOnly();
+        const match = await topicManager.resolveTopicByName(topic);
+        const result = await runMutation(() => topicManager.removeDocument(match.topic.id, documentId));
+        return toolJson({ success: true, document: result.document, chunksRemoved: result.chunksRemoved });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  registerWriteTool(
+    "rag_rename_topic",
+    "Rename a local topic",
+    { topic: z.string().min(1), newName: z.string().trim().min(1).max(100) },
+    writeAnnotations,
+    async ({ topic, newName }) => {
+      try {
+        writerOnly();
+        const match = await topicManager.resolveTopicByName(topic);
+        const updated = await runMutation(() => topicManager.updateTopic(match.topic.id, { name: newName }));
+        return toolJson({ success: true, topic: updated });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  registerWriteTool(
+    "rag_add_url",
+    "Fetch and index one public HTTP(S) page with SSRF and size protections",
+    { topic: z.string().min(1), url: z.string().url() },
+    networkWriteAnnotations,
+    async ({ topic, url }, extra) => {
+      try {
+        writerOnly();
+        const parsed = new URL(url);
+        if (!["http:", "https:"].includes(parsed.protocol)) {
+          throw new Error("Only HTTP(S) URLs are supported");
+        }
+        const match = await topicManager.resolveTopicByName(topic);
+        const results = await runMutation(() =>
+          topicManager.addDocuments(match.topic.id, [url], {
+            loaderOptions: { fileType: "web" },
+            signal: extra.signal,
+          }),
+        );
+        return toolJson({ success: results.length > 0, outcomes: results });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  registerWriteTool(
+    "rag_add_github_repo",
+    "Index a repository from an allowlisted GitHub or GHES host",
+    { topic: z.string().min(1), url: z.string().url(), branch: z.string().min(1).max(255).optional() },
+    networkWriteAnnotations,
+    async ({ topic, url, branch }, extra) => {
+      try {
+        writerOnly();
+        const parsed = new URL(url);
+        if (!config?.githubHosts.includes(parsed.hostname.toLowerCase())) {
+          throw new Error("GitHub host is not allowlisted");
+        }
+        const match = await topicManager.resolveTopicByName(topic);
+        const results = await runMutation(() =>
+          topicManager.addDocuments(match.topic.id, [url], {
+            loaderOptions: {
+              fileType: "github",
+              branch,
+              accessToken: config?.githubToken || undefined,
+            },
+            signal: extra.signal,
+          }),
+        );
+        return toolJson({ success: results.length > 0, outcomes: results });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  registerWriteTool(
+    "rag_export_topic",
+    "Export a topic as a storage-v2 .rag archive under the configured export directory",
+    { topic: z.string().min(1) },
+    writeAnnotations,
+    async ({ topic }) => {
+      try {
+        writerOnly();
+        if (!config) {
+          throw new Error("Export configuration unavailable");
+        }
+        const match = await topicManager.resolveTopicByName(topic);
+        await fs.mkdir(config.exportDir, { recursive: true });
+        const safeName = match.topic.name.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "topic";
+        const exportPath = path.join(config.exportDir, `${safeName}-${Date.now()}.rag`);
+        await runMutation(() => topicManager.exportTopic(match.topic.id, exportPath));
+        const bytes = await fs.readFile(exportPath);
+        return toolJson({
+          path: exportPath,
+          size: bytes.byteLength,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  registerWriteTool(
+    "rag_import_topic",
+    "Import a validated storage-v2 .rag archive from an allowlisted path",
+    { archivePath: z.string().min(1), confirm: z.literal(true) },
+    destructiveAnnotations,
+    async ({ archivePath }) => {
+      try {
+        writerOnly();
+        const realPath = await assertPathAllowed(archivePath);
+        const topic = await runMutation(() => topicManager.importTopic(realPath));
+        return toolJson({ success: true, topic });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  // Memory is always personal → never served from a shared deployment, so the
+  // memory tools are structurally absent there for every role (P3).
+  if (memoryStore && deployment !== "shared") {
+    registerWriteTool(
+      "rag_reset_memory",
+      "Delete all standalone memories before changing embedding space",
+      { confirm: z.literal(true) },
+      destructiveAnnotations,
+      async ({ confirm }) => {
+        try {
+          writerOnly();
+          if (!memoryStore) {
+            throw new Error("Memory store is unavailable");
+          }
+          await runMutation(() => memoryStore.reset(confirm));
+          return toolJson({ success: true });
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  registerTool(
+    "rag_storage_status",
+    "Report storage format and configured locations",
+    {},
+    readOnlyAnnotations,
+    async () => {
+      try {
+        return toolJson(await topicManager.getStorageStatus());
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
   // ────────────────────────────────────────────────────────────
   // Memory tools
   // ────────────────────────────────────────────────────────────
 
-  if (memoryStore) {
-    server.tool(
+  if (memoryStore && deployment !== "shared") {
+    registerTool(
       "rag_memory",
       "Store, recall, forget, list, or get stats for project memories. " +
         "Memories are stored per-workspace or per-git-branch. " +
@@ -729,6 +1002,10 @@ export function registerTools(
           .max(20)
           .optional()
           .describe("Tags to attach to memory (for 'store' action)"),
+        ttlDays: z.number().positive().max(3650).optional().describe("Optional memory TTL in days"),
+        includeAuto: z.boolean().optional().describe("Include reserved auto-generated memories"),
+        reinforce: z.boolean().optional().describe("Update access counters during recall (writer sessions only)"),
+        ids: z.array(z.string().trim().min(1)).max(500).optional().describe("Memory IDs for promote"),
         limit: z
           .number()
           .int()
@@ -737,13 +1014,36 @@ export function registerTools(
           .optional()
           .describe("Max entries to return (for 'list' action, default: 50)"),
       },
-      async ({ action, content, query, topK, includeEntities, id, olderThan, expired, scope, branch, tags, limit }) => {
+      async (
+        {
+          action,
+          content,
+          query,
+          topK,
+          includeEntities,
+          id,
+          ids,
+          olderThan,
+          expired,
+          scope,
+          branch,
+          tags,
+          ttlDays,
+          includeAuto,
+          reinforce,
+          limit,
+        },
+        extra,
+      ) => {
         try {
+          if (["store", "forget", "decay", "promote"].includes(action)) {
+            writerOnly();
+          }
           // Branch scope explicitly requested but unresolvable must be an
           // error, not a silent fall-back to workspace scope: the caller
           // would store/read memories in a scope they didn't ask for.
           if (scope === "branch" && !branch && (action === "store" || action === "recall" || action === "list")) {
-            const detected = memoryStore.getCurrentBranch();
+            const detected = await memoryStore.getCurrentBranch();
             if (!detected) {
               return {
                 content: [
@@ -775,12 +1075,16 @@ export function registerTools(
                   isError: true,
                 };
               }
-              const entry = await memoryStore.store({
-                content,
-                scope: scope ?? "workspace",
-                branch,
-                tags,
-              });
+              const entry = await runMutation(() =>
+                memoryStore.store({
+                  content,
+                  scope: scope ?? "workspace",
+                  branch,
+                  tags,
+                  ...(ttlDays !== undefined ? { ttlDays } : {}),
+                  ...(extra?.signal ? { signal: extra.signal } : {}),
+                }),
+              );
               return {
                 content: [
                   {
@@ -824,6 +1128,9 @@ export function registerTools(
                 branch,
                 topK: topK ?? 10,
                 includeEntities: includeEntities ?? false,
+                ...(includeAuto ? { includeAuto: true } : {}),
+                ...(accessRole === "reader" ? { reinforce: false } : reinforce !== undefined ? { reinforce } : {}),
+                ...(extra?.signal ? { signal: extra.signal } : {}),
               });
               return {
                 content: [
@@ -858,13 +1165,15 @@ export function registerTools(
             }
 
             case "forget": {
-              const count = await memoryStore.forget({
-                id,
-                scope,
-                branch,
-                olderThan,
-                expired,
-              });
+              const count = await runMutation(() =>
+                memoryStore.forget({
+                  id,
+                  scope,
+                  branch,
+                  olderThan,
+                  expired,
+                }),
+              );
               return {
                 content: [
                   {
@@ -889,7 +1198,7 @@ export function registerTools(
                         // mis-scoped setups are visible instead of silent.
                         workspace: {
                           workingDir: config?.workingDir || process.cwd(),
-                          detectedBranch: memoryStore.getCurrentBranch(),
+                          detectedBranch: await memoryStore.getCurrentBranch(),
                         },
                       },
                       null,
@@ -905,6 +1214,7 @@ export function registerTools(
                 scope,
                 branch,
                 limit: limit ?? 50,
+                ...(includeAuto ? { includeAuto: true } : {}),
               });
               return {
                 content: [
@@ -1006,7 +1316,7 @@ export function registerTools(
                   isError: true,
                 };
               }
-              const entryIds = id ? id.split(",").map((s) => s.trim()) : undefined;
+              const entryIds = ids ?? (id ? id.split(",").map((s) => s.trim()) : undefined);
               const promoted = await memoryStore.promoteToWorkspace(branch, entryIds);
               return {
                 content: [

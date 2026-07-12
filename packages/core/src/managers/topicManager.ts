@@ -21,6 +21,7 @@ import {
   ExportedTopicData,
   TopicSource,
   TopicMatch,
+  DocumentSource,
 } from "../utils/types";
 import { DocumentPipeline, PipelineOptions, PipelineResult } from "./documentPipeline";
 import { executeIndexingGraph } from "../agents/indexingGraph";
@@ -31,9 +32,15 @@ import { EventEmitter } from "events";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
 import { EXTENSION, CONFIG } from "../constants";
+import { atomicWriteJson, ensureStorageFormatV2, resetStorageToV2 } from "../utils/storageV2";
+import { acquireStorageLock } from "../utils/storageLock";
+import type { StorageLockHandle } from "../utils/storageLock";
+import { createHash } from "crypto";
+import { LanceDBCheckpointSaver } from "../stores/lanceDBCheckpointer";
+import { Mutex } from "async-mutex";
 
 /** Current export format version */
-const EXPORT_FORMAT_VERSION = "1.0";
+const EXPORT_FORMAT_VERSION = "2.0";
 
 export interface TopicManagerOptions {
   storageDir: string;
@@ -45,6 +52,9 @@ export interface TopicManagerOptions {
    * Optional — without it the graph pipeline skips extraction.
    */
   llmProvider?: ILLMProvider;
+  /** Explicitly back up existing managed data and initialize storage format v2. */
+  resetStorage?: boolean;
+  checkpointer?: LanceDBCheckpointSaver;
 }
 
 export interface CreateTopicOptions {
@@ -64,6 +74,14 @@ export interface AddDocumentResult {
   topic: Topic;
   document: TopicDocument;
   pipelineResult: PipelineResult;
+}
+
+interface IngestionJournalEntry {
+  id: string;
+  topicId: string;
+  stage: "started" | "vectorCommitted";
+  document: TopicDocument;
+  updatedAt: number;
 }
 
 /**
@@ -116,6 +134,9 @@ export class TopicManager {
   private commonTopicsIndex: TopicsIndex | null = null;
   private commonTopicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
   private commonDatabasePath: string | null = null;
+  private commonKnowledgeGraphStore: KnowledgeGraphStore | null = null;
+  private journalMutex = new Mutex();
+  private storageLock: StorageLockHandle | null = null;
 
   /**
    * Create and initialize a TopicManager
@@ -150,6 +171,18 @@ export class TopicManager {
     this.logger.info("Initializing TopicManager");
 
     try {
+      // Cross-process single-writer guard: a second OS process on the same
+      // storage dir would race whole-table rewrites the in-process
+      // serializers cannot see. Fail fast naming the holder instead.
+      this.storageLock = await acquireStorageLock(this.storageDir);
+
+      if (this.options.resetStorage) {
+        const backupPath = await resetStorageToV2(this.storageDir);
+        this.logger.warn("Storage reset completed", { backupPath: backupPath ?? "empty storage" });
+      } else {
+        await ensureStorageFormatV2(this.storageDir);
+      }
+
       // Ensure storage directory exists
       await this.ensureStorageDirectory();
 
@@ -165,6 +198,7 @@ export class TopicManager {
 
       this.vectorStoreFactory = new VectorStoreFactory(storageDir, this.topicsIndex!.modelName, this.embeddingService);
       this.knowledgeGraphStore = new KnowledgeGraphStore(path.join(storageDir, "lancedb"));
+      await this.recoverIngestionJournal();
 
       // Load common database if configured
       await this.loadCommonDatabase();
@@ -179,6 +213,13 @@ export class TopicManager {
       this.logger.error("Failed to initialize TopicManager", {
         error: error instanceof Error ? error.message : String(error),
       });
+      // Don't hold the lock hostage after a failed init (e.g., unversioned
+      // storage rejected) — the user will retry with --reset-storage.
+      if (this.storageLock) {
+        const lock = this.storageLock;
+        this.storageLock = null;
+        await lock.release().catch(() => undefined);
+      }
       throw error;
     }
   }
@@ -276,7 +317,7 @@ export class TopicManager {
       }
 
       // Remove from cache
-      this.vectorStoreCache.delete(topicId);
+      this.invalidateVectorStoreCache(topicId);
       this.topicDocuments.delete(topicId);
 
       // Delete document metadata file
@@ -312,7 +353,11 @@ export class TopicManager {
    */
   public invalidateVectorStoreCache(topicId?: string): void {
     if (topicId) {
-      this.vectorStoreCache.delete(topicId);
+      for (const key of this.vectorStoreCache.keys()) {
+        if (key.endsWith(`::${topicId}`)) {
+          this.vectorStoreCache.delete(key);
+        }
+      }
     } else {
       this.vectorStoreCache.clear();
     }
@@ -329,15 +374,16 @@ export class TopicManager {
    * Load the knowledge graph for a topic (returns null if none exists)
    */
   public async getKnowledgeGraph(topicId: string): Promise<KnowledgeGraph | null> {
-    if (!this.knowledgeGraphStore) {
+    const graphStore = this.isCommonTopic(topicId) ? this.commonKnowledgeGraphStore : this.knowledgeGraphStore;
+    if (!graphStore) {
       return null;
     }
     try {
-      const hasGraph = await this.knowledgeGraphStore.hasGraph(topicId);
+      const hasGraph = await graphStore.hasGraph(topicId);
       if (!hasGraph) {
         return null;
       }
-      const data = await this.knowledgeGraphStore.loadGraph(topicId);
+      const data = await graphStore.loadGraph(topicId);
       if (!data) {
         return null;
       }
@@ -528,6 +574,87 @@ export class TopicManager {
     return [];
   }
 
+  public listDocuments(topicId: string): TopicDocument[] {
+    if (!this.getTopic(topicId)) {
+      throw new Error(`Topic not found: ${topicId}`);
+    }
+    return this.getTopicDocuments(topicId);
+  }
+
+  public async removeDocument(
+    topicId: string,
+    documentId: string,
+  ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
+    if (this.isCommonTopic(topicId)) {
+      throw new Error("Common database topics are read-only");
+    }
+    if (!this.topicsIndex || !this.vectorStoreFactory) {
+      throw new Error("TopicManager not initialized");
+    }
+    const documents = this.topicDocuments.get(topicId);
+    const document = documents?.get(documentId);
+    if (!document) {
+      throw new Error(`Document not found: ${documentId}`);
+    }
+    const removedChunkIds = await this.vectorStoreFactory.removeDocument(topicId, documentId);
+    if (this.knowledgeGraphStore && removedChunkIds.length > 0) {
+      const graph = await this.getKnowledgeGraph(topicId);
+      if (graph) {
+        const removed = new Set(removedChunkIds);
+        for (const relationship of graph.getAllRelationships()) {
+          const sourceChunkIds = relationship.sourceChunkIds.filter((id) => !removed.has(id));
+          if (sourceChunkIds.length === 0) {
+            graph.removeRelationship(relationship.id);
+          } else {
+            graph.updateRelationship(relationship.id, { sourceChunkIds });
+          }
+        }
+        for (const entity of graph.getAllEntities()) {
+          const sourceChunkIds = entity.sourceChunkIds.filter((id) => !removed.has(id));
+          if (sourceChunkIds.length === 0) {
+            graph.removeEntity(entity.id);
+          } else {
+            graph.updateEntity(entity.id, { sourceChunkIds });
+          }
+        }
+        await this.knowledgeGraphStore.saveGraph(topicId, graph.toJSON());
+      }
+    }
+    documents!.delete(documentId);
+    const topic = this.topicsIndex.topics[topicId];
+    topic.documentCount = documents!.size;
+    topic.updatedAt = Date.now();
+    this.topicsIndex.lastUpdated = Date.now();
+    await this.saveTopicDocuments(topicId);
+    await this.saveTopicsIndex();
+    const stats = await this.vectorStoreFactory.getStoredStats(topicId);
+    const existing = await this.vectorStoreFactory.getStoreMetadata(topicId);
+    await this.vectorStoreFactory.saveStore(topicId, {
+      ...existing,
+      documentCount: stats.documentCount,
+      chunkCount: stats.chunkCount,
+    });
+    this.invalidateVectorStoreCache(topicId);
+    this.notifyAgentCacheCleanup(topicId);
+    return { document, chunksRemoved: removedChunkIds.length };
+  }
+
+  public async getStorageStatus(): Promise<{
+    formatVersion: number;
+    storageDir: string;
+    databaseDir: string;
+    topicCount: number;
+    commonTopicCount: number;
+  }> {
+    return {
+      formatVersion: 2,
+      storageDir: this.storageDir,
+      databaseDir: this.getDatabaseDir(),
+      topicCount: Object.keys(this.topicsIndex?.topics ?? {}).length,
+      commonTopicCount: Object.keys(this.commonTopicsIndex?.topics ?? {}).length,
+    };
+  }
+
   /**
    * Add documents to a topic
    */
@@ -556,12 +683,44 @@ export class TopicManager {
 
       // Process each document
       for (const filePath of filePaths) {
+        const fileName = path.basename(filePath);
+        const fileExt = path.extname(filePath).substring(1);
+        const source: DocumentSource =
+          options?.loaderOptions?.fileType === "github"
+            ? { type: "github", url: filePath, branch: options.loaderOptions.branch }
+            : /^https?:\/\//i.test(filePath)
+              ? { type: "url", url: filePath }
+              : { type: "file", path: path.resolve(filePath) };
+        const stableDocumentId = this.documentIdForSource(filePath, source.type === "url" ? "web" : source.type);
+        const plannedDocument: TopicDocument = {
+          id: stableDocumentId,
+          topicId,
+          name: fileName,
+          filePath,
+          fileType:
+            options?.loaderOptions?.fileType === "github"
+              ? "github"
+              : options?.loaderOptions?.fileType === "web"
+                ? "web"
+                : this.mapFileType(fileExt),
+          source,
+          addedAt: Date.now(),
+          chunkCount: 0,
+        };
+        const journalId = `${topicId}:${stableDocumentId}`;
+        await this.upsertIngestionJournal({
+          id: journalId,
+          topicId,
+          stage: "started",
+          document: plannedDocument,
+          updatedAt: Date.now(),
+        });
         try {
           // Process document through the LangGraph pipeline (single-pass
           // load/chunk/store with topic-graph extraction) or the legacy
           // pipeline, depending on the langGraphEnabled flag.
           const pipelineResult = useLangGraph
-            ? await this.processDocumentViaGraph(filePath, topicId)
+            ? await this.processDocumentViaGraph(filePath, topicId, options)
             : await this.documentPipeline.processDocument(filePath, topicId, options);
 
           if (!pipelineResult.success) {
@@ -571,26 +730,32 @@ export class TopicManager {
             });
             continue;
           }
-
-          // Create document metadata
-          const fileName = path.basename(filePath);
-          const fileExt = path.extname(filePath).substring(1);
+          await this.reconcileKnowledgeGraphProvenance(topicId);
 
           const document: TopicDocument = {
-            id: this.generateDocumentId(),
-            topicId,
-            name: fileName,
-            filePath,
-            fileType: this.mapFileType(fileExt),
-            addedAt: Date.now(),
+            ...plannedDocument,
+            id: String(pipelineResult.chunks[0]?.metadata.documentId ?? "") || stableDocumentId,
             chunkCount: pipelineResult.metadata.chunksStored,
           };
+          await this.upsertIngestionJournal({
+            id: journalId,
+            topicId,
+            stage: "vectorCommitted",
+            document,
+            updatedAt: Date.now(),
+          });
 
           // Store document metadata
           if (!this.topicDocuments.has(topicId)) {
             this.topicDocuments.set(topicId, new Map());
           }
           this.topicDocuments.get(topicId)!.set(document.id, document);
+          topic.documentCount = this.topicDocuments.get(topicId)!.size;
+          topic.updatedAt = Date.now();
+          this.topicsIndex.lastUpdated = Date.now();
+          await this.saveTopicDocuments(topicId);
+          await this.saveTopicsIndex();
+          await this.removeIngestionJournal(journalId);
 
           results.push({
             topic,
@@ -609,12 +774,13 @@ export class TopicManager {
             error: error instanceof Error ? error.message : String(error),
             filePath,
           });
+          await this.removeIngestionJournal(journalId).catch(() => undefined);
           // Continue with other documents
         }
       }
 
       // Invalidate cached vector store so next read picks up new documents
-      this.vectorStoreCache.delete(topicId);
+      this.invalidateVectorStoreCache(topicId);
       this.notifyAgentCacheCleanup(topicId);
 
       // Update topic document count
@@ -642,36 +808,117 @@ export class TopicManager {
     }
   }
 
+  public async addSources(
+    topicId: string,
+    sources: DocumentSource[],
+    options?: PipelineOptions,
+  ): Promise<AddDocumentResult[]> {
+    const outcomes: AddDocumentResult[] = [];
+    for (const source of sources) {
+      const input = source.type === "file" ? source.path : source.url;
+      const loaderOptions =
+        source.type === "github"
+          ? { fileType: "github" as const, branch: source.branch }
+          : source.type === "url"
+            ? { fileType: "web" as const }
+            : options?.loaderOptions;
+      outcomes.push(
+        ...(await this.addDocuments(topicId, [input], {
+          ...options,
+          loaderOptions: { ...options?.loaderOptions, ...loaderOptions },
+        })),
+      );
+    }
+    return outcomes;
+  }
+
   /**
    * Embed and persist already-chunked documents (store-only path).
    * Used by the LangGraph indexing pipeline, which owns loading/chunking.
    */
   public async storeProcessedChunks(topicId: string, chunks: LangChainDocument[]): Promise<void> {
     await this.documentPipeline.storeProcessedChunks(chunks, topicId);
+    await this.reconcileKnowledgeGraphProvenance(topicId);
+  }
+
+  private async reconcileKnowledgeGraphProvenance(topicId: string): Promise<void> {
+    if (!this.knowledgeGraphStore || !(await this.knowledgeGraphStore.hasGraph(topicId))) {
+      return;
+    }
+    const graph = await this.getKnowledgeGraph(topicId);
+    if (!graph) {
+      return;
+    }
+    const liveChunks = new Set(
+      (await this.getAllDocuments(topicId, 1_000_000)).map((document) => String(document.metadata.chunkId)),
+    );
+    let changed = false;
+    for (const relationship of graph.getAllRelationships()) {
+      const sourceChunkIds = relationship.sourceChunkIds.filter((id) => liveChunks.has(id));
+      if (sourceChunkIds.length === 0) {
+        graph.removeRelationship(relationship.id);
+      } else if (sourceChunkIds.length !== relationship.sourceChunkIds.length) {
+        graph.updateRelationship(relationship.id, { sourceChunkIds });
+      }
+      changed ||= sourceChunkIds.length !== relationship.sourceChunkIds.length;
+    }
+    for (const entity of graph.getAllEntities()) {
+      const sourceChunkIds = entity.sourceChunkIds.filter((id) => liveChunks.has(id));
+      if (sourceChunkIds.length === 0) {
+        graph.removeEntity(entity.id);
+      } else if (sourceChunkIds.length !== entity.sourceChunkIds.length) {
+        graph.updateEntity(entity.id, { sourceChunkIds });
+      }
+      changed ||= sourceChunkIds.length !== entity.sourceChunkIds.length;
+    }
+    if (changed) {
+      await this.knowledgeGraphStore.saveGraph(topicId, graph.toJSON());
+    }
   }
 
   /**
    * Run one document through the LangGraph indexing pipeline and adapt the
    * graph result to the PipelineResult shape addDocuments() bookkeeping uses.
    */
-  private async processDocumentViaGraph(filePath: string, topicId: string): Promise<PipelineResult> {
+  private async processDocumentViaGraph(
+    filePath: string,
+    topicId: string,
+    options?: PipelineOptions,
+  ): Promise<PipelineResult> {
     const startTime = Date.now();
+    const checkpointRetentionMs = this.config.get<number>(CONFIG.CHECKPOINT_RETENTION_MS, 0);
+    if (checkpointRetentionMs > 0) {
+      await this.options.checkpointer?.deleteOlderThan(Date.now() - checkpointRetentionMs, "ingest:");
+    }
+    const threadId = `ingest:${topicId}:${createHash("sha256").update(this.documentIdForSource(filePath)).digest("hex")}`;
     const graphResult = await executeIndexingGraph(
       {
         topicManager: this,
         llmProvider: this.llmProvider,
         config: this.config,
+        checkpointer: this.options.checkpointer,
+        loaderOptions: { ...options?.loaderOptions, signal: options?.signal },
+        signal: options?.signal,
       },
       [filePath],
       topicId,
+      threadId,
     );
 
     const success = graphResult.success === true;
+    if (success) {
+      if (checkpointRetentionMs > 0) {
+        this.options.checkpointer?.deleteThreadAfter(threadId, checkpointRetentionMs);
+      } else {
+        await this.options.checkpointer?.deleteThread(threadId);
+      }
+    }
     const documentCount = (graphResult.documentCount as number) ?? 0;
     const chunkCount = (graphResult.chunkCount as number) ?? 0;
     const entityCount = (graphResult.entityCount as number) ?? 0;
     const relationshipCount = (graphResult.relationshipCount as number) ?? 0;
     const errors = (graphResult.errors as string[] | undefined) ?? [];
+    const warnings = (graphResult.warnings as Array<{ stage: string; message: string }> | undefined) ?? [];
     const completedStage = (graphResult.completedStage as string) ?? "";
 
     const stageReached = (stage: string): boolean => {
@@ -698,6 +945,10 @@ export class TopicManager {
         relationshipsExtracted: relationshipCount,
         totalTime,
         stageTimings: { loading: 0, chunking: 0, extracting: 0, embedding: 0, storing: 0 },
+        graphExtracted: graphResult.graphExtracted === true,
+        partial: graphResult.partial === true,
+        documentId: this.documentIdForSource(filePath),
+        warnings,
       },
       chunks: [],
       errors: errors.length > 0 ? errors : undefined,
@@ -717,8 +968,10 @@ export class TopicManager {
 
       await this.ensureEmbeddingModelCompatibility(topicId);
 
+      const location = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? "common") : this.getDatabaseDir();
+      const cacheKey = `${location}::${topicId}`;
       // Check cache first
-      const cachedStore = this.vectorStoreCache.get(topicId);
+      const cachedStore = this.vectorStoreCache.get(cacheKey);
       if (cachedStore) {
         this.logger.debug("Returning cached vector store", { topicId });
         return cachedStore;
@@ -734,7 +987,7 @@ export class TopicManager {
       }
 
       if (store) {
-        this.vectorStoreCache.set(topicId, store);
+        this.vectorStoreCache.set(cacheKey, store);
         this.logger.debug("Vector store loaded and cached", { topicId });
       }
 
@@ -771,7 +1024,10 @@ export class TopicManager {
       return;
     }
 
-    const metadata = await this.vectorStoreFactory.getStoreMetadata(topicId);
+    const metadata = await this.vectorStoreFactory.getStoreMetadata(
+      topicId,
+      this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? undefined) : undefined,
+    );
     if (!metadata?.embeddingModel) {
       return;
     }
@@ -909,33 +1165,36 @@ export class TopicManager {
 
     try {
       const topicIds = this.topicsIndex ? Object.keys(this.topicsIndex.topics) : [];
-
-      // 1. Dispose old factory first to release resources
-      if (this.vectorStoreFactory) {
-        this.vectorStoreFactory.dispose();
+      const storageDir = this.getDatabaseDir();
+      const currentModel = this.embeddingService.getCurrentModel();
+      const replacementPipeline = new DocumentPipeline(this.notifier, this.embeddingService, this.config);
+      await replacementPipeline.initialize(storageDir);
+      const replacementFactory = new VectorStoreFactory(storageDir, currentModel, this.embeddingService);
+      const previousIndexModel = this.topicsIndex?.modelName;
+      try {
+        if (this.topicsIndex) {
+          this.topicsIndex.modelName = currentModel;
+          this.topicsIndex.lastUpdated = Date.now();
+          await this.saveTopicsIndex();
+        }
+      } catch (error) {
+        if (this.topicsIndex && previousIndexModel) {
+          this.topicsIndex.modelName = previousIndexModel;
+        }
+        replacementPipeline.dispose();
+        replacementFactory.dispose();
+        throw error;
       }
 
-      // 2. Clear local caches
+      const previousPipeline = this.documentPipeline;
+      const previousFactory = this.vectorStoreFactory;
+      this.documentPipeline = replacementPipeline;
+      this.vectorStoreFactory = replacementFactory;
       this.vectorStoreCache.clear();
-
-      // 3. Notify external components to clear their caches
+      previousPipeline.dispose();
+      previousFactory?.dispose();
       for (const topicId of topicIds) {
         this.notifyAgentCacheCleanup(topicId);
-      }
-
-      // Reinitialize document pipeline with new model
-      const storageDir = this.getDatabaseDir();
-      await this.documentPipeline.initialize(storageDir);
-
-      // Update topics index with new model
-      const currentModel = this.embeddingService.getCurrentModel();
-
-      if (this.topicsIndex) {
-        this.topicsIndex.modelName = currentModel;
-        this.topicsIndex.lastUpdated = Date.now();
-        await this.saveTopicsIndex();
-
-        this.vectorStoreFactory = new VectorStoreFactory(storageDir, this.topicsIndex.modelName, this.embeddingService);
       }
 
       this.logger.info("TopicManager reinitialized successfully with new model", {
@@ -970,6 +1229,10 @@ export class TopicManager {
       this.vectorStoreFactory.dispose();
       this.vectorStoreFactory = null;
     }
+    this.knowledgeGraphStore?.dispose();
+    this.knowledgeGraphStore = null;
+    this.commonKnowledgeGraphStore?.dispose();
+    this.commonKnowledgeGraphStore = null;
 
     // Clear references
     this.topicsIndex = null;
@@ -977,6 +1240,14 @@ export class TopicManager {
 
     // Clear all agent cache cleanup listeners
     TopicManager._onAgentCacheCleanup.removeAllListeners();
+
+    // dispose() is sync; the exit hook and heartbeat staleness back this up
+    // if the async release never completes.
+    if (this.storageLock) {
+      const lock = this.storageLock;
+      this.storageLock = null;
+      void lock.release().catch(() => undefined);
+    }
 
     this.logger.info("TopicManager disposed");
   }
@@ -1015,6 +1286,7 @@ export class TopicManager {
         embeddingModel: this.topicsIndex.modelName,
         exportedAt: Date.now(),
       };
+      await fs.mkdir(path.dirname(exportPath), { recursive: true });
 
       // Create ZIP archive
       const output = fsSync.createWriteStream(exportPath);
@@ -1028,25 +1300,55 @@ export class TopicManager {
       archive.pipe(output);
 
       // Add topic metadata
-      archive.append(JSON.stringify(exportData, null, 2), { name: "topic.json" });
+      const manifestFiles: Array<{ path: string; size: number; sha256: string }> = [];
+      const topicJson = Buffer.from(JSON.stringify(exportData, null, 2));
+      archive.append(topicJson, { name: "topic.json" });
+      manifestFiles.push({
+        path: "topic.json",
+        size: topicJson.byteLength,
+        sha256: createHash("sha256").update(topicJson).digest("hex"),
+      });
 
       // Add vector store files (LanceDB tables are directories with .lance extension)
-      const lanceDbDir = path.join(databaseDir, "lancedb", `${topicId}.lance`);
-      try {
-        await fs.access(lanceDbDir);
-        archive.directory(lanceDbDir, `lancedb/${topicId}.lance`);
-      } catch {
-        this.logger.debug("No LanceDB directory found for topic", { topicId, path: lanceDbDir });
+      for (const tableName of [topicId, `kg-entities-${topicId}`, `kg-edges-${topicId}`]) {
+        const lanceDbDir = path.join(databaseDir, "lancedb", `${tableName}.lance`);
+        try {
+          await fs.access(lanceDbDir);
+          for (const filePath of await this.listFilesRecursively(lanceDbDir)) {
+            const relative = path.relative(lanceDbDir, filePath).replace(/\\/g, "/");
+            const archiveEntryPath = `lancedb/${tableName}.lance/${relative}`;
+            const bytes = await fs.readFile(filePath);
+            archive.append(bytes, { name: archiveEntryPath });
+            manifestFiles.push({
+              path: archiveEntryPath,
+              size: bytes.byteLength,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            });
+          }
+        } catch {
+          this.logger.debug("No LanceDB directory found", { tableName, path: lanceDbDir });
+        }
       }
 
       // Add vector metadata file
       const vectorMetadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
       try {
         await fs.access(vectorMetadataPath);
-        archive.file(vectorMetadataPath, { name: `vector-${topicId}-metadata.json` });
+        const bytes = await fs.readFile(vectorMetadataPath);
+        const metadataName = `vector-${topicId}-metadata.json`;
+        archive.append(bytes, { name: metadataName });
+        manifestFiles.push({
+          path: metadataName,
+          size: bytes.byteLength,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        });
       } catch {
         this.logger.debug("No vector metadata file found for topic", { topicId });
       }
+
+      archive.append(JSON.stringify({ formatVersion: EXPORT_FORMAT_VERSION, files: manifestFiles }, null, 2), {
+        name: "manifest.json",
+      });
 
       await archive.finalize();
       await archivePromise;
@@ -1075,6 +1377,41 @@ export class TopicManager {
       // Use adm-zip for extraction
       const zip = new AdmZip(archivePath);
       const entries = zip.getEntries();
+      if (entries.length > 100_000) {
+        throw new Error("Invalid archive: too many entries");
+      }
+      const uncompressedSize = entries.reduce((sum, entry) => sum + Number(entry.header.size || 0), 0);
+      if (uncompressedSize > 2 * 1024 * 1024 * 1024) {
+        throw new Error("Invalid archive: decompressed size exceeds 2 GiB");
+      }
+      for (const entry of entries) {
+        const normalized = entry.entryName.replace(/\\/g, "/");
+        if (normalized.startsWith("/") || normalized.split("/").includes("..")) {
+          throw new Error(`Invalid archive path: ${entry.entryName}`);
+        }
+      }
+      const manifestEntry = entries.find((entry) => entry.entryName === "manifest.json");
+      if (!manifestEntry) {
+        throw new Error("Invalid archive: manifest.json not found");
+      }
+      const manifest = JSON.parse(manifestEntry.getData().toString("utf8"));
+      if (manifest.formatVersion !== EXPORT_FORMAT_VERSION || !Array.isArray(manifest.files)) {
+        throw new Error("Invalid archive manifest");
+      }
+      const entriesByName = new Map(entries.map((entry) => [entry.entryName, entry]));
+      for (const expected of manifest.files) {
+        const entry = entriesByName.get(expected.path);
+        if (!entry || entry.isDirectory) {
+          throw new Error(`Archive checksum entry missing: ${expected.path}`);
+        }
+        const bytes = entry.getData();
+        if (
+          bytes.byteLength !== expected.size ||
+          createHash("sha256").update(bytes).digest("hex") !== expected.sha256
+        ) {
+          throw new Error(`Archive checksum mismatch: ${expected.path}`);
+        }
+      }
 
       // Find and parse topic.json
       const topicEntry = entries.find((e: AdmZip.IZipEntry) => e.entryName === "topic.json");
@@ -1083,6 +1420,9 @@ export class TopicManager {
       }
 
       const exportData: ExportedTopicData = JSON.parse(topicEntry.getData().toString("utf8"));
+      if (exportData.version !== EXPORT_FORMAT_VERSION) {
+        throw new Error(`Unsupported .rag format ${exportData.version}; expected ${EXPORT_FORMAT_VERSION}`);
+      }
 
       // Log if embedding model differs - actual compatibility check happens at query time
       const currentModel = this.embeddingService.getCurrentModel();
@@ -1118,45 +1458,24 @@ export class TopicManager {
       // Extract LanceDB files with new topic ID
       const databaseDir = this.getDatabaseDir();
 
-      // Target directory should always match what VectorStoreFactory expects (now checking .lance)
-      const targetDirName = `${newTopicId}.lance`;
-      const lanceDbDir = path.join(databaseDir, "lancedb", targetDirName);
-      await fs.mkdir(lanceDbDir, { recursive: true });
-
-      for (const entry of entries) {
-        // Handle standard .lance extension
-        if (entry.entryName.startsWith(`lancedb/${originalTopicId}.lance/`)) {
-          const relativePath = entry.entryName.replace(`lancedb/${originalTopicId}.lance/`, "");
-          // Skip directories (they are created recursively by mkdir)
-          if (entry.isDirectory) {
-            continue;
-          }
-
-          const targetPath = path.join(lanceDbDir, relativePath);
-          const resolvedTarget = path.resolve(targetPath);
-          const resolvedDir = path.resolve(lanceDbDir);
-          if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
-            this.logger.warn("Skipping potentially malicious ZIP entry", { entryName: entry.entryName });
-            continue;
-          }
-          await fs.mkdir(path.dirname(targetPath), { recursive: true });
-          await fs.writeFile(targetPath, entry.getData());
+      const tableMappings = [
+        { oldName: originalTopicId, newName: newTopicId },
+        { oldName: `kg-entities-${originalTopicId}`, newName: `kg-entities-${newTopicId}` },
+        { oldName: `kg-edges-${originalTopicId}`, newName: `kg-edges-${newTopicId}` },
+      ];
+      for (const mapping of tableMappings) {
+        const prefix = `lancedb/${mapping.oldName}.lance/`;
+        const matching = entries.filter((entry) => !entry.isDirectory && entry.entryName.startsWith(prefix));
+        if (matching.length === 0) {
+          continue;
         }
-
-        // Handle legacy/no-extension format
-        else if (entry.entryName.startsWith(`lancedb/${originalTopicId}/`)) {
-          const relativePath = entry.entryName.replace(`lancedb/${originalTopicId}/`, "");
-          // Skip directories
-          if (entry.isDirectory) {
-            continue;
-          }
-
-          const targetPath = path.join(lanceDbDir, relativePath);
-          const resolvedTarget = path.resolve(targetPath);
-          const resolvedDir = path.resolve(lanceDbDir);
-          if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
-            this.logger.warn("Skipping potentially malicious ZIP entry", { entryName: entry.entryName });
-            continue;
+        const targetDir = path.join(databaseDir, "lancedb", `${mapping.newName}.lance`);
+        await fs.mkdir(targetDir, { recursive: true });
+        for (const entry of matching) {
+          const relativePath = entry.entryName.slice(prefix.length);
+          const targetPath = path.resolve(targetDir, relativePath);
+          if (!targetPath.startsWith(path.resolve(targetDir) + path.sep)) {
+            throw new Error("Archive path traversal");
           }
           await fs.mkdir(path.dirname(targetPath), { recursive: true });
           await fs.writeFile(targetPath, entry.getData());
@@ -1171,13 +1490,12 @@ export class TopicManager {
         const metadata = JSON.parse(vectorMetadataEntry.getData().toString("utf8"));
         metadata.topicId = newTopicId;
         const newMetadataPath = path.join(databaseDir, `vector-${newTopicId}-metadata.json`);
-        await fs.writeFile(newMetadataPath, JSON.stringify(metadata, null, 2));
+        await atomicWriteJson(newMetadataPath, metadata);
       }
 
       // Update document IDs and topic references
       const newDocuments = exportData.documents.map((doc) => ({
         ...doc,
-        id: this.generateDocumentId(),
         topicId: newTopicId,
       }));
 
@@ -1222,16 +1540,25 @@ export class TopicManager {
       this.commonTopicsIndex = null;
       this.commonTopicDocuments.clear();
       this.commonDatabasePath = null;
+      this.commonKnowledgeGraphStore?.dispose();
+      this.commonKnowledgeGraphStore = null;
       return;
     }
 
     try {
       // Verify path exists
       await fs.access(commonPath);
-      this.commonDatabasePath = commonPath;
+      const commonFormat = JSON.parse(await fs.readFile(path.join(commonPath, "storage-format.json"), "utf8"));
+      if (commonFormat.formatVersion !== 2) {
+        throw new Error("Common database must use storage format v2");
+      }
+      const commonDatabaseDir = path.join(commonPath, EXTENSION.DATABASE_DIR);
+      this.commonDatabasePath = commonDatabaseDir;
+      this.commonKnowledgeGraphStore?.dispose();
+      this.commonKnowledgeGraphStore = new KnowledgeGraphStore(path.join(commonDatabaseDir, "lancedb"));
 
       // Check for topics.json
-      const indexPath = path.join(commonPath, EXTENSION.TOPICS_INDEX_FILENAME);
+      const indexPath = path.join(commonDatabaseDir, EXTENSION.TOPICS_INDEX_FILENAME);
       try {
         await fs.access(indexPath);
       } catch {
@@ -1277,6 +1604,8 @@ export class TopicManager {
           this.commonTopicsIndex = null;
           this.commonTopicDocuments.clear();
           this.commonDatabasePath = null;
+          this.commonKnowledgeGraphStore?.dispose();
+          this.commonKnowledgeGraphStore = null;
           return;
         }
 
@@ -1296,6 +1625,8 @@ export class TopicManager {
       this.commonTopicsIndex = null;
       this.commonTopicDocuments.clear();
       this.commonDatabasePath = null;
+      this.commonKnowledgeGraphStore?.dispose();
+      this.commonKnowledgeGraphStore = null;
     }
   }
 
@@ -1402,7 +1733,7 @@ export class TopicManager {
 
     try {
       const indexPath = this.getTopicsIndexPath();
-      await fs.writeFile(indexPath, JSON.stringify(this.topicsIndex, null, 2), "utf-8");
+      await atomicWriteJson(indexPath, this.topicsIndex);
 
       this.logger.debug("Topics index saved");
     } catch (error) {
@@ -1427,10 +1758,24 @@ export class TopicManager {
     return `doc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
   }
 
+  private documentIdForSource(source: string, sourceType: "file" | "web" | "github" = "file"): string {
+    let normalized: string;
+    try {
+      const url = new URL(source);
+      url.hash = "";
+      normalized = url.toString();
+    } catch {
+      normalized = path.resolve(source).replace(/\\/g, "/");
+    }
+    return `doc-${createHash("sha256")
+      .update(JSON.stringify({ type: sourceType, source: normalized }))
+      .digest("hex")}`;
+  }
+
   /**
    * Map file extension to document file type
    */
-  private mapFileType(extension: string): "pdf" | "markdown" | "html" {
+  private mapFileType(extension: string): "pdf" | "markdown" | "html" | "text" | "web" | "github" {
     switch (extension.toLowerCase()) {
       case "pdf":
         return "pdf";
@@ -1440,8 +1785,10 @@ export class TopicManager {
       case "html":
       case "htm":
         return "html";
+      case "txt":
+        return "text";
       default:
-        return "markdown"; // Default fallback
+        return "text";
     }
   }
 
@@ -1450,6 +1797,78 @@ export class TopicManager {
    */
   private getTopicDocumentsPath(topicId: string): string {
     return path.join(this.getDatabaseDir(), `topic-${topicId}-documents.json`);
+  }
+
+  private getIngestionJournalPath(): string {
+    return path.join(this.getDatabaseDir(), "ingestion-journal.json");
+  }
+
+  private async readIngestionJournal(): Promise<IngestionJournalEntry[]> {
+    try {
+      const parsed = JSON.parse(await fs.readFile(this.getIngestionJournalPath(), "utf8"));
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  private async upsertIngestionJournal(entry: IngestionJournalEntry): Promise<void> {
+    await this.journalMutex.runExclusive(async () => {
+      const entries = await this.readIngestionJournal();
+      const index = entries.findIndex((candidate) => candidate.id === entry.id);
+      if (index >= 0) {
+        entries[index] = entry;
+      } else {
+        entries.push(entry);
+      }
+      await atomicWriteJson(this.getIngestionJournalPath(), entries);
+    });
+  }
+
+  private async removeIngestionJournal(id: string): Promise<void> {
+    await this.journalMutex.runExclusive(async () => {
+      const entries = (await this.readIngestionJournal()).filter((entry) => entry.id !== id);
+      await atomicWriteJson(this.getIngestionJournalPath(), entries);
+    });
+  }
+
+  private async recoverIngestionJournal(): Promise<void> {
+    if (!this.vectorStoreFactory || !this.topicsIndex) {
+      return;
+    }
+    await this.journalMutex.runExclusive(async () => {
+      const pending = await this.readIngestionJournal();
+      const remaining: IngestionJournalEntry[] = [];
+      const touched = new Set<string>();
+      for (const entry of pending) {
+        const topic = this.topicsIndex!.topics[entry.topicId];
+        if (!topic) {
+          continue;
+        }
+        const chunkCount = await this.vectorStoreFactory!.getDocumentChunkCount(entry.topicId, entry.document.id);
+        if (chunkCount === 0) {
+          // No vector commit occurred; the started operation is safe to discard.
+          continue;
+        }
+        const documents = this.topicDocuments.get(entry.topicId) ?? new Map<string, TopicDocument>();
+        documents.set(entry.document.id, { ...entry.document, chunkCount });
+        this.topicDocuments.set(entry.topicId, documents);
+        topic.documentCount = documents.size;
+        topic.updatedAt = Math.max(topic.updatedAt, entry.updatedAt);
+        touched.add(entry.topicId);
+      }
+      for (const topicId of touched) {
+        await this.saveTopicDocuments(topicId);
+      }
+      if (touched.size > 0) {
+        this.topicsIndex!.lastUpdated = Date.now();
+        await this.saveTopicsIndex();
+      }
+      await atomicWriteJson(this.getIngestionJournalPath(), remaining);
+    });
   }
 
   /**
@@ -1465,7 +1884,7 @@ export class TopicManager {
       const documentsPath = this.getTopicDocumentsPath(topicId);
       const documentsArray = Array.from(documents.values());
 
-      await fs.writeFile(documentsPath, JSON.stringify(documentsArray, null, 2), "utf-8");
+      await atomicWriteJson(documentsPath, documentsArray);
 
       this.logger.debug("Topic documents saved", {
         topicId,
@@ -1523,5 +1942,21 @@ export class TopicManager {
     for (const topicId of topicIds) {
       await this.loadTopicDocuments(topicId);
     }
+  }
+
+  private async listFilesRecursively(directory: string): Promise<string[]> {
+    const files: string[] = [];
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`Refusing to export symbolic link: ${entryPath}`);
+      }
+      if (entry.isDirectory()) {
+        files.push(...(await this.listFilesRecursively(entryPath)));
+      } else if (entry.isFile()) {
+        files.push(entryPath);
+      }
+    }
+    return files;
   }
 }

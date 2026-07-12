@@ -37,6 +37,10 @@ import { GitBranchDetector } from "./gitBranchDetector";
 import { MemoryDecayEngine } from "./memoryDecayEngine";
 import { MemoryScopeLinker } from "./memoryScopeLinker";
 import { cosineSimilarity } from "../utils/vectorMath";
+import { atomicWriteJson } from "../utils/storageV2";
+import { acquireStorageLock } from "../utils/storageLock";
+import type { StorageLockHandle } from "../utils/storageLock";
+import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 export interface MemoryStoreOptions {
   /** LanceDB storage directory */
@@ -88,10 +92,16 @@ export class MemoryStore {
   // rewrite the entire scope table (all rows + vectors) on every read.
   private reinforcementDirty = new Set<string>();
   private reinforcementTimer: ReturnType<typeof setTimeout> | null = null;
+  private memoryManifestPath: string;
+  private fingerprintCheck: Promise<void> | null = null;
+  private storageDir: string;
+  private lockPromise: Promise<StorageLockHandle> | null = null;
 
   constructor(options: MemoryStoreOptions) {
     const lanceDbUri = path.join(options.storageDir, "memory-lancedb");
+    this.storageDir = options.storageDir;
     this.vectorStore = new MemoryVectorStore(lanceDbUri);
+    this.memoryManifestPath = path.join(options.storageDir, "memory-manifest.json");
     this.embeddingService = options.embeddingService;
     this.extractor = options.llmProvider ? new MemoryEntityExtractor(options.llmProvider) : null;
     this.exporter = new MemoryMarkdownExporter();
@@ -110,11 +120,15 @@ export class MemoryStore {
   // ── Store ──────────────────────────────────────────────────────────
 
   async store(options: StoreOptions): Promise<MemoryEntry> {
-    const { scope, branch } = this.resolveBranch(options);
+    options.signal?.throwIfAborted();
+    await this.ensureEmbeddingFingerprint();
+    options.signal?.throwIfAborted();
+    const { scope, branch } = await this.resolveBranch(options);
     const cacheKey = this.scopeKey(scope, branch);
 
     // 1. Embed content
-    const vector = await this.embeddingService.embed(options.content);
+    const vector = await this.embeddingService.embed(options.content, options.signal);
+    options.signal?.throwIfAborted();
 
     // 2. Check for duplicate entries
     const entries = await this.getEntries(scope, branch);
@@ -127,11 +141,6 @@ export class MemoryStore {
       this.logger.debug(`Duplicate detected, superseding ${duplicate.id} with ${newId}`);
 
       const oldVersion = duplicate.version ?? 1;
-
-      // Mark old entry as superseded
-      duplicate.isLatest = false;
-      duplicate.supersededBy = newId;
-      duplicate.updatedAt = Date.now();
 
       // Create new versioned entry, carrying forward tags and entity associations
       entry = {
@@ -148,11 +157,11 @@ export class MemoryStore {
         entityIds: [...duplicate.entityIds],
         metadata: {},
         confidence: 1.0,
+        expiresAt: options.ttlDays ? Date.now() + options.ttlDays * 86_400_000 : undefined,
         isLatest: true,
         previousVersionId: duplicate.id,
         version: oldVersion + 1,
       };
-      entries.push(entry);
     } else {
       // Create new entry
       entry = {
@@ -169,20 +178,26 @@ export class MemoryStore {
         entityIds: [],
         metadata: {},
         confidence: 1.0,
+        expiresAt: options.ttlDays ? Date.now() + options.ttlDays * 86_400_000 : undefined,
         isLatest: true,
         version: 1,
       };
-      entries.push(entry);
     }
 
     // 3. Extract entities (if LLM available)
-    const entityIds = await this.extractAndMergeEntities(options.content, entry.id, scope, branch);
+    const entityIds = await this.extractAndMergeEntities(options.content, entry.id, scope, branch, options.signal);
     entry.entityIds = [...new Set([...entry.entityIds, ...entityIds])];
 
     // 4. Persist
+    options.signal?.throwIfAborted();
+    if (duplicate) {
+      duplicate.isLatest = false;
+      duplicate.supersededBy = entry.id;
+      duplicate.updatedAt = Date.now();
+    }
+    entries.push(entry);
     this.entryCache.set(cacheKey, entries);
-    await this.persistEntries(scope, branch);
-    await this.persistGraph(scope, branch);
+    await this.persistScopeOrInvalidate(scope, branch);
 
     // 5. Regenerate markdown (debounced)
     this.scheduleMarkdownRegeneration();
@@ -193,24 +208,36 @@ export class MemoryStore {
   // ── Recall ─────────────────────────────────────────────────────────
 
   async recall(options: RecallOptions): Promise<RecallResult> {
+    options.signal?.throwIfAborted();
+    await this.ensureEmbeddingFingerprint();
     const topK = options.topK ?? DEFAULT_TOP_K;
-    const queryVector = await this.embeddingService.embed(options.query);
+    const queryVector = await this.embeddingService.embed(options.query, options.signal);
+    options.signal?.throwIfAborted();
 
     const allMemories: Array<{ entry: MemoryEntry; score: number }> = [];
     const allEntities: Array<{ entity: MemoryEntity; score: number }> = [];
 
     // Determine which scopes to search
-    const scopes = this.resolveScopesForRecall(options);
+    const scopes = await this.resolveScopesForRecall(options);
 
     for (const { scope, branch } of scopes) {
+      options.signal?.throwIfAborted();
       // Search entries via vector store
-      const results = await this.vectorStore.searchEntries(queryVector, scope, branch, topK);
+      const graph = await this.getGraph(scope, branch);
+      const results = (await this.vectorStore.searchEntries(queryVector, scope, branch, topK * 2))
+        .filter(({ entry }) => options.includeAuto || !entry.tags.some((tag) => tag.startsWith("auto:")))
+        .filter(({ entry }) => !entry.expiresAt || entry.expiresAt > Date.now())
+        .map((result) => ({
+          ...result,
+          score: result.score * this.decayEngine.effectiveConfidence(result.entry, graph),
+        }))
+        .slice(0, topK);
 
       // Reinforce accessed memories and return the UPDATED entries so callers
       // see post-increment accessCount/lastAccessedAt (the search results are
       // detached copies read from LanceDB). Persistence is deferred and
       // batched — reads must not rewrite the whole scope table synchronously.
-      if (results.length > 0) {
+      if (results.length > 0 && options.reinforce !== false) {
         const entries = await this.getEntries(scope, branch);
         for (const result of results) {
           const cached = entries.find((e) => e.id === result.entry.id);
@@ -226,7 +253,6 @@ export class MemoryStore {
 
       // Include graph entities if requested
       if (options.includeEntities) {
-        const graph = await this.getGraph(scope, branch);
         const entityResults = graph.searchByEmbedding(queryVector, topK);
         allEntities.push(...entityResults);
 
@@ -387,6 +413,7 @@ export class MemoryStore {
     limit?: number;
     /** If true, include superseded (non-latest) entries. Default false. */
     includeSuperseded?: boolean;
+    includeAuto?: boolean;
   }): Promise<MemoryEntry[]> {
     const limit = options?.limit ?? 50;
     const includeSuperseded = options?.includeSuperseded ?? false;
@@ -414,7 +441,10 @@ export class MemoryStore {
     results.sort((a, b) => b.updatedAt - a.updatedAt);
 
     // Filter superseded entries unless explicitly requested
-    const filtered = includeSuperseded ? results : results.filter((e) => e.isLatest !== false);
+    const versionFiltered = includeSuperseded ? results : results.filter((e) => e.isLatest !== false);
+    const filtered = options?.includeAuto
+      ? versionFiltered
+      : versionFiltered.filter((entry) => !entry.tags.some((tag) => tag.startsWith("auto:")));
 
     return filtered.slice(0, limit);
   }
@@ -526,6 +556,77 @@ export class MemoryStore {
     }
     await this.flushReinforcement();
     await this.flushMarkdown();
+    await this.vectorStore.dispose();
+    if (this.lockPromise) {
+      const lock = await this.lockPromise.catch(() => null);
+      this.lockPromise = null;
+      await lock?.release();
+    }
+  }
+
+  /** Confirmed destructive reset used before changing embedding vector spaces. */
+  async reset(confirm: boolean): Promise<void> {
+    if (!confirm) {
+      throw new Error("Memory reset requires confirm=true");
+    }
+    await this.ensureStorageLock();
+    await this.vectorStore.deleteAll();
+    this.entryCache.clear();
+    this.graphCache.clear();
+    const embeddingFingerprint = await this.embeddingService.getFingerprint();
+    await atomicWriteJson(this.memoryManifestPath, { schemaVersion: 2, embeddingFingerprint, updatedAt: Date.now() });
+    this.fingerprintCheck = null;
+  }
+
+  async validateEmbeddingFingerprint(): Promise<void> {
+    await this.ensureEmbeddingFingerprint();
+  }
+
+  private async ensureEmbeddingFingerprint(): Promise<void> {
+    if (this.fingerprintCheck) {
+      return this.fingerprintCheck;
+    }
+    this.fingerprintCheck = (async () => {
+      const current =
+        typeof (this.embeddingService as any).getFingerprint === "function"
+          ? await this.embeddingService.getFingerprint()
+          : {
+              backendKind: "test-or-legacy",
+              providerFormat: "unknown",
+              model: "unknown",
+              revision: "unknown",
+              dimension: (await this.embeddingService.embed("RAGnarok embedding fingerprint probe")).length,
+              endpointHash: "unknown",
+            };
+      let stored: EmbeddingFingerprint | undefined;
+      try {
+        const manifest = JSON.parse(await fs.readFile(this.memoryManifestPath, "utf8"));
+        stored = manifest.embeddingFingerprint;
+      } catch (error: any) {
+        if (error?.code !== "ENOENT") {
+          throw error;
+        }
+      }
+      if (!stored) {
+        await atomicWriteJson(this.memoryManifestPath, {
+          schemaVersion: 2,
+          embeddingFingerprint: current,
+          updatedAt: Date.now(),
+        });
+        return;
+      }
+      if (JSON.stringify(stored) !== JSON.stringify(current)) {
+        throw new Error(
+          `Memory embedding fingerprint mismatch. Stored ${stored.backendKind}/${stored.model}; ` +
+            `current ${current.backendKind}/${current.model}. Run rag_reset_memory with confirmation before switching.`,
+        );
+      }
+    })();
+    try {
+      await this.fingerprintCheck;
+    } finally {
+      this.fingerprintCheck = null;
+    }
   }
 
   // ── Cross-Scope Linking ─────────────────────────────────────────────
@@ -537,7 +638,7 @@ export class MemoryStore {
    */
   async discoverLinks(sourceScope?: string, targetScope?: string): Promise<ScopeLink[]> {
     const src = sourceScope ?? "workspace";
-    const tgt = targetScope ?? this.currentBranchScope();
+    const tgt = targetScope ?? (await this.currentBranchScope());
     if (!tgt) {
       return [];
     }
@@ -550,6 +651,7 @@ export class MemoryStore {
    * @param entryIds — optional list of specific entry IDs to promote
    */
   async promoteToWorkspace(branch: string, entryIds?: string[]): Promise<number> {
+    await this.ensureStorageLock();
     const count = await this.scopeLinker.promoteToWorkspace(`branch:${branch}`, "workspace", entryIds);
     // Invalidate workspace caches so next access reloads from store
     this.invalidateCache("workspace");
@@ -565,7 +667,7 @@ export class MemoryStore {
 
   // ── Branch Detection ───────────────────────────────────────────────
 
-  getCurrentBranch(): string | null {
+  getCurrentBranch(): Promise<string | null> {
     return this.branchDetector.getCurrentBranch();
   }
 
@@ -580,12 +682,32 @@ export class MemoryStore {
     this.graphCache.delete(scopeKey);
   }
 
-  private currentBranchScope(): string | null {
-    const branch = this.branchDetector.getCurrentBranch();
+  private async currentBranchScope(): Promise<string | null> {
+    const branch = await this.branchDetector.getCurrentBranch();
     return branch ? `branch:${branch}` : null;
   }
 
+  /**
+   * Cross-process single-writer guard, acquired lazily on first data access
+   * (the constructor is sync). Shares the process-wide refcounted lock with
+   * any TopicManager on the same storage dir.
+   */
+  private async ensureStorageLock(): Promise<void> {
+    if (!this.lockPromise) {
+      const acquisition = acquireStorageLock(this.storageDir);
+      this.lockPromise = acquisition;
+      acquisition.catch(() => {
+        // A failed acquisition must not poison later attempts.
+        if (this.lockPromise === acquisition) {
+          this.lockPromise = null;
+        }
+      });
+    }
+    await this.lockPromise;
+  }
+
   private async getGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraph> {
+    await this.ensureStorageLock();
     const key = this.scopeKey(scope, branch);
     const cached = this.graphCache.get(key);
     if (cached) {
@@ -610,6 +732,7 @@ export class MemoryStore {
   }
 
   private async getEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
+    await this.ensureStorageLock();
     const key = this.scopeKey(scope, branch);
     const cached = this.entryCache.get(key);
     if (cached) {
@@ -670,13 +793,29 @@ export class MemoryStore {
     }
   }
 
-  private resolveBranch(options: { scope?: MemoryScope; branch?: string }): {
+  /**
+   * Persist a scope's cached entries and graph together. On failure the
+   * scope's caches are dropped before rethrowing: the optimistic in-memory
+   * mutation must not masquerade as persisted state, so the next access
+   * reloads disk truth instead.
+   */
+  private async persistScopeOrInvalidate(scope: MemoryScope, branch?: string): Promise<void> {
+    try {
+      await this.persistEntries(scope, branch);
+      await this.persistGraph(scope, branch);
+    } catch (error) {
+      this.invalidateCache(this.scopeKey(scope, branch));
+      throw error;
+    }
+  }
+
+  private async resolveBranch(options: { scope?: MemoryScope; branch?: string }): Promise<{
     scope: MemoryScope;
     branch: string | undefined;
-  } {
+  }> {
     const scope = options.scope ?? "workspace";
     if (scope === "branch") {
-      const branch = options.branch ?? this.branchDetector.getCurrentBranch() ?? undefined;
+      const branch = options.branch ?? (await this.branchDetector.getCurrentBranch()) ?? undefined;
       if (!branch) {
         this.logger.warn("Branch scope requested but no branch detected, falling back to workspace");
         return { scope: "workspace", branch: undefined };
@@ -686,12 +825,14 @@ export class MemoryStore {
     return { scope: "workspace", branch: undefined };
   }
 
-  private resolveScopesForRecall(options: RecallOptions): Array<{ scope: MemoryScope; branch?: string }> {
+  private async resolveScopesForRecall(
+    options: RecallOptions,
+  ): Promise<Array<{ scope: MemoryScope; branch?: string }>> {
     if (options.scope === "workspace") {
       return [{ scope: "workspace" }];
     }
     if (options.scope === "branch") {
-      const branch = options.branch ?? this.branchDetector.getCurrentBranch() ?? undefined;
+      const branch = options.branch ?? (await this.branchDetector.getCurrentBranch()) ?? undefined;
       if (!branch) {
         return [{ scope: "workspace" }];
       }
@@ -699,7 +840,7 @@ export class MemoryStore {
     }
     // Default: search both workspace and current branch
     const scopes: Array<{ scope: MemoryScope; branch?: string }> = [{ scope: "workspace" }];
-    const branch = options.branch ?? this.branchDetector.getCurrentBranch() ?? undefined;
+    const branch = options.branch ?? (await this.branchDetector.getCurrentBranch()) ?? undefined;
     if (branch) {
       scopes.push({ scope: "branch", branch });
     }
@@ -728,12 +869,14 @@ export class MemoryStore {
     memoryId: string,
     scope: MemoryScope,
     branch?: string,
+    signal?: AbortSignal,
   ): Promise<string[]> {
     if (!this.extractor) {
       return [];
     }
 
-    const result = await this.extractor.extract(content);
+    const result = await this.extractor.extract(content, signal);
+    signal?.throwIfAborted();
     if (result.entities.length === 0) {
       return [];
     }
@@ -745,20 +888,12 @@ export class MemoryStore {
     // new descriptions embed in ONE batch instead of K serial inference calls.
     const entityNameToId = new Map<string, string>();
     const newEntities: typeof result.entities = [];
+    const existingEntities: Array<{ extracted: (typeof result.entities)[number]; entity: MemoryEntity }> = [];
     for (const extracted of result.entities) {
       const existing = graph.findDuplicate(extracted.name, extracted.type);
 
       if (existing) {
-        // Merge: update description, add sourceMemoryId, bump strength
-        const mergedDescription = existing.description.includes(extracted.description)
-          ? existing.description
-          : `${existing.description}; ${extracted.description}`;
-        graph.updateEntity(existing.id, {
-          description: mergedDescription,
-          sourceMemoryIds: [...new Set([...existing.sourceMemoryIds, memoryId])],
-          strength: Math.min(existing.strength + 0.1, 5.0),
-          updatedAt: Date.now(),
-        });
+        existingEntities.push({ extracted, entity: existing });
         entityIds.push(existing.id);
         entityNameToId.set(extracted.name.toLowerCase(), existing.id);
       } else {
@@ -766,28 +901,51 @@ export class MemoryStore {
       }
     }
 
-    if (newEntities.length > 0) {
-      const vectors = await this.embeddingService.embedBatch(newEntities.map((e) => e.description));
-      newEntities.forEach((extracted, i) => {
-        const entity: MemoryEntity = {
-          id: crypto.randomUUID(),
-          name: extracted.name,
-          type: extracted.type,
-          description: extracted.description,
-          vector: vectors[i],
-          scope,
-          branch,
-          confidence: 1.0,
-          strength: 1.0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          sourceMemoryIds: [memoryId],
-          metadata: {},
-        };
-        graph.addEntity(entity);
-        entityIds.push(entity.id);
-        entityNameToId.set(extracted.name.toLowerCase(), entity.id);
+    const vectors =
+      newEntities.length > 0
+        ? await this.embeddingService.embedBatch(
+            newEntities.map((e) => e.description),
+            undefined,
+            signal,
+          )
+        : [];
+    signal?.throwIfAborted();
+
+    const preparedEntities = newEntities.map((extracted, i) => {
+      const entity: MemoryEntity = {
+        id: crypto.randomUUID(),
+        name: extracted.name,
+        type: extracted.type,
+        description: extracted.description,
+        vector: vectors[i],
+        scope,
+        branch,
+        confidence: 1.0,
+        strength: 1.0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        sourceMemoryIds: [memoryId],
+        metadata: {},
+      };
+      entityIds.push(entity.id);
+      entityNameToId.set(extracted.name.toLowerCase(), entity.id);
+      return entity;
+    });
+
+    // Apply graph mutations only after every cancellable operation succeeded.
+    for (const { extracted, entity } of existingEntities) {
+      const mergedDescription = entity.description.includes(extracted.description)
+        ? entity.description
+        : `${entity.description}; ${extracted.description}`;
+      graph.updateEntity(entity.id, {
+        description: mergedDescription,
+        sourceMemoryIds: [...new Set([...entity.sourceMemoryIds, memoryId])],
+        strength: Math.min(entity.strength + 0.1, 5.0),
+        updatedAt: Date.now(),
       });
+    }
+    for (const entity of preparedEntities) {
+      graph.addEntity(entity);
     }
 
     // Process extracted relationships
@@ -819,8 +977,9 @@ export class MemoryStore {
     if (wsIdx !== -1) {
       const entry = wsEntries[wsIdx];
       wsEntries.splice(wsIdx, 1);
+      this.repairVersionChain(wsEntries, entry);
       await this.cleanupOrphanedEntities(entry, "workspace");
-      await this.persistEntries("workspace");
+      await this.persistScopeOrInvalidate("workspace");
       return 1;
     }
 
@@ -831,8 +990,9 @@ export class MemoryStore {
       if (idx !== -1) {
         const entry = entries[idx];
         entries.splice(idx, 1);
+        this.repairVersionChain(entries, entry);
         await this.cleanupOrphanedEntities(entry, "branch", branch);
-        await this.persistEntries("branch", branch);
+        await this.persistScopeOrInvalidate("branch", branch);
         return 1;
       }
     }
@@ -849,8 +1009,11 @@ export class MemoryStore {
       const removed = this.decayEngine.expireStale(entries, graph);
 
       if (removed.length > 0) {
-        await this.persistEntries(scope, branch);
-        await this.persistGraph(scope, branch);
+        for (const entry of removed) {
+          this.repairVersionChain(entries, entry);
+          await this.cleanupOrphanedEntities(entry, scope, branch);
+        }
+        await this.persistScopeOrInvalidate(scope, branch);
         count += removed.length;
       }
     };
@@ -901,10 +1064,10 @@ export class MemoryStore {
           if (idx !== -1) {
             entries.splice(idx, 1);
           }
+          this.repairVersionChain(entries, entry);
           await this.cleanupOrphanedEntities(entry, scope, branch);
         }
-        await this.persistEntries(scope, branch);
-        await this.persistGraph(scope, branch);
+        await this.persistScopeOrInvalidate(scope, branch);
         count += toRemove.length;
       }
     };
@@ -946,6 +1109,22 @@ export class MemoryStore {
         const updated = entity.sourceMemoryIds.filter((id) => id !== removedEntry.id);
         graph.updateEntity(entityId, { sourceMemoryIds: updated });
       }
+    }
+  }
+
+  private repairVersionChain(entries: MemoryEntry[], removed: MemoryEntry): void {
+    const previous = removed.previousVersionId
+      ? entries.find((entry) => entry.id === removed.previousVersionId)
+      : undefined;
+    const next = removed.supersededBy ? entries.find((entry) => entry.id === removed.supersededBy) : undefined;
+    if (previous) {
+      previous.supersededBy = next?.id;
+      previous.isLatest = !next;
+      previous.updatedAt = Date.now();
+    }
+    if (next) {
+      next.previousVersionId = previous?.id;
+      next.updatedAt = Date.now();
     }
   }
 

@@ -139,12 +139,13 @@ Notes:
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
 - **LLM-Powered Entity Extraction**: Optionally extracts entities (facts, preferences, concepts, tools, conventions) from stored memories; gracefully degrades when no LLM is available
 - **Markdown Export**: Automatically generates a `memories.md` file summarizing stored memories for human review
-- **MCP Integration**: Exposed as the `rag_memory` tool with actions: `store`, `recall`, `forget`, `stats`, `list`
+- **MCP Integration**: Exposed as the `rag_memory` tool with store, recall, forget, stats, list, decay, history, promote, and link operations. Memory TTL is supported; reserved `auto:` memories are hidden unless explicitly requested.
 
 ### 🔮 **LangGraph Orchestration** _(experimental, opt-in)_
 
 - Enable with the `ragnarok.langGraphEnabled` VS Code setting or `RAGNAROK_LANGGRAPH_ENABLED=true` for the MCP server
 - When enabled, [LangGraph](https://langchain-ai.github.io/langgraphjs/) `StateGraph` pipelines orchestrate both query execution and document ingestion — ingestion additionally builds a per-topic knowledge graph (entity extraction requires an LLM provider), which powers the `graph` retrieval strategies
+- LanceDB checkpoints support crash recovery. Successful checkpoints are deleted immediately by default; set `ragnarok.checkpointRetentionMs` or `RAGNAROK_CHECKPOINT_RETENTION_MS` for bounded debugging retention. Automatic query memory remains disabled unless `ragnarok.queryMemoryEnabled` or `RAGNAROK_QUERY_MEMORY_ENABLED=true` is set.
 - The existing procedural flows (`RAGAgent`, `DocumentPipeline`) remain the default
 - See [Phase 4 plan](docs/knowledge-graph/phase-4-memory-langgraph.md) for the full design
 
@@ -483,6 +484,22 @@ The MCP server exposes these tools to any MCP-compatible agent:
 | `rag_switch_embedding_model` | Switch the active embedding model                                                        |
 | `rag_llm_status`             | Get current LLM provider status                                                          |
 | `rag_memory`                 | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped) |
+| `rag_list_documents`         | List stable source documents in a topic                                                  |
+| `rag_delete_topic`           | Delete a topic after explicit confirmation                                               |
+| `rag_remove_document`        | Remove a document and reconcile chunks and graph provenance                              |
+| `rag_rename_topic`           | Rename a topic                                                                           |
+| `rag_add_url`                | Securely ingest a public HTTP(S) page                                                    |
+| `rag_add_github_repo`        | Ingest an allowlisted GitHub/GHES repository                                             |
+| `rag_export_topic`           | Export a checksummed storage-v2 `.rag` archive                                           |
+| `rag_import_topic`           | Validate and import a `.rag` archive                                                     |
+| `rag_reset_memory`           | Reset incompatible or unwanted standalone memory after confirmation                      |
+| `rag_storage_status`         | Inspect storage-format readiness and reset requirements                                  |
+
+The MCP server exposes 23 tools in total, including the three reranker operations. HTTP uses separate read and write tokens: `RAGNAROK_API_KEY` creates reader sessions and the distinct `RAGNAROK_WRITE_API_KEY` creates writer sessions. Non-loopback binds require authentication and restricted CORS; local loopback remains usable without tokens.
+
+### Storage compatibility
+
+Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty unversioned storage fails closed and must be backed up/reset explicitly with `--reset-storage`, `RAGNAROK_RESET_STORAGE=1`, or the VS Code confirmation prompt. Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
 
 ---
 

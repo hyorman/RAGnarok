@@ -26,6 +26,7 @@ const path = require('path');
 const { execSync, spawn } = require('child_process');
 const https = require('https');
 const os = require('os');
+const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -153,6 +154,29 @@ function copyDirSync(src, dest) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
+}
+
+function verifyStagedModels(stagingDir) {
+  const modelsDir = path.join(stagingDir, 'assets', 'models');
+  const manifestPath = path.join(modelsDir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`Missing staged model manifest: ${manifestPath}`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0) {
+    throw new Error('Staged model manifest has no artifacts');
+  }
+  for (const artifact of manifest.artifacts) {
+    const filePath = path.resolve(modelsDir, artifact.filename);
+    if (!filePath.startsWith(modelsDir + path.sep) || !fs.existsSync(filePath)) {
+      throw new Error(`Missing or invalid staged model artifact: ${artifact.filename}`);
+    }
+    const actual = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    if (actual !== artifact.sha256) {
+      throw new Error(`Staged model checksum mismatch: ${artifact.filename}`);
+    }
+  }
+  console.log(`Verified ${manifest.artifacts.length} staged model artifacts.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +579,7 @@ async function main() {
   try {
     createStagingPackageJson(stagingDir, targetPlatform);
     copyToStaging(stagingDir);
+    verifyStagedModels(stagingDir);
     npmInstallStaging(stagingDir);
     await installNativeDeps(stagingDir, targetPlatform);
     pruneBloat(stagingDir, targetPlatform);

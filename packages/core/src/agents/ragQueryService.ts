@@ -26,6 +26,8 @@ import { Logger } from "../logger";
 import { CONFIG, DEFAULTS } from "../constants";
 import { RAGQueryParams, RAGQueryResult, RetrievalStrategy } from "../utils/types";
 import type { Reranker } from "../rerankers/reranker";
+import { LanceDBCheckpointSaver } from "../stores/lanceDBCheckpointer";
+import { randomUUID } from "crypto";
 
 /**
  * Thrown when a topic exists but contains no documents.
@@ -53,7 +55,7 @@ function formatPosition(metadata: Record<string, any> | undefined): string {
   const loc = metadata?.loc as { lines?: { from?: number; to?: number } } | undefined;
   const linesFrom = loc?.lines?.from ?? metadata?.loc_lines_from;
   const linesTo = loc?.lines?.to ?? metadata?.loc_lines_to;
-  if (linesFrom != null || linesTo != null) {
+  if ((linesFrom !== undefined && linesFrom !== null) || (linesTo !== undefined && linesTo !== null)) {
     return `lines ${linesFrom ?? 0}-${linesTo ?? 0}`;
   }
   return `chars ${metadata?.startPosition ?? 0}-${metadata?.endPosition ?? 0}`;
@@ -64,7 +66,7 @@ function formatPosition(metadata: Record<string, any> | undefined): string {
  * JSON-serialized array persisted to LanceDB, or a plain string.
  */
 function formatHeadingPath(raw: unknown): string | undefined {
-  if (raw == null) {
+  if (raw === null || raw === undefined) {
     return undefined;
   }
   if (Array.isArray(raw)) {
@@ -99,6 +101,7 @@ export class RAGQueryService {
   private memoryStore?: MemoryStore;
   private notifier?: INotifier;
   private embeddingService?: EmbeddingService;
+  private checkpointer?: LanceDBCheckpointSaver;
 
   constructor(
     private readonly topicManager: TopicManager,
@@ -111,10 +114,12 @@ export class RAGQueryService {
     memoryStore?: MemoryStore;
     notifier?: INotifier;
     embeddingService?: EmbeddingService;
+    checkpointer?: LanceDBCheckpointSaver;
   }): void {
     this.memoryStore = deps.memoryStore;
     this.notifier = deps.notifier;
     this.embeddingService = deps.embeddingService;
+    this.checkpointer = deps.checkpointer;
     // Dependencies feeding the compiled graph changed — recompile lazily.
     this.compiledQueryGraph = null;
   }
@@ -146,13 +151,14 @@ export class RAGQueryService {
     params: RAGQueryParams,
     workspaceContext?: string,
     signal?: AbortSignal,
+    readOnly = false,
   ): Promise<RAGQueryResult> {
     this.logger.info(`RAG query: "${params.query}" for topic: "${params.topic}"`);
 
     // ── LangGraph pipeline (opt-in) ──
     const langGraphEnabled = this.config.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false);
     if (langGraphEnabled) {
-      return this.executeViaGraph(params, workspaceContext, signal);
+      return this.executeViaGraph(params, workspaceContext, signal, readOnly);
     }
 
     return this.executeQueryLegacy(params, workspaceContext, signal);
@@ -222,12 +228,25 @@ export class RAGQueryService {
     );
 
     // 6. Format into RAGQueryResult
+    const graphRequested = [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(retrievalStrategy);
+    const graphUsed = ragResult.results.some((result) => String(result.source).includes("graph"));
     return {
       query: params.query,
       topicName: topicMatch.topic.name,
       topicMatched: topicMatch.matchType,
       requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
       availableTopics: topicMatch.availableTopics,
+      graphUsed,
+      fallbackReason:
+        graphRequested && !graphUsed ? "No graph matches were available; vector retrieval was used." : undefined,
+      matchedEntities: [
+        ...new Set(
+          ragResult.results.flatMap((result) =>
+            Array.isArray(result.document.metadata.matchedEntities) ? result.document.metadata.matchedEntities : [],
+          ),
+        ),
+      ] as string[],
+      hopDepth: Math.max(0, ...ragResult.results.map((result) => Number(result.document.metadata.hopDepth ?? 0))),
       agenticMetadata: {
         mode: "agentic",
         steps: ragResult.plan.subQueries.map((sq, idx) => ({
@@ -272,9 +291,9 @@ export class RAGQueryService {
   /**
    * Dispose all cached agents.
    */
-  public dispose(): void {
+  public async dispose(): Promise<void> {
     if (this.cachedReranker) {
-      this.cachedReranker.dispose();
+      await this.cachedReranker.dispose();
       this.cachedReranker = undefined;
     }
     this.ragAgents.clear();
@@ -295,6 +314,7 @@ export class RAGQueryService {
     params: RAGQueryParams,
     workspaceContext?: string,
     signal?: AbortSignal,
+    readOnly = false,
   ): Promise<RAGQueryResult> {
     // Resolve topic first (same as existing flow)
     const topicMatch = await this.topicManager.resolveTopicByName(params.topic);
@@ -323,21 +343,43 @@ export class RAGQueryService {
       topicManager: this.topicManager,
       memoryStore: this.memoryStore,
       reranker: reranker ?? undefined,
+      checkpointer: readOnly ? undefined : this.checkpointer,
     };
 
     try {
-      // Compile once and reuse — the compiled graph caches per-topic agents.
-      this.compiledQueryGraph ??= createQueryGraph(deps);
+      // Reader-token runs use an uncheckpointed graph so a read causes zero
+      // durable writes. Writer/local runs retain the long-lived graph cache.
+      if (!readOnly) {
+        this.compiledQueryGraph ??= createQueryGraph(deps);
+      }
+      const compiledGraph = readOnly ? createQueryGraph(deps) : this.compiledQueryGraph!;
 
-      const graphResult = await executeQueryGraph(deps, params.query, topicMatch.topic.id, {
-        retrievalStrategy: params.retrievalStrategy ?? this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, ""),
-        topK: params.topK ?? this.config.get<number>(CONFIG.TOP_K, 5),
-        modelFamily: this.config.get<string>(CONFIG.LLM_MODEL, ""),
-        maxIterations: this.config.get<number>(CONFIG.MAX_ITERATIONS, 3),
-        confidenceThreshold: this.config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7),
-        signal,
-        compiledGraph: this.compiledQueryGraph,
-      });
+      const threadId = `query:${randomUUID()}`;
+      const checkpointRetentionMs = this.config.get<number>(CONFIG.CHECKPOINT_RETENTION_MS, 0);
+      if (!readOnly && checkpointRetentionMs > 0) {
+        await this.checkpointer?.deleteOlderThan(Date.now() - checkpointRetentionMs, "query:");
+      }
+      const graphResult = await executeQueryGraph(
+        deps,
+        params.query,
+        topicMatch.topic.id,
+        {
+          retrievalStrategy: params.retrievalStrategy ?? this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, ""),
+          topK: params.topK ?? this.config.get<number>(CONFIG.TOP_K, 5),
+          modelFamily: this.config.get<string>(CONFIG.LLM_MODEL, ""),
+          maxIterations: this.config.get<number>(CONFIG.MAX_ITERATIONS, 3),
+          confidenceThreshold: this.config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7),
+          signal,
+          allowMemoryWrites: !readOnly,
+          compiledGraph,
+        },
+        threadId,
+      );
+      if (!readOnly && checkpointRetentionMs > 0) {
+        this.checkpointer?.deleteThreadAfter(threadId, checkpointRetentionMs);
+      } else if (!readOnly) {
+        await this.checkpointer?.deleteThread(threadId);
+      }
 
       return this.mapGraphResult(graphResult, params, topicMatch);
     } catch (error) {
@@ -367,6 +409,10 @@ export class RAGQueryService {
       | undefined;
     const confidence = (graphResult.confidence as number) ?? 0;
     const iterations = (graphResult.iterations as number) ?? 1;
+    const subQueryCounts = (graphResult.subQueryCounts ?? {}) as Record<string, number>;
+    const requestedStrategy =
+      params.retrievalStrategy ?? (this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "") as RetrievalStrategy);
+    const graphUsed = results.some((result) => String(result.metadata?.retrievalStrategy ?? "").includes("graph"));
 
     return {
       query: params.query,
@@ -374,12 +420,25 @@ export class RAGQueryService {
       topicMatched: topicMatch.matchType,
       requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
       availableTopics: topicMatch.availableTopics,
+      graphUsed,
+      fallbackReason:
+        [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(requestedStrategy) && !graphUsed
+          ? "No graph matches were available; vector retrieval was used."
+          : undefined,
+      matchedEntities: [
+        ...new Set(
+          results.flatMap((result) =>
+            Array.isArray(result.metadata?.matchedEntities) ? result.metadata.matchedEntities : [],
+          ),
+        ),
+      ] as string[],
+      hopDepth: Math.max(0, ...results.map((result) => Number(result.metadata?.hopDepth ?? 0))),
       agenticMetadata: {
         mode: "agentic",
         steps: plan?.subQueries.map((sq, idx) => ({
           stepNumber: idx + 1,
           query: sq.query,
-          resultsCount: results.filter((r) => (r.metadata?.subQuery as string) === sq.query).length,
+          resultsCount: subQueryCounts[sq.query] ?? 0,
           confidence,
           reasoning: sq.reasoning,
         })),
@@ -447,7 +506,9 @@ export class RAGQueryService {
   }
 
   private async getOrCreateReranker(): Promise<Reranker | null> {
-    if (this.cachedReranker !== undefined) return this.cachedReranker;
+    if (this.cachedReranker !== undefined) {
+      return this.cachedReranker;
+    }
     this.cachedReranker = await this.createReranker();
     return this.cachedReranker;
   }
@@ -457,6 +518,9 @@ export class RAGQueryService {
    * Lazily imports to avoid loading ONNX at startup.
    */
   private async createReranker(): Promise<Reranker | null> {
+    if (!this.config.get<boolean>(CONFIG.RERANKER_ENABLED, DEFAULTS.RERANKER_ENABLED)) {
+      return null;
+    }
     try {
       const { CrossEncoderReranker } = await import("../rerankers/crossEncoderReranker.js");
       const model = this.config.get<string>(CONFIG.RERANKER_MODEL, "") || undefined;

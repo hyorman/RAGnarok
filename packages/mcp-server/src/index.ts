@@ -42,12 +42,14 @@ import {
   RAGQueryService,
   MemoryStore,
   CrossEncoderReranker,
+  LanceDBCheckpointSaver,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion } from "./config";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
+import type { MutationRunner } from "./tools";
 import { startHttpTransport, HttpTransportHandle } from "./httpServer";
 
 async function main(): Promise<void> {
@@ -98,6 +100,10 @@ async function main(): Promise<void> {
     logger.info(`Registered remote embedding backend (${config.embeddingProvider}) at ${config.embeddingBaseUrl}`);
   }
 
+  const checkpointer = config.langGraphEnabled
+    ? new LanceDBCheckpointSaver(path.join(config.storageDir, "checkpoints-lancedb"))
+    : undefined;
+
   // Create topic manager
   const topicManager = await TopicManager.create({
     storageDir: config.storageDir,
@@ -105,6 +111,8 @@ async function main(): Promise<void> {
     notifier,
     embeddingService,
     llmProvider,
+    resetStorage: config.resetStorage,
+    checkpointer,
   });
 
   logger.info(`Loaded ${topicManager.getAllTopics().length} topic(s) from ${config.storageDir}`);
@@ -113,12 +121,20 @@ async function main(): Promise<void> {
   const ragQueryService = new RAGQueryService(topicManager, configProvider, llmProvider);
   TopicManager.onAgentCacheCleanup.subscribe((topicId) => ragQueryService.clearAgentCache(topicId));
 
+  // Deployment mode: an HTTP server with auth tokens configured serves
+  // multiple parties (a shared team KB). Memory is always personal (never
+  // hosted), so shared deployments get no MemoryStore and no memory tools.
+  // stdio and token-less loopback HTTP are personal setups and keep them.
+  const useHttp = process.argv.includes("--http");
+  const sharedDeployment = useHttp && Boolean(config.apiKey || config.writeApiKey);
+  const deployment: "local" | "shared" = sharedDeployment ? "shared" : "local";
+
   // Create standalone memory store
   // Branch-scoped memory needs the PROJECT's directory, not the server's.
   // Global MCP clients often launch servers from a home/app directory, which
   // would silently mis-scope branch memories without an explicit working dir.
   const workingDir = config.workingDir || process.cwd();
-  if (!config.workingDir) {
+  if (!config.workingDir && !sharedDeployment) {
     logger.warn(
       `RAGNAROK_WORKING_DIR not set — using process.cwd() (${workingDir}) for git branch detection. ` +
         "Set it when the server is launched outside the project directory.",
@@ -126,40 +142,95 @@ async function main(): Promise<void> {
   }
   // Downstream consumers (tools) read the RESOLVED working dir from config.
   config.workingDir = workingDir;
-  const memoryStore = new MemoryStore({
-    storageDir: config.storageDir,
-    embeddingService,
-    llmProvider,
-    workingDir,
-    markdownPath: path.join(config.storageDir, "memories.md"),
-  });
+  const memoryStore = sharedDeployment
+    ? undefined
+    : new MemoryStore({
+        storageDir: config.storageDir,
+        embeddingService,
+        llmProvider,
+        workingDir,
+        markdownPath: path.join(config.storageDir, "memories.md"),
+      });
+  if (sharedDeployment) {
+    logger.info("Shared deployment (auth tokens configured): personal memory tools are disabled");
+  }
 
-  ragQueryService.setGraphDeps({ memoryStore, notifier, embeddingService });
+  ragQueryService.setGraphDeps({ memoryStore, notifier, embeddingService, checkpointer });
 
   // Create reranker (always-on — gracefully degrades if ONNX model unavailable)
-  const reranker = new CrossEncoderReranker(config.rerankerModel, {
-    maxCandidates: config.rerankerMaxCandidates,
-  });
+  const reranker = config.rerankerEnabled
+    ? new CrossEncoderReranker(config.rerankerModel, { maxCandidates: config.rerankerMaxCandidates })
+    : null;
   // Share the SAME instance with the query path so rag_switch_reranker_model
   // affects query behaviour, not just the management tools' private copy.
-  ragQueryService.setReranker(reranker);
+  if (reranker) {
+    ragQueryService.setReranker(reranker);
+    // Non-blocking warm-up: the first query skips the model-load stall, and a
+    // broken model surfaces in the startup log instead of at query time.
+    void reranker.initialize().catch((error) => {
+      logger.warn(
+        "Reranker warm-up failed — queries will fall back to original ranking",
+        error instanceof Error ? error.message : error,
+      );
+    });
+  }
 
   // Server factory: stdio uses a single instance; the HTTP transport creates
   // one server+transport pair per client session (all sharing the services).
-  const createMcpServer = (): McpServer => {
-    const server = new McpServer({
-      name: "ragnarok",
-      version: getServerVersion(),
+  let mutationTail = Promise.resolve();
+  const runMutation: MutationRunner = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const previous = mutationTail;
+    let release!: () => void;
+    mutationTail = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    registerTools(server, topicManager, llmProvider, embeddingService, ragQueryService, memoryStore, reranker, config);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
+
+  // Self-describing servers: agents that see both a local and a shared
+  // RAGnarōk entry route between them by these instructions (design §4.2).
+  const instructions = sharedDeployment
+    ? "RAGnarōk team shared knowledge base (central, curated). Topics on this server are shared team data: " +
+      "read-only unless your token grants write access. Personal memory tools are not available here — " +
+      "personal knowledge bases and memory belong to a local RAGnarōk server. If a local RAGnarōk server " +
+      "is also configured, prefer it for personal topics and memory; use this server for team-shared topics."
+    : "RAGnarōk personal engine: local knowledge bases and project memory, full read/write on this machine. " +
+      "If a remote team RAGnarōk server is also configured, prefer this local server for personal topics " +
+      "and memory; use the remote one for team-shared topics.";
+
+  const createMcpServer = (role: "reader" | "writer" = "writer"): McpServer => {
+    const server = new McpServer(
+      {
+        name: "ragnarok",
+        version: getServerVersion(),
+      },
+      { instructions },
+    );
+    registerTools(
+      server,
+      topicManager,
+      llmProvider,
+      embeddingService,
+      ragQueryService,
+      memoryStore,
+      reranker,
+      config,
+      role,
+      runMutation,
+      deployment,
+    );
     return server;
   };
 
   // Start transport
-  const useHttp = process.argv.includes("--http");
-
   let httpHandle: HttpTransportHandle | null = null;
   let stdioServer: McpServer | null = null;
+  let stdioTransport: StdioServerTransport | null = null;
 
   if (useHttp) {
     httpHandle = await startHttpTransport(createMcpServer, config);
@@ -167,8 +238,8 @@ async function main(): Promise<void> {
     // stdio transport for local agents (default)
     logger.info("Starting stdio transport");
     stdioServer = createMcpServer();
-    const transport = new StdioServerTransport();
-    await stdioServer.connect(transport);
+    stdioTransport = new StdioServerTransport();
+    await stdioServer.connect(stdioTransport);
     logger.info("RAGnarōk MCP server running (stdio)");
   }
 
@@ -181,6 +252,7 @@ async function main(): Promise<void> {
     }
     shuttingDown = true;
     logger.info(`Received ${signal} — shutting down`);
+    const hardExit = setTimeout(() => process.exit(1), 10_000);
 
     try {
       if (httpHandle) {
@@ -189,23 +261,27 @@ async function main(): Promise<void> {
       if (stdioServer) {
         await stdioServer.close();
       }
-      await memoryStore.dispose();
-      ragQueryService.dispose();
-      reranker.dispose();
+      await memoryStore?.dispose();
+      await ragQueryService.dispose();
       topicManager.dispose();
-      embeddingService.dispose();
+      await embeddingService.dispose();
+      checkpointer?.dispose();
       logger.info("Shutdown complete");
+      clearTimeout(hardExit);
     } catch (error) {
       logger.error("Error during shutdown", error);
     }
-    process.exit(0);
+    process.exitCode = 0;
   };
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  if (stdioTransport) {
+    stdioTransport.onclose = () => void shutdown("stdio EOF");
+  }
 }
 
 main().catch((error) => {
   console.error("Fatal error starting MCP server:", error);
-  process.exit(1);
+  process.exitCode = 1;
 });

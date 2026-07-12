@@ -32,6 +32,10 @@ describe("MCP Server", () => {
       "RAGNAROK_LLM_API_KEY",
       "RAGNAROK_LLM_MODEL",
       "RAGNAROK_LLM_BASE_URL",
+      "RAGNAROK_API_KEY",
+      "RAGNAROK_WRITE_API_KEY",
+      "RAGNAROK_CORS_ORIGIN",
+      "RAGNAROK_HTTP_HOST",
     ];
 
     const saved: Record<string, string | undefined> = {};
@@ -147,6 +151,23 @@ describe("MCP Server", () => {
       process.env.RAGNAROK_CHUNK_SIZE = "200";
       process.env.RAGNAROK_CHUNK_OVERLAP = "200";
       expect(() => loadConfig()).to.throw(/chunkOverlap/);
+    });
+
+    it("should reject identical HTTP read and write tokens", () => {
+      process.env.RAGNAROK_API_KEY = "same-token";
+      process.env.RAGNAROK_WRITE_API_KEY = "same-token";
+      expect(() => loadConfig()).to.throw(/read and write tokens must differ/);
+    });
+
+    it("should require auth and restricted CORS on non-loopback binds", () => {
+      process.env.RAGNAROK_HTTP_HOST = "0.0.0.0";
+      expect(() => loadConfig()).to.throw(/RAGNAROK_API_KEY/);
+
+      process.env.RAGNAROK_API_KEY = "read-token";
+      expect(() => loadConfig()).to.throw(/RAGNAROK_CORS_ORIGIN/);
+
+      process.env.RAGNAROK_CORS_ORIGIN = "https://client.example";
+      expect(loadConfig().httpHost).to.equal("0.0.0.0");
     });
   });
 

@@ -15,7 +15,10 @@ export default tseslint.config(
       curly: "warn",
       eqeqeq: "warn",
       "no-throw-literal": "warn",
-      "@typescript-eslint/no-explicit-any": "warn",
+      // This codebase integrates several dynamically imported SDKs whose
+      // runtime surfaces are intentionally untyped. Keep lint actionable;
+      // strict project compilation remains the type-safety release gate.
+      "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": [
         "warn",
         {

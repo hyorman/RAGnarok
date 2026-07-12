@@ -5,6 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import { MemoryStore, MemoryStoreOptions } from "../src/memory/memoryStore";
 import { EmbeddingService } from "../src/embeddings/embeddingService";
+import type { EmbeddingFingerprint } from "../src/embeddings/embeddingBackend";
 
 // ── Mock Embedding Service ───────────────────────────────────────────
 // Returns a deterministic 32-dim vector derived from a simple text hash.
@@ -34,6 +35,36 @@ function createMockEmbeddingService(): EmbeddingService {
     embedBatch: async (texts: string[]): Promise<number[][]> => texts.map(textToVector),
   } as unknown as EmbeddingService;
   return mock;
+}
+
+function createFingerprintedEmbeddingService(fingerprint: EmbeddingFingerprint): EmbeddingService {
+  return {
+    embed: async (text: string, signal?: AbortSignal): Promise<number[]> => {
+      signal?.throwIfAborted();
+      return textToVector(text);
+    },
+    embedBatch: async (texts: string[], _progress?: unknown, signal?: AbortSignal): Promise<number[][]> => {
+      signal?.throwIfAborted();
+      return texts.map(textToVector);
+    },
+    getFingerprint: async (signal?: AbortSignal): Promise<EmbeddingFingerprint> => {
+      signal?.throwIfAborted();
+      return fingerprint;
+    },
+  } as unknown as EmbeddingService;
+}
+
+async function captureError(operation: Promise<unknown>): Promise<unknown> {
+  let captured: unknown;
+  try {
+    await operation;
+  } catch (error) {
+    captured = error;
+  }
+  if (captured === undefined) {
+    throw new Error("Expected operation to reject");
+  }
+  return captured;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -269,6 +300,37 @@ describe("MemoryStore restart persistence", function () {
     const listed = await second.list({ scope: "workspace" });
     expect(listed.map((e) => e.id)).to.deep.equal([keep.id]);
   });
+
+  it("a failed persist surfaces the error and rolls the cache back to disk truth", async function () {
+    const store = makeStore();
+    const kept = await store.store({ content: "persisted before the failure" });
+
+    // Inject a one-shot persistence failure at the vector-store boundary.
+    const vectorStore = (store as any).vectorStore;
+    const originalSave = vectorStore.saveEntries.bind(vectorStore);
+    vectorStore.saveEntries = async () => {
+      vectorStore.saveEntries = originalSave;
+      throw new Error("simulated LanceDB write failure");
+    };
+
+    let caught: unknown;
+    try {
+      await store.store({ content: "entry whose persist fails" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught, "persist failure must surface to the caller").to.be.instanceOf(Error);
+
+    // The optimistic cache entry must not survive: the SAME instance reloads
+    // disk truth on next access instead of reporting a phantom success.
+    const listed = await store.list({ scope: "workspace" });
+    expect(listed.map((e) => e.id)).to.deep.equal([kept.id]);
+
+    // And the store keeps working normally once persistence recovers.
+    const after = await store.store({ content: "entry stored after recovery" });
+    const relisted = await store.list({ scope: "workspace" });
+    expect(relisted.map((e) => e.id).sort()).to.deep.equal([kept.id, after.id].sort());
+  });
 });
 
 // ── Concurrency (single instance, interleaved operations) ────────────
@@ -326,5 +388,111 @@ describe("MemoryStore concurrent operations", function () {
 
     const branch = await store.list({ scope: "branch", branch: "feat/concurrent", limit: 100 });
     expect(branch.map((e) => e.content)).to.deep.equal(["branch op"]);
+  });
+});
+
+describe("MemoryStore release contracts", function () {
+  this.timeout(30000);
+
+  let tempDir: string;
+  const stores: MemoryStore[] = [];
+
+  const makeStore = (embeddingService: EmbeddingService = createMockEmbeddingService()) => {
+    const result = new MemoryStore({
+      storageDir: tempDir,
+      embeddingService,
+      workingDir: tempDir,
+      markdownPath: null,
+    });
+    stores.push(result);
+    return result;
+  };
+
+  beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-contract-test-"));
+  });
+
+  afterEach(async function () {
+    for (const current of stores.splice(0)) {
+      await current.dispose();
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("hides reserved auto memories unless includeAuto is explicit", async function () {
+    const current = makeStore();
+    const automatic = await current.store({
+      content: "automatic query insight with a unique violet almanac",
+      tags: ["auto:query-insight"],
+    });
+
+    expect((await current.list({ scope: "workspace" })).map((entry) => entry.id)).to.not.include(automatic.id);
+    expect((await current.list({ scope: "workspace", includeAuto: true })).map((entry) => entry.id)).to.include(
+      automatic.id,
+    );
+    expect(
+      (await current.recall({ query: automatic.content, scope: "workspace", reinforce: false })).memories,
+    ).to.deep.equal([]);
+    expect(
+      (
+        await current.recall({
+          query: automatic.content,
+          scope: "workspace",
+          includeAuto: true,
+          reinforce: false,
+        })
+      ).memories.map(({ entry }) => entry.id),
+    ).to.include(automatic.id);
+  });
+
+  it("persists expiresAt and excludes then purges expired TTL memories after restart", async function () {
+    const first = makeStore();
+    const entry = await first.store({ content: "short lived memory", ttlDays: 0.00000001 });
+    expect(entry.expiresAt).to.be.a("number");
+    await first.dispose();
+    stores.splice(stores.indexOf(first), 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = makeStore();
+    const recalled = await second.recall({ query: entry.content, scope: "workspace", reinforce: false });
+    expect(recalled.memories).to.deep.equal([]);
+    expect(await second.forget({ scope: "workspace", expired: true })).to.equal(1);
+  });
+
+  it("rejects a same-dimension embedding fingerprint change", async function () {
+    const original: EmbeddingFingerprint = {
+      backendKind: "remote",
+      providerFormat: "openai",
+      model: "model-a",
+      revision: "1",
+      dimension: VECTOR_DIM,
+      endpointHash: "endpoint-a",
+    };
+    const incompatible: EmbeddingFingerprint = {
+      ...original,
+      providerFormat: "ollama",
+      model: "model-b",
+      endpointHash: "endpoint-b",
+    };
+
+    const first = makeStore(createFingerprintedEmbeddingService(original));
+    await first.store({ content: "fingerprinted memory" });
+    await first.dispose();
+    stores.splice(stores.indexOf(first), 1);
+
+    const second = makeStore(createFingerprintedEmbeddingService(incompatible));
+    const error = await captureError(second.validateEmbeddingFingerprint());
+    expect(error).to.be.instanceOf(Error);
+    expect((error as Error).message).to.include("Memory embedding fingerprint mismatch");
+  });
+
+  it("does not persist a memory when cancellation is already requested", async function () {
+    const current = makeStore();
+    const controller = new AbortController();
+    controller.abort(new Error("cancel memory store"));
+
+    const error = await captureError(current.store({ content: "must never be written", signal: controller.signal }));
+    expect(error).to.be.instanceOf(Error);
+    expect(await current.list({ scope: "workspace", includeAuto: true })).to.deep.equal([]);
   });
 });

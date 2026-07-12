@@ -76,7 +76,7 @@ function makeBaseDeps() {
  * Register tools and capture handler callbacks keyed by tool name.
  * Optionally passes a MemoryStore to registerTools.
  */
-function captureHandlers(memoryStore?: MemoryStore): Record<string, ToolHandler> {
+function captureHandlers(memoryStore?: MemoryStore, deployment?: "local" | "shared"): Record<string, ToolHandler> {
   const handlers: Record<string, ToolHandler> = {};
   const server = new McpServer({ name: "test", version: "0.0.0" });
 
@@ -97,6 +97,11 @@ function captureHandlers(memoryStore?: MemoryStore): Record<string, ToolHandler>
     deps.embeddingService as unknown as EmbeddingService,
     deps.ragQueryService as unknown as RAGQueryService,
     memoryStore,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deployment,
   );
 
   return handlers;
@@ -161,6 +166,22 @@ describe("rag_memory tool", () => {
   it("is NOT registered when memoryStore is undefined", () => {
     const noMemoryHandlers = captureHandlers(undefined);
     expect(noMemoryHandlers.rag_memory).to.be.undefined;
+  });
+
+  it("is NOT registered in a shared deployment, even with a memoryStore and writer role", () => {
+    const sharedHandlers = captureHandlers(memoryStore as unknown as MemoryStore, "shared");
+    expect(sharedHandlers.rag_memory).to.be.undefined;
+    expect(sharedHandlers.rag_reset_memory).to.be.undefined;
+    // Only the memory tools are dropped — the rest of the surface stays.
+    expect(sharedHandlers.rag_query).to.be.a("function");
+    expect(sharedHandlers.rag_storage_status).to.be.a("function");
+    expect(sharedHandlers.rag_create_topic).to.be.a("function");
+  });
+
+  it("is registered alongside rag_reset_memory in a local deployment", () => {
+    const localHandlers = captureHandlers(memoryStore as unknown as MemoryStore, "local");
+    expect(localHandlers.rag_memory).to.be.a("function");
+    expect(localHandlers.rag_reset_memory).to.be.a("function");
   });
 
   // -----------------------------------------------------------------------

@@ -130,7 +130,9 @@ describe("IndexingGraph", function () {
       const storeStub = tm.storeProcessedChunks as sinon.SinonStub;
       expect(storeStub.calledOnce).to.be.true;
       expect(storeStub.firstCall.args[0]).to.equal("test-topic");
-      expect(storeStub.firstCall.args[1].map((c: LangChainDocument) => c.metadata.chunkId)).to.deep.equal(["c1"]);
+      const storedChunkIds = storeStub.firstCall.args[1].map((c: LangChainDocument) => c.metadata.chunkId as string);
+      expect(storedChunkIds).to.have.length(1);
+      expect(storedChunkIds[0]).to.match(/^chunk-[a-f0-9]{64}$/);
 
       // Verify final result
       expect(result.result).to.be.an("object");
@@ -200,9 +202,10 @@ describe("IndexingGraph", function () {
         relationships: Array<{ sourceChunkIds: string[] }>;
       };
       expect(savedGraph.entities).to.have.length(2);
+      const storedChunkId = (tm.storeProcessedChunks as sinon.SinonStub).firstCall.args[1][0].metadata.chunkId;
       const typeScriptEntity = savedGraph.entities.find((entity) => entity.name === "TypeScript");
-      expect(typeScriptEntity?.sourceChunkIds).to.deep.equal(["c1"]);
-      expect(savedGraph.relationships[0].sourceChunkIds).to.deep.equal(["c1"]);
+      expect(typeScriptEntity?.sourceChunkIds).to.deep.equal([storedChunkId]);
+      expect(savedGraph.relationships[0].sourceChunkIds).to.deep.equal([storedChunkId]);
     });
   });
 

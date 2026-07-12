@@ -13,6 +13,7 @@ describe("WebDocumentLoader", function () {
 
   let loader: WebDocumentLoader;
   let fetchStub: sinon.SinonStub;
+  let pinnedAddresses: Array<{ address: string; family?: number }>;
 
   const makeOptions = (filePath: string, overrides?: Partial<LoaderOptions>): LoaderOptions => ({
     filePath,
@@ -42,7 +43,7 @@ describe("WebDocumentLoader", function () {
       clone: sinon.stub().returnsThis(),
       body: null,
       bodyUsed: false,
-      arrayBuffer: sinon.stub().resolves(new ArrayBuffer(0)),
+      arrayBuffer: sinon.stub().resolves(new TextEncoder().encode(html).buffer),
       blob: sinon.stub().resolves(new Blob([])),
       formData: sinon.stub().resolves(new FormData()),
       redirected: false,
@@ -53,7 +54,21 @@ describe("WebDocumentLoader", function () {
   }
 
   beforeEach(function () {
-    loader = new WebDocumentLoader();
+    pinnedAddresses = [];
+    loader = new (class extends WebDocumentLoader {
+      protected resolveAddresses(): Promise<Array<{ address: string }>> {
+        return Promise.resolve([{ address: "93.184.216.34" }]);
+      }
+
+      protected fetchResponse(
+        url: URL,
+        signal: AbortSignal,
+        addresses: Array<{ address: string; family?: number }>,
+      ): Promise<Response> {
+        pinnedAddresses = addresses;
+        return fetch(url, { method: "GET", redirect: "manual", signal });
+      }
+    })();
     fetchStub = sinon.stub(global, "fetch");
   });
 
@@ -66,6 +81,27 @@ describe("WebDocumentLoader", function () {
   // ---------------------------------------------------------------------------
 
   describe("security checks", function () {
+    for (const privateUrl of [
+      "http://127.0.0.1/",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://172.16.0.1/",
+      "http://192.168.1.1/",
+      "http://100.64.0.1/",
+      "http://[fe90::1]/",
+      "http://[fd00::1]/",
+      "http://[::ffff:7f00:1]/",
+    ]) {
+      it(`should reject private destination ${privateUrl}`, async function () {
+        try {
+          await loader.load(privateUrl, makeOptions(privateUrl));
+          expect.fail("Should have thrown");
+        } catch (error: any) {
+          expect(error.message).to.match(/Private URLs|private, loopback, or link-local/);
+        }
+        expect(fetchStub.called).to.equal(false);
+      });
+    }
+
     it("should reject 401 Unauthorized responses", async function () {
       fetchStub.resolves(mockResponse({ status: 401, ok: false }));
 
@@ -163,6 +199,29 @@ describe("WebDocumentLoader", function () {
         expect(error.message).to.include("password field");
       }
     });
+
+    it("should reject a redirect target that resolves to a private address", async function () {
+      const redirectLoader = new (class extends WebDocumentLoader {
+        protected resolveAddresses(hostname: string): Promise<Array<{ address: string }>> {
+          return Promise.resolve([{ address: hostname === "internal.example" ? "127.0.0.1" : "93.184.216.34" }]);
+        }
+
+        protected fetchResponse(url: URL, signal: AbortSignal): Promise<Response> {
+          return fetch(url, { method: "GET", redirect: "manual", signal });
+        }
+      })();
+      fetchStub.resolves(
+        mockResponse({ status: 302, ok: false, headers: { location: "http://internal.example/secret" } }),
+      );
+
+      try {
+        await redirectLoader.load("https://example.com/start", makeOptions("https://example.com/start"));
+        expect.fail("Should have thrown");
+      } catch (error: any) {
+        expect(error.message).to.include("private, loopback, or link-local");
+      }
+      expect(fetchStub.calledOnce).to.equal(true);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -173,8 +232,6 @@ describe("WebDocumentLoader", function () {
     it("should load a public page successfully", async function () {
       const html = "<html><head><title>Test Page</title></head><body><p>Hello World</p></body></html>";
 
-      // First call: our security check
-      // Second call: CheerioWebBaseLoader's internal fetch
       fetchStub.resolves(mockResponse({ html }));
 
       const docs = await loader.load("https://example.com/page", makeOptions("https://example.com/page"));
@@ -182,7 +239,8 @@ describe("WebDocumentLoader", function () {
       expect(docs).to.be.an("array");
       expect(docs.length).to.be.greaterThan(0);
       // Security check fetch was called
-      expect(fetchStub.calledWith("https://example.com/page")).to.be.true;
+      expect(fetchStub.calledOnce).to.be.true;
+      expect(pinnedAddresses).to.deep.equal([{ address: "93.184.216.34" }]);
     });
   });
 

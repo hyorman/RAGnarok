@@ -6,6 +6,7 @@
 import { expect } from "chai";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import {
   DocumentPipeline,
   PipelineProgress,
@@ -14,6 +15,7 @@ import {
   INotifier,
   HuggingFaceBackend,
   ModelRegistry,
+  VectorStoreFactory,
 } from "../src/index";
 
 const mockConfig: IConfigProvider = {
@@ -37,13 +39,10 @@ describe("DocumentPipeline", function () {
 
   // When tests are compiled, they're in packages/core/dist-test/test, so go up to workspace root
   const fixturesPath = path.join(__dirname, "../../../../test/fixtures");
-  const tempStorageDir = path.join(__dirname, "../../../../test/.temp-storage");
+  let tempStorageDir: string;
 
   before(async function () {
-    // Create temp storage directory
-    if (!fs.existsSync(tempStorageDir)) {
-      fs.mkdirSync(tempStorageDir, { recursive: true });
-    }
+    tempStorageDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-pipeline-"));
 
     // Get embedding service instance and save original model state
     embeddingService = new EmbeddingService({ config: mockConfig, notifier: mockNotifier });
@@ -65,10 +64,7 @@ describe("DocumentPipeline", function () {
       await embeddingService.clearCache();
     }
 
-    // Cleanup temp storage (optional - can keep for inspection)
-    // if (fs.existsSync(tempStorageDir)) {
-    //   fs.rmSync(tempStorageDir, { recursive: true, force: true });
-    // }
+    fs.rmSync(tempStorageDir, { recursive: true, force: true });
   });
 
   describe("Initialization", function () {
@@ -354,6 +350,22 @@ describe("DocumentPipeline", function () {
   });
 
   describe("Error Handling", function () {
+    it("does not create vector rows when ingestion is cancelled", async function () {
+      const controller = new AbortController();
+      controller.abort(new Error("ingestion cancelled"));
+      const topicId = "test-topic-cancelled";
+      const result = await pipeline.processDocument(path.join(fixturesPath, "sample.md"), topicId, {
+        signal: controller.signal,
+      });
+
+      expect(result.success).to.equal(false);
+      expect(result.stages.storing).to.equal(false);
+      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService);
+      await verifier.initialize();
+      expect(await verifier.loadStore(topicId)).to.equal(null);
+      verifier.dispose();
+    });
+
     it("should collect and report errors", async function () {
       // Try to process a non-existent file
       const fakeFile = path.join(fixturesPath, "does-not-exist.txt");
@@ -441,6 +453,26 @@ describe("DocumentPipeline", function () {
   });
 
   describe("Integration", function () {
+    it("supports TXT, Markdown, HTML, and PDF in every first-file ordering without duplicates", async function () {
+      const files = ["sample-text.txt", "sample.md", "sample.html", "sample.pdf"].map((name) =>
+        path.join(fixturesPath, name),
+      );
+      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService);
+      for (let first = 0; first < files.length; first++) {
+        const topicId = `mixed-first-${first}`;
+        const order = [files[first], ...files.filter((_, index) => index !== first)];
+        for (const file of order) {
+          expect((await pipeline.processDocument(file, topicId)).success).to.equal(true);
+        }
+        const before = await verifier.getStoredStats(topicId);
+        expect(before.documentCount).to.equal(4);
+        expect((await pipeline.processDocument(files[first], topicId)).success).to.equal(true);
+        const after = await verifier.getStoredStats(topicId);
+        expect(after).to.deep.equal(before);
+      }
+      verifier.dispose();
+    });
+
     it("should complete end-to-end pipeline successfully", async function () {
       const testFile = path.join(fixturesPath, "sample.md");
 

@@ -5,3 +5,11 @@ node_modules
 .vscode-test
 test/chunk-output
 assets
+
+# Working review and planning artifacts are intentionally preserved verbatim.
+*-PLAN.md
+*-REVIEW.md
+*-REPORT.md
+*Review*.md
+now-create-comprehensive-plan-serialized-rabbit.md
+docs/superpowers/specs/

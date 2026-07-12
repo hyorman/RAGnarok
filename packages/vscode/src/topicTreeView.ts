@@ -507,7 +507,6 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
    */
   async selectVscodeEmbeddingModel(): Promise<void> {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lm = vscode.lm as any;
 
       if (!lm || typeof lm.computeEmbeddings !== "function") {

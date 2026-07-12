@@ -12,6 +12,8 @@ import {
   CONFIG,
   HuggingFaceBackend,
   ModelRegistry,
+  MemoryStore,
+  LanceDBCheckpointSaver,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
 import { VsCodeConfigProvider } from "./adapters/vsCodeConfigProvider";
@@ -56,12 +58,43 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Initialize TopicManager with VS Code storage path
     const storageDir = context.globalStorageUri.fsPath;
-    const topicManager = await TopicManager.create({
+    const checkpointer = configProvider.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false)
+      ? new LanceDBCheckpointSaver(vscode.Uri.joinPath(context.globalStorageUri, "checkpoints-lancedb").fsPath)
+      : undefined;
+    const createTopicManager = (resetStorage = false) =>
+      TopicManager.create({
+        storageDir,
+        config: configProvider,
+        notifier,
+        embeddingService,
+        llmProvider,
+        checkpointer,
+        resetStorage,
+      });
+    let topicManager: TopicManager;
+    try {
+      topicManager = await createTopicManager();
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("unversioned RAGnarōk storage")) {
+        throw error;
+      }
+      const choice = await vscode.window.showWarningMessage(
+        `${error.message}\nExisting data will be moved to a timestamped backup.`,
+        { modal: true },
+        "Back Up and Reset",
+      );
+      if (choice !== "Back Up and Reset") {
+        throw error;
+      }
+      topicManager = await createTopicManager(true);
+    }
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const memoryStore = new MemoryStore({
       storageDir,
-      config: configProvider,
-      notifier,
       embeddingService,
       llmProvider,
+      workingDir: workspaceRoot,
+      markdownPath: vscode.Uri.joinPath(context.globalStorageUri, "memories.md").fsPath,
     });
 
     // Start model initialization in the background — don't block activation
@@ -149,7 +182,15 @@ export async function activate(context: vscode.ExtensionContext) {
             }
           });
       } else {
-        RAGTool.register(context, topicManager, embeddingService, configProvider, llmProvider);
+        RAGTool.register(
+          context,
+          topicManager,
+          embeddingService,
+          configProvider,
+          llmProvider,
+          memoryStore,
+          checkpointer,
+        );
         logger.info("RAG query tool registered successfully");
       }
     } catch (error) {
@@ -179,6 +220,7 @@ export async function activate(context: vscode.ExtensionContext) {
         logger.info("Embedding local model path changed");
 
         try {
+          const previousModel = embeddingService.getCurrentModel();
           const applyModel = async (): Promise<void> => {
             await vscode.window.withProgress(
               {
@@ -188,6 +230,12 @@ export async function activate(context: vscode.ExtensionContext) {
               async (progress) => {
                 progress.report({ message: "Loading embedding model..." });
                 await embeddingService.initialize();
+                try {
+                  await memoryStore.validateEmbeddingFingerprint();
+                } catch (error) {
+                  await embeddingService.initialize(previousModel);
+                  throw error;
+                }
 
                 progress.report({ message: "Reinitializing services..." });
                 await topicManager.reinitializeWithNewModel();
@@ -228,6 +276,8 @@ export async function activate(context: vscode.ExtensionContext) {
         logger.info("Embedding backend configuration changed");
 
         try {
+          const previousBackend = embeddingService.getActiveBackendType();
+          const previousModel = embeddingService.getCurrentModel();
           const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
           const requested = config.get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
           const requestedModel = config.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
@@ -252,8 +302,6 @@ export async function activate(context: vscode.ExtensionContext) {
             }
           }
 
-          embeddingService.resetBackendSelection();
-
           await vscode.window.withProgress(
             {
               location: vscode.ProgressLocation.Notification,
@@ -261,7 +309,15 @@ export async function activate(context: vscode.ExtensionContext) {
             },
             async (progress) => {
               progress.report({ message: "Resolving backend..." });
-              await embeddingService.initialize();
+              await embeddingService.reselectBackendTransactional();
+              try {
+                await memoryStore.validateEmbeddingFingerprint();
+              } catch (error) {
+                if (previousBackend) {
+                  await embeddingService.selectBackendTransactional(previousBackend, previousModel);
+                }
+                throw error;
+              }
 
               progress.report({ message: "Reinitializing services..." });
               await topicManager.reinitializeWithNewModel();
@@ -300,6 +356,14 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     });
     context.subscriptions.push(configChangeDisposable);
+    context.subscriptions.push({
+      dispose: () => {
+        void memoryStore.dispose();
+        checkpointer?.dispose();
+        topicManager.dispose();
+        void embeddingService.dispose();
+      },
+    });
 
     logger.info("Extension activation complete");
   } catch (error) {

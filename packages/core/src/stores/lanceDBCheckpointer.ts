@@ -18,6 +18,7 @@ import {
   WRITES_IDX_MAP,
 } from "@langchain/langgraph-checkpoint";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { Field, Float64, Schema, Utf8 } from "apache-arrow";
 
 const CHECKPOINTS_TABLE = "_lg_checkpoints";
 const WRITES_TABLE = "_lg_checkpoint_writes";
@@ -52,6 +53,7 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
   private db: Connection | null = null;
   private checkpointTable: Table | null = null;
   private writesTable: Table | null = null;
+  private deletionTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(lanceDbUri: string) {
     super();
@@ -97,19 +99,18 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
       return existing;
     }
     const db = await this.getDb();
-    const seed: CheckpointRow[] = [
-      {
-        thread_id: "__seed__",
-        checkpoint_ns: "",
-        checkpoint_id: "",
-        parent_checkpoint_id: "",
-        data: "{}",
-        metadata: "{}",
-        created_at: 0,
-      },
-    ];
-    this.checkpointTable = await db.createTable(CHECKPOINTS_TABLE, seed as unknown as Record<string, unknown>[]);
-    await this.checkpointTable.delete("thread_id = '__seed__'");
+    this.checkpointTable = await db.createEmptyTable(
+      CHECKPOINTS_TABLE,
+      new Schema([
+        new Field("thread_id", new Utf8(), false),
+        new Field("checkpoint_ns", new Utf8(), false),
+        new Field("checkpoint_id", new Utf8(), false),
+        new Field("parent_checkpoint_id", new Utf8(), false),
+        new Field("data", new Utf8(), false),
+        new Field("metadata", new Utf8(), false),
+        new Field("created_at", new Float64(), false),
+      ]),
+    );
     return this.checkpointTable;
   }
 
@@ -119,20 +120,19 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
       return existing;
     }
     const db = await this.getDb();
-    const seed: WriteRow[] = [
-      {
-        thread_id: "__seed__",
-        checkpoint_ns: "",
-        checkpoint_id: "",
-        task_id: "",
-        idx: 0,
-        channel: "",
-        type: "",
-        value: "null",
-      },
-    ];
-    this.writesTable = await db.createTable(WRITES_TABLE, seed as unknown as Record<string, unknown>[]);
-    await this.writesTable.delete("thread_id = '__seed__'");
+    this.writesTable = await db.createEmptyTable(
+      WRITES_TABLE,
+      new Schema([
+        new Field("thread_id", new Utf8(), false),
+        new Field("checkpoint_ns", new Utf8(), false),
+        new Field("checkpoint_id", new Utf8(), false),
+        new Field("task_id", new Utf8(), false),
+        new Field("idx", new Float64(), false),
+        new Field("channel", new Utf8(), false),
+        new Field("type", new Utf8(), false),
+        new Field("value", new Utf8(), false),
+      ]),
+    );
     return this.writesTable;
   }
 
@@ -418,5 +418,52 @@ export class LanceDBCheckpointSaver extends BaseCheckpointSaver {
         // Ignore if table is empty or row not found
       }
     }
+  }
+
+  /** Delete a completed thread after an optional debugging-retention window. */
+  deleteThreadAfter(threadId: string, delayMs: number): void {
+    if (delayMs <= 0) {
+      void this.deleteThread(threadId);
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.deletionTimers.delete(timer);
+      void this.deleteThread(threadId);
+    }, delayMs);
+    timer.unref?.();
+    this.deletionTimers.add(timer);
+  }
+
+  /** Lazily purge retained threads after restart or prolonged inactivity. */
+  async deleteOlderThan(cutoff: number, threadPrefix?: string): Promise<number> {
+    const table = await this.getCheckpointTable();
+    if (!table) {
+      return 0;
+    }
+    const rows = await table.query().select(["thread_id", "created_at"]).toArray();
+    const threadIds = new Set<string>();
+    for (const row of rows) {
+      const threadId = String(row.thread_id);
+      if (Number(row.created_at) < cutoff && (!threadPrefix || threadId.startsWith(threadPrefix))) {
+        threadIds.add(threadId);
+      }
+    }
+    for (const threadId of threadIds) {
+      await this.deleteThread(threadId);
+    }
+    return threadIds.size;
+  }
+
+  dispose(): void {
+    for (const timer of this.deletionTimers) {
+      clearTimeout(timer);
+    }
+    this.deletionTimers.clear();
+    this.checkpointTable?.close();
+    this.writesTable?.close();
+    this.db?.close();
+    this.checkpointTable = null;
+    this.writesTable = null;
+    this.db = null;
   }
 }

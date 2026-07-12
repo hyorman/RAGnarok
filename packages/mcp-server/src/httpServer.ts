@@ -17,6 +17,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { Logger } from "@ragnarok/core";
 import { McpConfig, getServerVersion } from "./config";
 
@@ -40,7 +42,7 @@ export interface HttpTransportHandle {
  * @returns Handle with the listening http.Server and a shutdown function
  */
 export async function startHttpTransport(
-  createMcpServer: () => McpServer,
+  createMcpServer: (role: "reader" | "writer") => McpServer,
   config: McpConfig,
 ): Promise<HttpTransportHandle> {
   const logger = new Logger("HTTP-Transport");
@@ -48,30 +50,18 @@ export async function startHttpTransport(
   // Create Express app with MCP SDK's built-in middleware
   const app = createMcpExpressApp({ host: config.httpHost });
 
-  // Rate limiting — dynamic import since it's a transitive dep of the SDK
-  try {
-    const { default: rateLimit } = await import("express-rate-limit");
-    app.use(
-      rateLimit({
-        windowMs: 60_000,
-        max: 100,
-        standardHeaders: true,
-        legacyHeaders: false,
-      }),
-    );
-    logger.debug("Rate limiting enabled (100 req/min)");
-  } catch {
-    logger.warn("express-rate-limit not available — skipping rate limiting");
-  }
+  app.use(
+    rateLimit({
+      windowMs: 60_000,
+      max: config.rateLimitPerMinute,
+      standardHeaders: true,
+      legacyHeaders: false,
+    }),
+  );
+  logger.debug(`Rate limiting enabled (${config.rateLimitPerMinute} req/min)`);
 
-  // CORS
-  try {
-    const { default: cors } = await import("cors");
-    app.use(cors({ origin: config.corsOrigin }));
-    logger.debug(`CORS enabled (origin: ${config.corsOrigin})`);
-  } catch {
-    logger.warn("cors not available — skipping CORS middleware");
-  }
+  app.use(cors({ origin: config.corsOrigin }));
+  logger.debug(`CORS enabled (origin: ${config.corsOrigin})`);
 
   const serverVersion = getServerVersion();
 
@@ -83,31 +73,54 @@ export async function startHttpTransport(
       uptime: process.uptime(),
     });
   });
+  app.get("/ready", (_req, res) => res.json({ status: "ready", version: serverVersion }));
 
-  // Optional API key authentication middleware
-  const expectedToken = `Bearer ${config.apiKey}`;
-  const authMiddleware = config.apiKey
-    ? (req: any, res: any, next: any) => {
-        const auth = req.headers.authorization || "";
-        const authBuf = Buffer.from(auth);
-        const expectedBuf = Buffer.from(expectedToken);
-        if (authBuf.length !== expectedBuf.length || !timingSafeEqual(authBuf, expectedBuf)) {
+  type Session = {
+    transport: StreamableHTTPServerTransport;
+    server: McpServer;
+    role: "reader" | "writer";
+    authorization: string;
+    lastSeen: number;
+  };
+  const sessions = new Map<string, Session>();
+
+  const secureEquals = (actual: string, expected: string): boolean => {
+    const a = Buffer.from(actual);
+    const b = Buffer.from(expected);
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+  const classifyAuthorization = (authorization: string): "reader" | "writer" | null => {
+    if (!config.apiKey && !config.writeApiKey) {
+      return "writer";
+    }
+    if (config.writeApiKey && secureEquals(authorization, `Bearer ${config.writeApiKey}`)) {
+      return "writer";
+    }
+    if (config.apiKey && secureEquals(authorization, `Bearer ${config.apiKey}`)) {
+      return "reader";
+    }
+    return null;
+  };
+
+  app.all("/mcp", async (req, res) => {
+    try {
+      const authorization = String(req.headers.authorization || "");
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      let session = sessionId ? sessions.get(sessionId) : undefined;
+
+      if (session && !secureEquals(authorization, session.authorization)) {
+        res.status(401).json({ error: "Session token role mismatch" });
+        return;
+      }
+
+      if (!session) {
+        // Authenticate before parsing/validating the request shape so
+        // unauthorized callers cannot use response differences as an oracle.
+        const role = classifyAuthorization(authorization);
+        if (!role) {
           res.status(401).json({ error: "Unauthorized" });
           return;
         }
-        next();
-      }
-    : (_req: any, _res: any, next: any) => next();
-
-  // Active sessions: mcp-session-id → transport (each with its own McpServer)
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
-
-  app.all("/mcp", authMiddleware, async (req, res) => {
-    try {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      let transport = sessionId ? sessions.get(sessionId) : undefined;
-
-      if (!transport) {
         // Only an initialize request may open a new session.
         if (req.method !== "POST" || !isInitializeRequest(req.body)) {
           res.status(400).json({
@@ -117,11 +130,20 @@ export async function startHttpTransport(
           });
           return;
         }
-
+        if (sessions.size >= config.maxSessions) {
+          res.status(503).json({ error: "Maximum MCP session count reached" });
+          return;
+        }
         const newTransport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
-            sessions.set(sid, newTransport);
+            sessions.set(sid, {
+              transport: newTransport,
+              server: mcpServer,
+              role,
+              authorization,
+              lastSeen: Date.now(),
+            });
             logger.debug(`Session initialized: ${sid}`);
           },
         });
@@ -134,11 +156,13 @@ export async function startHttpTransport(
           }
         };
 
-        await createMcpServer().connect(newTransport);
-        transport = newTransport;
+        const mcpServer = createMcpServer(role);
+        await mcpServer.connect(newTransport);
+        session = { transport: newTransport, server: mcpServer, role, authorization, lastSeen: Date.now() };
       }
 
-      await transport.handleRequest(req, res, req.body);
+      session.lastSeen = Date.now();
+      await session.transport.handleRequest(req, res, req.body);
     } catch (error) {
       logger.error("Failed to handle MCP request", error);
       if (!res.headersSent) {
@@ -153,9 +177,28 @@ export async function startHttpTransport(
 
   // Start HTTP server
   const httpServer = createServer(app);
+  const expiryTimer = setInterval(
+    () => {
+      const cutoff = Date.now() - config.sessionIdleTtlMs;
+      for (const [sid, session] of sessions) {
+        if (session.lastSeen < cutoff) {
+          sessions.delete(sid);
+          void (async () => {
+            await session.transport.close();
+            await session.server.close();
+          })().catch((error) => logger.debug(`Error expiring session ${sid}`, error));
+        }
+      }
+    },
+    Math.min(config.sessionIdleTtlMs, 60_000),
+  );
+  expiryTimer.unref();
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    httpServer.once("error", onError);
     httpServer.listen(config.port, config.httpHost, () => {
+      httpServer.off("error", onError);
       logger.info(`RAGnarōk MCP server running at http://${config.httpHost}:${config.port}`);
       logger.info(`  MCP endpoint: http://${config.httpHost}:${config.port}/mcp`);
       logger.info(`  Health check: http://${config.httpHost}:${config.port}/health`);
@@ -176,20 +219,19 @@ export async function startHttpTransport(
     shutdownStarted = true;
     logger.info(`Shutting down HTTP transport (${sessions.size} active session(s))`);
 
-    for (const [sid, transport] of [...sessions]) {
+    clearInterval(expiryTimer);
+    const serverClosed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    httpServer.closeAllConnections?.();
+    for (const [sid, session] of [...sessions]) {
       try {
-        await transport.close();
+        await session.transport.close();
+        await session.server.close();
       } catch (error) {
         logger.debug(`Error closing session ${sid}`, error);
       }
     }
     sessions.clear();
-
-    await new Promise<void>((resolve) => {
-      httpServer.close(() => resolve());
-      // Don't wait forever on lingering keep-alive connections.
-      httpServer.closeAllConnections?.();
-    });
+    await serverClosed;
   };
 
   return { httpServer, shutdown };

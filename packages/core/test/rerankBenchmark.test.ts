@@ -29,7 +29,6 @@ import {
   HuggingFaceBackend,
   ModelRegistry,
   TransformersEmbeddings,
-  extractKeywords,
 } from "../src/index";
 import type { ScoredDocument } from "../src/index";
 import { RealVectorStore, mockConfig, mockNotifier } from "./helpers/realVectorStore";

@@ -71,8 +71,9 @@ export class MemoryEntityExtractor {
 
   constructor(private llmProvider: ILLMProvider) {}
 
-  async extract(text: string): Promise<ExtractionResult> {
+  async extract(text: string, signal?: AbortSignal): Promise<ExtractionResult> {
     try {
+      signal?.throwIfAborted();
       const isAvailable = await this.llmProvider.isAvailable();
       if (!isAvailable) {
         this.logger.debug("LLM not available, skipping entity extraction");
@@ -86,25 +87,32 @@ export class MemoryEntityExtractor {
       }
 
       const prompt = EXTRACTION_PROMPT + text;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
+      const timeoutSignal = AbortSignal.timeout(15_000);
+      const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
       try {
-        const stream = await model.sendRequest([{ role: "user", content: prompt }], controller.signal);
+        requestSignal.throwIfAborted();
+        const stream = await model.sendRequest([{ role: "user", content: prompt }], requestSignal);
+        requestSignal.throwIfAborted();
 
         let response = "";
         for await (const chunk of stream) {
+          requestSignal.throwIfAborted();
           response += chunk;
         }
-        clearTimeout(timeout);
 
         return this.parseResponse(response);
       } catch (error) {
-        clearTimeout(timeout);
+        if (signal?.aborted) {
+          throw error;
+        }
         this.logger.warn("Entity extraction LLM call failed", error as Error);
         return { entities: [], relationships: [] };
       }
     } catch (error) {
+      if (signal?.aborted) {
+        throw error;
+      }
       this.logger.warn("Entity extraction failed", error as Error);
       return { entities: [], relationships: [] };
     }

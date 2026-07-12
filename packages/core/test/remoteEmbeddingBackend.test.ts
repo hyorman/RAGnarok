@@ -155,6 +155,67 @@ describe("RemoteEmbeddingBackend", function () {
       await backend.embed("hello");
       expect(backend.getDimension()).to.equal(3);
     });
+
+    it("rejects missing, duplicate, non-finite, and inconsistent results", async () => {
+      const invalidPayloads = [
+        { data: [] },
+        {
+          data: [
+            { index: 0, embedding: [0.1] },
+            { index: 0, embedding: [0.2] },
+          ],
+        },
+        {
+          data: [
+            { index: 0, embedding: [Number.NaN] },
+            { index: 1, embedding: [0.2] },
+          ],
+        },
+        {
+          data: [
+            { index: 0, embedding: [0.1] },
+            { index: 1, embedding: [0.2, 0.3] },
+          ],
+        },
+      ];
+      for (const payload of invalidPayloads) {
+        mockFetch([{ method: "POST", pattern: "/embeddings", response: { status: 200, body: payload } }]);
+        try {
+          await backend.embedBatch(["a", "b"]);
+          expect.fail("expected invalid provider payload to be rejected");
+        } catch (error) {
+          expect((error as Error).message).to.match(/expected|invalid|duplicate|finite|dimension/i);
+        }
+      }
+    });
+
+    it("does not call the provider for an empty batch", async () => {
+      const fetchBefore = global.fetch;
+      let calls = 0;
+      global.fetch = (async () => {
+        calls++;
+        throw new Error("unexpected");
+      }) as typeof fetch;
+      expect(await backend.embedBatch([])).to.deep.equal([]);
+      expect(calls).to.equal(0);
+      global.fetch = fetchBefore;
+    });
+
+    it("aborts an in-flight remote embedding request", async () => {
+      global.fetch = ((_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        })) as typeof global.fetch;
+      const controller = new AbortController();
+      const request = backend.embed("cancel me", controller.signal);
+      controller.abort(new Error("embedding cancelled"));
+      try {
+        await request;
+        expect.fail("expected cancellation");
+      } catch (error) {
+        expect((error as Error).message).to.equal("embedding cancelled");
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

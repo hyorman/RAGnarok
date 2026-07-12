@@ -72,11 +72,22 @@ function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     embeddingBaseUrl: "",
     embeddingApiKey: "",
     apiKey: "",
+    writeApiKey: "",
     corsOrigin: "*",
     httpHost: "127.0.0.1",
     rerankerModel: "Xenova/ms-marco-MiniLM-L-6-v2",
+    rerankerEnabled: true,
     rerankerMaxCandidates: 20,
     rerankerCandidateMultiplier: 4,
+    queryMemoryEnabled: false,
+    sessionIdleTtlMs: 30_000,
+    maxSessions: 20,
+    rateLimitPerMinute: 1_000,
+    exportDir: "/tmp/ragnarok-exports",
+    githubHosts: ["github.com"],
+    githubToken: "",
+    checkpointRetentionMs: 0,
+    resetStorage: false,
     ...overrides,
   };
 }
@@ -93,6 +104,7 @@ function captureHandlers(deps: {
   ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   mcpConfig?: McpConfig;
   memoryStore?: unknown;
+  accessRole?: "reader" | "writer";
 }): Record<string, ToolHandler> {
   const handlers: Record<string, ToolHandler> = {};
   const server = new McpServer({ name: "test", version: "0.0.0" });
@@ -115,6 +127,7 @@ function captureHandlers(deps: {
     deps.memoryStore as never,
     undefined,
     deps.mcpConfig,
+    deps.accessRole,
   );
 
   return handlers;
@@ -185,7 +198,17 @@ describe("MCP Tools (registerTools)", () => {
   // Registration smoke test
   // -----------------------------------------------------------------------
 
-  it("registers all 10 expected tools", () => {
+  it("registers the complete release tool surface", () => {
+    // rag_memory/rag_reset_memory register only when a memory store exists
+    // (and never in shared deployments), so capture with one present.
+    const fullHandlers = captureHandlers({
+      topicManager,
+      config,
+      llmProvider,
+      embeddingService,
+      ragQueryService,
+      memoryStore: {},
+    });
     const expected = [
       "rag_query",
       "rag_list_topics",
@@ -196,10 +219,41 @@ describe("MCP Tools (registerTools)", () => {
       "rag_embedding_info",
       "rag_switch_embedding_model",
       "rag_llm_status",
+      "rag_list_reranker_models",
+      "rag_reranker_info",
+      "rag_switch_reranker_model",
+      "rag_list_documents",
+      "rag_delete_topic",
+      "rag_remove_document",
+      "rag_rename_topic",
+      "rag_add_url",
+      "rag_add_github_repo",
+      "rag_export_topic",
+      "rag_import_topic",
+      "rag_memory",
+      "rag_reset_memory",
+      "rag_storage_status",
     ];
     for (const name of expected) {
-      expect(handlers[name], `handler for ${name}`).to.be.a("function");
+      expect(fullHandlers[name], `handler for ${name}`).to.be.a("function");
     }
+  });
+
+  it("omits pure write operations from reader sessions", async () => {
+    const readerHandlers = captureHandlers({
+      topicManager,
+      config,
+      llmProvider,
+      embeddingService,
+      ragQueryService,
+      accessRole: "reader",
+    });
+    expect(readerHandlers.rag_create_topic).to.equal(undefined);
+    expect(readerHandlers.rag_add_documents).to.equal(undefined);
+    expect(readerHandlers.rag_delete_topic).to.equal(undefined);
+    expect(readerHandlers.rag_list_topics).to.be.a("function");
+    expect(readerHandlers.rag_query).to.be.a("function");
+    expect(topicManager.createTopic.called).to.equal(false);
   });
 
   // -----------------------------------------------------------------------
@@ -920,6 +974,51 @@ describe("MCP Tools (registerTools)", () => {
         expect(body.newModel).to.equal("Xenova/ms-marco-MiniLM-L-12-v2");
         expect(body.message).to.include("Switched");
       });
+    });
+  });
+
+  describe("deployment-aware tool descriptions", () => {
+    function captureDescriptions(deployment?: "local" | "shared"): Record<string, string> {
+      const descriptions: Record<string, string> = {};
+      const server = new McpServer({ name: "test", version: "0.0.0" });
+
+      const originalTool = server.tool.bind(server);
+      server.tool = function (this: McpServer, ...args: any[]) {
+        descriptions[args[0] as string] = args[1] as string;
+        return (originalTool as (...a: unknown[]) => unknown).apply(this, args);
+      } as any;
+
+      registerTools(
+        server,
+        topicManager as unknown as TopicManager,
+        llmProvider as unknown as ILLMProvider,
+        embeddingService as unknown as EmbeddingService,
+        ragQueryService as unknown as RAGQueryService,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        deployment,
+      );
+
+      return descriptions;
+    }
+
+    it("prefixes every tool description in a shared deployment", () => {
+      const descriptions = captureDescriptions("shared");
+      expect(Object.keys(descriptions)).to.have.length.greaterThan(0);
+      for (const [name, description] of Object.entries(descriptions)) {
+        expect(description, `description of ${name}`).to.match(/^\[Team shared KB\] /);
+      }
+    });
+
+    it("leaves descriptions unprefixed in a local deployment (default)", () => {
+      const descriptions = captureDescriptions();
+      expect(Object.keys(descriptions)).to.have.length.greaterThan(0);
+      for (const [name, description] of Object.entries(descriptions)) {
+        expect(description, `description of ${name}`).to.not.match(/^\[Team shared KB\]/);
+      }
     });
   });
 });

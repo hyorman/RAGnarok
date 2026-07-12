@@ -17,6 +17,8 @@ import { EntityExtractor } from "../agents/entityExtractor";
 import { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "../agents/entityExtractorTypes";
 import { Logger } from "../logger";
 import { upsertExtractedGraphData } from "../utils/knowledgeGraphAssembly";
+import { createHash } from "crypto";
+import * as path from "path";
 
 export interface PipelineOptions {
   /** Document loading options */
@@ -30,6 +32,7 @@ export interface PipelineOptions {
 
   /** Progress callback */
   onProgress?: (progress: PipelineProgress) => void;
+  signal?: AbortSignal;
 }
 
 export interface PipelineProgress {
@@ -68,6 +71,10 @@ export interface PipelineResult {
       embedding: number;
       storing: number;
     };
+    graphExtracted: boolean;
+    partial: boolean;
+    documentId?: string;
+    warnings: Array<{ stage: string; message: string }>;
   };
 
   /** Generated chunks */
@@ -196,12 +203,16 @@ export class DocumentPipeline {
           embedding: 0,
           storing: 0,
         },
+        graphExtracted: false,
+        partial: false,
+        warnings: [],
       },
       chunks: [],
       errors: [],
     };
 
     try {
+      options.signal?.throwIfAborted();
       // Ensure initialized
       if (!this.vectorStoreFactory) {
         throw new Error("Pipeline not initialized. Call initialize() first.");
@@ -216,6 +227,7 @@ export class DocumentPipeline {
       });
 
       const loadedDocs = await this.loadDocuments(filePaths, options);
+      options.signal?.throwIfAborted();
       result.stages.loading = true;
       result.metadata.stageTimings.loading = Date.now() - loadStartTime;
 
@@ -262,6 +274,23 @@ export class DocumentPipeline {
       });
 
       const chunkingResult = await this.semanticChunker.chunkDocuments(loadedDocs, options.chunkingOptions);
+      options.signal?.throwIfAborted();
+
+      // Replace process-local chunk counters with durable source-derived IDs.
+      const perDocumentIndex = new Map<string, number>();
+      const perDocumentTotals = new Map<string, number>();
+      for (const chunk of chunkingResult.chunks) {
+        const documentId = String(chunk.metadata.documentId);
+        perDocumentTotals.set(documentId, (perDocumentTotals.get(documentId) ?? 0) + 1);
+      }
+      for (const chunk of chunkingResult.chunks) {
+        const documentId = String(chunk.metadata.documentId);
+        const index = perDocumentIndex.get(documentId) ?? 0;
+        chunk.metadata.chunkIndex = index;
+        chunk.metadata.totalChunks = perDocumentTotals.get(documentId) ?? 1;
+        chunk.metadata.chunkId = this.hashId("chunk", `${documentId}\0${index}\0${chunk.pageContent}`);
+        perDocumentIndex.set(documentId, index + 1);
+      }
 
       result.chunks = chunkingResult.chunks;
       result.metadata.chunksCreated = chunkingResult.chunkCount;
@@ -338,6 +367,7 @@ export class DocumentPipeline {
           result.metadata.entitiesExtracted = extractionResult.entities.length;
           result.metadata.relationshipsExtracted = graphUpsert.relationshipsAdded + graphUpsert.relationshipsUpdated;
           result.stages.extracting = true;
+          result.metadata.graphExtracted = true;
           result.metadata.stageTimings.extracting = Date.now() - extractStartTime;
 
           this.logger.info("Entity extraction stage complete", {
@@ -353,6 +383,8 @@ export class DocumentPipeline {
             result.errors = [];
           }
           result.errors.push(errorMessage);
+          result.metadata.partial = true;
+          result.metadata.warnings.push({ stage: "extracting", message: errorMessage });
         }
       }
 
@@ -372,7 +404,9 @@ export class DocumentPipeline {
       });
 
       await this.storeDocuments(result.chunks, topicId, options);
+      options.signal?.throwIfAborted();
       result.metadata.chunksStored = result.chunks.length;
+      result.metadata.documentId = String(result.chunks[0]?.metadata.documentId ?? "") || undefined;
       result.metadata.chunksEmbedded = result.chunks.length; // Embeddings generated during storage
       result.stages.embedding = true;
       result.stages.storing = true;
@@ -459,14 +493,58 @@ export class DocumentPipeline {
     const loaderOptions = filePaths.map((filePath) => ({
       filePath,
       ...options.loaderOptions,
+      signal: options.signal,
     }));
 
     const results = await this.documentLoader.loadDocuments(loaderOptions);
 
     // Flatten all documents
     const allDocuments = results.flatMap((result) => result.documents);
+    const grouped = new Map<string, LangChainDocument[]>();
+    for (const document of allDocuments) {
+      const source = this.normalizeSource(String(document.metadata.source ?? document.metadata.filePath ?? "unknown"));
+      const group = grouped.get(source) ?? [];
+      group.push(document);
+      grouped.set(source, group);
+    }
+    for (const [source, documents] of grouped) {
+      const first = documents[0];
+      const sourceType = ["web", "github"].includes(String(first.metadata.fileType))
+        ? String(first.metadata.fileType)
+        : "file";
+      const descriptor = { type: sourceType, source };
+      const documentId = this.hashId("doc", JSON.stringify(descriptor));
+      const revision = createHash("sha256")
+        .update(documents.map((document) => document.pageContent).join("\0"))
+        .digest("hex");
+      for (const document of documents) {
+        document.metadata.source = source;
+        document.metadata.sourceType = sourceType;
+        document.metadata.sourceDescriptor = JSON.stringify(descriptor);
+        document.metadata.sourceRevision = revision;
+        document.metadata.documentId = documentId;
+      }
+    }
 
     return allDocuments;
+  }
+
+  private normalizeSource(source: string): string {
+    try {
+      const url = new URL(source);
+      url.hash = "";
+      url.hostname = url.hostname.toLowerCase();
+      if ((url.protocol === "https:" && url.port === "443") || (url.protocol === "http:" && url.port === "80")) {
+        url.port = "";
+      }
+      return url.toString();
+    } catch {
+      return path.resolve(source).replace(/\\/g, "/");
+    }
+  }
+
+  private hashId(prefix: string, value: string): string {
+    return `${prefix}-${createHash("sha256").update(value).digest("hex")}`;
   }
 
   /**
@@ -500,7 +578,7 @@ export class DocumentPipeline {
         message: `Adding ${chunks.length} chunks with embeddings...`,
       });
 
-      await this.vectorStoreFactory.addDocuments(topicId, vectorStore, chunks);
+      await this.vectorStoreFactory.reconcileDocuments(topicId, chunks, options.signal);
     } else {
       // Create new store (embeddings generated here via our wrapper)
       this.logger.debug("Creating new vector store", { topicId });
@@ -511,7 +589,7 @@ export class DocumentPipeline {
         message: `Creating vector store and embedding ${chunks.length} chunks...`,
       });
 
-      await this.vectorStoreFactory.createStore({ topicId, storageDir: "" }, chunks);
+      await this.vectorStoreFactory.createStore({ topicId, storageDir: "" }, chunks, options.signal);
     }
 
     // Save the store
@@ -522,13 +600,16 @@ export class DocumentPipeline {
     });
 
     const existingMetadata = await this.vectorStoreFactory.getStoreMetadata(topicId);
+    const storedStats = await this.vectorStoreFactory.getStoredStats(topicId);
 
     await this.vectorStoreFactory.saveStore(topicId, {
-      documentCount: (existingMetadata?.documentCount ?? 0) + 1,
-      chunkCount: (existingMetadata?.chunkCount ?? 0) + chunks.length,
+      documentCount: storedStats.documentCount,
+      chunkCount: storedStats.chunkCount,
       createdAt: existingMetadata?.createdAt, // Preserved for existing stores, saveStore() will use Date.now() for new ones
       embeddingModel: existingMetadata?.embeddingModel ?? this.vectorStoreFactory.getEmbeddingModel(),
       embeddingBackend: existingMetadata?.embeddingBackend ?? this.embeddingService.getActiveBackendType(),
+      embeddingFingerprint:
+        existingMetadata?.embeddingFingerprint ?? (await this.embeddingService.getFingerprint(options.signal)),
     });
   }
 

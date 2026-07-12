@@ -243,7 +243,7 @@ export class RAGAgent {
       // Step 4: Rerank if cross-encoder is available (post-iteration)
       let finalResults: RetrievalResult[];
       if (this.reranker) {
-        finalResults = await this.rerankResults(query, rankedResults, options.topK);
+        finalResults = await this.rerankResults(query, rankedResults, options.topK, options.signal);
       } else {
         finalResults = rankedResults.slice(0, options.topK);
       }
@@ -294,6 +294,7 @@ export class RAGAgent {
     retrievalStrategy: RetrievalStrategy;
     topK: number;
     modelFamily?: string;
+    signal?: AbortSignal;
   }): Promise<RetrievalResult[]> {
     if (!this.vectorStore) {
       throw new Error("RAGAgent not initialized. Call initialize() first.");
@@ -318,6 +319,7 @@ export class RAGAgent {
       retrievalStrategy: params.retrievalStrategy,
       topK: params.topK,
       modelFamily: params.modelFamily ?? "",
+      signal: params.signal,
     };
 
     const results = await this.executeRetrieval(plan, options);
@@ -325,7 +327,7 @@ export class RAGAgent {
     const rankedResults = this.rankResults(uniqueResults);
 
     if (this.reranker) {
-      return this.rerankResults(params.query, rankedResults, params.topK);
+      return this.rerankResults(params.query, rankedResults, params.topK, params.signal);
     }
 
     return rankedResults.slice(0, params.topK);
@@ -511,7 +513,7 @@ export class RAGAgent {
         CONFIG.RERANKER_CANDIDATE_MULTIPLIER,
         DEFAULTS.RERANKER_CANDIDATE_MULTIPLIER,
       );
-      topK = Math.min(topK * multiplier, 50);
+      topK = Math.min(topK * multiplier, this.reranker.getMaxCandidates?.() ?? 50);
     }
 
     this.logger.debug("Executing sub-query", {
@@ -805,7 +807,7 @@ export class RAGAgent {
    * Tries LLM-assisted refinement first, falls back to heuristic.
    * Populates gapTargetMap: follow-up query text → original sub-query text.
    */
-  private async generateFollowUpPlan(
+  public async generateFollowUpPlan(
     originalPlan: QueryPlan,
     gapAnalysis: GapAnalysis,
     existingResults: RetrievalResult[],
@@ -1190,7 +1192,12 @@ Respond with JSON:
    * Rerank results using the cross-encoder model.
    * Converts RetrievalResult[] ↔ ScoredDocument[] for the Reranker interface.
    */
-  private async rerankResults(query: string, results: RetrievalResult[], topK: number): Promise<RetrievalResult[]> {
+  private async rerankResults(
+    query: string,
+    results: RetrievalResult[],
+    topK: number,
+    signal?: AbortSignal,
+  ): Promise<RetrievalResult[]> {
     if (!this.reranker || results.length === 0) {
       return results.slice(0, topK);
     }
@@ -1201,7 +1208,7 @@ Respond with JSON:
       score: r.score,
     }));
 
-    const reranked = await this.reranker.rerank(query, candidates, topK);
+    const reranked = await this.reranker.rerank(query, candidates, topK, signal);
 
     // Map back to RetrievalResult, preserving source metadata
     const docToResult = new Map<string, RetrievalResult>();

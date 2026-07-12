@@ -106,13 +106,19 @@ export class RerankerModelRegistry {
       const orgs = fs.readdirSync(root);
       for (const org of orgs) {
         const orgPath = path.join(root, org);
-        if (!fs.statSync(orgPath).isDirectory()) continue;
+        if (!fs.statSync(orgPath).isDirectory()) {
+          continue;
+        }
 
         const entries = fs.readdirSync(orgPath);
         for (const entry of entries) {
           const entryPath = path.join(orgPath, entry);
-          if (!fs.statSync(entryPath).isDirectory()) continue;
-          if (!isModelDirectory(entryPath)) continue;
+          if (!fs.statSync(entryPath).isDirectory()) {
+            continue;
+          }
+          if (!isModelDirectory(entryPath)) {
+            continue;
+          }
 
           // Check if it's a cross-encoder (sequence classification) model
           const configPath = path.join(entryPath, "config.json");

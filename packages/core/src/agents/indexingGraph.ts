@@ -22,6 +22,7 @@ import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { IConfigProvider, ILLMProvider } from "../interfaces";
 import type { TopicManager } from "../managers/topicManager";
 import { DocumentLoaderFactory } from "../loaders/documentLoaderFactory";
+import type { LoaderOptions } from "../loaders/documentLoaderFactory";
 import { SemanticChunker } from "../splitters/semanticChunker";
 import { EntityExtractor } from "./entityExtractor";
 import { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "./entityExtractorTypes";
@@ -29,6 +30,8 @@ import { KnowledgeGraph } from "../stores/knowledgeGraph";
 import { IndexingPipelineState, IndexingPipelineStateType, IndexingPipelineUpdateType } from "./graphState";
 import { upsertExtractedGraphData } from "../utils/knowledgeGraphAssembly";
 import { Logger } from "../logger";
+import { createHash } from "crypto";
+import * as path from "path";
 
 // ── Dependencies ─────────────────────────────────────────────────────
 
@@ -38,23 +41,40 @@ export interface IndexingGraphDeps {
   /** Config provider so chunking uses the host's configured options. */
   config?: IConfigProvider;
   checkpointer?: BaseCheckpointSaver;
+  loaderOptions?: Partial<LoaderOptions>;
+  signal?: AbortSignal;
 }
 
 // ── Node Functions ───────────────────────────────────────────────────
 
 const logger = new Logger("IndexingGraph");
 
+function normalizeSource(source: string): string {
+  try {
+    const url = new URL(source);
+    url.hash = "";
+    url.hostname = url.hostname.toLowerCase();
+    return url.toString();
+  } catch {
+    return path.resolve(source).replace(/\\/g, "/");
+  }
+}
+
+function stableId(prefix: string, value: string): string {
+  return `${prefix}-${createHash("sha256").update(value).digest("hex")}`;
+}
+
 /**
  * Load documents from file paths using DocumentLoaderFactory.
  * Delegates to the same loader the DocumentPipeline uses internally.
  */
-function createLoadDocumentsNode(_deps: IndexingGraphDeps) {
+function createLoadDocumentsNode(deps: IndexingGraphDeps) {
   return async (state: IndexingPipelineStateType): Promise<IndexingPipelineUpdateType> => {
     logger.info("loadDocuments: starting", { fileCount: state.filePaths.length });
 
     try {
       const loader = new DocumentLoaderFactory();
-      const loaderInputs = state.filePaths.map((filePath) => ({ filePath }));
+      const loaderInputs = state.filePaths.map((filePath) => ({ filePath, ...deps.loaderOptions }));
       const results = await loader.loadDocuments(loaderInputs);
       const docs = results.flatMap((r) => r.documents);
 
@@ -62,6 +82,27 @@ function createLoadDocumentsNode(_deps: IndexingGraphDeps) {
         const msg = "loadDocuments failed: no documents loaded (check file paths and loader configuration)";
         logger.error(msg);
         return { errors: [msg], completedStage: "loaded" };
+      }
+
+      const groups = new Map<string, typeof docs>();
+      for (const document of docs) {
+        const source = normalizeSource(String(document.metadata.source ?? document.metadata.filePath ?? "unknown"));
+        const group = groups.get(source) ?? [];
+        group.push(document);
+        groups.set(source, group);
+      }
+      for (const [source, documents] of groups) {
+        const sourceType = ["web", "github"].includes(String(documents[0].metadata.fileType))
+          ? String(documents[0].metadata.fileType)
+          : "file";
+        const sourceDescriptor = JSON.stringify({ type: sourceType, source });
+        const documentId = stableId("doc", sourceDescriptor);
+        const sourceRevision = createHash("sha256")
+          .update(documents.map((document) => document.pageContent).join("\0"))
+          .digest("hex");
+        for (const document of documents) {
+          Object.assign(document.metadata, { source, sourceType, sourceDescriptor, sourceRevision, documentId });
+        }
       }
 
       logger.info("loadDocuments: complete", { documentCount: docs.length });
@@ -92,9 +133,23 @@ function createChunkDocumentsNode(deps: IndexingGraphDeps) {
         logger.error(msg);
         return { errors: [msg], completedStage: "chunked" };
       }
+      const indices = new Map<string, number>();
+      const totals = new Map<string, number>();
+      for (const chunk of result.chunks) {
+        const documentId = String(chunk.metadata.documentId);
+        totals.set(documentId, (totals.get(documentId) ?? 0) + 1);
+      }
+      for (const chunk of result.chunks) {
+        const documentId = String(chunk.metadata.documentId);
+        const index = indices.get(documentId) ?? 0;
+        chunk.metadata.chunkIndex = index;
+        chunk.metadata.totalChunks = totals.get(documentId) ?? 1;
+        chunk.metadata.chunkId = stableId("chunk", `${documentId}\0${index}\0${chunk.pageContent}`);
+        indices.set(documentId, index + 1);
+      }
 
       logger.info("chunkDocuments: complete", { chunkCount: result.chunkCount });
-      return { chunks: result.chunks, chunkCount: result.chunkCount, completedStage: "chunked" };
+      return { loadedDocs: [], chunks: result.chunks, chunkCount: result.chunkCount, completedStage: "chunked" };
     } catch (error) {
       const msg = `chunkDocuments failed: ${error instanceof Error ? error.message : String(error)}`;
       logger.error(msg);
@@ -226,6 +281,9 @@ function createStoreEntitiesNode(deps: IndexingGraphDeps) {
       return {
         entityCount: graphUpsert.entityCount,
         relationshipCount: graphUpsert.relationshipCount,
+        chunks: [],
+        extractedEntities: [],
+        extractedRelationships: [],
         completedStage: "entities_stored",
       };
     } catch (error) {
@@ -242,9 +300,11 @@ function createStoreEntitiesNode(deps: IndexingGraphDeps) {
 function createBuildResultNode(_deps: IndexingGraphDeps) {
   return async (state: IndexingPipelineStateType): Promise<IndexingPipelineUpdateType> => {
     const hasErrors = state.errors.length > 0;
+    const vectorStored = ["stored", "extracted", "entities_stored"].includes(state.completedStage);
+    const success = vectorStored && state.chunkCount > 0;
 
     const result: Record<string, unknown> = {
-      success: !hasErrors,
+      success,
       topicId: state.topicId,
       filePaths: state.filePaths,
       documentCount: state.documentCount,
@@ -252,18 +312,21 @@ function createBuildResultNode(_deps: IndexingGraphDeps) {
       entityCount: state.entityCount,
       relationshipCount: state.relationshipCount,
       completedStage: state.completedStage,
-      errors: hasErrors ? state.errors : undefined,
+      graphExtracted: success && state.entityCount > 0,
+      partial: success && hasErrors,
+      warnings: success && hasErrors ? state.errors.map((message) => ({ stage: "graph", message })) : [],
+      errors: !success && hasErrors ? state.errors : undefined,
     };
 
     logger.info("buildResult: indexing pipeline complete", {
-      success: !hasErrors,
+      success,
       documents: state.documentCount,
       chunks: state.chunkCount,
       entities: state.entityCount,
       relationships: state.relationshipCount,
     });
 
-    return { result };
+    return { result, loadedDocs: [], chunks: [], extractedEntities: [], extractedRelationships: [] };
   };
 }
 
@@ -351,6 +414,9 @@ export async function executeIndexingGraph(
   const config: Record<string, unknown> = {};
   if (threadId) {
     config.configurable = { thread_id: threadId };
+  }
+  if (deps.signal) {
+    config.signal = deps.signal;
   }
 
   const finalState = await compiled.invoke(initialState, config);

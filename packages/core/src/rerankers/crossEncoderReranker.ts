@@ -20,7 +20,6 @@ import { sigmoid } from "./reranker";
 // Dynamic import types — @huggingface/transformers is ESM-only
 type TransformersModule = any;
 
-const DEFAULT_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2";
 const DEFAULT_MAX_CANDIDATES = 20;
 const MAX_DOCUMENT_CHARS = 1500; // ~375 tokens at 4 chars/token, leaving room for query
 
@@ -71,17 +70,17 @@ export class CrossEncoderReranker implements Reranker {
     return this.model !== null && this.tokenizer !== null;
   }
 
-  async rerank(query: string, candidates: ScoredDocument[], topK: number): Promise<ScoredDocument[]> {
+  async rerank(
+    query: string,
+    candidates: ScoredDocument[],
+    topK: number,
+    signal?: AbortSignal,
+  ): Promise<ScoredDocument[]> {
+    signal?.throwIfAborted();
     if (candidates.length === 0) {
       return [];
     }
 
-    // Ensure model is loaded
-    if (!this.isAvailable()) {
-      await this.initialize();
-    }
-
-    // Cap candidates to avoid O(N) blowup
     const capped = candidates.slice(0, this.maxCandidates);
 
     this.logger.info("Reranking candidates", {
@@ -93,8 +92,13 @@ export class CrossEncoderReranker implements Reranker {
     const startTime = Date.now();
 
     try {
+      if (!this.isAvailable()) {
+        await this.initialize();
+      }
+      signal?.throwIfAborted();
       // Score all (query, document) pairs
       const scores = await this.scorePairs(query, capped);
+      signal?.throwIfAborted();
 
       // Combine scores with documents, preserving original scores
       const reranked: ScoredDocument[] = capped.map((candidate, i) => ({
@@ -116,6 +120,9 @@ export class CrossEncoderReranker implements Reranker {
 
       return results;
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       this.logger.error("Reranking failed, returning original order", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -124,10 +131,12 @@ export class CrossEncoderReranker implements Reranker {
     }
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
+    const model = this.model;
     this.model = null;
     this.tokenizer = null;
     this.transformers = null;
+    await this.releaseModel(model);
     this.logger.info("CrossEncoderReranker disposed");
   }
 
@@ -135,12 +144,16 @@ export class CrossEncoderReranker implements Reranker {
     return this.modelName;
   }
 
+  getMaxCandidates(): number {
+    return this.maxCandidates;
+  }
+
   async switchModel(modelName: string): Promise<void> {
     // Validate model name — the registry's resolveModelIdentifier handles
     // path traversal checks (blocks "..", absolute paths including Windows drive letters)
     try {
       this.registry.resolveModelIdentifier(modelName);
-    } catch (err) {
+    } catch (_err) {
       throw new Error(`Invalid model name: ${modelName}`);
     }
     if (!modelName.includes("/")) {
@@ -154,14 +167,23 @@ export class CrossEncoderReranker implements Reranker {
 
     this.logger.info("Switching reranker model", { from: this.modelName, to: modelName });
 
-    // Dispose current model
-    this.model = null;
-    this.tokenizer = null;
+    // Load into a replacement first; the working model remains available if
+    // validation, download, tokenization, or ONNX initialization fails.
+    const replacement = new CrossEncoderReranker(modelName, {
+      maxCandidates: this.maxCandidates,
+      registry: this.registry,
+    });
+    await replacement.initialize();
+    const previousModel = this.model;
+    this.model = replacement.model;
+    this.tokenizer = replacement.tokenizer;
+    this.transformers = replacement.transformers;
+    this.modelName = replacement.modelName;
     this.initPromise = null;
-
-    // Set new model name and reload
-    this.modelName = modelName;
-    await this.initialize();
+    replacement.model = null;
+    replacement.tokenizer = null;
+    replacement.transformers = null;
+    await this.releaseModel(previousModel);
   }
 
   async listAvailableModels(): Promise<AvailableRerankerModel[]> {
@@ -233,7 +255,7 @@ export class CrossEncoderReranker implements Reranker {
 
     this.tokenizer = await AutoTokenizer.from_pretrained(resolvedModel);
     this.model = await AutoModelForSequenceClassification.from_pretrained(resolvedModel, {
-      quantized: true,
+      dtype: "q8",
     });
 
     const elapsed = Date.now() - startTime;
@@ -261,5 +283,11 @@ export class CrossEncoderReranker implements Reranker {
     }
 
     return this.transformers;
+  }
+
+  private async releaseModel(model: any): Promise<void> {
+    if (model && typeof model.dispose === "function") {
+      await model.dispose();
+    }
   }
 }

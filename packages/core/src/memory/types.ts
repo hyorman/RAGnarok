@@ -125,6 +125,10 @@ export interface StoreOptions {
   scope?: MemoryScope;
   branch?: string;
   tags?: string[];
+  /** Optional time-to-live in days. */
+  ttlDays?: number;
+  /** Abort long-running embedding/extraction work before persistence. */
+  signal?: AbortSignal;
 }
 
 export interface RecallOptions {
@@ -133,6 +137,12 @@ export interface RecallOptions {
   branch?: string;
   topK?: number;
   includeEntities?: boolean;
+  /** Include reserved auto-generated entries (tags beginning with auto:). */
+  includeAuto?: boolean;
+  /** Update access counters. HTTP reader sessions force this to false. */
+  reinforce?: boolean;
+  /** Abort the embedding/search operation. */
+  signal?: AbortSignal;
 }
 
 export interface RecallResult {

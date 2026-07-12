@@ -67,6 +67,12 @@ execSync(
   `npm install --no-audit --no-fund "${path.join(packDir, coreTgz)}" "${path.join(packDir, mcpTgz)}"`,
   { cwd: consumerDir, stdio: ["ignore", "ignore", "inherit"], env: cleanEnv },
 );
+console.log("Auditing clean-consumer production dependencies...");
+execSync("npm audit --omit=dev --audit-level=moderate", {
+  cwd: consumerDir,
+  stdio: ["ignore", "ignore", "inherit"],
+  env: cleanEnv,
+});
 
 // ── 3. Require core ────────────────────────────────────────────────────────
 console.log("Requiring @ragnarok/core from the packed artifact...");

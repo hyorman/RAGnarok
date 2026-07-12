@@ -48,6 +48,8 @@ export interface LoaderOptions {
 
   /** File extensions to include when loading directories (e.g., ['.html', '.md']). If not specified, all supported extensions are included. */
   includeExtensions?: string[];
+  /** Cancellation signal propagated from the caller. */
+  signal?: AbortSignal;
 }
 
 export interface LoadedDocument {

@@ -53,11 +53,22 @@ export interface McpConfig {
   embeddingBaseUrl: string;
   embeddingApiKey: string;
   apiKey: string;
+  writeApiKey: string;
   corsOrigin: string;
   httpHost: string;
   rerankerModel: string;
+  rerankerEnabled: boolean;
   rerankerMaxCandidates: number;
   rerankerCandidateMultiplier: number;
+  queryMemoryEnabled: boolean;
+  sessionIdleTtlMs: number;
+  maxSessions: number;
+  rateLimitPerMinute: number;
+  exportDir: string;
+  githubHosts: string[];
+  githubToken: string;
+  checkpointRetentionMs: number;
+  resetStorage: boolean;
 }
 
 /**
@@ -89,11 +100,22 @@ const configSchema = z
     embeddingBaseUrl: z.string(),
     embeddingApiKey: z.string(),
     apiKey: z.string(),
+    writeApiKey: z.string(),
     corsOrigin: z.string().min(1),
     httpHost: z.string().min(1),
     rerankerModel: z.string().min(1),
+    rerankerEnabled: z.boolean(),
     rerankerMaxCandidates: z.number().int().min(1).max(200),
     rerankerCandidateMultiplier: z.number().int().min(1).max(20),
+    queryMemoryEnabled: z.boolean(),
+    sessionIdleTtlMs: z.number().int().min(1_000).max(86_400_000),
+    maxSessions: z.number().int().min(1).max(10_000),
+    rateLimitPerMinute: z.number().int().min(1).max(100_000),
+    exportDir: z.string().min(1),
+    githubHosts: z.array(z.string().min(1)).min(1),
+    githubToken: z.string(),
+    checkpointRetentionMs: z.number().int().min(0).max(604_800_000),
+    resetStorage: z.boolean(),
   })
   .superRefine((cfg, ctx) => {
     if ((cfg.llmProvider === "openai" || cfg.llmProvider === "anthropic") && !cfg.llmApiKey) {
@@ -115,6 +137,28 @@ const configSchema = z
         code: z.ZodIssueCode.custom,
         path: ["chunkOverlap"],
         message: `RAGNAROK_CHUNK_OVERLAP (${cfg.chunkOverlap}) must be smaller than RAGNAROK_CHUNK_SIZE (${cfg.chunkSize})`,
+      });
+    }
+    if (cfg.apiKey && cfg.writeApiKey && cfg.apiKey === cfg.writeApiKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["writeApiKey"],
+        message: "read and write tokens must differ",
+      });
+    }
+    const loopback = ["127.0.0.1", "::1", "localhost"].includes(cfg.httpHost.toLowerCase());
+    if (!loopback && !cfg.apiKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["apiKey"],
+        message: "RAGNAROK_API_KEY is required for non-loopback HTTP binds",
+      });
+    }
+    if (!loopback && cfg.corsOrigin === "*") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["corsOrigin"],
+        message: "RAGNAROK_CORS_ORIGIN must be restricted for non-loopback HTTP binds",
       });
     }
   });
@@ -149,12 +193,32 @@ export function loadConfig(): McpConfig {
     embeddingBaseUrl: process.env.RAGNAROK_EMBEDDING_BASE_URL || "",
     embeddingApiKey: process.env.RAGNAROK_EMBEDDING_API_KEY || "",
     apiKey: process.env.RAGNAROK_API_KEY || "",
+    writeApiKey: process.env.RAGNAROK_WRITE_API_KEY || "",
     // WARNING: Default '*' allows all origins. Restrict in production (e.g. "https://yourdomain.com").
     corsOrigin: process.env.RAGNAROK_CORS_ORIGIN || "*",
     httpHost: process.env.RAGNAROK_HTTP_HOST || "127.0.0.1",
     rerankerModel: process.env.RAGNAROK_RERANKER_MODEL || "Xenova/ms-marco-MiniLM-L-6-v2",
+    rerankerEnabled: process.env.RAGNAROK_RERANKER_ENABLED !== "0" && process.env.RAGNAROK_RERANKER_ENABLED !== "false",
     rerankerMaxCandidates: parseInt(process.env.RAGNAROK_RERANKER_MAX_CANDIDATES || "20", 10),
     rerankerCandidateMultiplier: parseInt(process.env.RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER || "4", 10),
+    queryMemoryEnabled:
+      process.env.RAGNAROK_QUERY_MEMORY_ENABLED === "1" || process.env.RAGNAROK_QUERY_MEMORY_ENABLED === "true",
+    sessionIdleTtlMs: parseInt(process.env.RAGNAROK_SESSION_IDLE_TTL_MS || "1800000", 10),
+    maxSessions: parseInt(process.env.RAGNAROK_MAX_SESSIONS || "100", 10),
+    rateLimitPerMinute: parseInt(process.env.RAGNAROK_RATE_LIMIT_PER_MINUTE || "100", 10),
+    exportDir:
+      process.env.RAGNAROK_EXPORT_DIR ||
+      path.join(process.env.RAGNAROK_STORAGE_DIR || path.join(os.homedir(), ".ragnarok"), "exports"),
+    githubHosts: (process.env.RAGNAROK_GITHUB_HOSTS || "github.com")
+      .split(",")
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
+    githubToken: process.env.RAGNAROK_GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || "",
+    checkpointRetentionMs: parseInt(process.env.RAGNAROK_CHECKPOINT_RETENTION_MS || "0", 10),
+    resetStorage:
+      process.argv.includes("--reset-storage") ||
+      process.env.RAGNAROK_RESET_STORAGE === "1" ||
+      process.env.RAGNAROK_RESET_STORAGE === "true",
   };
 
   const parsed = configSchema.safeParse(raw);

@@ -39,6 +39,9 @@ class OpenAIModel implements ILLMModel {
       async *[Symbol.asyncIterator]() {
         for await (const chunk of stream) {
           const content = chunk.choices?.[0]?.delta?.content;
+          if (content !== undefined && content !== null && typeof content !== "string") {
+            throw new Error("OpenAI streaming response contained non-text content");
+          }
           if (content) {
             yield content;
           }
@@ -51,6 +54,7 @@ class OpenAIModel implements ILLMModel {
 export class OpenAILLMProvider implements ILLMProvider {
   private logger = new Logger("OpenAILLMProvider");
   private client: any = null;
+  private availability?: { value: boolean; expiresAt: number };
 
   constructor(
     private apiKey: string,
@@ -81,11 +85,16 @@ export class OpenAILLMProvider implements ILLMProvider {
   }
 
   async isAvailable(): Promise<boolean> {
+    if (this.availability && this.availability.expiresAt > Date.now()) {
+      return this.availability.value;
+    }
     try {
       const client = await this.getClient();
       await client.models.list();
+      this.availability = { value: true, expiresAt: Date.now() + 10_000 };
       return true;
     } catch {
+      this.availability = { value: false, expiresAt: Date.now() + 10_000 };
       return false;
     }
   }
@@ -134,6 +143,9 @@ class AnthropicModel implements ILLMModel {
       async *[Symbol.asyncIterator]() {
         for await (const event of stream) {
           if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+            if (typeof event.delta.text !== "string") {
+              throw new Error("Anthropic stream contained invalid text");
+            }
             yield event.delta.text;
           }
         }
@@ -145,6 +157,7 @@ class AnthropicModel implements ILLMModel {
 export class AnthropicLLMProvider implements ILLMProvider {
   private logger = new Logger("AnthropicLLMProvider");
   private client: any = null;
+  private availability?: { value: boolean; expiresAt: number };
 
   constructor(
     private apiKey: string,
@@ -171,10 +184,18 @@ export class AnthropicLLMProvider implements ILLMProvider {
   }
 
   async isAvailable(): Promise<boolean> {
+    if (this.availability && this.availability.expiresAt > Date.now()) {
+      return this.availability.value;
+    }
     try {
-      await this.getClient();
+      const client = await this.getClient();
+      if (client.models?.list) {
+        await client.models.list({ limit: 1 });
+      }
+      this.availability = { value: true, expiresAt: Date.now() + 10_000 };
       return true;
     } catch {
+      this.availability = { value: false, expiresAt: Date.now() + 10_000 };
       return false;
     }
   }
@@ -210,6 +231,9 @@ class OllamaModel implements ILLMModel {
       async *[Symbol.asyncIterator]() {
         for await (const chunk of stream) {
           const content = chunk.choices?.[0]?.delta?.content;
+          if (content !== undefined && content !== null && typeof content !== "string") {
+            throw new Error("Ollama streaming response contained non-text content");
+          }
           if (content) {
             yield content;
           }
@@ -222,6 +246,7 @@ class OllamaModel implements ILLMModel {
 export class OllamaLLMProvider implements ILLMProvider {
   private logger = new Logger("OllamaLLMProvider");
   private client: any = null;
+  private availability?: { value: boolean; expiresAt: number };
 
   constructor(
     private baseUrl: string,
@@ -251,11 +276,16 @@ export class OllamaLLMProvider implements ILLMProvider {
   }
 
   async isAvailable(): Promise<boolean> {
+    if (this.availability && this.availability.expiresAt > Date.now()) {
+      return this.availability.value;
+    }
     try {
       const client = await this.getClient();
       await client.models.list();
+      this.availability = { value: true, expiresAt: Date.now() + 3_000 };
       return true;
     } catch {
+      this.availability = { value: false, expiresAt: Date.now() + 3_000 };
       return false;
     }
   }

@@ -145,6 +145,22 @@ describe("MemoryEntityExtractor", function () {
       expect(result.relationships).to.have.length(0);
     });
 
+    it("should propagate caller cancellation instead of degrading it", async function () {
+      const extractor = new MemoryEntityExtractor(createSlowLLMProvider(30_000));
+      const controller = new AbortController();
+      const extraction = extractor.extract("Some memory text", controller.signal);
+      controller.abort(new Error("cancel memory extraction"));
+
+      let caught: unknown;
+      try {
+        await extraction;
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).to.be.instanceOf(Error);
+      expect(controller.signal.aborted).to.equal(true);
+    });
+
     it("should return empty when LLM is not available", async function () {
       const provider: ILLMProvider = {
         selectModel: async () => null,

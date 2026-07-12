@@ -15,6 +15,21 @@
  */
 export type EmbeddingBackendType = "auto" | (string & {});
 
+export interface EmbeddingFingerprint {
+  backendKind: string;
+  providerFormat: string;
+  model: string;
+  revision: string;
+  dimension: number;
+  endpointHash: string;
+}
+
+export interface EmbeddingFingerprintInfo {
+  providerFormat?: string;
+  revision?: string;
+  endpointHash?: string;
+}
+
 /**
  * Common interface that every embedding backend must implement.
  */
@@ -27,7 +42,7 @@ export interface EmbeddingBackend {
    * @param text Input text to embed.
    * @returns Embedding vector (number[]).
    */
-  embed(text: string): Promise<number[]>;
+  embed(text: string, signal?: AbortSignal): Promise<number[]>;
 
   /**
    * Generate embedding vectors for multiple texts.
@@ -36,7 +51,7 @@ export interface EmbeddingBackend {
    * @param progressCallback Optional callback reporting progress as a value in [0, 1].
    * @returns Array of embedding vectors in the same order as `texts`.
    */
-  embedBatch(texts: string[], progressCallback?: (progress: number) => void): Promise<number[][]>;
+  embedBatch(texts: string[], progressCallback?: (progress: number) => void, signal?: AbortSignal): Promise<number[][]>;
 
   /**
    * Initialize the backend (load models, check provider availability, etc.).
@@ -71,6 +86,9 @@ export interface EmbeddingBackend {
    */
   getModelId?(): string | null;
 
+  /** Non-secret identity details used to prevent incompatible vector mixing. */
+  getFingerprintInfo?(): EmbeddingFingerprintInfo;
+
   /**
    * List the models this backend can serve (e.g. a remote API's catalogue).
    * Optional — local backends rely on the ModelRegistry instead.
@@ -80,5 +98,5 @@ export interface EmbeddingBackend {
   /**
    * Release any resources held by this backend.
    */
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
