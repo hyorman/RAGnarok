@@ -88,8 +88,12 @@ describe("shared-mode HTTP E2E (real binary)", function () {
       harness.proc.kill("SIGTERM");
       await harness.waitForExit(20000).catch(() => harness!.proc.kill("SIGKILL"));
     }
-    fs.rmSync(storageDir, { recursive: true, force: true });
-    fs.rmSync(workDir, { recursive: true, force: true });
+    if (storageDir) {
+      fs.rmSync(storageDir, { recursive: true, force: true });
+    }
+    if (workDir) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects unauthenticated requests", async function () {
@@ -104,30 +108,39 @@ describe("shared-mode HTTP E2E (real binary)", function () {
   it("serves a memory-free, prefixed, role-scoped tool surface", async function () {
     const reader = authedClient(port, READ_TOKEN);
     await reader.client.connect(reader.transport);
-    const readerTools = (await reader.client.listTools()).tools;
-    const readerNames = readerTools.map((t) => t.name);
+    try {
+      const readerTools = (await reader.client.listTools()).tools;
+      const readerNames = readerTools.map((t) => t.name);
 
-    expect(readerNames).to.include("rag_query");
-    expect(readerNames, "memory tools must be absent in shared mode").to.not.include("rag_memory");
-    expect(readerNames).to.not.include("rag_reset_memory");
-    expect(readerNames, "write tools must be absent for readers").to.not.include("rag_create_topic");
-    for (const tool of readerTools) {
-      expect(tool.description ?? "", `description of ${tool.name}`).to.match(/^\[Team shared KB\] /);
+      expect(readerNames).to.include("rag_query");
+      expect(readerNames, "memory tools must be absent in shared mode").to.not.include("rag_memory");
+      expect(readerNames).to.not.include("rag_reset_memory");
+      expect(readerNames, "write tools must be absent for readers").to.not.include("rag_create_topic");
+      for (const tool of readerTools) {
+        expect(tool.description ?? "", `description of ${tool.name}`).to.match(/^\[Team shared KB\] /);
+      }
+      const instructions = reader.client.getInstructions() ?? "";
+      expect(instructions.toLowerCase()).to.include("team shared knowledge base");
+    } finally {
+      await reader.client.close();
     }
-    const instructions = reader.client.getInstructions() ?? "";
-    expect(instructions.toLowerCase()).to.include("team shared knowledge base");
-    await reader.client.close();
 
     const writer = authedClient(port, WRITE_TOKEN);
     await writer.client.connect(writer.transport);
-    const writerNames = (await writer.client.listTools()).tools.map((t) => t.name);
-    expect(writerNames, "writers get write tools").to.include("rag_create_topic");
-    expect(writerNames, "memory tools are absent for EVERY role in shared mode").to.not.include("rag_memory");
-    expect(writerNames).to.not.include("rag_reset_memory");
-    await writer.client.close();
+    try {
+      const writerNames = (await writer.client.listTools()).tools.map((t) => t.name);
+      expect(writerNames, "writers get write tools").to.include("rag_create_topic");
+      expect(writerNames, "memory tools are absent for EVERY role in shared mode").to.not.include("rag_memory");
+      expect(writerNames).to.not.include("rag_reset_memory");
+    } finally {
+      await writer.client.close();
+    }
   });
 
   it("exits 0 on SIGTERM with no native-abort traces (MB-2, HTTP path)", async function () {
+    if (process.platform === "win32") {
+      this.skip(); // SIGTERM-graceful-shutdown is not emulatable on Windows
+    }
     harness!.proc.kill("SIGTERM");
     const exitCode = await harness!.waitForExit(20000);
     expect(exitCode, `stderr: ${harness!.stderrText.slice(-500)}`).to.equal(0);

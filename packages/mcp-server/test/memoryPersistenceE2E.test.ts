@@ -40,8 +40,12 @@ describe("memory restart persistence E2E (C2 gate)", function () {
         harness.proc.kill();
       }
     }
-    fs.rmSync(storageDir, { recursive: true, force: true });
-    fs.rmSync(workDir, { recursive: true, force: true });
+    if (storageDir) {
+      fs.rmSync(storageDir, { recursive: true, force: true });
+    }
+    if (workDir) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it("memories survive restart → mutate → restart with zero loss", async function () {

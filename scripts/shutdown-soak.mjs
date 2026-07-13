@@ -33,7 +33,12 @@ try {
       child.stderr.on("data", (chunk) => (stderr += chunk));
       child.stdout.on("data", (chunk) => {
         stdout += chunk;
-        if (stdout.includes('"id":1')) child.kill("SIGTERM");
+        if (stdout.includes('"id":1')) {
+          // Windows cannot deliver a catchable SIGTERM; end stdin so the
+          // server takes its stdio-EOF shutdown path instead.
+          if (process.platform === "win32") child.stdin.end();
+          else child.kill("SIGTERM");
+        }
       });
       child.on("error", reject);
       child.on("exit", (code, signal) => {

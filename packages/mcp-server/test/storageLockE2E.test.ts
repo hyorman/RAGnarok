@@ -35,8 +35,12 @@ describe("cross-process storage lock E2E (AA-1 gate)", function () {
         harness.proc.kill();
       }
     }
-    fs.rmSync(storageDir, { recursive: true, force: true });
-    fs.rmSync(workDir, { recursive: true, force: true });
+    if (storageDir) {
+      fs.rmSync(storageDir, { recursive: true, force: true });
+    }
+    if (workDir) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it("second process fails fast; lock releases on clean exit", async function () {

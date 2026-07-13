@@ -57,8 +57,12 @@ describe("mixed-format ingestion E2E (MB-1 gate)", function () {
         harness.proc.kill();
       }
     }
-    fs.rmSync(storageDir, { recursive: true, force: true });
-    fs.rmSync(sourceDir, { recursive: true, force: true });
+    if (storageDir) {
+      fs.rmSync(storageDir, { recursive: true, force: true });
+    }
+    if (sourceDir) {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+    }
   });
 
   async function ingestInOrder(topic: string, order: string[], firstId: number): Promise<void> {
