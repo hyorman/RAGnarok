@@ -19,7 +19,7 @@ import {
   EnsembleSearchResult,
   DEFAULT_ENSEMBLE_OPTIONS,
 } from "../retrievers/ensembleRetriever";
-import { GraphRetriever, GraphSearchResult, DEFAULT_GRAPH_OPTIONS } from "../retrievers/graphRetriever";
+import { GraphRetriever, GraphSearchResult, DEFAULT_GRAPH_OPTIONS, getChunkId } from "../retrievers/graphRetriever";
 import {
   GraphHybridRetriever,
   GraphHybridSearchResult,
@@ -1158,8 +1158,9 @@ Respond with JSON:
    * Uses chunkId when available, otherwise a content hash.
    */
   private getDocumentKey(doc: LangChainDocument): string {
-    if (doc.metadata?.chunkId) {
-      return String(doc.metadata.chunkId);
+    const chunkId = getChunkId(doc.metadata);
+    if (chunkId !== null) {
+      return chunkId;
     }
     return createHash("sha256").update(doc.pageContent).digest("hex");
   }
