@@ -75,7 +75,7 @@ Status legend: **[verified]** = independently confirmed by review/probe (`CODEX-
 - [todo] Transactional embedding switch (probe before global state change).
 - [impl] Remote embedding response validation (MB-6).
 - [verified] C3: vector commit = success even if graph extraction fails; graph failure demoted to warnings (`stage:"graph"`, `partial:true`, `graphExtracted:false`); idempotent chunk storage ⇒ no duplicates on retry. Graph provenance by doc/chunk (MB-7).
-- [todo] Verify stable `documentId`/`chunkId` assignment before `storeProcessedChunks` — `normalizeDocumentMetadata` defaults them to `""`; empty ids would collide on the `chunk_id` mergeInsert key.
+- [verified] Stable `documentId`/`chunkId` assignment before `storeProcessedChunks` — closed by the Phase 4 stdio E2E: `documentId` matches `doc-<sha256>` (non-empty, collision-resistant) and reingestion replaces rather than duplicates the source document (`stdioTransport.test.ts:115,138`).
 
 ### Phase 3 — Memory correctness & restart regressions  *(C2, memory quality)*
 - [verified] Row-level memory persistence: `Array.from` at read boundaries + explicit Arrow schemas + crash-safe `mergeInsert(id).whenMatchedUpdateAll().whenNotMatchedInsertAll().whenNotMatchedBySourceDelete()` (single transactional merge, better than planned); empty collections retain empty tables.
@@ -84,7 +84,15 @@ Status legend: **[verified]** = independently confirmed by review/probe (`CODEX-
 
 ### Phase 4 — Real-process e2e harness & CI baseline  *(A4, AA-2)*
 - [partial] `.github/workflows/release.yml` exists — expand to Plan B's matrix (Node 20/22; Linux/macOS/Windows native; VS Code ext on Linux; npm pack/install/require/stdio smoke; Docker build+non-root+auth+persistence+shutdown smoke; VSIX×6 with content+manifest verify; dep/license + artifact-size audit).
-- [todo] Port review harness (`it/*.cjs`) into mocha e2e specs spawning the **built binary + bundled models**, **clearing all `RAGNAROK_*`** (AA-2). Coverage: 6 strategies with bundled reranker (C1 gate); restart→mutate→restart memory (C2 gate); mixed-format ordering (MB-1); LangGraph index+query; HTTP roles/401/session/SIGTERM; **20× shutdown soak exit-0** (MB-2 gate).
+- [impl] Real-binary mocha e2e specs spawning the **built binary + bundled models** landed in `packages/mcp-server/test/`, covering all five Phase-4 gates:
+  - **C1** — existing stdio all-strategies loop in `stdioTransport.test.ts` (`vector`/`hybrid`/`ensemble`/`bm25`/`graph`/`graph_hybrid`, both the legacy path and the opt-in LangGraph path) with the bundled reranker.
+  - **C2** — `memoryPersistenceE2E.test.ts`: restart → mutate → restart with zero loss.
+  - **MB-1** — `mixedFormatE2E.test.ts`: order-independent txt→md→html / html→md→txt ingestion, including the mixed-b "silver relay" sentinel query.
+  - **AA-1** — `storageLockE2E.test.ts`: second process fails fast on a locked storage dir; lock releases on clean exit.
+  - **MB-2** — hardened `scripts/shutdown-soak.mjs` (ONNX lifecycle exercised, `RAGNAROK_*` env scrubbed, 20× stdio exit-0) plus `httpBinaryE2E.test.ts`'s "exits 0 on SIGTERM with no native-abort traces" case for the HTTP path.
+  - These specs run inside `test:mcp:compiled` (`npm run test:fast`), so the CI `quality`/`native-process` jobs pick them up with **zero workflow changes**.
+- **[impl] AA-2 e2e env hygiene** — the harness (`StdioHarness`) and the shutdown soak both clear/override all `RAGNAROK_*` env vars in the spawn env, preventing the developer shell's remote-provider config from leaking into e2e runs.
+- Closes the Phase 2 `documentId`/`chunkId` verification item: `stdioTransport.test.ts` asserts the `doc-<sha256>` id pattern (line 115) and that reingestion replaces rather than duplicates the source document (line 138, "reingestion must replace, not duplicate, the source").
 
 ### Phase 5 — HTTP access, lifecycle, Docker  *(CF-2, MB-2, MB-5, HTTP hardening)*
 - [verified] Read/write token split (timing-safe); session role fixed at init; **structural default-deny** — write tools absent (not just guarded) for reader sessions; `writerOnly()` per-action on mixed `rag_memory`; readers cause zero durable writes.
@@ -110,7 +118,7 @@ Status legend: **[verified]** = independently confirmed by review/probe (`CODEX-
 - [todo] `VectorStoreMetadata` += `schemaVersion` + `embeddingFingerprint`; `DocumentSource` discriminated union with `addDocuments(string[])` compat wrapper over `addSources()`; pipeline metadata += `graphExtracted`/`partial`/`documentId`/warnings; memory options += `ttlDays`/`includeAuto`/`reinforce`.
 - [impl/verify] Model manifest + packaging gate (MB-10).
 - [todo] Pin release-critical direct deps to CI-validated exact versions; declare Node engine range.
-- [todo] Lint gate repair (scope type-aware globs / per-package; fix the `require()` error + burn down warnings) + zero-warning CI.
+- [todo] Lint gate repair (scope type-aware globs / per-package; fix the `require()` error + burn down warnings) + zero-warning CI. **Confirmed still broken (2026-07-13 re-check):** `npm run lint` (single flat `eslint packages/*/src packages/*/test test/` invocation) OOMs the Node heap every time — V8 Mark-Compact GC repeatedly failing to reclaim above ~2081MB, aborting after ~305s with `Linter process terminated abnormally (possibly out of memory)` (exit 134/SIGABRT), no findings ever printed. Root cause is almost certainly type-aware linting loading every package's TS project graph into one process. Fix direction: split into a per-package `eslint` invocation (or `--max-old-space-size` bump + parallel workspace runs), not a code fix — do not attempt in this plan.
 - [todo] Docs reconciliation: tool counts (now ~18), defaults (`TOP_K`=10), storage reset, graph prerequisites (LangGraph+LLM+fallback), access roles, checkpoint behavior, hybrid 90/10 (fix ARCHITECTURE 70/30), single-instance constraint, provider support.
 
 ### Phase 10 — Federated shared KB & topology  *(design: `docs/superpowers/specs/2026-07-12-federated-shared-kb-design.md`)*

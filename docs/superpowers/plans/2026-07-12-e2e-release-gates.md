@@ -493,6 +493,7 @@ describe("mixed-format ingestion E2E (MB-1 gate)", function () {
     await expectAnswer("mixed-a", "What performs cache invalidation?", "golden broom", 52);
     await expectAnswer("mixed-b", "How many nightly snapshots are kept?", "copper", 53);
     await expectAnswer("mixed-b", "What performs cache invalidation?", "golden broom", 54);
+    await expectAnswer("mixed-b", "What does pager escalation go through?", "silver relay", 55);
 
     expect(harness.nonProtocolLines, "diagnostics leaked onto stdout").to.deep.equal([]);
     expect(await harness.close()).to.equal(0);
