@@ -620,6 +620,34 @@ describe("RAGAgent", function () {
     });
   });
 
+  describe("Graph strategy fallback labeling", function () {
+    // Regression test: dispatchSearch used to fall back to VECTOR internally
+    // when no knowledge graph was available, but mapSearchResults still
+    // labeled results with the originally *requested* strategy (GRAPH /
+    // GRAPH_HYBRID). That mislabeling made graphUsed/fallbackReason lie —
+    // callers saw source: "graph" even though pure vector retrieval ran.
+    it("should label results as vector (not graph) when falling back due to missing knowledge graph", async function () {
+      const result = await agent.query("Python", defaultQueryOptions({ retrievalStrategy: RetrievalStrategy.GRAPH }));
+
+      expect(result.results.length).to.be.greaterThan(0);
+      result.results.forEach((r) => {
+        expect(r.source).to.equal(RetrievalStrategy.VECTOR);
+      });
+    });
+
+    it("should label results as vector (not graph_hybrid) when falling back due to missing knowledge graph", async function () {
+      const result = await agent.query(
+        "Python",
+        defaultQueryOptions({ retrievalStrategy: RetrievalStrategy.GRAPH_HYBRID }),
+      );
+
+      expect(result.results.length).to.be.greaterThan(0);
+      result.results.forEach((r) => {
+        expect(r.source).to.equal(RetrievalStrategy.VECTOR);
+      });
+    });
+  });
+
   describe("Result Structure", function () {
     it("should include document in results", async function () {
       const result = await agent.query("test", defaultQueryOptions());

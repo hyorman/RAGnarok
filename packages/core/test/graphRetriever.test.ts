@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { Document as LangChainDocument } from "@langchain/core/documents";
-import { KnowledgeGraph, GraphRetriever, GraphEntity, GraphRelationship } from "../src/index";
+import { KnowledgeGraph, GraphRetriever, GraphEntity, GraphRelationship, getChunkId } from "../src/index";
 
 // ── Mock helpers ─────────────────────────────────────────────────────
 
@@ -231,6 +231,26 @@ describe("GraphRetriever", function () {
 
       // Should find TypeScript via embedding similarity even though "programming language" doesn't match entity names
       expect(results.length).to.be.greaterThan(0);
+    });
+  });
+
+  describe("getChunkId", function () {
+    it("should normalize a string chunkId", function () {
+      expect(getChunkId({ chunkId: "chunk-1" })).to.equal("chunk-1");
+    });
+
+    it("should normalize a numeric chunkId to its string form", function () {
+      expect(getChunkId({ chunkId: 42 })).to.equal("42");
+    });
+
+    it("should return null when chunkId is missing", function () {
+      expect(getChunkId({})).to.be.null;
+      expect(getChunkId(undefined)).to.be.null;
+      expect(getChunkId(null)).to.be.null;
+    });
+
+    it("should return null for a non-string/number chunkId", function () {
+      expect(getChunkId({ chunkId: { nested: true } })).to.be.null;
     });
   });
 });

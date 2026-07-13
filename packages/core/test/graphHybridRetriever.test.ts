@@ -146,6 +146,27 @@ describe("GraphHybridRetriever", function () {
     expect(results).to.have.length.at.most(3);
   });
 
+  it("should merge graph and vector candidates for the same chunk even when chunkId types differ (string vs number)", async function () {
+    // Real-world metadata can carry chunkId as either a string (LanceDB-persisted
+    // chunks) or a number (in-memory chunking). Both retrieval tiers must key
+    // candidates through the same normalized chunk-id accessor, or the same
+    // logical chunk silently produces two unmerged candidates.
+    const numericIdDoc = new LangChainDocument({ pageContent: "graph view of chunk 42", metadata: { chunkId: 42 } });
+    const stringIdDoc = new LangChainDocument({ pageContent: "vector view of chunk 42", metadata: { chunkId: "42" } });
+
+    const fakeGraphRetriever = {
+      search: async () => [{ document: numericIdDoc, score: 0.6, matchedEntities: ["e1"], hopDepth: 0 }],
+    } as any;
+    const vectorRetriever = createMockVectorRetriever([{ doc: stringIdDoc, score: 0.8 }]);
+
+    const hybrid = new GraphHybridRetriever(fakeGraphRetriever, vectorRetriever);
+    const results = await hybrid.search("chunk 42", { k: 5 });
+
+    expect(results).to.have.lengthOf(1);
+    expect(results[0].graphScore).to.be.greaterThan(0);
+    expect(results[0].vectorScore).to.be.greaterThan(0);
+  });
+
   it("should expose default options", function () {
     expect(DEFAULT_GRAPH_HYBRID_OPTIONS.graphWeight).to.equal(0.3);
     expect(DEFAULT_GRAPH_HYBRID_OPTIONS.vectorWeight).to.equal(0.7);

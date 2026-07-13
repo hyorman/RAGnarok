@@ -440,14 +440,21 @@ export class RAGAgent {
 
   /**
    * Shared retrieval dispatch: initializes the correct retriever and runs the search.
+   * Returns the strategy actually used alongside the results — when a graph
+   * strategy falls back to VECTOR (no knowledge graph available), the caller
+   * must label results with the effective strategy, not the requested one,
+   * or downstream `graphUsed`/`fallbackReason` reporting silently lies.
    */
   private async dispatchSearch(
     query: string,
     topK: number,
     strategy: RetrievalStrategy,
-  ): Promise<
-    Array<HybridSearchResult | EnsembleSearchResult | KeywordSearchResult | GraphSearchResult | GraphHybridSearchResult>
-  > {
+  ): Promise<{
+    results: Array<
+      HybridSearchResult | EnsembleSearchResult | KeywordSearchResult | GraphSearchResult | GraphHybridSearchResult
+    >;
+    effectiveStrategy: RetrievalStrategy;
+  }> {
     // Graph strategies fall back to VECTOR when KG is unavailable
     if (
       (strategy === RetrievalStrategy.GRAPH || strategy === RetrievalStrategy.GRAPH_HYBRID) &&
@@ -462,27 +469,42 @@ export class RAGAgent {
     await this.initializeRetrieversForStrategy(strategy);
 
     if (strategy === RetrievalStrategy.BM25 && this.keywordRetriever) {
-      return this.keywordRetriever.search(query, topK);
+      return { results: await this.keywordRetriever.search(query, topK), effectiveStrategy: strategy };
     } else if (strategy === RetrievalStrategy.ENSEMBLE && this.ensembleRetriever) {
-      return this.ensembleRetriever.search(query, { k: topK, ...DEFAULT_ENSEMBLE_OPTIONS });
+      return {
+        results: await this.ensembleRetriever.search(query, { k: topK, ...DEFAULT_ENSEMBLE_OPTIONS }),
+        effectiveStrategy: strategy,
+      };
     } else if (strategy === RetrievalStrategy.HYBRID && this.hybridRetriever) {
-      return this.hybridRetriever.search(query, { k: topK, ...DEFAULT_HYBRID_OPTIONS });
+      return {
+        results: await this.hybridRetriever.search(query, { k: topK, ...DEFAULT_HYBRID_OPTIONS }),
+        effectiveStrategy: strategy,
+      };
     } else if (strategy === RetrievalStrategy.GRAPH && this.graphRetriever) {
-      return this.graphRetriever.search(query, { k: topK, ...DEFAULT_GRAPH_OPTIONS });
+      return {
+        results: await this.graphRetriever.search(query, { k: topK, ...DEFAULT_GRAPH_OPTIONS }),
+        effectiveStrategy: strategy,
+      };
     } else if (strategy === RetrievalStrategy.GRAPH_HYBRID && this.graphHybridRetriever) {
-      return this.graphHybridRetriever.search(query, {
-        k: topK,
-        ...DEFAULT_GRAPH_HYBRID_OPTIONS,
-        graphOptions: { k: topK, ...DEFAULT_GRAPH_OPTIONS },
-      });
+      return {
+        results: await this.graphHybridRetriever.search(query, {
+          k: topK,
+          ...DEFAULT_GRAPH_HYBRID_OPTIONS,
+          graphOptions: { k: topK, ...DEFAULT_GRAPH_OPTIONS },
+        }),
+        effectiveStrategy: strategy,
+      };
     } else if (strategy === RetrievalStrategy.VECTOR && this.vectorRetriever) {
       const results = await this.vectorRetriever.search(query, topK);
-      return results.map(({ document, score }) => ({
-        document,
-        score,
-        vectorScore: score,
-        keywordScore: 0,
-      }));
+      return {
+        results: results.map(({ document, score }) => ({
+          document,
+          score,
+          vectorScore: score,
+          keywordScore: 0,
+        })),
+        effectiveStrategy: strategy,
+      };
     }
     throw new Error(`Retriever for strategy ${strategy} not initialized`);
   }
@@ -524,9 +546,9 @@ export class RAGAgent {
     });
 
     try {
-      const searchResults = await this.dispatchSearch(subQuery.query, topK, strategy);
+      const { results: searchResults, effectiveStrategy } = await this.dispatchSearch(subQuery.query, topK, strategy);
 
-      return this.mapSearchResults(searchResults, strategy, subQuery.query);
+      return this.mapSearchResults(searchResults, effectiveStrategy, subQuery.query);
     } catch (error) {
       this.logger.error("Sub-query execution failed", {
         error: error instanceof Error ? error.message : String(error),

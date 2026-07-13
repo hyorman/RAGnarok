@@ -31,6 +31,7 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { QueryPlan } from "./queryPlannerAgent";
 import type { RetrievalResult } from "./ragAgent";
+import { getChunkId } from "../retrievers/graphRetriever";
 
 // ── Dependencies ─────────────────────────────────────────────────────
 
@@ -227,7 +228,14 @@ function createEvaluateNode(_deps: QueryGraphDeps) {
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
 
-    const avgScore = topResults.reduce((sum, r) => sum + r.score, 0) / topResults.length;
+    // Reranker scores are sigmoid-scaled (0-1 but a different distribution than
+    // raw retrieval scores) and would skew the confidence used for the
+    // refine/memorize decision. Prefer the pre-rerank originalScore when present
+    // so confidenceThreshold stays comparable across reranked and non-reranked runs.
+    const scoreOf = (r: RetrievalResultEntry): number =>
+      typeof r.metadata?.originalScore === "number" ? (r.metadata.originalScore as number) : r.score;
+
+    const avgScore = topResults.reduce((sum, r) => sum + scoreOf(r), 0) / topResults.length;
 
     logger.debug("Evaluation complete", {
       avgScore: avgScore.toFixed(3),
@@ -389,9 +397,9 @@ function createFormatOutputNode(_deps: QueryGraphDeps) {
 }
 
 function getRetrievalResultKey(result: RetrievalResultEntry): string {
-  const chunkId = result.metadata?.chunkId;
-  if (typeof chunkId === "string" || typeof chunkId === "number") {
-    return String(chunkId);
+  const chunkId = getChunkId(result.metadata);
+  if (chunkId !== null) {
+    return chunkId;
   }
 
   return createHash("sha256").update(result.content).digest("hex");

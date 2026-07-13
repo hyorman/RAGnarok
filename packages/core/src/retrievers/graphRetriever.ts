@@ -43,6 +43,22 @@ export interface GraphSearchResult {
 const MAX_DOCS_FOR_GRAPH_LOOKUP = 50_000;
 
 /**
+ * Shared chunk-id accessor. Extracts a normalized chunk-id string from a
+ * document/result metadata bag, or null when absent. Vector, graph, and
+ * graph-hybrid candidate keying should all funnel through this helper so a
+ * chunk is identified consistently no matter which retrieval path produced
+ * it (ad-hoc `metadata.chunkId` variants can silently disagree on type
+ * coercion or fallback behavior and break dedup/merge across retrievers).
+ */
+export function getChunkId(metadata: Record<string, unknown> | null | undefined): string | null {
+  const rawChunkId = metadata?.chunkId;
+  if (typeof rawChunkId === "string" || typeof rawChunkId === "number") {
+    return String(rawChunkId);
+  }
+  return null;
+}
+
+/**
  * Graph retriever that leverages knowledge graph entity relationships
  * to find relevant document chunks.
  */
@@ -139,7 +155,7 @@ export class GraphRetriever {
     const vectorFallbacks: GraphSearchResult[] = [];
 
     for (const vr of vectorResults) {
-      const chunkId = this.getChunkId(vr.document);
+      const chunkId = getChunkId(vr.document.metadata);
       const resultKey = this.getResultKey(vr.document);
 
       if (chunkId && chunkScores.has(chunkId)) {
@@ -319,7 +335,7 @@ export class GraphRetriever {
           const documentMap = new Map<string, LangChainDocument>();
 
           for (const document of documents) {
-            const chunkId = this.getChunkId(document);
+            const chunkId = getChunkId(document.metadata);
             if (chunkId && !documentMap.has(chunkId)) {
               documentMap.set(chunkId, document);
             }
@@ -341,15 +357,7 @@ export class GraphRetriever {
     return this.chunkDocumentMapPromise;
   }
 
-  private getChunkId(document: LangChainDocument): string | null {
-    const rawChunkId = document.metadata?.chunkId;
-    if (typeof rawChunkId === "string" || typeof rawChunkId === "number") {
-      return String(rawChunkId);
-    }
-    return null;
-  }
-
   private getResultKey(document: LangChainDocument): string {
-    return this.getChunkId(document) ?? document.pageContent.substring(0, 100);
+    return getChunkId(document.metadata) ?? document.pageContent.substring(0, 100);
   }
 }

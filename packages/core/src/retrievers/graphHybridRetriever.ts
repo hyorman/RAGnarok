@@ -6,7 +6,7 @@
  */
 
 import { Document as LangChainDocument } from "@langchain/core/documents";
-import { GraphRetriever, GraphSearchResult, GraphSearchOptions } from "./graphRetriever";
+import { GraphRetriever, GraphSearchResult, GraphSearchOptions, getChunkId } from "./graphRetriever";
 import { VectorRetriever } from "./vectorRetriever";
 import { Logger } from "../logger";
 
@@ -97,7 +97,7 @@ export class GraphHybridRetriever {
 
     // Add graph results
     for (const gr of graphResults) {
-      const key = gr.document.metadata?.chunkId ?? gr.document.pageContent.substring(0, 100);
+      const key = getChunkId(gr.document.metadata) ?? gr.document.pageContent.substring(0, 100);
       candidateMap.set(key, {
         document: gr.document,
         graphScore: gr.score,
@@ -109,7 +109,7 @@ export class GraphHybridRetriever {
 
     // Merge vector results
     for (const vr of vectorResults) {
-      const key = vr.document.metadata?.chunkId ?? vr.document.pageContent.substring(0, 100);
+      const key = getChunkId(vr.document.metadata) ?? vr.document.pageContent.substring(0, 100);
       const existing = candidateMap.get(key);
       if (existing) {
         existing.vectorScore = vr.score;

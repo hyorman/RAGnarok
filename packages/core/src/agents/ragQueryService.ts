@@ -252,7 +252,7 @@ export class RAGQueryService {
         steps: ragResult.plan.subQueries.map((sq, idx) => ({
           stepNumber: idx + 1,
           query: sq.query,
-          resultsCount: ragResult.results.filter((r) => r.document?.metadata?.subQueryIndex === idx).length,
+          resultsCount: ragResult.results.filter((r) => (r.originalSubQuery ?? r.subQuery) === sq.query).length,
           confidence: ragResult.avgConfidence,
           reasoning: sq.reasoning,
         })),

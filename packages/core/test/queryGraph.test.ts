@@ -444,6 +444,62 @@ describe("QueryGraph", function () {
     });
   });
 
+  describe("Evaluate node confidence", () => {
+    it("evaluates confidence using the pre-rerank originalScore, not the sigmoid-scaled reranked score", async () => {
+      // The reranker inflates every candidate's score to 0.95 (a sigmoid-scaled
+      // cross-encoder score) while the true first-stage retrieval score is ~0.3.
+      // If evaluate() averaged the reranked score, 0.95 would clear a 0.6
+      // threshold immediately (1 iteration, no refine). Using originalScore
+      // keeps confidence at ~0.3, below threshold, forcing refinement.
+      //
+      // Mock scores are fed through VectorRetriever.similaritySearchWithScore
+      // as raw LanceDB L2 distances, then normalized to a [0,1] similarity via
+      // `1 - distance / 2` (see VectorRetriever.normalizeDistance) — so a
+      // distance of 1.4 yields the ~0.3 similarity this test targets, not 0.3
+      // itself. Strategy is pinned to "vector" (not "hybrid") so the mocked
+      // topic manager's default keyword corpus (unrelated docs used to build
+      // the BM25 index) can't blend extra candidates into the average.
+      const doc = new LangChainDocument({
+        pageContent: "Some content about the obscure topic",
+        metadata: { source: "doc.md", chunkId: "dup-chunk" },
+      });
+      const lowScoreDocs: [LangChainDocument, number][] = [[doc, 1.4]];
+      const mockVs = createMockVectorStore(lowScoreDocs);
+
+      const rerank = sinon
+        .stub()
+        .callsFake(async (_query: string, candidates: Array<{ document: LangChainDocument; score: number }>) =>
+          candidates.map((c) => ({ document: c.document, score: 0.95 })),
+        );
+
+      const deps = buildDeps({
+        topicManager: createMockTopicManager(mockVs),
+        reranker: { rerank, isAvailable: () => true, dispose: async () => {} } as any,
+      });
+      const graph = createQueryGraph(deps);
+
+      const result = await graph.invoke({
+        query: "obscure topic",
+        topicId: "t1",
+        options: { retrievalStrategy: "vector", topK: 5, modelFamily: "", allowMemoryWrites: true },
+        maxIterations: 3,
+        confidenceThreshold: 0.6,
+      });
+
+      expect(rerank.called).to.be.true;
+      // Refinement only triggers if confidence was computed from originalScore (0.3 < 0.6).
+      expect(result.iterations).to.be.greaterThan(1);
+      expect(result.confidence).to.be.closeTo(0.3, 0.05);
+      // The same chunk (chunkId "dup-chunk") accumulates across refine
+      // iterations in state.retrievalResults; confidence staying at ~0.3
+      // rather than drifting also confirms evaluate() dedups by chunk key
+      // before averaging (a distinct, uncapped average would still land on
+      // 0.3 here since all copies share the same originalScore — the
+      // no-crash/no-NaN-with-duplicates behavior is what this covers).
+      expect(result.retrievalResults.length).to.be.greaterThan(1);
+    });
+  });
+
   describe("Error handling", () => {
     it("should capture error when vector store retrieval fails", async () => {
       const failingVs = {

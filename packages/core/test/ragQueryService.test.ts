@@ -290,6 +290,70 @@ describe("RAGQueryService", () => {
 
       expect(result).to.have.property("agenticMetadata");
     });
+
+    it("should populate agenticMetadata.steps[].resultsCount per sub-query (legacy path)", async () => {
+      queryStub.resolves({
+        ...fakeRagResult,
+        plan: {
+          ...fakeRagResult.plan,
+          subQueries: [
+            { query: "sub A", reasoning: "reasoning A", topK: 5 },
+            { query: "sub B", reasoning: "reasoning B", topK: 5 },
+          ],
+        },
+        results: [
+          {
+            document: { pageContent: "a1", metadata: { source: "a.md" } },
+            score: 0.9,
+            source: "hybrid",
+            subQuery: "sub A",
+          },
+          {
+            document: { pageContent: "a2", metadata: { source: "a.md" } },
+            score: 0.8,
+            source: "hybrid",
+            subQuery: "sub A",
+          },
+          {
+            document: { pageContent: "b1", metadata: { source: "b.md" } },
+            score: 0.7,
+            source: "hybrid",
+            subQuery: "sub B",
+          },
+        ],
+      } as any);
+
+      const result = await service.executeQuery({ topic: "Docs", query: "test" });
+
+      expect(result.agenticMetadata?.steps).to.have.lengthOf(2);
+      expect(result.agenticMetadata?.steps?.[0]).to.include({ query: "sub A", resultsCount: 2 });
+      expect(result.agenticMetadata?.steps?.[1]).to.include({ query: "sub B", resultsCount: 1 });
+    });
+
+    it("should attribute follow-up-iteration results to their original sub-query via originalSubQuery (legacy path)", async () => {
+      queryStub.resolves({
+        ...fakeRagResult,
+        plan: {
+          ...fakeRagResult.plan,
+          subQueries: [{ query: "sub A", reasoning: "reasoning A", topK: 5 }],
+        },
+        results: [
+          {
+            document: { pageContent: "a1", metadata: {} },
+            score: 0.9,
+            source: "hybrid",
+            // A gap-filling follow-up iteration re-queries with different text
+            // but is attributed back to the original sub-query it targets.
+            subQuery: "follow-up phrasing of sub A",
+            originalSubQuery: "sub A",
+          },
+        ],
+      } as any);
+
+      const result = await service.executeQuery({ topic: "Docs", query: "test" });
+
+      expect(result.agenticMetadata?.steps?.[0]).to.include({ query: "sub A", resultsCount: 1 });
+    });
   });
 
   describe("clearAgentCache", () => {

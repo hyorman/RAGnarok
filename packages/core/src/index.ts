@@ -98,7 +98,7 @@ export { HybridRetriever, DEFAULT_HYBRID_OPTIONS } from "./retrievers/hybridRetr
 export type { HybridSearchOptions } from "./retrievers/hybridRetriever";
 export { EnsembleRetrieverWrapper, DEFAULT_ENSEMBLE_OPTIONS } from "./retrievers/ensembleRetriever";
 export type { EnsembleSearchOptions } from "./retrievers/ensembleRetriever";
-export { GraphRetriever, DEFAULT_GRAPH_OPTIONS } from "./retrievers/graphRetriever";
+export { GraphRetriever, DEFAULT_GRAPH_OPTIONS, getChunkId } from "./retrievers/graphRetriever";
 export type { GraphSearchOptions, GraphSearchResult } from "./retrievers/graphRetriever";
 export { GraphHybridRetriever, DEFAULT_GRAPH_HYBRID_OPTIONS } from "./retrievers/graphHybridRetriever";
 export type { GraphHybridSearchOptions, GraphHybridSearchResult } from "./retrievers/graphHybridRetriever";
