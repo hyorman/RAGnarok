@@ -6,7 +6,7 @@
  * only the selected provider's dependency is loaded.
  */
 
-import { ILLMProvider, ILLMModel, ILLMMessage, Logger } from "@ragnarok/core";
+import { ILLMProvider, ILLMModel, ILLMMessage, Logger, PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "./config";
 
 // ────────────────────────────────────────────────────────────
@@ -308,7 +308,7 @@ export function createLLMProvider(config: McpConfig): ILLMProvider {
         logger.warn("OpenAI selected but RAGNAROK_LLM_API_KEY not set — LLM features disabled");
         return new NullProvider();
       }
-      const openaiModel = config.llmModel || "gpt-4o-mini";
+      const openaiModel = config.llmModel || PROVIDER_DEFAULT_MODELS.openai;
       logger.info(
         `Using OpenAI provider (model: ${openaiModel}${config.llmBaseUrl ? `, baseUrl: ${config.llmBaseUrl}` : ""})`,
       );
@@ -320,13 +320,13 @@ export function createLLMProvider(config: McpConfig): ILLMProvider {
         logger.warn("Anthropic selected but RAGNAROK_LLM_API_KEY not set — LLM features disabled");
         return new NullProvider();
       }
-      const anthropicModel = config.llmModel || "claude-sonnet-4-20250514";
+      const anthropicModel = config.llmModel || PROVIDER_DEFAULT_MODELS.anthropic;
       logger.info(`Using Anthropic provider (model: ${anthropicModel})`);
       return new AnthropicLLMProvider(config.llmApiKey, anthropicModel);
     }
 
     case "ollama": {
-      const ollamaModel = config.llmModel || "llama3";
+      const ollamaModel = config.llmModel || PROVIDER_DEFAULT_MODELS.ollama;
       const ollamaUrl = config.llmBaseUrl || "http://localhost:11434";
       logger.info(`Using Ollama provider (model: ${ollamaModel}, url: ${ollamaUrl})`);
       return new OllamaLLMProvider(ollamaUrl, ollamaModel);

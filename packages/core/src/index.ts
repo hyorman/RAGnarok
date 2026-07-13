@@ -21,7 +21,8 @@ export { LogLevel } from "./interfaces";
 export { Logger, setLoggerFactory, sanitizeErrorMessage } from "./logger";
 
 // Constants
-export { EXTENSION, CONFIG, DEFAULTS } from "./constants";
+export { EXTENSION, CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS } from "./constants";
+export type { LLMProviderName } from "./constants";
 
 // Types
 export {

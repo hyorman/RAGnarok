@@ -49,3 +49,11 @@ export const DEFAULTS = {
   RERANKER_MAX_CANDIDATES: 20,
   RERANKER_CANDIDATE_MULTIPLIER: 4,
 } as const;
+
+/** Single source of truth for per-provider default model ids. */
+export const PROVIDER_DEFAULT_MODELS = {
+  openai: "gpt-4o-mini",
+  anthropic: "claude-sonnet-4-20250514",
+  ollama: "llama3",
+} as const;
+export type LLMProviderName = keyof typeof PROVIDER_DEFAULT_MODELS;

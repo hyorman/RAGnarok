@@ -4,6 +4,7 @@
  */
 
 import { expect } from "chai";
+import { PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "../src/config";
 import { createLLMProvider, OpenAILLMProvider, AnthropicLLMProvider, OllamaLLMProvider } from "../src/llmProviders";
 
@@ -141,6 +142,19 @@ describe("LLM Providers", function () {
     it("returns an OllamaLLMProvider even when llmApiKey is empty", function () {
       const provider = createLLMProvider(makeConfig({ llmProvider: "ollama", llmApiKey: "" }));
       expect(provider).to.be.instanceOf(OllamaLLMProvider);
+    });
+
+    it("provider factory falls back to the shared default model map", function () {
+      const openai = createLLMProvider(makeConfig({ llmProvider: "openai", llmApiKey: "sk-test-key", llmModel: "" }));
+      expect((openai as any).defaultModel).to.equal(PROVIDER_DEFAULT_MODELS.openai);
+
+      const anthropic = createLLMProvider(
+        makeConfig({ llmProvider: "anthropic", llmApiKey: "sk-ant-test", llmModel: "" }),
+      );
+      expect((anthropic as any).defaultModel).to.equal(PROVIDER_DEFAULT_MODELS.anthropic);
+
+      const ollama = createLLMProvider(makeConfig({ llmProvider: "ollama", llmModel: "" }));
+      expect((ollama as any).defaultModel).to.equal(PROVIDER_DEFAULT_MODELS.ollama);
     });
   });
 

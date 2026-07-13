@@ -28,7 +28,7 @@ import {
 import { KnowledgeGraph } from "../stores/knowledgeGraph";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
-import { CONFIG, DEFAULTS } from "../constants";
+import { CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS } from "../constants";
 import { RetrievalStrategy } from "../utils/types";
 import { extractKeywords } from "../utils/keywords";
 import type { Reranker } from "../rerankers/reranker";
@@ -894,7 +894,8 @@ export class RAGAgent {
         return null;
       }
 
-      const modelFamily = options.modelFamily || this.config.get<string>(CONFIG.LLM_MODEL, "gpt-4o-mini");
+      const modelFamily =
+        options.modelFamily || this.config.get<string>(CONFIG.LLM_MODEL, PROVIDER_DEFAULT_MODELS.openai);
 
       const model = await this.llmProvider.selectModel({ family: modelFamily });
       if (!model) {

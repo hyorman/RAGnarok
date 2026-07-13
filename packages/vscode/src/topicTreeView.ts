@@ -11,6 +11,7 @@ import {
   Logger,
   CONFIG,
   DEFAULTS,
+  PROVIDER_DEFAULT_MODELS,
   Topic,
   Document,
   RetrievalStrategy,
@@ -481,7 +482,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     const chunkOverlap = config.get<number>(CONFIG.CHUNK_OVERLAP, 200);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.CHUNK_OVERLAP, value: chunkOverlap }, "config-item"));
 
-    const llmModel = config.get<string>(CONFIG.LLM_MODEL, "gpt-4o-mini");
+    const llmModel = config.get<string>(CONFIG.LLM_MODEL, PROVIDER_DEFAULT_MODELS.openai);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.LLM_MODEL, value: llmModel }, "config-item"));
 
     const includeWorkspace = config.get<boolean>(VSCODE_CONFIG.INCLUDE_WORKSPACE, true);
@@ -770,7 +771,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
       }
 
       const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
-      const currentFamily = config.get<string>(CONFIG.LLM_MODEL, "gpt-4o-mini");
+      const currentFamily = config.get<string>(CONFIG.LLM_MODEL, PROVIDER_DEFAULT_MODELS.openai);
 
       const familyMap = new Map<string, { vendor: string; maxTokens: number; count: number }>();
       for (const m of allModels) {
