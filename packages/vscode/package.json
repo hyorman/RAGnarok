@@ -7,8 +7,8 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc -p ./",
-    "lint": "eslint src",
-    "lint:fix": "eslint --fix src",
+    "lint": "eslint src test",
+    "lint:fix": "eslint --fix src test",
     "clean": "rimraf dist tsconfig.tsbuildinfo",
     "test": "echo 'VS Code extension tests must be run from root: npm test'"
   },
