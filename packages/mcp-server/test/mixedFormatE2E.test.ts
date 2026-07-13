@@ -76,7 +76,10 @@ describe("mixed-format ingestion E2E (MB-1 gate)", function () {
         { topic, filePaths: [filePath] },
         60000,
       );
-      expect(ingest.result?.isError, `${topic} ← ${path.basename(filePath)}: ${JSON.stringify(ingest.result)}`).not.to.equal(true);
+      expect(
+        ingest.result?.isError,
+        `${topic} ← ${path.basename(filePath)}: ${JSON.stringify(ingest.result)}`,
+      ).not.to.equal(true);
       expect(payload(ingest).documentsAdded, `${topic} ← ${path.basename(filePath)}`).to.equal(1);
     }
     const stats = payload(await harness!.callTool(firstId + 10, "rag_topic_stats", { topic }));

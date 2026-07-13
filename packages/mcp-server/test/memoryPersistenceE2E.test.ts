@@ -107,7 +107,10 @@ describe("memory restart persistence E2E (C2 gate)", function () {
     );
     expect(recall.count, JSON.stringify(recall)).to.be.greaterThan(0);
     const texts = (recall.memories as Array<{ content: string }>).map((m) => m.content.toLowerCase());
-    expect(texts.some((t) => t.includes("crimson lever")), JSON.stringify(texts)).to.equal(true);
+    expect(
+      texts.some((t) => t.includes("crimson lever")),
+      JSON.stringify(texts),
+    ).to.equal(true);
 
     expect(harness.nonProtocolLines, "diagnostics leaked onto stdout").to.deep.equal([]);
     expect(await harness.close(), "generation 3 did not exit cleanly").to.equal(0);

@@ -214,10 +214,7 @@ async function acquireFileLock(storageDir: string, options?: StorageLockOptions)
  * Reentrant within a process (refcounted per resolved directory). Throws
  * {@link StorageLockHeldError} when another live process holds the lock.
  */
-export async function acquireStorageLock(
-  storageDir: string,
-  options?: StorageLockOptions,
-): Promise<StorageLockHandle> {
+export async function acquireStorageLock(storageDir: string, options?: StorageLockOptions): Promise<StorageLockHandle> {
   const key = path.resolve(storageDir);
   const lockPath = path.join(key, STORAGE_LOCK_FILENAME);
 

@@ -89,11 +89,7 @@ describe("acquireStorageLock", function () {
 
   it("fails fast naming the holder when a live same-host process owns the lock", async function () {
     // pid 1 (launchd/init) is always alive; kill(1, 0) yields EPERM = alive.
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }),
-      "utf8",
-    );
+    await fs.writeFile(lockPath, JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }), "utf8");
 
     let caught: unknown;
     try {
@@ -164,11 +160,7 @@ describe("acquireStorageLock", function () {
   });
 
   it("RAGNAROK_IGNORE_LOCK bypasses locking entirely", async function () {
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }),
-      "utf8",
-    );
+    await fs.writeFile(lockPath, JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }), "utf8");
     process.env.RAGNAROK_IGNORE_LOCK = "1";
 
     const lock = await acquireStorageLock(tempDir);
@@ -181,11 +173,7 @@ describe("acquireStorageLock", function () {
   it("release leaves a lock alone if another process reclaimed it meanwhile", async function () {
     const lock = await acquireStorageLock(tempDir);
     // Simulate another process stealing after our staleness (e.g., long GC pause).
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }),
-      "utf8",
-    );
+    await fs.writeFile(lockPath, JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }), "utf8");
 
     await lock.release();
     expect(await exists(lockPath), "release must not remove a lock it no longer owns").to.equal(true);

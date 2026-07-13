@@ -35,17 +35,17 @@ RAGnarōk is a **local-first Retrieval-Augmented Generation engine**. One portab
 
 All data lives on disk in the user's environment (LanceDB tables + JSON indexes). There is no required cloud dependency: embedding and reranking default to bundled ONNX models executed in-process, and the LLM-dependent features (query planning refinement, entity extraction) degrade to heuristics when no LLM is configured.
 
-| Capability | Description | Where |
-| --- | --- | --- |
-| Multi-format ingestion | PDF, Markdown, HTML, plain text, GitHub repos, web pages | §7 |
-| Structure-aware chunking | Heading-aware Markdown splitting, code-aware recursive splitting | §7 |
-| Pluggable embeddings | Bundled HuggingFace ONNX (default), remote OpenAI/Ollama-format, VS Code LM API | §8 |
-| 6 retrieval strategies | vector, hybrid, ensemble (RRF), bm25, graph, graph_hybrid | §9 |
-| Cross-encoder reranking | Bundled ms-marco MiniLM ONNX model, always-on with graceful degradation | §9 |
-| Knowledge graph | LLM entity/relationship extraction into a per-topic graph store | §10 |
-| Persistent memory | Workspace/branch-scoped memories with version chains, decay, and an entity graph | §11 |
-| Agentic querying | Query decomposition, iterative refinement, optional LangGraph orchestration | §12 |
-| Team sharing | Shared-KB host with read/write token roles (server side today; federation is roadmap) | §13, §17 |
+| Capability               | Description                                                                           | Where    |
+| ------------------------ | ------------------------------------------------------------------------------------- | -------- |
+| Multi-format ingestion   | PDF, Markdown, HTML, plain text, GitHub repos, web pages                              | §7       |
+| Structure-aware chunking | Heading-aware Markdown splitting, code-aware recursive splitting                      | §7       |
+| Pluggable embeddings     | Bundled HuggingFace ONNX (default), remote OpenAI/Ollama-format, VS Code LM API       | §8       |
+| 6 retrieval strategies   | vector, hybrid, ensemble (RRF), bm25, graph, graph_hybrid                             | §9       |
+| Cross-encoder reranking  | Bundled ms-marco MiniLM ONNX model, always-on with graceful degradation               | §9       |
+| Knowledge graph          | LLM entity/relationship extraction into a per-topic graph store                       | §10      |
+| Persistent memory        | Workspace/branch-scoped memories with version chains, decay, and an entity graph      | §11      |
+| Agentic querying         | Query decomposition, iterative refinement, optional LangGraph orchestration           | §12      |
+| Team sharing             | Shared-KB host with read/write token roles (server side today; federation is roadmap) | §13, §17 |
 
 **Versioned surfaces:** storage format v2 (§5), `.rag` export archives v2 (§7), MCP tool surface (§13). All three fail closed on version mismatch with actionable errors.
 
@@ -55,15 +55,15 @@ All data lives on disk in the user's environment (LanceDB tables + JSON indexes)
 
 The same server binary serves two deployment modes, distinguished **by configuration, not code paths chosen by the client**:
 
-| Mode | Trigger | Memory tools | Tool descriptions | Typical user |
-| --- | --- | --- | --- | --- |
-| **Local (personal engine)** | stdio, or HTTP without auth tokens (loopback-only) | Registered | Plain | The developer's own machine |
-| **Shared (team KB host)** | `--http` **and** auth tokens configured | **Never registered, for any role** | Prefixed `[Team shared KB] ` | Central team infrastructure |
+| Mode                        | Trigger                                            | Memory tools                       | Tool descriptions            | Typical user                |
+| --------------------------- | -------------------------------------------------- | ---------------------------------- | ---------------------------- | --------------------------- |
+| **Local (personal engine)** | stdio, or HTTP without auth tokens (loopback-only) | Registered                         | Plain                        | The developer's own machine |
+| **Shared (team KB host)**   | `--http` **and** auth tokens configured            | **Never registered, for any role** | Prefixed `[Team shared KB] ` | Central team infrastructure |
 
 The rule is **exactly one RAGnarōk MCP entry per agent context**:
 
-- **Consumer / sandboxed agent** (no local KBs, no memory): the agent connects **directly to the shared host** with a read token. Zero local install. A sandboxed agent *cannot* run a local engine, which is why the shared host is a first-class MCP server and not merely a sync source.
-- **Power user** (local KBs and/or memory): the agent is configured with the **local engine only**. The shared KB becomes a *setting* of the local engine once federation lands (§17).
+- **Consumer / sandboxed agent** (no local KBs, no memory): the agent connects **directly to the shared host** with a read token. Zero local install. A sandboxed agent _cannot_ run a local engine, which is why the shared host is a first-class MCP server and not merely a sync source.
+- **Power user** (local KBs and/or memory): the agent is configured with the **local engine only**. The shared KB becomes a _setting_ of the local engine once federation lands (§17).
 - **Curator** (write-token holder): a direct writer session against the shared host, typically in a dedicated curation context. Local-file ingestion into the shared KB goes via export/import or URL ingestion, because the host cannot read the curator's disk.
 
 When both a local and a shared entry are configured anyway, degradation is layered: MCP clients namespace tools per server entry (no hard collision); both servers **self-describe** via MCP `instructions` and the shared host prefixes every tool description, so the LLM routes deliberately; the tool surfaces barely overlap (no memory tools on the host, no write tools for readers); and the worst case of a wrong pick is a duplicate retrieval, never a misplaced write.
@@ -102,27 +102,27 @@ Dependency direction is strict: hosts depend on `@ragnarok/core`; core depends o
 
 ### Invariants (violations are bugs, not preferences)
 
-- **P1 — Personal data is always local.** Personal KBs and *all* memory live in the user's environment, read/write. Never on a shared server.
+- **P1 — Personal data is always local.** Personal KBs and _all_ memory live in the user's environment, read/write. Never on a shared server.
 - **P2 — The engine that owns local data runs locally.** A remote server cannot create or modify files on a client's disk; any user wanting local KBs/memory runs a local engine. Users with no local data need no local engine at all (§2).
-- **P3 — Memory is always personal → always local.** Only topics are ever shared. Shared deployments do not even *register* memory tools, and construct no `MemoryStore` (structural, not policy — `mcp-server/src/index.ts`, `tools.ts`).
+- **P3 — Memory is always personal → always local.** Only topics are ever shared. Shared deployments do not even _register_ memory tools, and construct no `MemoryStore` (structural, not policy — `mcp-server/src/index.ts`, `tools.ts`).
 - **P4 — Data locality dictates compute locality.** A query vector is valid only against the exact embedding model that built the table. Local tables ⇒ local embedding with that topic's recorded model; remotely-served topics ⇒ the host embeds and retrieves (§17).
 - **P5 — Auth lives only where parties share data.** Read/write tokens are a property of the shared host. The local engine needs no per-user auth; it is guarded by OS permissions and the storage lock (§6).
 
 ### Decision record (ADR-style)
 
-| Decision | Choice | Rationale / rejected alternative |
-| --- | --- | --- |
-| Model distribution | **Bundle ONNX models in the npm package** | Zero-network first run, deterministic CI; rejected download-on-demand (deferred — package size is the cost). A SHA-256 manifest (`assets/models/manifest.json` + `scripts/verify-model-manifest.mjs`) makes silent asset drift a build failure. |
-| Pre-1.0 storage evolution | **Versioned format + fail-closed gate + reset-with-backup** (storage v2) | Rejected in-place migration: packages are unpublished, migration code would be permanent liability. Reset preserves data via timestamped `backup-v1-*` with rollback on partial failure (§5). |
-| LanceDB write pattern | **Single transactional `mergeInsert` (upsert + delete-missing)** | Rejected drop-then-recreate: a crash between drop and create destroyed the table (the historical C2 data-loss bug). |
-| Arrow read boundary | **`Array.from()` every vector read from LanceDB** | LanceDB returns Arrow `Vector` objects; persisting a collection containing them serializes garbage. Normalization happens at the read boundary, once, in every store (§5). |
-| Shared-KB serving | **Retrieval-serving (remote MCP host), not data-serving** | Data-serving forces every consumer to run a local engine and pins the shared KB to the bundled embedding model (P4). Retrieval-serving gives zero-install consumers and model freedom. Folder-sync (`commonDatabasePath`) and export/import remain as escape hatches. |
-| Reader enforcement | **Structural default-deny** — write tools are *not registered* for reader sessions | Rejected per-handler guards as the primary mechanism (default-open; one forgotten guard leaks writes). `writerOnly()` remains as defense-in-depth on the mixed `rag_memory` tool. |
-| Cross-topic result fusion | **None. `rag_query` targets one topic; same-named local+shared topics fuse by RRF (roadmap §17)** | Rejected a combined cross-encoder over heterogeneous sources: scores from different models/rerankers are not comparable; RRF is rank-based and needs no shared scale. |
-| LangGraph pipelines | **Opt-in (`RAGNAROK_LANGGRAPH_ENABLED`, default false)** | The legacy imperative path is the stable default; the graph path adds checkpointing/observability and is hardened behind a flag until parity (§12). |
-| Query-time auto-memory | **Opt-in (`queryMemoryEnabled`, default false) + isolated** | Auto-stored "query insights" polluted recall in live testing. When enabled: confidence floor 0.7, reserved `auto:query-insight` tag, excluded from recall unless `includeAuto: true`. |
-| Write serialization (MCP) | **Promise-chain mutation serializer (`runMutation`) shared across sessions** | LanceDB whole-table merges must not interleave; reads stay parallel. Cross-process safety is the storage lock's job, not this serializer's (§6). |
-| Shutdown | **Natural drain + `process.exitCode`, never forced `process.exit(0)`** | Forced exit after ONNX use aborts natively (`mutex lock failed` SIGABRT). A 10s hard-exit timer remains as a last-resort watchdog. Verified by a 20× soak that loads/disposes the ONNX session every iteration (§16). |
+| Decision                  | Choice                                                                                            | Rationale / rejected alternative                                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model distribution        | **Bundle ONNX models in the npm package**                                                         | Zero-network first run, deterministic CI; rejected download-on-demand (deferred — package size is the cost). A SHA-256 manifest (`assets/models/manifest.json` + `scripts/verify-model-manifest.mjs`) makes silent asset drift a build failure.                       |
+| Pre-1.0 storage evolution | **Versioned format + fail-closed gate + reset-with-backup** (storage v2)                          | Rejected in-place migration: packages are unpublished, migration code would be permanent liability. Reset preserves data via timestamped `backup-v1-*` with rollback on partial failure (§5).                                                                         |
+| LanceDB write pattern     | **Single transactional `mergeInsert` (upsert + delete-missing)**                                  | Rejected drop-then-recreate: a crash between drop and create destroyed the table (the historical C2 data-loss bug).                                                                                                                                                   |
+| Arrow read boundary       | **`Array.from()` every vector read from LanceDB**                                                 | LanceDB returns Arrow `Vector` objects; persisting a collection containing them serializes garbage. Normalization happens at the read boundary, once, in every store (§5).                                                                                            |
+| Shared-KB serving         | **Retrieval-serving (remote MCP host), not data-serving**                                         | Data-serving forces every consumer to run a local engine and pins the shared KB to the bundled embedding model (P4). Retrieval-serving gives zero-install consumers and model freedom. Folder-sync (`commonDatabasePath`) and export/import remain as escape hatches. |
+| Reader enforcement        | **Structural default-deny** — write tools are _not registered_ for reader sessions                | Rejected per-handler guards as the primary mechanism (default-open; one forgotten guard leaks writes). `writerOnly()` remains as defense-in-depth on the mixed `rag_memory` tool.                                                                                     |
+| Cross-topic result fusion | **None. `rag_query` targets one topic; same-named local+shared topics fuse by RRF (roadmap §17)** | Rejected a combined cross-encoder over heterogeneous sources: scores from different models/rerankers are not comparable; RRF is rank-based and needs no shared scale.                                                                                                 |
+| LangGraph pipelines       | **Opt-in (`RAGNAROK_LANGGRAPH_ENABLED`, default false)**                                          | The legacy imperative path is the stable default; the graph path adds checkpointing/observability and is hardened behind a flag until parity (§12).                                                                                                                   |
+| Query-time auto-memory    | **Opt-in (`queryMemoryEnabled`, default false) + isolated**                                       | Auto-stored "query insights" polluted recall in live testing. When enabled: confidence floor 0.7, reserved `auto:query-insight` tag, excluded from recall unless `includeAuto: true`.                                                                                 |
+| Write serialization (MCP) | **Promise-chain mutation serializer (`runMutation`) shared across sessions**                      | LanceDB whole-table merges must not interleave; reads stay parallel. Cross-process safety is the storage lock's job, not this serializer's (§6).                                                                                                                      |
+| Shutdown                  | **Natural drain + `process.exitCode`, never forced `process.exit(0)`**                            | Forced exit after ONNX use aborts natively (`mutex lock failed` SIGABRT). A 10s hard-exit timer remains as a last-resort watchdog. Verified by a 20× soak that loads/disposes the ONNX session every iteration (§16).                                                 |
 
 ---
 
@@ -149,7 +149,7 @@ Dependency direction is strict: hosts depend on `@ragnarok/core`; core depends o
 
 `utils/storageV2.ts` is the single authority:
 
-- **`ensureStorageFormatV2`** validates the marker. A directory containing managed data but **no marker fails closed** with an actionable message (`--reset-storage` / `RAGNAROK_RESET_STORAGE=1`). Infrastructure entries (`storage-format.json`, `.ragnarok.lock`, `backup-v1-*`) are excluded from the "has data" judgment — the lock is created *before* format validation and must not masquerade as legacy data.
+- **`ensureStorageFormatV2`** validates the marker. A directory containing managed data but **no marker fails closed** with an actionable message (`--reset-storage` / `RAGNAROK_RESET_STORAGE=1`). Infrastructure entries (`storage-format.json`, `.ragnarok.lock`, `backup-v1-*`) are excluded from the "has data" judgment — the lock is created _before_ format validation and must not masquerade as legacy data.
 - **`resetStorageToV2`** moves managed content into `backup-v1-<ISO timestamp>/`, then initializes the marker. Partial moves roll back; the backup is never auto-deleted (restore is a manual operation).
 - **`atomicWriteFile`/`atomicWriteJson`**: temp file in the same directory → write → fsync → rename → best-effort directory fsync. Every JSON index write goes through this; a crash never leaves a half-written index.
 
@@ -171,18 +171,18 @@ An **ingestion journal** (recovered by `TopicManager.recoverIngestionJournal` on
 
 Three distinct layers, each solving a different interleaving:
 
-| Layer | Mechanism | Protects against |
-| --- | --- | --- |
-| Async interleaving in one process | `async-mutex` in stores; **single-flight cache loaders** in `MemoryStore` (`entryLoads`/`graphLoads` maps); journal mutex in `TopicManager` | Two concurrent tool calls loading/mutating the same cached array and losing updates |
-| Write vs write across sessions (one server process) | **`runMutation` promise-chain serializer** in `mcp-server/src/index.ts` — all 14+ mutating tool handlers enqueue; reads bypass | Interleaved whole-table merges from concurrent MCP sessions |
-| Second OS process on the same storage dir | **`<storageDir>/.ragnarok.lock`** (`utils/storageLock.ts`) | Two VS Code windows or two stdio servers silently corrupting tables |
+| Layer                                               | Mechanism                                                                                                                                   | Protects against                                                                    |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Async interleaving in one process                   | `async-mutex` in stores; **single-flight cache loaders** in `MemoryStore` (`entryLoads`/`graphLoads` maps); journal mutex in `TopicManager` | Two concurrent tool calls loading/mutating the same cached array and losing updates |
+| Write vs write across sessions (one server process) | **`runMutation` promise-chain serializer** in `mcp-server/src/index.ts` — all 14+ mutating tool handlers enqueue; reads bypass              | Interleaved whole-table merges from concurrent MCP sessions                         |
+| Second OS process on the same storage dir           | **`<storageDir>/.ragnarok.lock`** (`utils/storageLock.ts`)                                                                                  | Two VS Code windows or two stdio servers silently corrupting tables                 |
 
 ### The storage lock, precisely
 
 - Atomic exclusive creation (`open "wx"`), content `{pid, hostname, acquiredAt}`.
 - **Refcounted per resolved directory within a process** — `TopicManager` (acquired first thing in init, released on failed init and on dispose) and `MemoryStore` (acquired lazily on first data access) share one underlying lock.
-- **Heartbeat**: the holder refreshes the file mtime every 30s (unref'd timer). Staleness: heartbeat older than 5 min, or same-host holder pid dead (`kill(pid, 0)`; `EPERM` counts as alive). Stale locks are reclaimed with a bounded retry loop; a *live* holder produces a fail-fast `StorageLockHeldError` naming the pid and the `RAGNAROK_IGNORE_LOCK=1` override.
-- **Release order matters**: unlink first, *then* drop the exit-hook entry, so a process dying mid-release still gets cleaned by the synchronous `process.on("exit")` unlink. Release verifies the lock is still ours before unlinking (a reclaimed lock is never deleted from under its new owner).
+- **Heartbeat**: the holder refreshes the file mtime every 30s (unref'd timer). Staleness: heartbeat older than 5 min, or same-host holder pid dead (`kill(pid, 0)`; `EPERM` counts as alive). Stale locks are reclaimed with a bounded retry loop; a _live_ holder produces a fail-fast `StorageLockHeldError` naming the pid and the `RAGNAROK_IGNORE_LOCK=1` override.
+- **Release order matters**: unlink first, _then_ drop the exit-hook entry, so a process dying mid-release still gets cleaned by the synchronous `process.on("exit")` unlink. Release verifies the lock is still ours before unlinking (a reclaimed lock is never deleted from under its new owner).
 - Corrupt lock file + fresh mtime ⇒ treated as held (fail safe).
 
 The e2e gate for all of this spawns two real server processes against one directory (`packages/mcp-server/test/storageLockE2E.test.ts`).
@@ -216,11 +216,11 @@ files / URLs / repos
 
 `EmbeddingService` routes to registered backends:
 
-| Backend | When | Notes |
-| --- | --- | --- |
-| `HuggingFaceBackend` | default | transformers.js v3 over bundled ONNX assets; **`dtype: "q8"`** must match the bundled `model_quantized.onnx` (the v2-era `quantized: true` option is silently ignored by v3 — the historical C1 bug class). Default model `Xenova/all-MiniLM-L6-v2`. |
-| `RemoteEmbeddingBackend` | `RAGNAROK_EMBEDDING_PROVIDER=openai\|ollama` | OpenAI- or Ollama-format HTTP APIs; responses validated (count, index alignment, finite values, dimension consistency, empty batch). |
-| VS Code LM backend | extension only | Proposed `vscode.lm` embeddings API. |
+| Backend                  | When                                         | Notes                                                                                                                                                                                                                                                |
+| ------------------------ | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HuggingFaceBackend`     | default                                      | transformers.js v3 over bundled ONNX assets; **`dtype: "q8"`** must match the bundled `model_quantized.onnx` (the v2-era `quantized: true` option is silently ignored by v3 — the historical C1 bug class). Default model `Xenova/all-MiniLM-L6-v2`. |
+| `RemoteEmbeddingBackend` | `RAGNAROK_EMBEDDING_PROVIDER=openai\|ollama` | OpenAI- or Ollama-format HTTP APIs; responses validated (count, index alignment, finite values, dimension consistency, empty batch).                                                                                                                 |
+| VS Code LM backend       | extension only                               | Proposed `vscode.lm` embeddings API.                                                                                                                                                                                                                 |
 
 **Embedding fingerprints** (`{backendKind, providerFormat, model, revision, dimension, endpointHash}`) are persisted per topic and in the memory manifest. A fingerprint mismatch is rejected **even when dimensions coincidentally match** — `remote:openai` and `remote:ollama` embeddings of the same dimension are not interchangeable. Memory offers an explicit escape hatch (`rag_reset_memory`, confirmed destructive) before switching embedding spaces; topic model switches probe the replacement pipeline before swapping global state and roll back on failure.
 
@@ -230,21 +230,21 @@ files / URLs / repos
 
 ## 9. Retrieval & Ranking
 
-| Strategy | Composition | Score basis |
-| --- | --- | --- |
-| `vector` | LanceDB cosine similarity | model space |
-| `bm25` | KeywordRetriever (BM25 + keyword boost) | lexical |
-| `hybrid` | weighted fusion, **0.9 vector / 0.1 keyword** | normalized blend |
-| `ensemble` | Reciprocal Rank Fusion of vector + keyword lists | rank-based (no shared scale needed) |
-| `graph` | entity match → graph traversal → source chunks | graph relevance |
-| `graph_hybrid` | graph candidates fused with semantic search | blend |
+| Strategy       | Composition                                      | Score basis                         |
+| -------------- | ------------------------------------------------ | ----------------------------------- |
+| `vector`       | LanceDB cosine similarity                        | model space                         |
+| `bm25`         | KeywordRetriever (BM25 + keyword boost)          | lexical                             |
+| `hybrid`       | weighted fusion, **0.9 vector / 0.1 keyword**    | normalized blend                    |
+| `ensemble`     | Reciprocal Rank Fusion of vector + keyword lists | rank-based (no shared scale needed) |
+| `graph`        | entity match → graph traversal → source chunks   | graph relevance                     |
+| `graph_hybrid` | graph candidates fused with semantic search      | blend                               |
 
 Graph strategies require a populated knowledge graph (LLM-dependent at ingest time) and **fall back to hybrid** with an explicit `fallbackReason` rather than returning empty.
 
 **Cross-encoder reranking** (`rerankers/crossEncoderReranker.ts`) applies to the candidate pool after retrieval, always-on by default (`rerankerEnabled`):
 
 - Bundled `Xenova/ms-marco-MiniLM-L-6-v2` at `dtype: "q8"`; scores `(query, doc)` pairs jointly, sigmoid-normalized; `originalScore` preserved alongside.
-- **Degradation boundary**: model load happens *inside* the rerank try/catch — any init or scoring failure returns the original ranking and logs, it never fails the query. Cancellation (`AbortSignal`) is re-thrown, not swallowed, and is checked before/after scoring.
+- **Degradation boundary**: model load happens _inside_ the rerank try/catch — any init or scoring failure returns the original ranking and logs, it never fails the query. Cancellation (`AbortSignal`) is re-thrown, not swallowed, and is checked before/after scoring.
 - **Warm-up**: the MCP host fires a non-blocking `initialize()` at startup so the first query skips the load stall and a broken model surfaces in startup logs.
 - **Model switch is swap-after-success**: a replacement instance fully initializes before the live model/tokenizer are swapped and the old session disposed; a failed switch leaves the working model untouched.
 - Candidate pool capped by `rerankerMaxCandidates` (default 20); documents truncated to ~1500 chars for the cross-encoder context window.
@@ -264,6 +264,7 @@ Standalone, host-independent memory (`memory/`), fully local (invariant P3).
 **Scoping.** Two scopes: `workspace` and `branch` (git branch auto-detected by reading `.git/HEAD` asynchronously, worktree-aware, 5s cache; explicit `branch` overrides; branch scope with no detectable branch is a hard error at the tool layer — never a silent fall-back). Scope tables are base64url-encoded per scope+branch.
 
 **Entry lifecycle.**
+
 - **Store**: embed → near-duplicate detection (cosine ≥ threshold) → if duplicate, create a new **version** (old entry `isLatest=false`, `supersededBy` set; tags/entities carried forward) → optional LLM entity extraction into the per-scope `MemoryGraph` → persist entries + graph.
 - **Recall**: vector search ×2 topK → filter expired + `auto:*`-tagged (unless `includeAuto`) → multiply by **decay-engine effective confidence** → slice topK → reinforcement (access counters bumped on the cached entries, persisted by a **debounced flush** — reads never rewrite whole tables synchronously; readers with `reinforce:false` cause zero writes).
 - **Forget**: by id (with **version-chain repair** — removing the latest reinstates its predecessor), by age filter (guarded: refuses to delete everything without a filter), or by expiry (TTL `expiresAt` from `ttlDays`, plus decay-below-threshold purge).
@@ -307,15 +308,15 @@ Two paths share the same tool surface and `RAGQueryService` entry point:
 
 ### Tool surface (23 tools in local writer mode)
 
-| Group | Tools |
-| --- | --- |
-| Query | `rag_query` |
-| Topics | `rag_list_topics`, `rag_topic_stats`, `rag_create_topic`, `rag_delete_topic`, `rag_rename_topic`, `rag_storage_status` |
-| Documents | `rag_add_documents`, `rag_list_documents`, `rag_remove_document`, `rag_add_url`, `rag_add_github_repo` |
-| Archives | `rag_export_topic`, `rag_import_topic` |
-| Embeddings | `rag_list_embedding_models`, `rag_embedding_info`, `rag_switch_embedding_model` |
-| LLM / Reranker | `rag_llm_status`, `rag_list_reranker_models`, `rag_reranker_info`, `rag_switch_reranker_model` |
-| Memory (local only) | `rag_memory` (store/recall/forget/stats/list/decay/history/promote/links), `rag_reset_memory` |
+| Group               | Tools                                                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Query               | `rag_query`                                                                                                            |
+| Topics              | `rag_list_topics`, `rag_topic_stats`, `rag_create_topic`, `rag_delete_topic`, `rag_rename_topic`, `rag_storage_status` |
+| Documents           | `rag_add_documents`, `rag_list_documents`, `rag_remove_document`, `rag_add_url`, `rag_add_github_repo`                 |
+| Archives            | `rag_export_topic`, `rag_import_topic`                                                                                 |
+| Embeddings          | `rag_list_embedding_models`, `rag_embedding_info`, `rag_switch_embedding_model`                                        |
+| LLM / Reranker      | `rag_llm_status`, `rag_list_reranker_models`, `rag_reranker_info`, `rag_switch_reranker_model`                         |
+| Memory (local only) | `rag_memory` (store/recall/forget/stats/list/decay/history/promote/links), `rag_reset_memory`                          |
 
 Every tool carries MCP annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`); destructive operations require `confirm: true` literals. All mutating handlers run inside `runMutation` (§6). In shared deployments the memory tools are absent for every role and descriptions carry the `[Team shared KB] ` prefix; the server's MCP `instructions` describe its deployment role (§2).
 
@@ -333,16 +334,16 @@ The extension host wires the same core: activation creates the storage under `co
 
 ## 15. Security Model
 
-| Surface | Control |
-| --- | --- |
-| HTTP exposure | Fail-closed config: non-loopback requires a token; CORS `*` forbidden off-loopback; rate limiting; session TTL + cap |
-| Tokens | Read/write split, timing-safe compare, role pinned per session, structural default-deny registration (§13) |
+| Surface              | Control                                                                                                                                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP exposure        | Fail-closed config: non-loopback requires a token; CORS `*` forbidden off-loopback; rate limiting; session TTL + cap                                                                                           |
+| Tokens               | Read/write split, timing-safe compare, role pinned per session, structural default-deny registration (§13)                                                                                                     |
 | Web ingestion (SSRF) | DNS resolution with private/loopback/link-local blocking (IPv4 + IPv6 ULA/link-local), **DNS pinning** for the actual fetch (defeats rebinding TOCTOU), per-redirect re-validation, redirect cap, http(s) only |
-| File ingestion | `RAGNAROK_ALLOWED_PATHS` allowlist; symlinks resolved before checking; GitHub host allowlist for repo ingestion |
-| Archives | SHA-256 per entry, manifest version gate, path-traversal and zip-bomb guards, fingerprint compatibility check |
-| Model assets | SHA-256 manifest verified at build/pack time; registry blocks path traversal in model identifiers |
-| Container | Non-root `USER node`, prod-only deps, no secrets in logs |
-| Memory privacy | P3: never on shared hosts — no store constructed, no tools registered |
+| File ingestion       | `RAGNAROK_ALLOWED_PATHS` allowlist; symlinks resolved before checking; GitHub host allowlist for repo ingestion                                                                                                |
+| Archives             | SHA-256 per entry, manifest version gate, path-traversal and zip-bomb guards, fingerprint compatibility check                                                                                                  |
+| Model assets         | SHA-256 manifest verified at build/pack time; registry blocks path traversal in model identifiers                                                                                                              |
+| Container            | Non-root `USER node`, prod-only deps, no secrets in logs                                                                                                                                                       |
+| Memory privacy       | P3: never on shared hosts — no store constructed, no tools registered                                                                                                                                          |
 
 The threat model is a **trusted local machine + semi-trusted team network**: static shared tokens are accepted for team infra (rotation is a manual op); per-client identity/audit is deferred (§17).
 
@@ -354,13 +355,13 @@ The threat model is a **trusted local machine + semi-trusted team network**: sta
 
 **Named release gates** (each locks a reproduced production failure):
 
-| Gate | Spec | Locked regression |
-| --- | --- | --- |
-| C1 | stdio E2E all-6-strategies loops (legacy + LangGraph) | bundled reranker model failing to load ⇒ every query failed |
-| C2 | `memoryPersistenceE2E` (store → restart → mutate → restart, exact id set) | Arrow-vector persistence destroying all memories on first mutation after reload |
-| MB-1 | `mixedFormatE2E` (txt/md/html in opposite orders, per-format sentinels both topics) | first-file schema inference breaking later formats |
-| AA-1 | `storageLockE2E` (two real processes, fail-fast + release) | silent cross-process table corruption |
-| MB-2 | `shutdown-soak.mjs` 20× (ONNX load/dispose every iteration) + HTTP SIGTERM exit-0 spec | native SIGABRT on shutdown |
+| Gate | Spec                                                                                   | Locked regression                                                               |
+| ---- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| C1   | stdio E2E all-6-strategies loops (legacy + LangGraph)                                  | bundled reranker model failing to load ⇒ every query failed                     |
+| C2   | `memoryPersistenceE2E` (store → restart → mutate → restart, exact id set)              | Arrow-vector persistence destroying all memories on first mutation after reload |
+| MB-1 | `mixedFormatE2E` (txt/md/html in opposite orders, per-format sentinels both topics)    | first-file schema inference breaking later formats                              |
+| AA-1 | `storageLockE2E` (two real processes, fail-fast + release)                             | silent cross-process table corruption                                           |
+| MB-2 | `shutdown-soak.mjs` 20× (ONNX load/dispose every iteration) + HTTP SIGTERM exit-0 spec | native SIGABRT on shutdown                                                      |
 
 **CI** (`.github/workflows/release.yml`): `quality` (lint, format, model manifest, test:fast on Node 20/22), `native-process` (3 OS × Node 20/22 running compiled suites + the soak — win32 uses the stdio-EOF shutdown path since SIGTERM is not emulatable there), `vscode` (xvfb), `packages` (pack smoke, audit, VSIX), `docker` (build, non-root, auth, persistence, clean-stop). Known issue: `npm run lint` OOMs at the 2GB default heap (recorded; per-package split planned) — and the workflow needs its first real push/PR run to validate the matrix.
 
@@ -370,7 +371,7 @@ The threat model is a **trusted local machine + semi-trusted team network**: sta
 
 Design settled in `docs/superpowers/specs/2026-07-12-federated-shared-kb-design.md`; implementation targeted at 0.5.0:
 
-- **`SharedSource` abstraction** with two implementations: `FolderSharedSource` (generalizing today's `commonDatabasePath` — shared tables on a synced/mounted filesystem, all compute local using each topic's recorded model) and `RemoteSharedSource` (an MCP *client* inside the local engine pointed at the shared host with a read token; the host embeds/retrieves/reranks server-side per P4).
+- **`SharedSource` abstraction** with two implementations: `FolderSharedSource` (generalizing today's `commonDatabasePath` — shared tables on a synced/mounted filesystem, all compute local using each topic's recorded model) and `RemoteSharedSource` (an MCP _client_ inside the local engine pointed at the shared host with a read token; the host embeds/retrieves/reranks server-side per P4).
 - **Per-topic federation** in `RAGQueryService`: a topic resolves local-only, shared-only, or both; "both" retrieves each side concurrently and fuses with **RRF** (rank-based — no cross-model score comparison), tagging result origins; a slow/down remote degrades to local-only with a surfaced note, never a hard failure.
 - **No combined cross-encoder across sources** (decision record, §4).
 - Deferred with rationale: federation write-through for curators (direct writer sessions instead), OAuth/mTLS/per-client audit (static team tokens now), npm model download-on-demand (bundling now).
@@ -381,26 +382,26 @@ Design settled in `docs/superpowers/specs/2026-07-12-federated-shared-kb-design.
 
 ### Environment variables (MCP server; VS Code settings mirror under `ragnarok.*`)
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `RAGNAROK_STORAGE_DIR` | `~/.ragnarok` | Storage root (format-gated, lock-guarded) |
-| `RAGNAROK_WORKING_DIR` | `process.cwd()` | Project root for git-branch memory scoping |
-| `RAGNAROK_ALLOWED_PATHS` | working dir | Ingestion path allowlist (delimiter-separated) |
-| `RAGNAROK_EMBEDDING_PROVIDER` | `huggingface` | `huggingface` \| `openai` \| `ollama` |
-| `RAGNAROK_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model id |
-| `RAGNAROK_EMBEDDING_BASE_URL` / `_API_KEY` | — | Remote embedding endpoint (required for non-HF providers) |
-| `RAGNAROK_LLM_PROVIDER` | `none` | `openai` \| `anthropic` \| `ollama` \| `none` |
-| `RAGNAROK_LLM_MODEL` / `_API_KEY` / `_BASE_URL` | provider defaults | LLM wiring |
-| `RAGNAROK_RERANKER_ENABLED` | `true` | Cross-encoder reranking toggle |
-| `RAGNAROK_LANGGRAPH_ENABLED` | `false` | LangGraph pipelines (adds checkpointer) |
-| `RAGNAROK_QUERY_MEMORY_ENABLED` | `false` | Opt-in query-time auto-memory (§12) |
-| `RAGNAROK_API_KEY` / `RAGNAROK_WRITE_API_KEY` | — | Read / write tokens; both present + `--http` ⇒ shared deployment |
-| `RAGNAROK_PORT` / `RAGNAROK_HTTP_HOST` | `3000` / loopback | HTTP bind (non-loopback requires a token) |
-| `RAGNAROK_CORS_ORIGIN` | restricted | `*` forbidden off-loopback |
-| `RAGNAROK_SESSION_IDLE_TTL_MS` / `RAGNAROK_MAX_SESSIONS` / `RAGNAROK_RATE_LIMIT_PER_MINUTE` | 1800000 / 100 / 100 | HTTP session hygiene |
-| `RAGNAROK_RESET_STORAGE` (or `--reset-storage`) | — | Back up legacy storage and initialize v2 |
-| `RAGNAROK_IGNORE_LOCK` | — | Bypass the storage lock (unsafe with concurrent writers) |
-| `RAGNAROK_LOG_LEVEL` | `info` | debug/info/warn/error (stderr only — stdout is protocol-clean in stdio mode) |
+| Variable                                                                                    | Default                   | Purpose                                                                      |
+| ------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------- |
+| `RAGNAROK_STORAGE_DIR`                                                                      | `~/.ragnarok`             | Storage root (format-gated, lock-guarded)                                    |
+| `RAGNAROK_WORKING_DIR`                                                                      | `process.cwd()`           | Project root for git-branch memory scoping                                   |
+| `RAGNAROK_ALLOWED_PATHS`                                                                    | working dir               | Ingestion path allowlist (delimiter-separated)                               |
+| `RAGNAROK_EMBEDDING_PROVIDER`                                                               | `huggingface`             | `huggingface` \| `openai` \| `ollama`                                        |
+| `RAGNAROK_EMBEDDING_MODEL`                                                                  | `Xenova/all-MiniLM-L6-v2` | Embedding model id                                                           |
+| `RAGNAROK_EMBEDDING_BASE_URL` / `_API_KEY`                                                  | —                         | Remote embedding endpoint (required for non-HF providers)                    |
+| `RAGNAROK_LLM_PROVIDER`                                                                     | `none`                    | `openai` \| `anthropic` \| `ollama` \| `none`                                |
+| `RAGNAROK_LLM_MODEL` / `_API_KEY` / `_BASE_URL`                                             | provider defaults         | LLM wiring                                                                   |
+| `RAGNAROK_RERANKER_ENABLED`                                                                 | `true`                    | Cross-encoder reranking toggle                                               |
+| `RAGNAROK_LANGGRAPH_ENABLED`                                                                | `false`                   | LangGraph pipelines (adds checkpointer)                                      |
+| `RAGNAROK_QUERY_MEMORY_ENABLED`                                                             | `false`                   | Opt-in query-time auto-memory (§12)                                          |
+| `RAGNAROK_API_KEY` / `RAGNAROK_WRITE_API_KEY`                                               | —                         | Read / write tokens; both present + `--http` ⇒ shared deployment             |
+| `RAGNAROK_PORT` / `RAGNAROK_HTTP_HOST`                                                      | `3000` / loopback         | HTTP bind (non-loopback requires a token)                                    |
+| `RAGNAROK_CORS_ORIGIN`                                                                      | restricted                | `*` forbidden off-loopback                                                   |
+| `RAGNAROK_SESSION_IDLE_TTL_MS` / `RAGNAROK_MAX_SESSIONS` / `RAGNAROK_RATE_LIMIT_PER_MINUTE` | 1800000 / 100 / 100       | HTTP session hygiene                                                         |
+| `RAGNAROK_RESET_STORAGE` (or `--reset-storage`)                                             | —                         | Back up legacy storage and initialize v2                                     |
+| `RAGNAROK_IGNORE_LOCK`                                                                      | —                         | Bypass the storage lock (unsafe with concurrent writers)                     |
+| `RAGNAROK_LOG_LEVEL`                                                                        | `info`                    | debug/info/warn/error (stderr only — stdout is protocol-clean in stdio mode) |
 
 ### Storage file map
 
