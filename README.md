@@ -501,6 +501,8 @@ The MCP server exposes 23 tools in total, including the three reranker operation
 
 Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty unversioned storage fails closed and must be backed up/reset explicitly with `--reset-storage`, `RAGNAROK_RESET_STORAGE=1`, or the VS Code confirmation prompt. Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
 
+**Single-writer constraint:** Only one process (VS Code window, MCP server instance, or CLI tool) may access a storage directory at a time. A second process fails fast with an error naming the first holder's PID instead of silently corrupting data. See [ARCHITECTURE.md §6](ARCHITECTURE.md#6-concurrency-model) for the complete concurrency and locking model.
+
 ---
 
 ## 🏗️ Architecture

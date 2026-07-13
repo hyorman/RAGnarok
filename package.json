@@ -16,6 +16,7 @@
     "url": "https://github.com/hyorman/ragnarok"
   },
   "engines": {
+    "node": ">=20",
     "vscode": "^1.105.0"
   },
   "categories": [

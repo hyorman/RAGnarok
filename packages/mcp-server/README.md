@@ -77,45 +77,56 @@ src/
 
 All settings are read from environment variables at startup:
 
-| Variable                                 | Default                         | Description                                                                                                                       |
-| ---------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `RAGNAROK_STORAGE_DIR`                   | `~/.ragnarok`                   | Database & topic storage directory                                                                                                |
-| `RAGNAROK_WORKING_DIR`                   | `process.cwd()`                 | Project root for git-branch-scoped memory                                                                                         |
-| `RAGNAROK_ALLOWED_PATHS`                 | _(the working dir)_             | Roots `rag_add_documents` may read, path-delimiter separated                                                                      |
-| `RAGNAROK_LANGGRAPH_ENABLED`             | `false`                         | Run queries/indexing through the LangGraph pipeline (experimental)                                                                |
-| `RAGNAROK_QUERY_MEMORY_ENABLED`          | `false`                         | Allow high-confidence query insights to be stored as reserved automatic memories                                                  |
-| `RAGNAROK_EMBEDDING_MODEL`               | `Xenova/all-MiniLM-L6-v2`       | Embedding model name (HuggingFace or remote)                                                                                      |
-| `RAGNAROK_EMBEDDING_PROVIDER`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                             |
-| `RAGNAROK_EMBEDDING_BASE_URL`            | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                        |
-| `RAGNAROK_EMBEDDING_API_KEY`             | _(empty)_                       | API key for remote embedding API                                                                                                  |
-| `RAGNAROK_CHUNK_SIZE`                    | `1000`                          | Document chunk size (characters)                                                                                                  |
-| `RAGNAROK_CHUNK_OVERLAP`                 | `200`                           | Overlap between chunks                                                                                                            |
-| `RAGNAROK_TOP_K`                         | `10`                            | Default number of results per query                                                                                               |
-| `RAGNAROK_RETRIEVAL_STRATEGY`            | `hybrid`                        | Default retrieval strategy                                                                                                        |
-| `RAGNAROK_MAX_ITERATIONS`                | `3`                             | Max agentic refinement iterations                                                                                                 |
-| `RAGNAROK_CONFIDENCE_THRESHOLD`          | `0.7`                           | Confidence threshold for early stopping                                                                                           |
-| `RAGNAROK_LOG_LEVEL`                     | `info`                          | Log level (`debug`, `info`, `warn`, `error`)                                                                                      |
-| `RAGNAROK_LLM_PROVIDER`                  | `none`                          | LLM provider: `openai`, `anthropic`, `ollama`, `none`                                                                             |
-| `RAGNAROK_LLM_API_KEY`                   | _(empty)_                       | API key for OpenAI or Anthropic                                                                                                   |
-| `RAGNAROK_LLM_MODEL`                     | _(per-provider)_                | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`)                                                         |
-| `RAGNAROK_LLM_BASE_URL`                  | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set) |
-| `RAGNAROK_RERANKER_MODEL`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model                                                                                                      |
-| `RAGNAROK_RERANKER_ENABLED`              | `true`                          | Enable bundled cross-encoder reranking                                                                                            |
-| `RAGNAROK_RERANKER_MAX_CANDIDATES`       | `20`                            | Maximum candidates scored by the reranker                                                                                         |
-| `RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER` | `4`                             | First-stage over-fetch multiplier                                                                                                 |
-| `RAGNAROK_API_KEY`                       | _(empty)_                       | HTTP read token; required for non-loopback binds                                                                                  |
-| `RAGNAROK_WRITE_API_KEY`                 | _(empty)_                       | Distinct HTTP write token; omission makes authenticated HTTP read-only                                                            |
-| `RAGNAROK_CORS_ORIGIN`                   | `*`                             | Allowed CORS origin(s)                                                                                                            |
-| `RAGNAROK_HTTP_HOST`                     | `127.0.0.1`                     | HTTP server bind address (`0.0.0.0` for Docker)                                                                                   |
-| `RAGNAROK_PORT`                          | `3000`                          | HTTP transport port (when `--http` is used)                                                                                       |
-| `RAGNAROK_SESSION_IDLE_TTL_MS`           | `1800000`                       | HTTP session idle expiry                                                                                                          |
-| `RAGNAROK_MAX_SESSIONS`                  | `100`                           | Maximum concurrent HTTP sessions                                                                                                  |
-| `RAGNAROK_RATE_LIMIT_PER_MINUTE`         | `100`                           | Per-client HTTP request limit                                                                                                     |
-| `RAGNAROK_EXPORT_DIR`                    | `<storage>/exports`             | Only directory used for exported archives                                                                                         |
-| `RAGNAROK_GITHUB_HOSTS`                  | `github.com`                    | Comma-separated GitHub/GHES host allowlist                                                                                        |
-| `RAGNAROK_GITHUB_TOKEN`                  | _(empty)_                       | GitHub credential; never accepted as a tool argument                                                                              |
-| `RAGNAROK_CHECKPOINT_RETENTION_MS`       | `0`                             | Debug retention for successful checkpoints; zero cleans immediately                                                               |
-| `RAGNAROK_RESET_STORAGE`                 | `false`                         | Set to `1` to back up managed data and initialize storage v2                                                                      |
+| Variable                                 | Default                         | Description                                                                                                                                                        |
+| ---------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RAGNAROK_STORAGE_DIR`                   | `~/.ragnarok`                   | Database & topic storage directory                                                                                                                                 |
+| `RAGNAROK_WORKING_DIR`                   | `process.cwd()`                 | Project root for git-branch-scoped memory                                                                                                                          |
+| `RAGNAROK_ALLOWED_PATHS`                 | _(the working dir)_             | Roots `rag_add_documents` may read, path-delimiter separated                                                                                                       |
+| `RAGNAROK_LANGGRAPH_ENABLED`             | `false`                         | Run queries/indexing through the LangGraph pipeline (experimental)                                                                                                 |
+| `RAGNAROK_QUERY_MEMORY_ENABLED`          | `false`                         | Allow high-confidence query insights to be stored as reserved automatic memories                                                                                   |
+| `RAGNAROK_EMBEDDING_MODEL`               | `Xenova/all-MiniLM-L6-v2`       | Embedding model name (HuggingFace or remote)                                                                                                                       |
+| `RAGNAROK_EMBEDDING_PROVIDER`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                                                              |
+| `RAGNAROK_EMBEDDING_BASE_URL`            | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                                                         |
+| `RAGNAROK_EMBEDDING_API_KEY`             | _(empty)_                       | API key for remote embedding API                                                                                                                                   |
+| `RAGNAROK_CHUNK_SIZE`                    | `1000`                          | Document chunk size (characters)                                                                                                                                   |
+| `RAGNAROK_CHUNK_OVERLAP`                 | `200`                           | Overlap between chunks                                                                                                                                             |
+| `RAGNAROK_TOP_K`                         | `10`                            | Default number of results per query                                                                                                                                |
+| `RAGNAROK_RETRIEVAL_STRATEGY`            | `hybrid`                        | Default retrieval strategy                                                                                                                                         |
+| `RAGNAROK_MAX_ITERATIONS`                | `3`                             | Max agentic refinement iterations                                                                                                                                  |
+| `RAGNAROK_CONFIDENCE_THRESHOLD`          | `0.7`                           | Confidence threshold for early stopping                                                                                                                            |
+| `RAGNAROK_LOG_LEVEL`                     | `info`                          | Log level (`debug`, `info`, `warn`, `error`)                                                                                                                       |
+| `RAGNAROK_LLM_PROVIDER`                  | `none`                          | LLM provider: `openai`, `anthropic`, `ollama`, `none`                                                                                                              |
+| `RAGNAROK_LLM_API_KEY`                   | _(empty)_                       | API key for OpenAI or Anthropic                                                                                                                                    |
+| `RAGNAROK_LLM_MODEL`                     | _(per-provider)_                | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`)                                                                                          |
+| `RAGNAROK_LLM_BASE_URL`                  | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set)                                  |
+| `RAGNAROK_RERANKER_MODEL`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model                                                                                                                                       |
+| `RAGNAROK_RERANKER_ENABLED`              | `true`                          | Enable bundled cross-encoder reranking                                                                                                                             |
+| `RAGNAROK_RERANKER_MAX_CANDIDATES`       | `20`                            | Maximum candidates scored by the reranker                                                                                                                          |
+| `RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER` | `4`                             | First-stage over-fetch multiplier                                                                                                                                  |
+| `RAGNAROK_API_KEY`                       | _(empty)_                       | HTTP read token; required for non-loopback binds                                                                                                                   |
+| `RAGNAROK_WRITE_API_KEY`                 | _(empty)_                       | Distinct HTTP write token; omission makes authenticated HTTP read-only                                                                                             |
+| `RAGNAROK_CORS_ORIGIN`                   | `*`                             | Allowed CORS origin(s)                                                                                                                                             |
+| `RAGNAROK_HTTP_HOST`                     | `127.0.0.1`                     | HTTP server bind address (`0.0.0.0` for Docker)                                                                                                                    |
+| `RAGNAROK_PORT`                          | `3000`                          | HTTP transport port (when `--http` is used)                                                                                                                        |
+| `RAGNAROK_SESSION_IDLE_TTL_MS`           | `1800000`                       | HTTP session idle expiry                                                                                                                                           |
+| `RAGNAROK_MAX_SESSIONS`                  | `100`                           | Maximum concurrent HTTP sessions                                                                                                                                   |
+| `RAGNAROK_RATE_LIMIT_PER_MINUTE`         | `100`                           | Per-client HTTP request limit                                                                                                                                      |
+| `RAGNAROK_EXPORT_DIR`                    | `<storage>/exports`             | Only directory used for exported archives                                                                                                                          |
+| `RAGNAROK_GITHUB_HOSTS`                  | `github.com`                    | Comma-separated GitHub/GHES host allowlist                                                                                                                         |
+| `RAGNAROK_GITHUB_TOKEN`                  | _(empty)_                       | GitHub credential; never accepted as a tool argument                                                                                                               |
+| `RAGNAROK_CHECKPOINT_RETENTION_MS`       | `0`                             | Debug retention for successful checkpoints; zero cleans immediately                                                                                                |
+| `RAGNAROK_RESET_STORAGE`                 | `false`                         | Set to `1` to back up managed data and initialize storage v2                                                                                                       |
+| `RAGNAROK_IGNORE_LOCK`                   | unset                           | Bypass the cross-process storage lock (`<storageDir>/.ragnarok.lock`). Unsafe with concurrent writers — only for advanced setups that serialize access externally. |
+
+---
+
+## Concurrent Access
+
+RAGnarōk enforces a single-writer constraint per storage directory via a cross-process storage lock (`<storageDir>/.ragnarok.lock`). Only one process may access a storage directory at a time. A second process fails fast with an error message naming the holder's PID instead of silently corrupting data. If a holder crashes, the lock self-heals automatically via heartbeat staleness detection (default 5 minutes) so a new process can acquire it.
+
+For advanced setups that serialize access externally and need to bypass the lock, set `RAGNAROK_IGNORE_LOCK=1`. This is unsafe with concurrent writers and should only be used when you have your own synchronization mechanism.
+
+See [ARCHITECTURE.md §6](../../ARCHITECTURE.md#6-concurrency-model) for the complete concurrency model.
 
 ---
 
