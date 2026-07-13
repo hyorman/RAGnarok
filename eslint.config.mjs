@@ -7,7 +7,23 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    ignores: ["out", "dist", "**/*.d.ts", "node_modules"],
+    // Hardened: dist-test/.vscode-test are compiled-test/test-runner output;
+    // assets ships vendored/binary model files; test/.temp-storage and
+    // test/chunk-output are gitignored local runtime artifacts (LanceDB
+    // fragment data, chunk dumps) that accumulate across local test runs and
+    // sit directly under the `test/` lint target with no other protection —
+    // left unignored, ESLint's file walker still enumerates them.
+    ignores: [
+      "out",
+      "dist",
+      "dist-test",
+      "**/*.d.ts",
+      "node_modules",
+      ".vscode-test",
+      "**/assets/**",
+      "test/.temp-storage",
+      "test/chunk-output",
+    ],
   },
   {
     rules: {

@@ -12,6 +12,8 @@
   ],
   "scripts": {
     "build": "tsc -p ./",
+    "lint": "eslint src test",
+    "lint:fix": "eslint --fix src test",
     "clean": "rimraf dist dist-test tsconfig.tsbuildinfo",
     "clean:all": "rimraf dist dist-test node_modules tsconfig.tsbuildinfo",
     "clean:tests": "rimraf dist-test",
