@@ -1,1307 +1,407 @@
-# RAGnarōk — Architecture Documentation
+# RAGnarōk — Architecture
+
+**Scope:** every load-bearing design aspect of RAGnarōk as implemented on the `mcp-server` branch (v0.4.0 line). Roadmap items are marked as such and live in §17.
+**Audience:** contributors and reviewers. Sections are self-contained; cross-references are explicit.
 
 ## Table of Contents
 
-- [1. System Overview](#1-system-overview)
-- [2. High-Level Architecture](#2-high-level-architecture)
-- [3. Document Ingestion Pipeline](#3-document-ingestion-pipeline)
-- [4. Query Execution Pipeline](#4-query-execution-pipeline)
-- [5. Iterative Refinement & Gap Analysis](#5-iterative-refinement--gap-analysis)
-- [6. Embedding Subsystem](#6-embedding-subsystem)
-- [7. Retrieval Strategies](#7-retrieval-strategies)
-- [8. Knowledge Graph](#8-knowledge-graph)
-- [9. Memory Module](#9-memory-module)
-- [10. Class Diagram](#10-class-diagram)
-- [11. Sequence Diagrams](#11-sequence-diagrams)
-- [12. Storage & Persistence](#12-storage--persistence)
-- [13. Configuration Reference](#13-configuration-reference)
-- [14. Commands Reference](#14-commands-reference)
+1. [System Overview](#1-system-overview)
+2. [Deployment Topologies & User Profiles](#2-deployment-topologies--user-profiles)
+3. [Monorepo Layout](#3-monorepo-layout)
+4. [Design Invariants & Key Decisions](#4-design-invariants--key-decisions)
+5. [Storage & Durability](#5-storage--durability)
+6. [Concurrency Model](#6-concurrency-model)
+7. [Ingestion Pipeline](#7-ingestion-pipeline)
+8. [Embedding Subsystem](#8-embedding-subsystem)
+9. [Retrieval & Ranking](#9-retrieval--ranking)
+10. [Knowledge Graph](#10-knowledge-graph)
+11. [Memory Subsystem](#11-memory-subsystem)
+12. [Query Execution](#12-query-execution)
+13. [MCP Server](#13-mcp-server)
+14. [VS Code Extension](#14-vs-code-extension)
+15. [Security Model](#15-security-model)
+16. [Testing & Release Gates](#16-testing--release-gates)
+17. [Roadmap: Federated Shared Knowledge Bases](#17-roadmap-federated-shared-knowledge-bases)
+18. [Appendix: Configuration & Storage Reference](#18-appendix-configuration--storage-reference)
 
 ---
 
 ## 1. System Overview
 
-RAGnarōk is a VS Code extension that implements a full Retrieval-Augmented Generation (RAG) pipeline, exposing a Copilot-compatible language model tool for agentic query processing. It supports multiple embedding backends, retrieval strategies, iterative refinement with LLM-powered gap analysis, and per-topic vector stores backed by LanceDB.
+RAGnarōk is a **local-first Retrieval-Augmented Generation engine**. One portable core (`@ragnarok/core`) implements ingestion, embedding, retrieval, reranking, knowledge-graph extraction, and persistent memory; two hosts expose it:
 
-### Core Capabilities
+- an **MCP server** (`@ragnarok/mcp-server`) over stdio (local agents: Claude, Cursor, Copilot) and Streamable HTTP (remote/shared deployments), and
+- a **VS Code extension** (`@ragnarok/vscode`) exposing a Copilot-compatible language-model tool plus management UI.
 
-| Capability                       | Description                                                        |
-| -------------------------------- | ------------------------------------------------------------------ |
-| **Multi-format ingestion**       | PDF, Markdown, HTML, plain text, GitHub repos, web pages           |
-| **Semantic chunking**            | Structure-aware splitting with heading metadata preservation       |
-| **Pluggable embedding backends** | HuggingFace (local ONNX), VS Code LM API, Remote (OpenAI/Ollama)   |
-| **6 retrieval strategies**       | Vector, Hybrid, Ensemble (RRF), BM25, Graph, Graph-Hybrid          |
-| **Knowledge graph**              | LLM entity extraction, graphology graph, community detection       |
-| **Standalone memory**            | Workspace/branch-scoped persistent memory with entity graph        |
-| **Agentic query planning**       | LLM-powered query decomposition with heuristic fallback            |
-| **Iterative refinement**         | Gap analysis → follow-up query generation → convergence detection  |
-| **Per-topic isolation**          | Independent vector stores, document caches, and metadata per topic |
+All data lives on disk in the user's environment (LanceDB tables + JSON indexes). There is no required cloud dependency: embedding and reranking default to bundled ONNX models executed in-process, and the LLM-dependent features (query planning refinement, entity extraction) degrade to heuristics when no LLM is configured.
 
----
+| Capability | Description | Where |
+| --- | --- | --- |
+| Multi-format ingestion | PDF, Markdown, HTML, plain text, GitHub repos, web pages | §7 |
+| Structure-aware chunking | Heading-aware Markdown splitting, code-aware recursive splitting | §7 |
+| Pluggable embeddings | Bundled HuggingFace ONNX (default), remote OpenAI/Ollama-format, VS Code LM API | §8 |
+| 6 retrieval strategies | vector, hybrid, ensemble (RRF), bm25, graph, graph_hybrid | §9 |
+| Cross-encoder reranking | Bundled ms-marco MiniLM ONNX model, always-on with graceful degradation | §9 |
+| Knowledge graph | LLM entity/relationship extraction into a per-topic graph store | §10 |
+| Persistent memory | Workspace/branch-scoped memories with version chains, decay, and an entity graph | §11 |
+| Agentic querying | Query decomposition, iterative refinement, optional LangGraph orchestration | §12 |
+| Team sharing | Shared-KB host with read/write token roles (server side today; federation is roadmap) | §13, §17 |
 
-## 2. High-Level Architecture
-
-```mermaid
-graph TB
-    subgraph "VS Code Host"
-        UI[Tree Views & Commands]
-        Config[Configuration Panel]
-    end
-
-    subgraph "Extension Core"
-        EXT[extension.ts<br/>Activation & Wiring]
-        CMD[CommandHandler<br/>Command Registry]
-        TOOL[RAGTool<br/>Thin VS Code Adapter]
-    end
-
-    subgraph "Query Service Layer"
-        RQS[RAGQueryService<br/>Central Query Orchestrator]
-        AGENT[RAGAgent<br/>Per-Topic Executor]
-        QP[QueryPlannerAgent<br/>Decomposition]
-        LLM[VSCodeLLM<br/>LangChain Wrapper]
-    end
-
-    subgraph "Retrieval Layer"
-        VR[VectorRetriever<br/>Semantic Search]
-        KR[KeywordRetriever<br/>BM25 + Keyword Scoring]
-        HR[HybridRetriever<br/>Weighted Score Fusion]
-        ER[EnsembleRetriever<br/>RRF Rank Fusion]
-    end
-
-    subgraph "Embedding Layer"
-        ES[EmbeddingService<br/>Backend Router]
-        HF[HuggingFaceBackend<br/>Local ONNX/WASM]
-        VLM[VscodeLmBackend<br/>Proposed API]
-        MR[ModelRegistry<br/>Model Discovery]
-    end
-
-    subgraph "Storage Layer"
-        TM[TopicManager<br/>Topic Lifecycle]
-        DP[DocumentPipeline<br/>Ingestion Orchestrator]
-        VSF[VectorStoreFactory<br/>LanceDB Manager]
-        DLF[DocumentLoaderFactory<br/>Multi-Format Orchestrator]
-        SC[SemanticChunker<br/>Structure-Aware Splitter]
-    end
-
-    subgraph "Persistence"
-        LANCE[(LanceDB<br/>Vector Tables)]
-        META[(JSON Files<br/>Topics Index & Metadata)]
-    end
-
-    UI --> CMD
-    Config --> CMD
-    EXT --> CMD
-    EXT --> TOOL
-    EXT --> TM
-    EXT --> ES
-
-    TOOL --> RQS
-    RQS --> AGENT
-    AGENT --> QP
-    QP --> LLM
-    AGENT --> HR
-    AGENT --> ER
-    AGENT --> KR
-
-    HR --> ES
-    ER --> KR
-
-    ES --> HF
-    ES --> VLM
-    ES --> MR
-
-    CMD --> TM
-    TM --> DP
-    TM --> VSF
-    DP --> DLF
-    DP --> SC
-    DP --> ES
-    DP --> VSF
-
-    VSF --> LANCE
-    TM --> META
-
-    classDef core fill:#4a9eff,stroke:#2d7cd6,color:#fff
-    classDef agent fill:#ff6b6b,stroke:#d64545,color:#fff
-    classDef retrieval fill:#51cf66,stroke:#37b24d,color:#fff
-    classDef embedding fill:#ffd43b,stroke:#f59f00,color:#333
-    classDef storage fill:#845ef7,stroke:#7048e8,color:#fff
-    classDef persist fill:#868e96,stroke:#495057,color:#fff
-
-    class EXT,CMD,TOOL core
-    class RQS,AGENT,QP,LLM agent
-    class HR,ER,VR,KR retrieval
-    class ES,HF,VLM,MR embedding
-    class TM,DP,VSF,DLF,SC storage
-    class LANCE,META persist
-```
+**Versioned surfaces:** storage format v2 (§5), `.rag` export archives v2 (§7), MCP tool surface (§13). All three fail closed on version mismatch with actionable errors.
 
 ---
 
-## 3. Document Ingestion Pipeline
+## 2. Deployment Topologies & User Profiles
 
-The ingestion pipeline transforms raw files into searchable vector embeddings stored in LanceDB.
+The same server binary serves two deployment modes, distinguished **by configuration, not code paths chosen by the client**:
 
-### Flow Diagram
+| Mode | Trigger | Memory tools | Tool descriptions | Typical user |
+| --- | --- | --- | --- | --- |
+| **Local (personal engine)** | stdio, or HTTP without auth tokens (loopback-only) | Registered | Plain | The developer's own machine |
+| **Shared (team KB host)** | `--http` **and** auth tokens configured | **Never registered, for any role** | Prefixed `[Team shared KB] ` | Central team infrastructure |
 
-```mermaid
-flowchart TD
-    START([User adds document]) --> LOAD
+The rule is **exactly one RAGnarōk MCP entry per agent context**:
 
-    subgraph "Stage 1: Loading"
-        LOAD{Detect file type}
-        LOAD -->|.pdf| PDF[PdfDocumentLoader<br/>Page splitting]
-        LOAD -->|.md .markdown| MD[MarkdownDocumentLoader<br/>isMarkdown flag]
-        LOAD -->|.html .htm| HTML[HtmlDocumentLoader<br/>Regex tag stripping]
-        LOAD -->|.txt .text| TXT[TextDocumentLoader<br/>Plain text]
-        LOAD -->|github.com/...| GH[GithubDocumentLoader<br/>Clone & load]
-        LOAD -->|https://...| WEB[WebDocumentLoader<br/>CheerioWebBaseLoader]
-    end
+- **Consumer / sandboxed agent** (no local KBs, no memory): the agent connects **directly to the shared host** with a read token. Zero local install. A sandboxed agent *cannot* run a local engine, which is why the shared host is a first-class MCP server and not merely a sync source.
+- **Power user** (local KBs and/or memory): the agent is configured with the **local engine only**. The shared KB becomes a *setting* of the local engine once federation lands (§17).
+- **Curator** (write-token holder): a direct writer session against the shared host, typically in a dedicated curation context. Local-file ingestion into the shared KB goes via export/import or URL ingestion, because the host cannot read the curator's disk.
 
-    PDF & MD & HTML & TXT & GH & WEB --> ENRICH[Enrich metadata<br/>fileName, filePath, fileType,<br/>fileSize, source, loadedAt]
+When both a local and a shared entry are configured anyway, degradation is layered: MCP clients namespace tools per server entry (no hard collision); both servers **self-describe** via MCP `instructions` and the shared host prefixes every tool description, so the LLM routes deliberately; the tool surfaces barely overlap (no memory tools on the host, no write tools for readers); and the worst case of a wrong pick is a duplicate retrieval, never a misplaced write.
 
-    subgraph "Stage 2: Chunking"
-        ENRICH --> DETECT{Detect strategy}
-        DETECT -->|markdown| MDS[MarkdownTextSplitter<br/>Heading-aware separators]
-        DETECT -->|code| CODE[RecursiveCharacterTextSplitter<br/>Code-optimized]
-        DETECT -->|text/html/pdf| REC[RecursiveCharacterTextSplitter<br/>General purpose]
-
-        MDS & CODE & REC --> CHUNKS[Chunk Documents]
-        CHUNKS --> META_ENRICH[Enrich chunk metadata<br/>chunkIndex, headingPath,<br/>sectionTitle, position]
-    end
-
-    subgraph "Stage 3: Embedding"
-        META_ENRICH --> BATCH[Batch Processing<br/>batchSize: 32]
-        BATCH --> EMBED{Active Backend}
-        EMBED -->|HuggingFace| HF_E[ONNX Pipeline<br/>feature-extraction<br/>pooling: mean, normalize: true]
-        EMBED -->|VS Code LM| VS_E[vscode.lm.computeEmbeddings<br/>Proposed API]
-        HF_E & VS_E --> VECTORS[Embedding Vectors<br/>number arrays]
-    end
-
-    subgraph "Stage 4: Storage"
-        VECTORS --> STORE[VectorStoreFactory]
-        STORE --> LANCE_W[Write to LanceDB<br/>Per-topic table]
-        LANCE_W --> UPDATE[Update topic metadata<br/>& document index]
-    end
-
-    UPDATE --> DONE([Pipeline Complete<br/>Return PipelineResult])
-```
-
-### Pipeline Result
-
-Each pipeline execution returns a `PipelineResult` containing:
-
-| Field                        | Description                                                       |
-| ---------------------------- | ----------------------------------------------------------------- |
-| `stages`                     | Boolean success per stage (loading, chunking, embedding, storing) |
-| `metadata.originalDocuments` | Count of source documents loaded                                  |
-| `metadata.chunksCreated`     | Total chunks after splitting                                      |
-| `metadata.chunksEmbedded`    | Chunks successfully embedded                                      |
-| `metadata.chunksStored`      | Chunks written to LanceDB                                         |
-| `metadata.stageTimings`      | Per-stage timing breakdown                                        |
-
-### Loader Module Architecture
-
-The document loading system uses a **modular architecture** with a shared `DocumentLoader` interface. `DocumentLoaderFactory` is a thin orchestrator that delegates to format-specific loaders.
-
-```mermaid
-classDiagram
-    class DocumentLoader {
-        <<interface>>
-        +load(filePath, options) Promise~LangChainDocument[]~
-    }
-
-    class TextDocumentLoader {
-        +load(filePath, options) Promise~LangChainDocument[]~
-    }
-    class MarkdownDocumentLoader {
-        +load(filePath, options) Promise~LangChainDocument[]~
-    }
-    class HtmlDocumentLoader {
-        +load(filePath, options) Promise~LangChainDocument[]~
-    }
-    class PdfDocumentLoader {
-        +load(filePath, options) Promise~LangChainDocument[]~
-    }
-    class GithubDocumentLoader {
-        +load(url, options) Promise~LangChainDocument[]~
-    }
-    class WebDocumentLoader {
-        +load(url, options) Promise~LangChainDocument[]~
-    }
-
-    DocumentLoader <|.. TextDocumentLoader
-    DocumentLoader <|.. MarkdownDocumentLoader
-    DocumentLoader <|.. HtmlDocumentLoader
-    DocumentLoader <|.. PdfDocumentLoader
-    DocumentLoader <|.. GithubDocumentLoader
-    DocumentLoader <|.. WebDocumentLoader
-```
-
-| Module                     | File                            | Method                                                                                                      |
-| -------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **TextDocumentLoader**     | `src/loaders/textLoader.ts`     | UTF-8 file read, returns single document                                                                    |
-| **MarkdownDocumentLoader** | `src/loaders/markdownLoader.ts` | Text read with `isMarkdown` and `preserveStructure` metadata                                                |
-| **HtmlDocumentLoader**     | `src/loaders/htmlLoader.ts`     | Regex-based: strips `<script>`, `<style>`, comments, all tags; decodes HTML entities; normalizes whitespace |
-| **PdfDocumentLoader**      | `src/loaders/pdfLoader.ts`      | Delegates to LangChain `PDFLoader` (`pdf-parse`), optional page splitting                                   |
-| **GithubDocumentLoader**   | `src/loaders/githubLoader.ts`   | Delegates to LangChain `GithubRepoLoader`, supports GitHub Enterprise                                       |
-| **WebDocumentLoader**      | `src/loaders/webLoader.ts`      | Delegates to `CheerioWebBaseLoader`, security checks (rejects 401/403, login redirects, password fields)    |
-
-### Chunking Configuration
-
-| Setting             | Default | Description                       |
-| ------------------- | ------- | --------------------------------- |
-| `chunkSize`         | 512     | Target characters per chunk       |
-| `chunkOverlap`      | 50      | Overlap between adjacent chunks   |
-| `preserveStructure` | true    | Keep heading hierarchy (Markdown) |
-
-**Recommended chunk sizes by use case:**
-
-| Use Case      | Chunk Size |
-| ------------- | ---------- |
-| Q&A           | 500        |
-| Search        | 1000       |
-| Summarization | 2000       |
+Design details and the serving-mode decision record are in `docs/superpowers/specs/2026-07-12-federated-shared-kb-design.md`.
 
 ---
 
-## 4. Query Execution Pipeline
+## 3. Monorepo Layout
 
-### End-to-End Flow
-
-```mermaid
-flowchart TD
-    START([Copilot / MCP invokes RAG query]) --> RQS
-
-    subgraph "RAGQueryService"
-        RQS[RAGQueryService<br/>Central orchestrator] --> MATCH
-        MATCH[Resolve topic by name<br/>exact → fuzzy → semantic fallback]
-        MATCH --> CACHE{Agent cached?}
-        CACHE -->|Yes| REUSE[Reuse RAGAgent]
-        CACHE -->|No| CREATE[Create RAGAgent<br/>+ initialize retrievers]
-    end
-
-    REUSE & CREATE --> PLAN
-
-    subgraph "Query Planning"
-        PLAN[Analyze complexity] --> SCORE{Complexity score}
-        SCORE -->|Simple| HEUR[Heuristic plan<br/>1-2 sub-queries]
-        SCORE -->|Moderate/Complex| LLM_REF{LLM available?}
-        LLM_REF -->|Yes| REFINE[LLM refinement<br/>Zod-validated output]
-        LLM_REF -->|No| HEUR
-        REFINE --> QPLAN[QueryPlan<br/>sub-queries + complexity]
-        HEUR --> QPLAN
-    end
-
-    QPLAN --> ITER{Iterative refinement<br/>enabled AND<br/>complexity != simple?}
-    ITER -->|No| EXEC
-    ITER -->|Yes| ITERLOOP
-
-    subgraph "Initial Retrieval"
-        EXEC[Execute sub-queries] --> DISPATCH
-        DISPATCH{Strategy}
-        DISPATCH -->|hybrid| HYB[HybridRetriever<br/>VectorRetriever + KeywordRetriever<br/>weighted score fusion]
-        DISPATCH -->|ensemble| ENS[EnsembleRetriever<br/>VectorRetriever + KeywordRetriever<br/>RRF rank fusion]
-        DISPATCH -->|bm25| BM25[KeywordRetriever<br/>BM25 keyword only]
-        DISPATCH -->|vector| VEC[VectorRetriever<br/>Similarity only]
-        HYB & ENS & BM25 & VEC --> RESULTS[Initial results]
-    end
-
-    subgraph "Iterative Refinement Loop"
-        ITERLOOP[Execute initial plan] --> CHECK_CONF
-        CHECK_CONF{avgConfidence ≥<br/>threshold?}
-        CHECK_CONF -->|Yes| DONE_ITER[Refinement complete]
-        CHECK_CONF -->|No| CHECK_MAX{iterations < max?}
-        CHECK_MAX -->|No| DONE_ITER
-        CHECK_MAX -->|Yes| GAP[Gap Analysis<br/>Identify weak sub-queries]
-        GAP --> FOLLOWUP[Generate follow-up<br/>queries via LLM]
-        FOLLOWUP --> EXEC_FU[Execute follow-ups]
-        EXEC_FU --> MERGE[Merge & deduplicate]
-        MERGE --> CHECK_CONF
-    end
-
-    RESULTS --> POST
-    DONE_ITER --> POST
-
-    subgraph "Post-Processing"
-        POST[Deduplicate by content hash] --> RANK[Re-rank by score]
-        RANK --> TOPK[Limit to topK]
-        TOPK --> FORMAT[Format RAGQueryResult<br/>with agenticMetadata]
-    end
-
-    FORMAT --> RETURN([Return to Copilot])
+```
+packages/
+  core/          @ragnarok/core — the portable engine (no VS Code, no MCP imports)
+    src/
+      agents/      RAGQueryService, RAGAgent, QueryPlannerAgent, LangGraph pipelines, graph state
+      embeddings/  EmbeddingService, HuggingFaceBackend, RemoteEmbeddingBackend, fingerprints
+      loaders/     text/markdown/html/pdf/github/web loaders (+ SSRF guards)
+      managers/    TopicManager (topic lifecycle, ingestion orchestration, export/import)
+      memory/      MemoryStore, MemoryVectorStore, MemoryGraph, decay, scope linker, git branch detection
+      models/      ModelRegistry, RerankerModelRegistry, bundled-asset resolution
+      rerankers/   CrossEncoderReranker
+      retrievers/  vector/keyword/hybrid/ensemble/graph/graph-hybrid retrievers
+      splitters/   SemanticChunker and text splitters
+      stores/      VectorStoreFactory (topic tables), KnowledgeGraphStore, LanceDBCheckpointSaver
+      utils/       storageV2, storageLock, vector math, graph types, keywords
+    assets/models/ bundled ONNX models + manifest.json (SHA-256 gate)
+  mcp-server/    @ragnarok/mcp-server — MCP host (stdio + Streamable HTTP), tools.ts, httpServer.ts, config.ts
+  vscode/        @ragnarok/vscode — extension host (activation, commands, LM tool, settings)
 ```
 
-### Query Planning: Complexity Analysis
-
-The `QueryPlannerAgent` scores query complexity using heuristics:
-
-| Factor                | Weight                | Example                                |
-| --------------------- | --------------------- | -------------------------------------- |
-| Sentence/clause count | +1 per extra sentence | "How does X work? And how about Y?"    |
-| Question words        | +1 per question word  | what, how, why, when, where            |
-| Comparison indicators | +2                    | "compare X vs Y", "difference between" |
-| Word count > 25       | +1                    | Long, detailed queries                 |
-| Conjunctions          | +0.5                  | and, or, but, also                     |
-
-**Complexity mapping:**
-
-| Score | Classification | Sub-queries     |
-| ----- | -------------- | --------------- |
-| 0–2   | Simple         | 1 (passthrough) |
-| 3–5   | Moderate       | 2–3             |
-| 6+    | Complex        | 3–5             |
+Dependency direction is strict: hosts depend on `@ragnarok/core`; core depends on neither host. Core's host abstractions are small interfaces (`IConfigProvider`, `INotifier`, `ILLMProvider`, logger factory) implemented by each host (`mcp-server/src/adapters.ts`, VS Code equivalents). Tests compile to `dist-test/` per package; production builds to `dist/`.
 
 ---
 
-## 5. Iterative Refinement & Gap Analysis
+## 4. Design Invariants & Key Decisions
 
-### Refinement Loop Sequence
+### Invariants (violations are bugs, not preferences)
 
-```mermaid
-sequenceDiagram
-    participant RA as RAGAgent
-    participant QP as QueryPlannerAgent
-    participant RET as Retriever
-    participant LLM as VS Code LLM
+- **P1 — Personal data is always local.** Personal KBs and *all* memory live in the user's environment, read/write. Never on a shared server.
+- **P2 — The engine that owns local data runs locally.** A remote server cannot create or modify files on a client's disk; any user wanting local KBs/memory runs a local engine. Users with no local data need no local engine at all (§2).
+- **P3 — Memory is always personal → always local.** Only topics are ever shared. Shared deployments do not even *register* memory tools, and construct no `MemoryStore` (structural, not policy — `mcp-server/src/index.ts`, `tools.ts`).
+- **P4 — Data locality dictates compute locality.** A query vector is valid only against the exact embedding model that built the table. Local tables ⇒ local embedding with that topic's recorded model; remotely-served topics ⇒ the host embeds and retrieves (§17).
+- **P5 — Auth lives only where parties share data.** Read/write tokens are a property of the shared host. The local engine needs no per-user auth; it is guarded by OS permissions and the storage lock (§6).
 
-    RA->>QP: createPlan(query, options)
-    QP-->>RA: QueryPlan {subQueries, complexity}
+### Decision record (ADR-style)
 
-    loop Iteration 1..maxIterations
-        RA->>RET: execute sub-queries
-        RET-->>RA: RetrievalResult[]
-
-        RA->>RA: calculateAvgConfidence()
-        alt confidence ≥ threshold
-            RA-->>RA: Break loop (converged)
-        else confidence < threshold
-            RA->>RA: analyzeGaps(results, plan)
-            Note over RA: Identify sub-queries with:<br/>- no_results (0 hits)<br/>- low_score (avg < gapThreshold)<br/>- coverage_imbalance
-
-            alt gaps found
-                RA->>QP: generateFollowUpPlan(gaps)
-                QP->>LLM: Refine follow-up queries
-                LLM-->>QP: Follow-up sub-queries
-                QP-->>RA: Follow-up QueryPlan
-
-                RA->>RET: Execute follow-ups
-                RET-->>RA: Additional results
-
-                RA->>RA: Merge + deduplicate
-                RA->>RA: Recalculate confidence
-            else no gaps
-                RA-->>RA: Break loop (no improvement possible)
-            end
-        end
-    end
-
-    RA->>RA: Final dedup + re-rank + topK
-    RA-->>RA: Return RAGResult
-```
-
-### Gap Analysis Logic
-
-Gap analysis evaluates each sub-query's retrieval quality:
-
-```
-For each sub-query in the plan:
-  1. Filter results attributed to this sub-query
-  2. Calculate: resultCount, avgScore
-  3. Classify gap reason:
-     - no_results: resultCount === 0
-     - low_score:  avgScore < gapScoreThreshold (default: 0.4)
-     - coverage_imbalance: resultCount < expected proportion
-```
-
-### Follow-Up Query Generation
-
-When gaps are detected, the system generates targeted follow-up queries:
-
-1. **LLM path** — Sends gap context to `QueryPlannerAgent` for LLM refinement
-2. **Heuristic fallback** — Generates reformulated queries using keyword extraction
-3. **Circuit breaker** — Stops if follow-ups would exceed `maxIterations`
-4. **Fair allocation** — Distributes follow-up budget proportionally across gaps
-
-### Convergence Detection
-
-The loop terminates when any of these conditions are met:
-
-| Condition      | Description                           |
-| -------------- | ------------------------------------- |
-| Confidence met | `avgConfidence ≥ confidenceThreshold` |
-| Max iterations | `iteration ≥ maxIterations`           |
-| No gaps found  | Gap analysis returns empty list       |
-| Cancellation   | `token.isCancellationRequested`       |
+| Decision | Choice | Rationale / rejected alternative |
+| --- | --- | --- |
+| Model distribution | **Bundle ONNX models in the npm package** | Zero-network first run, deterministic CI; rejected download-on-demand (deferred — package size is the cost). A SHA-256 manifest (`assets/models/manifest.json` + `scripts/verify-model-manifest.mjs`) makes silent asset drift a build failure. |
+| Pre-1.0 storage evolution | **Versioned format + fail-closed gate + reset-with-backup** (storage v2) | Rejected in-place migration: packages are unpublished, migration code would be permanent liability. Reset preserves data via timestamped `backup-v1-*` with rollback on partial failure (§5). |
+| LanceDB write pattern | **Single transactional `mergeInsert` (upsert + delete-missing)** | Rejected drop-then-recreate: a crash between drop and create destroyed the table (the historical C2 data-loss bug). |
+| Arrow read boundary | **`Array.from()` every vector read from LanceDB** | LanceDB returns Arrow `Vector` objects; persisting a collection containing them serializes garbage. Normalization happens at the read boundary, once, in every store (§5). |
+| Shared-KB serving | **Retrieval-serving (remote MCP host), not data-serving** | Data-serving forces every consumer to run a local engine and pins the shared KB to the bundled embedding model (P4). Retrieval-serving gives zero-install consumers and model freedom. Folder-sync (`commonDatabasePath`) and export/import remain as escape hatches. |
+| Reader enforcement | **Structural default-deny** — write tools are *not registered* for reader sessions | Rejected per-handler guards as the primary mechanism (default-open; one forgotten guard leaks writes). `writerOnly()` remains as defense-in-depth on the mixed `rag_memory` tool. |
+| Cross-topic result fusion | **None. `rag_query` targets one topic; same-named local+shared topics fuse by RRF (roadmap §17)** | Rejected a combined cross-encoder over heterogeneous sources: scores from different models/rerankers are not comparable; RRF is rank-based and needs no shared scale. |
+| LangGraph pipelines | **Opt-in (`RAGNAROK_LANGGRAPH_ENABLED`, default false)** | The legacy imperative path is the stable default; the graph path adds checkpointing/observability and is hardened behind a flag until parity (§12). |
+| Query-time auto-memory | **Opt-in (`queryMemoryEnabled`, default false) + isolated** | Auto-stored "query insights" polluted recall in live testing. When enabled: confidence floor 0.7, reserved `auto:query-insight` tag, excluded from recall unless `includeAuto: true`. |
+| Write serialization (MCP) | **Promise-chain mutation serializer (`runMutation`) shared across sessions** | LanceDB whole-table merges must not interleave; reads stay parallel. Cross-process safety is the storage lock's job, not this serializer's (§6). |
+| Shutdown | **Natural drain + `process.exitCode`, never forced `process.exit(0)`** | Forced exit after ONNX use aborts natively (`mutex lock failed` SIGABRT). A 10s hard-exit timer remains as a last-resort watchdog. Verified by a 20× soak that loads/disposes the ONNX session every iteration (§16). |
 
 ---
 
-## 6. Embedding Subsystem
+## 5. Storage & Durability
 
-### Backend Selection Flow
+### On-disk layout (per storage dir, default `~/.ragnarok`)
 
-```mermaid
-flowchart TD
-    START([Embedding request]) --> RESOLVE{Backend config}
-
-    RESOLVE -->|auto| AUTO{Try registered backends}
-    AUTO -->|First available| SELECTED[Selected Backend]
-    AUTO -->|None available| FALLBACK[Last registered backend]
-
-    RESOLVE -->|specific name| FORCE{Backend registered?}
-    FORCE -->|Yes| SELECTED
-    FORCE -->|No| ERROR([Error: backend not registered])
-
-    SELECTED --> EXEC[Execute embedding]
-    FALLBACK --> EXEC
-
-    EXEC --> FAIL{Failure?}
-    FAIL -->|No| RETURN([Return vectors])
-    FAIL -->|Yes + auto mode| SWITCH[Switch to fallback backend]
-    FAIL -->|Yes + forced| ERROR2([Propagate error])
-    SWITCH --> EXEC
+```
+<storageDir>/
+  storage-format.json          # v2 marker {formatVersion: 2, initializedAt}
+  .ragnarok.lock               # cross-process lock (infrastructure — see §6)
+  backup-v1-<timestamp>/       # pre-reset backups (never touched by the format gate)
+  database/
+    topics.json                # topics index: id, name, model, fingerprints, document index
+    lancedb/                   # per-topic vector tables + knowledge-graph tables
+    checkpoints-lancedb/       # LangGraph checkpoints (when enabled)
+  memory-lancedb/              # memory entries + memory graph tables (per scope)
+  memory-manifest.json         # memory embedding fingerprint {schemaVersion, embeddingFingerprint}
+  memories.md                  # human-readable memory export (debounced regeneration)
+  exports/                     # .rag export archives
 ```
 
-### Backend Comparison
+### Storage format v2
 
-| Feature        | HuggingFace                       | VS Code LM           | Remote (OpenAI/Ollama)    |
-| -------------- | --------------------------------- | -------------------- | ------------------------- |
-| **Runtime**    | ONNX / WASM (local)               | VS Code proposed API | HTTP API call             |
-| **Models**     | Xenova/\* (bundled or downloaded) | Copilot-provided     | Server-hosted             |
-| **Latency**    | ~50ms first load, ~5ms after      | API-dependent        | Network-dependent         |
-| **Offline**    | Yes                               | No                   | No                        |
-| **Dimensions** | Model-dependent (384/768)         | Provider-dependent   | Model-dependent           |
-| **Batch**      | Sequential (per text)             | Native batch API     | Batch (up to 100/request) |
+`utils/storageV2.ts` is the single authority:
 
-### Class Diagram: Embedding Subsystem
+- **`ensureStorageFormatV2`** validates the marker. A directory containing managed data but **no marker fails closed** with an actionable message (`--reset-storage` / `RAGNAROK_RESET_STORAGE=1`). Infrastructure entries (`storage-format.json`, `.ragnarok.lock`, `backup-v1-*`) are excluded from the "has data" judgment — the lock is created *before* format validation and must not masquerade as legacy data.
+- **`resetStorageToV2`** moves managed content into `backup-v1-<ISO timestamp>/`, then initializes the marker. Partial moves roll back; the backup is never auto-deleted (restore is a manual operation).
+- **`atomicWriteFile`/`atomicWriteJson`**: temp file in the same directory → write → fsync → rename → best-effort directory fsync. Every JSON index write goes through this; a crash never leaves a half-written index.
 
-```mermaid
-classDiagram
-    class EmbeddingBackend {
-        <<interface>>
-        +name string
-        +isAvailable() Promise~boolean~
-        +initialize(modelName?) Promise~void~
-        +embed(text) Promise~number[]~
-        +embedBatch(texts, callback?) Promise~number[][]~
-        +getDimension() number | null
-        +getModelId() string | null
-        +dispose() void
-    }
+### LanceDB usage rules (uniform across all stores)
 
-    class EmbeddingService {
-        -activeBackend EmbeddingBackend
-        -activeBackendType string
-        -registeredBackends EmbeddingBackend[]
-        -initPromise Promise~void~
-        -modelRegistry ModelRegistry
-        +registerBackend(backend) void
-        +embed(text) Promise~number[]~
-        +embedBatch(texts, cb?) Promise~number[][]~
-        +initialize(modelName?) Promise~void~
-        +getCurrentModel() string
-        +resetBackendSelection() void
-        -resolveBackend() Promise~string~
-        -executeWithFallback(op, name) Promise~T~
-        +onModelChanged$ Event
-    }
+All three LanceDB-backed stores — topic vectors (`stores/vectorStoreFactory.ts`), knowledge graph (`stores/knowledgeGraphStore.ts`), memory (`memory/memoryVectorStore.ts`) — follow the same contract:
 
-    class HuggingFaceBackend {
-        +name = "huggingface"
-        -pipeline FeatureExtractionPipeline
-        -currentModel string
-        -dimension number
-        +isAvailable() Promise~boolean~
-        +initialize(modelName?) Promise~void~
-        +embed(text) Promise~number[]~
-        +embedBatch(texts, cb?) Promise~number[][]~
-    }
+1. **Explicit Arrow schemas** on table creation (`createEmptyTable(name, schema)`). Schema inference from the first row is banned: it made table shape depend on ingestion order (the MB-1 mixed-format bug).
+2. **Fixed, typed chunk columns with defaults** (`normalizeDocumentMetadata`): every chunk row carries the same column set regardless of source format.
+3. **`Array.from()` at every read boundary** for vector columns (Arrow `Vector` → plain `number[]`).
+4. **Crash-safe persistence**: `table.mergeInsert(key).whenMatchedUpdateAll().whenNotMatchedInsertAll().whenNotMatchedBySourceDelete().execute(rows)` — one transactional reconcile, no drop/create window. Keys: `chunk_id` for topic tables (scoped delete by `document_id` on reingest), `id` for memory/KG tables.
+5. **Connections memoized** per store (single `dbPromise`), disposed on `dispose()`.
 
-    class VscodeLmBackend {
-        +name = "vscodeLM"
-        -model EmbeddingModel
-        -dimension number
-        +isAvailable() Promise~boolean~
-        +initialize(modelName?) Promise~void~
-        +embed(text) Promise~number[]~
-        +embedBatch(texts, cb?) Promise~number[][]~
-    }
-
-    class RemoteEmbeddingBackend {
-        +name = "remote"
-        -baseUrl string
-        -apiKey string
-        -format RemoteEmbeddingFormat
-        -modelName string
-        +isAvailable() Promise~boolean~
-        +initialize(modelName?) Promise~void~
-        +embed(text) Promise~number[]~
-        +embedBatch(texts, cb?) Promise~number[][]~
-        +listModels() Promise~Array~
-    }
-
-    class ModelRegistry {
-        -instance$ ModelRegistry
-        +getInstance()$ ModelRegistry
-        +getDefaultModel() string
-        +resolveModelIdentifier(name) string
-        +listAvailableModels() Promise~AvailableModel[]~
-        +CURATED_MODELS$ string[]
-    }
-
-    EmbeddingBackend <|.. HuggingFaceBackend
-    EmbeddingBackend <|.. VscodeLmBackend
-    EmbeddingBackend <|.. RemoteEmbeddingBackend
-    EmbeddingService --> EmbeddingBackend : activeBackend
-    EmbeddingService --> EmbeddingBackend : registeredBackends[*]
-    EmbeddingService --> ModelRegistry : modelRegistry
-```
+An **ingestion journal** (recovered by `TopicManager.recoverIngestionJournal` on startup) finishes metadata bookkeeping if a crash lands between the vector commit and the index write, guarded by a journal mutex.
 
 ---
 
-## 7. Retrieval Strategies
+## 6. Concurrency Model
 
-### Strategy Comparison
+Three distinct layers, each solving a different interleaving:
 
-| Strategy             | Semantic | Keyword | Graph | Speed       | Memory | Best For                      |
-| -------------------- | -------- | ------- | ----- | ----------- | ------ | ----------------------------- |
-| **Vector**           | Yes      | No      | No    | Fast        | Medium | Pure semantic similarity      |
-| **Hybrid** (default) | Yes      | Yes     | No    | Medium      | Medium | General purpose               |
-| **Ensemble (RRF)**   | Yes      | Yes     | No    | Medium-Slow | High   | Robustness, multi-signal      |
-| **BM25**             | No       | Yes     | No    | Fast        | High   | Exact term match, code, IDs   |
-| **Graph**            | Yes      | No      | Yes   | Medium      | High   | Entity-aware, relationship Q  |
-| **Graph-Hybrid**     | Yes      | No      | Yes   | Medium      | High   | Best of graph + vector search |
+| Layer | Mechanism | Protects against |
+| --- | --- | --- |
+| Async interleaving in one process | `async-mutex` in stores; **single-flight cache loaders** in `MemoryStore` (`entryLoads`/`graphLoads` maps); journal mutex in `TopicManager` | Two concurrent tool calls loading/mutating the same cached array and losing updates |
+| Write vs write across sessions (one server process) | **`runMutation` promise-chain serializer** in `mcp-server/src/index.ts` — all 14+ mutating tool handlers enqueue; reads bypass | Interleaved whole-table merges from concurrent MCP sessions |
+| Second OS process on the same storage dir | **`<storageDir>/.ragnarok.lock`** (`utils/storageLock.ts`) | Two VS Code windows or two stdio servers silently corrupting tables |
 
-### Hybrid Retrieval Scoring
+### The storage lock, precisely
 
-```mermaid
-flowchart LR
-    Q([Query]) --> VS[Vector Search<br/>k=15]
-    Q --> KE[Keyword Extraction<br/>Remove stop words]
+- Atomic exclusive creation (`open "wx"`), content `{pid, hostname, acquiredAt}`.
+- **Refcounted per resolved directory within a process** — `TopicManager` (acquired first thing in init, released on failed init and on dispose) and `MemoryStore` (acquired lazily on first data access) share one underlying lock.
+- **Heartbeat**: the holder refreshes the file mtime every 30s (unref'd timer). Staleness: heartbeat older than 5 min, or same-host holder pid dead (`kill(pid, 0)`; `EPERM` counts as alive). Stale locks are reclaimed with a bounded retry loop; a *live* holder produces a fail-fast `StorageLockHeldError` naming the pid and the `RAGNAROK_IGNORE_LOCK=1` override.
+- **Release order matters**: unlink first, *then* drop the exit-hook entry, so a process dying mid-release still gets cleaned by the synchronous `process.on("exit")` unlink. Release verifies the lock is still ours before unlinking (a reclaimed lock is never deleted from under its new owner).
+- Corrupt lock file + fresh mtime ⇒ treated as held (fail safe).
 
-    VS --> VSCORE[vectorScore<br/>normalized 0-1]
-    KE --> KMATCH[Keyword Matching<br/>in documents]
-    KMATCH --> KSCORE[keywordScore<br/>term frequency]
-
-    VSCORE --> FUSION["hybridScore =<br/>0.9 × vectorScore +<br/>0.1 × keywordScore"]
-    KSCORE --> FUSION
-
-    FUSION --> RANK[Sort by hybridScore<br/>Return topK]
-```
-
-### Ensemble (RRF) Fusion
-
-```mermaid
-flowchart LR
-    Q([Query]) --> VS2[Vector Search<br/>ranked results]
-    Q --> BM[BM25 Search<br/>ranked results]
-
-    VS2 --> RRF["RRF Score per doc:<br/>Σ weight/(60 + rank + 1)"]
-    BM --> RRF
-
-    RRF --> DEDUP[Deduplicate by<br/>document hash]
-    DEDUP --> SORT[Sort by total<br/>RRF score]
-    SORT --> TOP[Return topK]
-```
-
-### Retriever Class Diagram
-
-```mermaid
-classDiagram
-    class VectorRetriever {
-        -vectorStore VectorStore
-        +search(query, k?) Promise~VectorSearchResult[]~
-        +getDocuments(query, k?) Promise~Document[]~
-        +setVectorStore(store) void
-        -normalizeDistance(distance, doc) number
-    }
-
-    class KeywordRetriever {
-        -bm25Retriever BM25Retriever
-        -documents LangChainDocument[]
-        +initialize(documents) Promise~void~
-        +search(query, k?) Promise~KeywordSearchResult[]~
-        +scoreDocument(text, keywords, boosting?) number
-        +isInitialized() boolean
-        +getDocumentCount() number
-        +refresh(documents) Promise~void~
-    }
-
-    class HybridRetriever {
-        -vectorRetriever VectorRetriever
-        -keywordRetriever KeywordRetriever
-        +search(query, options?) Promise~HybridSearchResult[]~
-        +vectorSearch(query, k?) Promise~HybridSearchResult[]~
-    }
-
-    class EnsembleRetrieverWrapper {
-        -vectorRetriever VectorRetriever
-        -keywordRetriever KeywordRetriever
-        +search(query, options?) Promise~EnsembleSearchResult[]~
-        -reciprocalRankFusion(vecResults, bm25Results, vW, bW) Document[]
-        -getDocumentId(doc) string
-        +isInitialized() boolean
-        +getDocumentCount() number
-    }
-
-    HybridRetriever --> VectorRetriever : delegates vector search
-    HybridRetriever --> KeywordRetriever : delegates keyword search
-    EnsembleRetrieverWrapper --> VectorRetriever : delegates vector search
-    EnsembleRetrieverWrapper --> KeywordRetriever : delegates keyword search
-```
+The e2e gate for all of this spawns two real server processes against one directory (`packages/mcp-server/test/storageLockE2E.test.ts`).
 
 ---
 
-## 8. Knowledge Graph
-
-The knowledge graph subsystem extracts structured entity–relationship data from documents and uses it for graph-aware retrieval.
-
-### Components
-
-| Component                | File                                 | Description                                                                                                                                                                                                                                                                             |
-| ------------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **KnowledgeGraph**       | `stores/knowledgeGraph.ts`           | In-memory directed graph (graphology). One per topic. Provides entity/relationship CRUD, BFS traversal, embedding similarity search, subgraph extraction, and community detection (Louvain).                                                                                            |
-| **KnowledgeGraphStore**  | `stores/knowledgeGraphStore.ts`      | LanceDB persistence layer. Serializes graph entities and relationships to/from LanceDB tables (`_kg_entities`, `_kg_relationships` per topic).                                                                                                                                          |
-| **EntityExtractor**      | `agents/entityExtractor.ts`          | LLM-powered extraction of entities and relationships from document chunks. Processes in configurable batches, validates output with Zod schemas, implements a circuit breaker (max consecutive failures), and supports cancellation via `AbortSignal`.                                  |
-| **GraphRetriever**       | `retrievers/graphRetriever.ts`       | Entity-aware retrieval: (1) match query to entities via name + embedding similarity, (2) BFS traverse neighborhoods with configurable hop depth (default: 2) and score decay (default: 0.5×/hop), (3) collect scored source chunks. Falls back to vector search when no entities match. |
-| **GraphHybridRetriever** | `retrievers/graphHybridRetriever.ts` | Weighted fusion of `GraphRetriever` and `VectorRetriever` results (default: 70% vector / 30% graph). Fetches candidates from both sources in parallel, fuses by chunkId, and falls back gracefully when either source is unavailable.                                                   |
-
-### Entity Extraction Flow
+## 7. Ingestion Pipeline
 
 ```
-Document Chunks
-    │
-    ▼
-EntityExtractor.extractFromChunks(chunks, options)
-    │  ├── Batch processing (configurable batchSize)
-    │  ├── LLM prompt → Zod-validated JSON
-    │  ├── Circuit breaker (maxConsecutiveFailures)
-    │  └── AbortSignal support
-    ▼
-ExtractionResult { entities[], relationships[] }
-    │
-    ▼
-KnowledgeGraph.addEntity() / .addRelationship()
-    │
-    ▼
-KnowledgeGraphStore.save() → LanceDB tables
+files / URLs / repos
+  → Loader (format-specific)         loaders/*.ts
+  → SemanticChunker                  heading-aware (md) | code-aware | recursive
+  → metadata normalization           fixed typed columns, stable documentId/chunkId
+  → EmbeddingService (batched)       §8
+  → VectorStoreFactory.mergeInsert   idempotent on chunk_id
+  → topics.json document index       atomic write (+ journal recovery)
+  → (optional) KG extraction         §10 — never blocks the commit
 ```
 
-### Graph Search Flow
+**Loaders.** `TextDocumentLoader`, `MarkdownDocumentLoader` (structure flags), `HtmlDocumentLoader` (tag stripping + entity decode), `PdfDocumentLoader` (LangChain PDFLoader), `GithubDocumentLoader` (repo crawl, token via env), `WebDocumentLoader` (Cheerio; SSRF-hardened — §15). File-path ingestion is restricted to `RAGNAROK_ALLOWED_PATHS` roots (`assertPathAllowed` resolves symlinks before checking).
 
-```
-Query
-    │
-    ├──► Name matching (exact + fuzzy)
-    ├──► Embedding similarity search
-    ▼
-Matched Entities
-    │
-    ▼
-BFS Traversal (maxHopDepth, hopDecay)
-    │
-    ▼
-Scored Source Chunks (by entity score × hop decay)
-    │
-    ▼
-Ranked Results (top-k)
-```
+**Identity & idempotency.** Every document gets a stable `documentId` (`doc-<sha256>` of its source identity) and every chunk a stable `chunkId`; reingesting a source reconciles via `mergeInsert("chunk_id")` with `whenNotMatchedBySourceDelete` scoped to that `document_id` — re-adding a document **replaces** it, never duplicates it (asserted e2e).
 
-### Integration with RAGAgent
+**Partial-success semantics (C3).** The commit point is vector storage: `success = vectorStored && chunkCount > 0`. Knowledge-graph extraction failure demotes to `warnings` (`stage: "graph"`, `partial: true`, `graphExtracted: false`) — an LLM outage cannot fail or duplicate an ingestion.
 
-The `RAGAgent` creates `GraphRetriever` and `GraphHybridRetriever` when a topic has a populated knowledge graph. The `QueryPlannerAgent` can select `graph` or `graph_hybrid` as the retrieval strategy based on query analysis.
+**Export/import.** `rag_export_topic` produces a `.rag` v2 zip: manifest (format version, embedding fingerprint), `topic.json`, table data, per-entry SHA-256 checksums. Import validates checksums (tamper ⇒ `checksum mismatch`), rejects old format versions, guards against path traversal and zip bombs, and refuses fingerprint-incompatible archives.
 
 ---
 
-## 9. Memory Module
+## 8. Embedding Subsystem
 
-The standalone memory module (`packages/core/src/memory/`) provides persistent, workspace-scoped and branch-scoped memory with LLM entity extraction. It is fully independent from the RAG pipeline — it has its own types, stores, and graph.
+`EmbeddingService` routes to registered backends:
 
-### Components
+| Backend | When | Notes |
+| --- | --- | --- |
+| `HuggingFaceBackend` | default | transformers.js v3 over bundled ONNX assets; **`dtype: "q8"`** must match the bundled `model_quantized.onnx` (the v2-era `quantized: true` option is silently ignored by v3 — the historical C1 bug class). Default model `Xenova/all-MiniLM-L6-v2`. |
+| `RemoteEmbeddingBackend` | `RAGNAROK_EMBEDDING_PROVIDER=openai\|ollama` | OpenAI- or Ollama-format HTTP APIs; responses validated (count, index alignment, finite values, dimension consistency, empty batch). |
+| VS Code LM backend | extension only | Proposed `vscode.lm` embeddings API. |
 
-| Component                  | File                               | Description                                                                                                                                                                                                              |
-| -------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **MemoryStore**            | `memory/memoryStore.ts`            | Main orchestrator. Coordinates vector store, entity graph, entity extraction, markdown export, and git branch detection. Manages in-memory caches with lazy-loading from LanceDB.                                        |
-| **MemoryVectorStore**      | `memory/memoryVectorStore.ts`      | LanceDB persistence for memory entries and entities. Separate DB directory (`memory-lancedb/`) from RAG vector stores. Supports scope + branch partitioning.                                                             |
-| **MemoryGraph**            | `memory/memoryGraph.ts`            | Graphology-based entity graph (one per scope partition). Stores `MemoryEntity` nodes and `MemoryRelationship` edges. Supports embedding similarity search and relationship traversal.                                    |
-| **MemoryEntityExtractor**  | `memory/memoryEntityExtractor.ts`  | LLM-powered entity extraction from memory content. Extracts typed entities (`fact`, `preference`, `concept`, `person`, `tool`, `project`, `convention`) and relationships. Gracefully degrades when no LLM is available. |
-| **GitBranchDetector**      | `memory/gitBranchDetector.ts`      | Detects the current git branch from the working directory. Used to automatically scope branch-level memories.                                                                                                            |
-| **MemoryMarkdownExporter** | `memory/memoryMarkdownExporter.ts` | Generates a human-readable `memories.md` file from stored memories.                                                                                                                                                      |
+**Embedding fingerprints** (`{backendKind, providerFormat, model, revision, dimension, endpointHash}`) are persisted per topic and in the memory manifest. A fingerprint mismatch is rejected **even when dimensions coincidentally match** — `remote:openai` and `remote:ollama` embeddings of the same dimension are not interchangeable. Memory offers an explicit escape hatch (`rag_reset_memory`, confirmed destructive) before switching embedding spaces; topic model switches probe the replacement pipeline before swapping global state and roll back on failure.
 
-### Memory Types
-
-| Type                   | Definition                                                                                                                              |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **MemoryScope**        | `"workspace"` \| `"branch"`                                                                                                             |
-| **MemoryEntry**        | Raw memory: content, vector, scope, branch, tags, entityIds, access tracking                                                            |
-| **MemoryEntity**       | Graph node: typed (`fact`/`preference`/`concept`/`person`/`tool`/`project`/`convention`), embedded, with confidence and strength scores |
-| **MemoryRelationship** | Graph edge: typed (`related_to`/`depends_on`/`part_of`/`uses`/`prefers`/`contradicts`/`updates`), weighted                              |
-
-### Store / Recall / Forget Flow
-
-```
-store(content, scope?, branch?, tags?)
-    ├── Embed content
-    ├── Duplicate detection (cosine similarity ≥ 0.92 → merge)
-    ├── LLM entity extraction (optional)
-    ├── Persist to LanceDB + graph
-    └── Regenerate memories.md (async)
-
-recall(query, scope?, branch?, topK?)
-    ├── Embed query
-    ├── Search entries via vector store (across scopes)
-    ├── Reinforce accessed memories (accessCount++)
-    ├── Include graph entities (optional)
-    └── Deduplicate + sort by score
-
-forget(id?, scope?, branch?, olderThan?)
-    ├── Remove matching entries from cache + LanceDB
-    ├── Prune orphaned entities from graph
-    └── Regenerate memories.md
-```
-
-### MCP Integration
-
-The `rag_memory` tool is registered in the MCP server when a `MemoryStore` is available:
-
-| Action   | Required Params | Description                                                                       |
-| -------- | --------------- | --------------------------------------------------------------------------------- |
-| `store`  | `content`       | Store a new memory (optional: `scope`, `branch`, `tags`)                          |
-| `recall` | `query`         | Recall relevant memories (optional: `topK`, `scope`, `branch`, `includeEntities`) |
-| `forget` | —               | Forget memories by `id`, `scope`/`branch`, or `olderThan` (days)                  |
-| `stats`  | —               | Get memory statistics (counts, scopes, entity types)                              |
-| `list`   | —               | List recent memories (optional: `scope`, `branch`, `limit`)                       |
-
-### Future: LangGraph Orchestration
-
-A `LANGGRAPH_ENABLED` feature flag exists in `constants.ts` for a planned LangGraph integration (`@langchain/langgraph`). When implemented, LangGraph `StateGraph` will provide an alternative orchestration path for both the query pipeline (`RAGAgent`) and the ingestion pipeline (`DocumentPipeline`). The existing procedural flows will remain as the default fallback. See [Phase 4 plan](docs/knowledge-graph/phase-4-memory-langgraph.md) for details.
+`ModelRegistry`/`RerankerModelRegistry` resolve model identifiers to bundled asset paths with path-traversal protection (block `..`, absolute paths, drive letters) and fall back to hub download when permitted.
 
 ---
 
-## 10. Class Diagram
+## 9. Retrieval & Ranking
 
-### Full System Class Relationships
+| Strategy | Composition | Score basis |
+| --- | --- | --- |
+| `vector` | LanceDB cosine similarity | model space |
+| `bm25` | KeywordRetriever (BM25 + keyword boost) | lexical |
+| `hybrid` | weighted fusion, **0.9 vector / 0.1 keyword** | normalized blend |
+| `ensemble` | Reciprocal Rank Fusion of vector + keyword lists | rank-based (no shared scale needed) |
+| `graph` | entity match → graph traversal → source chunks | graph relevance |
+| `graph_hybrid` | graph candidates fused with semantic search | blend |
 
-```mermaid
-classDiagram
-    %% Core Services (Singletons)
-    class EmbeddingService {
-        <<singleton>>
-    }
-    class TopicManager {
-        <<singleton>>
-    }
-    class ModelRegistry {
-        <<singleton>>
-    }
+Graph strategies require a populated knowledge graph (LLM-dependent at ingest time) and **fall back to hybrid** with an explicit `fallbackReason` rather than returning empty.
 
-    %% Extension Entry
-    class Extension {
-        +activate(context) Promise~void~
-        +deactivate() void
-    }
+**Cross-encoder reranking** (`rerankers/crossEncoderReranker.ts`) applies to the candidate pool after retrieval, always-on by default (`rerankerEnabled`):
 
-    %% Commands & Tool
-    class CommandHandler {
-        +registerCommands(context)$
-        +createTopic()
-        +deleteTopic(id)
-        +addDocuments(id, paths)
-        +setEmbeddingModel(model)
-    }
-
-    class RAGTool {
-        -ragQueryService RAGQueryService
-        +register(context)$ Disposable
-        -executeQuery(params) Promise~RAGQueryResult~
-    }
-
-    class RAGQueryService {
-        -ragAgents Map~string, RAGAgent~
-        -topicManager TopicManager
-        -config IConfigProvider
-        -llmProvider ILLMProvider
-        +executeQuery(params, workspaceContext?) Promise~RAGQueryResult~
-        +clearAgentCache(topicId?) void
-        +dispose() void
-        -getOrCreateAgent(topicId) Promise~RAGAgent~
-    }
-
-    %% Agents
-    class RAGAgent {
-        -queryPlanner QueryPlannerAgent
-        -vectorRetriever VectorRetriever
-        -keywordRetriever KeywordRetriever
-        -hybridRetriever HybridRetriever
-        -ensembleRetriever EnsembleRetrieverWrapper
-        -vectorStore VectorStore
-        +query(query, options?) Promise~RAGResult~
-        -iterativeRetrieval(plan, options) Promise
-        -analyzeGaps(results, plan) SubQueryGap[]
-        -generateFollowUpPlan(gaps, options) Promise
-    }
-
-    class QueryPlannerAgent {
-        +createPlan(query, options?) Promise~QueryPlan~
-        +canRefineWithLLM(query, family?)$ Promise~boolean~
-        -analyzeComplexityScore(query, options) number
-        -heuristicPlan(query, options) QueryPlan
-        -refinePlanWithLLM(query, plan, options) Promise~QueryPlan~
-    }
-
-    class VSCodeLLM {
-        -modelFamily string
-        -vendor string
-        +_generate(messages, options?) Promise~ChatResult~
-        +isModelAvailable(vendor?, family?)$ Promise~boolean~
-    }
-
-    %% Storage & Pipeline
-    class DocumentPipeline {
-        +processDocuments(paths, topicId, options?) Promise~PipelineResult~
-        -loadDocuments(paths, options)
-        -storeDocuments(chunks, topicId, options)
-    }
-
-    class VectorStoreFactory {
-        +createStore(config, docs?) Promise~void~
-        +loadStore(topicId, dir?) Promise~VectorStore~
-        +deleteStore(topicId) Promise~void~
-        +addDocuments(topicId, docs) Promise~void~
-        +invalidateCache(topicId?) void
-    }
-
-    class DocumentLoaderFactory {
-        -loaders Record~SupportedFileType, DocumentLoader~
-        +loadDocument(options) Promise~LoadedDocument~
-        +loadDocuments(paths) Promise~LangChainDocument[]~
-        +getSupportedExtensions()$ string[]
-        +isSupported(filePath)$ boolean
-        +isWebUrl(path)$ boolean
-        -detectFileType(filePath) SupportedFileType
-        -validateFile(filePath) Promise~void~
-        -isDirectory(filePath) Promise~boolean~
-        -collectFilesFromDirectory(dir) Promise~string[]~
-    }
-
-    class DocumentLoader {
-        <<interface>>
-        +load(filePath, options) Promise~LangChainDocument[]~
-    }
-
-    DocumentLoaderFactory --> DocumentLoader : delegates to 6 loaders
-
-    class SemanticChunker {
-        +chunkDocuments(docs, options?) Promise~ChunkingResult~
-        -determineStrategy(docs, options) string
-        -enrichChunksInBatches(chunks, options) Document[]
-    }
-
-    %% UI
-    class TopicTreeDataProvider {
-        +refresh() void
-        +getChildren(element?) Promise~TopicTreeItem[]~
-    }
-
-    %% Relationships
-    Extension --> CommandHandler : registers
-    Extension --> RAGTool : registers
-    Extension --> TopicManager : initializes
-    Extension --> EmbeddingService : initializes
-
-    RAGTool --> RAGQueryService : delegates queries
-    RAGQueryService --> RAGAgent : creates/caches
-    RAGQueryService --> TopicManager : resolves topics
-
-    RAGAgent --> QueryPlannerAgent : plans queries
-    RAGAgent --> VectorRetriever : base vector search
-    RAGAgent --> KeywordRetriever : base keyword search
-    RAGAgent --> HybridRetriever : weighted fusion
-    RAGAgent --> EnsembleRetrieverWrapper : RRF fusion
-
-    QueryPlannerAgent --> VSCodeLLM : LLM refinement
-
-    TopicManager --> DocumentPipeline : processes docs
-    TopicManager --> VectorStoreFactory : manages stores
-    TopicManager --> EmbeddingService : model info
-
-    DocumentPipeline --> DocumentLoaderFactory : loads files
-    DocumentPipeline --> SemanticChunker : chunks text
-    DocumentPipeline --> EmbeddingService : generates embeddings
-    DocumentPipeline --> VectorStoreFactory : stores vectors
-
-    TopicTreeDataProvider --> TopicManager : reads topics
-    TopicTreeDataProvider --> EmbeddingService : model events
-
-    EmbeddingService --> ModelRegistry : resolves models
-```
+- Bundled `Xenova/ms-marco-MiniLM-L-6-v2` at `dtype: "q8"`; scores `(query, doc)` pairs jointly, sigmoid-normalized; `originalScore` preserved alongside.
+- **Degradation boundary**: model load happens *inside* the rerank try/catch — any init or scoring failure returns the original ranking and logs, it never fails the query. Cancellation (`AbortSignal`) is re-thrown, not swallowed, and is checked before/after scoring.
+- **Warm-up**: the MCP host fires a non-blocking `initialize()` at startup so the first query skips the load stall and a broken model surfaces in startup logs.
+- **Model switch is swap-after-success**: a replacement instance fully initializes before the live model/tokenizer are swapped and the old session disposed; a failed switch leaves the working model untouched.
+- Candidate pool capped by `rerankerMaxCandidates` (default 20); documents truncated to ~1500 chars for the cross-encoder context window.
 
 ---
 
-## 11. Sequence Diagrams
+## 10. Knowledge Graph
 
-### 9.1 Extension Activation
-
-```mermaid
-sequenceDiagram
-    participant VSC as VS Code
-    participant EXT as extension.ts
-    participant TM as TopicManager
-    participant ES as EmbeddingService
-    participant CMD as CommandHandler
-    participant TOOL as RAGTool
-    participant TV as TreeViews
-
-    VSC->>EXT: activate(context)
-    EXT->>TM: getInstance(context)
-    TM->>TM: init() [load topics index]
-    EXT->>ES: getInstance()
-    ES->>ES: resolveBackend() [background]
-    EXT->>CMD: registerCommands(context)
-    EXT->>TV: new TopicTreeDataProvider()
-    EXT->>TV: new ConfigTreeDataProvider()
-    EXT->>TOOL: RAGTool.register(context)
-    TOOL->>VSC: vscode.lm.registerTool()
-    EXT->>VSC: setContext('ragnarok.loaded', true)
-    EXT->>VSC: setContext('ragnarok.hasTopics', count > 0)
-```
-
-### 9.2 Document Ingestion
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant CMD as CommandHandler
-    participant TM as TopicManager
-    participant DP as DocumentPipeline
-    participant DLF as DocumentLoaderFactory
-    participant SC as SemanticChunker
-    participant ES as EmbeddingService
-    participant VSF as VectorStoreFactory
-    participant DB as LanceDB
-
-    U->>CMD: Add Document command
-    CMD->>TM: addDocuments(topicId, filePaths)
-    TM->>DP: processDocuments(filePaths, topicId, options)
-
-    rect rgb(240, 248, 255)
-        Note over DP,DLF: Stage 1: Loading
-        DP->>DLF: loadDocument(options) per file
-        DLF->>DLF: detectFileType() → strategy
-        DLF-->>DP: LoadedDocument[] with metadata
-    end
-
-    rect rgb(240, 255, 240)
-        Note over DP,SC: Stage 2: Chunking
-        DP->>SC: chunkDocuments(documents, chunkingOptions)
-        SC->>SC: determineStrategy() → markdown|recursive|code
-        SC->>SC: split + enrichChunksInBatches()
-        SC-->>DP: ChunkingResult {chunks, stats}
-    end
-
-    rect rgb(255, 248, 240)
-        Note over DP,ES: Stage 3: Embedding
-        DP->>ES: embedBatch(chunkTexts, progressCallback)
-        ES->>ES: executeWithFallback(embed)
-        ES-->>DP: number[][] vectors
-    end
-
-    rect rgb(248, 240, 255)
-        Note over DP,DB: Stage 4: Storage
-        DP->>VSF: addDocuments(topicId, chunks)
-        VSF->>DB: LanceDB.fromDocuments() or addDocuments()
-        VSF->>VSF: saveStoreMetadata(topicId)
-        VSF-->>DP: stored
-    end
-
-    DP-->>TM: PipelineResult
-    TM->>TM: Update topic index + document cache
-    TM-->>CMD: AddDocumentResult
-```
-
-### 9.3 Agentic Query Execution
-
-```mermaid
-sequenceDiagram
-    participant COP as Copilot
-    participant TOOL as RAGTool
-    participant RQS as RAGQueryService
-    participant TM as TopicManager
-    participant RA as RAGAgent
-    participant QP as QueryPlannerAgent
-    participant LLM as VSCodeLLM
-    participant RET as Retriever
-
-    COP->>TOOL: executeQuery({topic, query, topK})
-    TOOL->>RQS: executeQuery(params, workspaceContext)
-    RQS->>TM: resolveTopicByName(topic)
-    TM-->>RQS: TopicMatch (exact|similar|fallback)
-    RQS->>RQS: getOrCreateAgent(topicId)
-    RQS->>RA: query(query, agenticOptions)
-
-    rect rgb(255, 245, 245)
-        Note over RA,QP: Phase 1: Planning
-        RA->>QP: createPlan(query, options)
-        QP->>QP: analyzeComplexityScore()
-        QP->>QP: heuristicPlan()
-        alt Complex + LLM available
-            QP->>LLM: refinePlanWithLLM()
-            LLM-->>QP: Zod-validated plan
-        end
-        QP-->>RA: QueryPlan {subQueries, complexity}
-    end
-
-    rect rgb(245, 255, 245)
-        Note over RA,RET: Phase 2: Retrieval
-        loop Each sub-query
-            RA->>RET: search(subQuery, {k, strategy})
-            RET-->>RA: RetrievalResult[]
-        end
-    end
-
-    rect rgb(245, 245, 255)
-        Note over RA,LLM: Phase 3: Iterative Refinement
-        alt complex query (not simple)
-            loop Until converged or maxIterations
-                RA->>RA: calculateAvgConfidence()
-                alt confidence < threshold
-                    RA->>RA: analyzeGaps()
-                    RA->>QP: generateFollowUpPlan(gaps)
-                    QP->>LLM: Refine follow-ups
-                    LLM-->>QP: Follow-up queries
-                    QP-->>RA: Follow-up plan
-                    RA->>RET: Execute follow-ups
-                    RET-->>RA: Additional results
-                    RA->>RA: Merge + deduplicate
-                end
-            end
-        end
-    end
-
-    RA->>RA: Final dedup + re-rank + topK
-    RA-->>RQS: RAGResult
-    RQS->>RQS: Format RAGQueryResult + agenticMetadata
-    RQS-->>TOOL: RAGQueryResult
-    TOOL-->>COP: JSON response
-```
-
-### 9.4 Embedding Backend Fallback
-
-```mermaid
-sequenceDiagram
-    participant C as Caller
-    participant ES as EmbeddingService
-    participant PB as Primary Backend
-    participant FB as Fallback Backend
-
-    C->>ES: embed(text)
-    ES->>ES: ensureBackend()
-
-    alt Primary backend active
-        ES->>PB: embed(text)
-        alt Success
-            PB-->>ES: number[]
-            ES-->>C: number[]
-        else Failure + auto mode
-            PB--xES: Error
-            ES->>ES: shouldFallback()
-            ES->>FB: initialize()
-            ES->>ES: switch active to fallback
-            ES->>FB: embed(text)
-            FB-->>ES: number[]
-            ES-->>C: number[]
-            Note over ES: Show warning to user
-        end
-    else Direct backend call
-        ES->>PB: embed(text)
-        PB-->>ES: number[]
-        ES-->>C: number[]
-    end
-```
+Per-topic graph built at ingest time when an LLM is available: entity + relationship extraction → graphology graph → persisted in LanceDB (`KnowledgeGraphStore`, explicit schema, entity embeddings for semantic entity search). **Provenance is tracked per document/chunk** so reingestion or document removal updates shared entities without deleting references owned by other documents. Graph retrievers (§9) map matched entities back to source chunks via `sourceChunkIds`. Graph extraction is advisory: its failure never blocks ingestion (§7) and its absence downgrades graph strategies to hybrid.
 
 ---
 
-## 12. Storage & Persistence
+## 11. Memory Subsystem
 
-### File System Layout
+Standalone, host-independent memory (`memory/`), fully local (invariant P3).
 
-```
-${extensionStorageDir}/
-├── database/
-│   ├── topics.json                    # Global topics index
-│   ├── lancedb/
-│   │   ├── ${topicId}/               # Per-topic LanceDB table
-│   │   │   ├── ${topicId}.lance      # Vector data
-│   │   │   ├── _kg_entities.lance    # Knowledge graph entities (if populated)
-│   │   │   ├── _kg_relationships.lance # Knowledge graph relationships
-│   │   │   └── .lancedb/            # Table metadata/index
-│   │   └── ...
-│   ├── memory-lancedb/                # Standalone memory store (separate from RAG)
-│   │   ├── _memory_workspace.lance   # Workspace-scoped memories
-│   │   ├── _memory_branch_*.lance    # Branch-scoped memories
-│   │   └── _memory_entities_*.lance  # Memory entity vectors
-│   ├── documents/
-│   │   ├── ${topicId}.json           # Document metadata per topic
-│   │   └── ...
-│   └── metadata/
-│       ├── ${topicId}.json           # Vector store metadata
-│       └── ...
-└── common-db/                         # Optional shared database
-    └── (same structure as database/)
-```
+**Scoping.** Two scopes: `workspace` and `branch` (git branch auto-detected by reading `.git/HEAD` asynchronously, worktree-aware, 5s cache; explicit `branch` overrides; branch scope with no detectable branch is a hard error at the tool layer — never a silent fall-back). Scope tables are base64url-encoded per scope+branch.
 
-### Data Model
+**Entry lifecycle.**
+- **Store**: embed → near-duplicate detection (cosine ≥ threshold) → if duplicate, create a new **version** (old entry `isLatest=false`, `supersededBy` set; tags/entities carried forward) → optional LLM entity extraction into the per-scope `MemoryGraph` → persist entries + graph.
+- **Recall**: vector search ×2 topK → filter expired + `auto:*`-tagged (unless `includeAuto`) → multiply by **decay-engine effective confidence** → slice topK → reinforcement (access counters bumped on the cached entries, persisted by a **debounced flush** — reads never rewrite whole tables synchronously; readers with `reinforce:false` cause zero writes).
+- **Forget**: by id (with **version-chain repair** — removing the latest reinstates its predecessor), by age filter (guarded: refuses to delete everything without a filter), or by expiry (TTL `expiresAt` from `ttlDays`, plus decay-below-threshold purge).
+- **Promote**: branch → workspace via the scope linker (specific ids or whole scope).
 
-```mermaid
-erDiagram
-    TOPICS_INDEX ||--o{ TOPIC : contains
-    TOPIC ||--o{ DOCUMENT : has
-    TOPIC ||--|| VECTOR_STORE : "1:1"
-    VECTOR_STORE ||--o{ CHUNK : stores
-    DOCUMENT ||--o{ CHUNK : "split into"
+**Persistence discipline.** In-memory per-scope caches (entries + graph) are the write-through source; `persistScopeOrInvalidate` persists both and **drops the caches on failure before rethrowing** — a failed persist can never masquerade as in-session success (the cache-rollback fix). All LanceDB rules of §5 apply. A debounced exporter regenerates `memories.md` for human inspection.
 
-    TOPICS_INDEX {
-        string version
-        Topic[] topics
-    }
-
-    TOPIC {
-        string id PK
-        string name
-        string description
-        number createdAt
-        number updatedAt
-        number documentCount
-        string source "local|common"
-    }
-
-    DOCUMENT {
-        string id PK
-        string topicId FK
-        string name
-        string filePath
-        string fileType
-        number addedAt
-        number chunkCount
-    }
-
-    VECTOR_STORE {
-        string topicId PK
-        number documentCount
-        number chunkCount
-        string embeddingModel
-        number createdAt
-        number updatedAt
-    }
-
-    CHUNK {
-        string id PK
-        string documentId FK
-        string topicId FK
-        string text
-        float[] embedding
-        number chunkIndex
-        string documentName
-        string headingPath
-        string sectionTitle
-    }
-```
-
-### Caching Strategy
-
-| Cache                             | Scope          | Size Limit | Eviction        |
-| --------------------------------- | -------------- | ---------- | --------------- |
-| **RAGAgent** (in RAGQueryService) | Per topic      | 10 agents  | LRU on overflow |
-| **VectorStore**                   | Per topic      | 50 stores  | LRU on overflow |
-| **QueryPlan**                     | Per query hash | 50 plans   | 1-minute TTL    |
-| **Topic documents**               | Per topic      | Unbounded  | On topic delete |
+**Decay engine** is a pure evaluator: effective confidence decays with age/access patterns and graph connectivity; `runDecay` reports, `forget(expired:true)` purges. Auto-decay can run on a timer (opt-in).
 
 ---
 
-## 13. Configuration Reference
+## 12. Query Execution
 
-All settings are under the `ragnarok.*` namespace.
+Two paths share the same tool surface and `RAGQueryService` entry point:
 
-### Core Settings
+**Legacy path (default).** Topic resolution (exact → fuzzy → semantic) → per-topic `RAGAgent` (cached; invalidated via `TopicManager.onAgentCacheCleanup`) → `QueryPlannerAgent` decomposes (heuristic for simple, LLM-refined with Zod-validated output for moderate/complex, heuristic fallback without LLM) → sub-queries execute against the chosen strategy → optional iterative refinement (gap analysis → LLM follow-up queries → merge/dedupe → convergence check against `confidenceThreshold`/`maxIterations`) → dedupe by content key → rerank (§9) → topK → `RAGQueryResult` with `agenticMetadata`.
 
-| Setting             | Type   | Default  | Description                                  |
-| ------------------- | ------ | -------- | -------------------------------------------- |
-| `topK`              | number | 5        | Number of results per query                  |
-| `chunkSize`         | number | 512      | Target chunk size (characters)               |
-| `chunkOverlap`      | number | 50       | Overlap between adjacent chunks              |
-| `retrievalStrategy` | enum   | `hybrid` | `vector` \| `hybrid` \| `ensemble` \| `bm25` |
-| `logLevel`          | enum   | `info`   | `debug` \| `info` \| `warn` \| `error`       |
+**LangGraph path (opt-in, `RAGNAROK_LANGGRAPH_ENABLED`).** `agents/queryGraph.ts` builds a StateGraph: `recallMemory` (skips without a MemoryStore) → `planQuery` → `retrieve` (strategy-dispatched, per-sub-query) → `rerank` → `evaluate` → conditional `refine` loop → `formatResult` → optional `memorize`. Cancellation propagates: the MCP `extra.signal` threads through recall, planning, retrieval, reranking, and embedding; reranker aborts re-throw rather than degrade.
 
-### Embedding Settings
-
-| Setting                  | Type   | Default | Description                           |
-| ------------------------ | ------ | ------- | ------------------------------------- |
-| `embeddingBackend`       | string | `auto`  | `auto` or any registered backend name |
-| `embeddingVscodeModelId` | string | `""`    | VS Code LM model identifier           |
-| `localModelPath`         | string | `""`    | Custom local model directory          |
-
-### Query Settings
-
-| Setting                   | Type    | Default       | Description                         |
-| ------------------------- | ------- | ------------- | ----------------------------------- |
-| `maxIterations`           | number  | 3             | Max refinement iterations           |
-| `confidenceThreshold`     | number  | 0.7           | Min confidence to stop refining     |
-| `llmModel`                | string  | `gpt-4o-mini` | LLM model family for planning       |
-| `includeWorkspaceContext` | boolean | true          | Include open files as context       |
-| `gapScoreThreshold`       | number  | 0.4           | Min avg score before gap is flagged |
-
-### Advanced Settings
-
-| Setting              | Type   | Default | Description                       |
-| -------------------- | ------ | ------- | --------------------------------- |
-| `commonDatabasePath` | string | `""`    | Path to shared read-only database |
+- `QueryPipelineOptions.allowMemoryWrites` is **required state**: reader sessions run with `allowMemoryWrites:false`, which no-ops `memorize` and disables recall reinforcement — "readers cause zero durable writes" holds inside the graph too.
+- The `memorize` node is double-gated: `queryMemoryEnabled` (default false) and a 0.7 confidence floor; stored entries carry the reserved `auto:query-insight` tag and are excluded from recall by default (§4 decision).
+- **Indexing graph** (`agents/indexingGraph.ts`): load → chunk → embed → store → extract-entities → store-graph, with per-stage state and a deterministic `thread_id` so a `LanceDBCheckpointSaver`-backed run can resume past completed stages. The checkpointer is constructed by hosts only when the flag is on (`database/checkpoints-lancedb/`).
+- Known parity gaps vs the legacy path (refinement is a simpler heuristic in-graph; confidence evaluation nuances) are tracked in `CONSOLIDATED-FIX-PLAN.md` Phase 6.
 
 ---
 
-## 14. Commands Reference
+## 13. MCP Server
 
-All commands are under the `ragnarok.*` namespace.
+### Process shape
 
-### Topic Management
+`mcp-server/src/index.ts` builds the singleton services once (embedding service + backends, `TopicManager`, `RAGQueryService`, reranker with warm-up, `MemoryStore` — the latter only in local deployments), then serves them through per-session `McpServer` instances:
 
-| Command                | Title            | Description                                      |
-| ---------------------- | ---------------- | ------------------------------------------------ |
-| `ragnarok.createTopic` | Create New Topic | Create a new RAG topic with name and description |
-| `ragnarok.deleteTopic` | Delete Topic     | Remove a topic and its vector store              |
-| `ragnarok.renameTopic` | Rename Topic     | Rename an existing topic                         |
-| `ragnarok.exportTopic` | Export Topic     | Export topic data to a portable format           |
-| `ragnarok.importTopic` | Import Topic     | Import a previously exported topic               |
+- **stdio** (default): one server + `StdioServerTransport`; EOF on stdin triggers the same graceful shutdown as SIGINT/SIGTERM.
+- **Streamable HTTP** (`--http`): Express app (`httpServer.ts`) with one `McpServer`+`StreamableHTTPServerTransport` pair **per client session**, keyed by the SDK-issued `mcp-session-id`. Sessions carry `{role, authorization, lastSeen}`; idle sessions are reaped on a TTL sweep (`sessionIdleTtlMs`, default 30 min); `maxSessions` caps concurrency (503 beyond); rate limiting and CORS wrap the app; `/health` and `/ready` endpoints serve probes.
 
-### Document Ingestion
+### Authentication & roles
 
-| Command                  | Title                    | Description                                                            |
-| ------------------------ | ------------------------ | ---------------------------------------------------------------------- |
-| `ragnarok.addDocument`   | Add Document to Topic    | Add local files (PDF, MD, HTML, TXT) or directories                    |
-| `ragnarok.addGithubRepo` | Add GitHub Repo to Topic | Ingest a GitHub repository (with optional token)                       |
-| `ragnarok.addWebUrl`     | Add Web URL to Topic     | Load a web page; auto-detects GitHub URLs and routes to repo ingestion |
+- `RAGNAROK_API_KEY` = **read** token, `RAGNAROK_WRITE_API_KEY` = **write** token; both compared timing-safe; config validation (zod `superRefine`) rejects identical tokens, non-loopback binds without a key, and non-loopback + CORS `*` — the server **fails closed at startup**, not at request time.
+- The session role is **pinned at initialize**: subsequent requests must present the same authorization or 401. No tokens configured (loopback dev) ⇒ writer.
+- **Structural default-deny**: `registerTools(server, …, role, …, deployment)` registers write tools through `registerWriteTool`, which is a **no-op for reader roles** — for a reader session the 12 write tools do not exist in `tools/list`, they are not merely guarded. The mixed `rag_memory` tool keeps per-action `writerOnly()` guards as defense-in-depth. Reader recall passes `reinforce:false`; reader queries pass `readOnly` into the query service (§12).
 
-### Embedding & Model Configuration
+### Tool surface (23 tools in local writer mode)
 
-| Command                               | Title                          | Description                                        |
-| ------------------------------------- | ------------------------------ | -------------------------------------------------- |
-| `ragnarok.setEmbeddingModel`          | Set Embedding Model            | Choose between HuggingFace and VS Code LM backends |
-| `ragnarok.selectVscodeEmbeddingModel` | Select VS Code Embedding Model | Pick from available VS Code LM embedding models    |
-| `ragnarok.selectHfEmbeddingModel`     | Select HuggingFace Model       | Pick from curated or custom HuggingFace models     |
-| `ragnarok.selectLLMModel`             | Select LLM Model               | Choose LLM for agentic query planning              |
+| Group | Tools |
+| --- | --- |
+| Query | `rag_query` |
+| Topics | `rag_list_topics`, `rag_topic_stats`, `rag_create_topic`, `rag_delete_topic`, `rag_rename_topic`, `rag_storage_status` |
+| Documents | `rag_add_documents`, `rag_list_documents`, `rag_remove_document`, `rag_add_url`, `rag_add_github_repo` |
+| Archives | `rag_export_topic`, `rag_import_topic` |
+| Embeddings | `rag_list_embedding_models`, `rag_embedding_info`, `rag_switch_embedding_model` |
+| LLM / Reranker | `rag_llm_status`, `rag_list_reranker_models`, `rag_reranker_info`, `rag_switch_reranker_model` |
+| Memory (local only) | `rag_memory` (store/recall/forget/stats/list/decay/history/promote/links), `rag_reset_memory` |
 
-### GitHub Token Management
+Every tool carries MCP annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`); destructive operations require `confirm: true` literals. All mutating handlers run inside `runMutation` (§6). In shared deployments the memory tools are absent for every role and descriptions carry the `[Team shared KB] ` prefix; the server's MCP `instructions` describe its deployment role (§2).
 
-| Command                      | Title               | Description                                     |
-| ---------------------------- | ------------------- | ----------------------------------------------- |
-| `ragnarok.addGithubToken`    | Add GitHub Token    | Store a PAT for GitHub API access (5000 req/hr) |
-| `ragnarok.listGithubTokens`  | List GitHub Tokens  | View stored tokens by host                      |
-| `ragnarok.removeGithubToken` | Remove GitHub Token | Delete a stored token                           |
+### Lifecycle
 
-### Maintenance
+Graceful shutdown (signal or stdio EOF): close transports → dispose memory store (flushes reinforcement + markdown) → dispose query service/reranker → dispose topic manager (releases storage lock) → dispose embedding service → dispose checkpointer → set `process.exitCode = 0` and drain naturally. A 10-second hard-exit timer is the watchdog. Forced `process.exit()` after ONNX use is banned (§4). Docker runs as `USER node`, prunes dev deps, healthchecks `/ready`, and its CI smoke validates auth, persistence across restart, and exit-code-0 stops.
 
-| Command                    | Title             | Description                           |
-| -------------------------- | ----------------- | ------------------------------------- |
-| `ragnarok.refreshTopics`   | Refresh Topics    | Reload topic tree view                |
-| `ragnarok.clearModelCache` | Clear Model Cache | Remove cached embedding model files   |
-| `ragnarok.clearDatabase`   | Clear Database    | Delete all topics and vector data     |
-| `ragnarok.editConfigItem`  | Edit Config Item  | Modify a configuration setting inline |
+---
+
+## 14. VS Code Extension
+
+The extension host wires the same core: activation creates the storage under `context.globalStorageUri`, a `TopicManager` (with a back-up-and-reset UX when the v2 gate rejects legacy storage), an `EmbeddingService` (background-initialized), a `MemoryStore` scoped to the first workspace folder, and registers commands (topic/document management, model switching, GitHub token management) plus the Copilot LM tool that fronts `RAGQueryService`. Settings under `ragnarok.*` mirror the env config (§18). The in-process concurrency story is the same as the MCP server's; the storage lock (§6) protects against a second window or a concurrently running stdio server on the same storage dir.
+
+---
+
+## 15. Security Model
+
+| Surface | Control |
+| --- | --- |
+| HTTP exposure | Fail-closed config: non-loopback requires a token; CORS `*` forbidden off-loopback; rate limiting; session TTL + cap |
+| Tokens | Read/write split, timing-safe compare, role pinned per session, structural default-deny registration (§13) |
+| Web ingestion (SSRF) | DNS resolution with private/loopback/link-local blocking (IPv4 + IPv6 ULA/link-local), **DNS pinning** for the actual fetch (defeats rebinding TOCTOU), per-redirect re-validation, redirect cap, http(s) only |
+| File ingestion | `RAGNAROK_ALLOWED_PATHS` allowlist; symlinks resolved before checking; GitHub host allowlist for repo ingestion |
+| Archives | SHA-256 per entry, manifest version gate, path-traversal and zip-bomb guards, fingerprint compatibility check |
+| Model assets | SHA-256 manifest verified at build/pack time; registry blocks path traversal in model identifiers |
+| Container | Non-root `USER node`, prod-only deps, no secrets in logs |
+| Memory privacy | P3: never on shared hosts — no store constructed, no tools registered |
+
+The threat model is a **trusted local machine + semi-trusted team network**: static shared tokens are accepted for team infra (rotation is a manual op); per-client identity/audit is deferred (§17).
+
+---
+
+## 16. Testing & Release Gates
+
+**Pyramid.** Unit + integration suites per package run against **real LanceDB in temp dirs** (no storage mocks): core ≈ 730 tests, mcp-server ≈ 168. On top sit real-binary e2e specs (`packages/mcp-server/test/*E2E*.test.ts`) that spawn the built `dist/index.js` through a shared `StdioHarness` which **scrubs inherited `RAGNAROK_*` env** (a developer shell's remote-provider exports silently reconfigure the server otherwise — this is a hard rule for every spawned server).
+
+**Named release gates** (each locks a reproduced production failure):
+
+| Gate | Spec | Locked regression |
+| --- | --- | --- |
+| C1 | stdio E2E all-6-strategies loops (legacy + LangGraph) | bundled reranker model failing to load ⇒ every query failed |
+| C2 | `memoryPersistenceE2E` (store → restart → mutate → restart, exact id set) | Arrow-vector persistence destroying all memories on first mutation after reload |
+| MB-1 | `mixedFormatE2E` (txt/md/html in opposite orders, per-format sentinels both topics) | first-file schema inference breaking later formats |
+| AA-1 | `storageLockE2E` (two real processes, fail-fast + release) | silent cross-process table corruption |
+| MB-2 | `shutdown-soak.mjs` 20× (ONNX load/dispose every iteration) + HTTP SIGTERM exit-0 spec | native SIGABRT on shutdown |
+
+**CI** (`.github/workflows/release.yml`): `quality` (lint, format, model manifest, test:fast on Node 20/22), `native-process` (3 OS × Node 20/22 running compiled suites + the soak — win32 uses the stdio-EOF shutdown path since SIGTERM is not emulatable there), `vscode` (xvfb), `packages` (pack smoke, audit, VSIX), `docker` (build, non-root, auth, persistence, clean-stop). Known issue: `npm run lint` OOMs at the 2GB default heap (recorded; per-package split planned) — and the workflow needs its first real push/PR run to validate the matrix.
+
+---
+
+## 17. Roadmap: Federated Shared Knowledge Bases
+
+Design settled in `docs/superpowers/specs/2026-07-12-federated-shared-kb-design.md`; implementation targeted at 0.5.0:
+
+- **`SharedSource` abstraction** with two implementations: `FolderSharedSource` (generalizing today's `commonDatabasePath` — shared tables on a synced/mounted filesystem, all compute local using each topic's recorded model) and `RemoteSharedSource` (an MCP *client* inside the local engine pointed at the shared host with a read token; the host embeds/retrieves/reranks server-side per P4).
+- **Per-topic federation** in `RAGQueryService`: a topic resolves local-only, shared-only, or both; "both" retrieves each side concurrently and fuses with **RRF** (rank-based — no cross-model score comparison), tagging result origins; a slow/down remote degrades to local-only with a surfaced note, never a hard failure.
+- **No combined cross-encoder across sources** (decision record, §4).
+- Deferred with rationale: federation write-through for curators (direct writer sessions instead), OAuth/mTLS/per-client audit (static team tokens now), npm model download-on-demand (bundling now).
+
+---
+
+## 18. Appendix: Configuration & Storage Reference
+
+### Environment variables (MCP server; VS Code settings mirror under `ragnarok.*`)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RAGNAROK_STORAGE_DIR` | `~/.ragnarok` | Storage root (format-gated, lock-guarded) |
+| `RAGNAROK_WORKING_DIR` | `process.cwd()` | Project root for git-branch memory scoping |
+| `RAGNAROK_ALLOWED_PATHS` | working dir | Ingestion path allowlist (delimiter-separated) |
+| `RAGNAROK_EMBEDDING_PROVIDER` | `huggingface` | `huggingface` \| `openai` \| `ollama` |
+| `RAGNAROK_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model id |
+| `RAGNAROK_EMBEDDING_BASE_URL` / `_API_KEY` | — | Remote embedding endpoint (required for non-HF providers) |
+| `RAGNAROK_LLM_PROVIDER` | `none` | `openai` \| `anthropic` \| `ollama` \| `none` |
+| `RAGNAROK_LLM_MODEL` / `_API_KEY` / `_BASE_URL` | provider defaults | LLM wiring |
+| `RAGNAROK_RERANKER_ENABLED` | `true` | Cross-encoder reranking toggle |
+| `RAGNAROK_LANGGRAPH_ENABLED` | `false` | LangGraph pipelines (adds checkpointer) |
+| `RAGNAROK_QUERY_MEMORY_ENABLED` | `false` | Opt-in query-time auto-memory (§12) |
+| `RAGNAROK_API_KEY` / `RAGNAROK_WRITE_API_KEY` | — | Read / write tokens; both present + `--http` ⇒ shared deployment |
+| `RAGNAROK_PORT` / `RAGNAROK_HTTP_HOST` | `3000` / loopback | HTTP bind (non-loopback requires a token) |
+| `RAGNAROK_CORS_ORIGIN` | restricted | `*` forbidden off-loopback |
+| `RAGNAROK_SESSION_IDLE_TTL_MS` / `RAGNAROK_MAX_SESSIONS` / `RAGNAROK_RATE_LIMIT_PER_MINUTE` | 1800000 / 100 / 100 | HTTP session hygiene |
+| `RAGNAROK_RESET_STORAGE` (or `--reset-storage`) | — | Back up legacy storage and initialize v2 |
+| `RAGNAROK_IGNORE_LOCK` | — | Bypass the storage lock (unsafe with concurrent writers) |
+| `RAGNAROK_LOG_LEVEL` | `info` | debug/info/warn/error (stderr only — stdout is protocol-clean in stdio mode) |
+
+### Storage file map
+
+See §5. Rule of thumb: JSON indexes are atomic-write, LanceDB tables are mergeInsert-reconciled, `storage-format.json`/`.ragnarok.lock`/`backup-v1-*` are infrastructure (excluded from the data gate), and everything else under the storage dir is owned by exactly one store class.
