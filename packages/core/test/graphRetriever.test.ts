@@ -105,6 +105,41 @@ function buildTestKG(): KnowledgeGraph {
 
 describe("GraphRetriever", function () {
   describe("search", function () {
+    it("rejects a persisted graph whose embedding fingerprint differs", async function () {
+      const data = buildTestKG().toJSON();
+      data.metadata.embeddingModel = "indexed-model";
+      data.metadata.embeddingDimension = 3;
+      data.metadata.embeddingFingerprint = {
+        backendKind: "test",
+        providerFormat: "test",
+        model: "indexed-model",
+        revision: "v1",
+        dimension: 3,
+        endpointHash: "local",
+      };
+      const persisted = KnowledgeGraph.fromJSON(data);
+      const embeddingService = {
+        ...createMockEmbeddingService([1, 0, 0]),
+        getFingerprint: async () => ({
+          backendKind: "test",
+          providerFormat: "test",
+          model: "different-model",
+          revision: "v1",
+          dimension: 3,
+          endpointHash: "local",
+        }),
+      } as any;
+      const retriever = new GraphRetriever(persisted, createMockVectorRetriever([]), embeddingService);
+
+      try {
+        await retriever.search("TypeScript", { k: 3 });
+        expect.fail("expected fingerprint mismatch");
+      } catch (error) {
+        expect((error as Error).message).to.include("fingerprint mismatch");
+        expect((error as Error).message).to.include("Reindex");
+      }
+    });
+
     it("should find entities by name and return graph-boosted results", async function () {
       const kg = buildTestKG();
       const doc1 = new LangChainDocument({ pageContent: "chunk 1", metadata: { chunkId: "chunk-1" } });
@@ -231,6 +266,65 @@ describe("GraphRetriever", function () {
 
       // Should find TypeScript via embedding similarity even though "programming language" doesn't match entity names
       expect(results.length).to.be.greaterThan(0);
+    });
+
+    it("does not treat orthogonal or dimension-mismatched entity vectors as matches", async function () {
+      const kg = new KnowledgeGraph("threshold-topic");
+      kg.addEntity(
+        createTestEntity({
+          id: "orthogonal",
+          name: "HiddenEntity",
+          vector: [1, 0, 0],
+          sourceChunkIds: ["graph-only"],
+        }),
+      );
+      const vectorDoc = new LangChainDocument({
+        pageContent: "vector fallback",
+        metadata: { chunkId: "vector-only" },
+      });
+      const vectorRetriever = createMockVectorRetriever([{ doc: vectorDoc, score: 0.72 }]);
+
+      for (const queryVector of [
+        [0, 1, 0],
+        [1, 0],
+      ]) {
+        const retriever = new GraphRetriever(kg, vectorRetriever, createMockEmbeddingService(queryVector), async () => [
+          new LangChainDocument({ pageContent: "must not surface", metadata: { chunkId: "graph-only" } }),
+        ]);
+        const results = await retriever.search("unrelated terms", { k: 5 });
+
+        expect(results).to.have.length(1);
+        expect(results[0].document.metadata.chunkId).to.equal("vector-only");
+        expect(results[0].matchedEntities).to.deep.equal([]);
+        expect(results[0].effectiveStrategy).to.equal("vector");
+        expect(results[0].degradedFrom).to.equal("graph");
+        expect(results[0].fallbackReason).to.equal("no_graph_matches");
+      }
+    });
+
+    it("honors a configurable raw-cosine entity threshold", async function () {
+      const kg = new KnowledgeGraph("custom-threshold");
+      kg.addEntity(
+        createTestEntity({
+          id: "candidate",
+          name: "HiddenEntity",
+          vector: [0.7, Math.sqrt(1 - 0.7 ** 2), 0],
+          sourceChunkIds: ["graph-chunk"],
+        }),
+      );
+      const graphDoc = new LangChainDocument({ pageContent: "graph", metadata: { chunkId: "graph-chunk" } });
+      const fallbackDoc = new LangChainDocument({ pageContent: "vector", metadata: { chunkId: "vector-chunk" } });
+      const vectorRetriever = createMockVectorRetriever([{ doc: fallbackDoc, score: 0.5 }]);
+      const retriever = new GraphRetriever(kg, vectorRetriever, createMockEmbeddingService([1, 0, 0]), async () => [
+        graphDoc,
+      ]);
+
+      const defaultResults = await retriever.search("unrelated terms", { k: 5 });
+      const strictResults = await retriever.search("unrelated terms", { k: 5, entitySimilarityThreshold: 0.8 });
+
+      expect(defaultResults.some((result) => result.matchedEntities.includes("HiddenEntity"))).to.equal(true);
+      expect(strictResults.every((result) => result.matchedEntities.length === 0)).to.equal(true);
+      expect(strictResults[0].fallbackReason).to.equal("no_graph_matches");
     });
   });
 

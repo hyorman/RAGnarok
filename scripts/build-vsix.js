@@ -6,9 +6,10 @@
  * This replaces the mutate-in-place approach (install-platform-deps.js + vsce package)
  * with a clean staging workflow:
  *
- *   1. Create a staging directory with production-only package.json
+ *   1. Clean and rebuild all extension output
+ *   2. Create a unique staging directory with the exact workspace manifests and lockfile
  *   2. Copy extension bundle, assets, and metadata
- *   3. npm install --omit=dev (only production deps, no workspaces)
+ *   3. npm ci --omit=dev for the target OS/CPU
  *   4. Install target-platform native binaries
  *   5. Prune bloat (maps, unused pdf.js versions, onnxruntime-node platforms, langchain nested)
  *   6. vsce package from the staging directory
@@ -18,17 +19,17 @@
  *   - Development node_modules never mutated
  *   - No gutting hacks (npm list not needed since no stubs)
  *   - Reproducible builds
- *   - onnxruntime-web eliminated at install time via stub dependency
+ *   - Every dependency resolution is bound to package-lock.json
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execSync, spawn } = require('child_process');
-const https = require('https');
-const os = require('os');
-const crypto = require('crypto');
+const fs = require("fs");
+const path = require("path");
+const { execFileSync, execSync } = require("child_process");
+const https = require("https");
+const os = require("os");
+const crypto = require("crypto");
 
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = path.resolve(__dirname, "..");
 
 // ---------------------------------------------------------------------------
 // 1. Parse target platform
@@ -37,16 +38,13 @@ const ROOT = path.resolve(__dirname, '..');
 function getTargetPlatform() {
   const target = process.argv[2] || process.env.VSCE_TARGET || process.env.TARGET;
   if (!target) {
-    console.error(
-      'Usage: node build-vsix.js <target>\n' +
-      'Examples: darwin-arm64, linux-x64, win32-x64'
-    );
+    console.error("Usage: node build-vsix.js <target>\n" + "Examples: darwin-arm64, linux-x64, win32-x64");
     process.exit(1);
   }
 
-  const [platform, arch] = target.split('-');
-  const validPlatforms = ['darwin', 'linux', 'win32'];
-  const validArchs = ['arm64', 'x64'];
+  const [platform, arch] = target.split("-");
+  const validPlatforms = ["darwin", "linux", "win32"];
+  const validArchs = ["arm64", "x64"];
 
   if (!validPlatforms.includes(platform) || !validArchs.includes(arch)) {
     console.error(`Invalid target: ${target}. Expected {platform}-{arch}`);
@@ -55,8 +53,8 @@ function getTargetPlatform() {
 
   // LanceDB uses variants like linux-x64-gnu, win32-x64-msvc
   const patterns = [target];
-  if (platform === 'linux') patterns.push(`${target}-gnu`);
-  if (platform === 'win32') patterns.push(`${target}-msvc`);
+  if (platform === "linux") patterns.push(`${target}-gnu`);
+  if (platform === "win32") patterns.push(`${target}-msvc`);
 
   return { platform, arch, target, patterns };
 }
@@ -66,46 +64,28 @@ function getTargetPlatform() {
 // ---------------------------------------------------------------------------
 
 function createStagingDir(target) {
-  const stagingDir = path.join(ROOT, `.vsce-staging-${target}`);
-  if (fs.existsSync(stagingDir)) {
-    fs.rmSync(stagingDir, { recursive: true, force: true });
-  }
-  fs.mkdirSync(stagingDir, { recursive: true });
-  return stagingDir;
+  return fs.mkdtempSync(path.join(os.tmpdir(), `ragnarok-vsix-${target}-${process.pid}-`));
 }
 
 function createStagingPackageJson(stagingDir, targetPlatform) {
-  const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  // The source tree was clean-built immediately before staging. VSCE otherwise
+  // reruns this hook inside the deliberately source-free staging tree, where
+  // workspace tsconfig/source files do not exist.
+  delete rootPkg.scripts?.["vscode:prepublish"];
+  fs.writeFileSync(path.join(stagingDir, "package.json"), JSON.stringify(rootPkg, null, 2) + "\n");
+  fs.copyFileSync(path.join(ROOT, "package-lock.json"), path.join(stagingDir, "package-lock.json"));
 
-  // Filter optional deps to only include target platform
-  const filteredOptional = {};
-  for (const [name, version] of Object.entries(rootPkg.optionalDependencies || {})) {
-    if (matchesTargetPlatform(name, targetPlatform.patterns)) {
-      filteredOptional[name] = version;
-    }
+  // npm ci validates every declared workspace. Copy only manifests and the
+  // already-clean build output; source files never enter the staged VSIX.
+  for (const workspace of rootPkg.workspaces || []) {
+    const source = path.join(ROOT, workspace);
+    const target = path.join(stagingDir, workspace);
+    fs.mkdirSync(target, { recursive: true });
+    fs.copyFileSync(path.join(source, "package.json"), path.join(target, "package.json"));
+    const dist = path.join(source, "dist");
+    if (fs.existsSync(dist)) copyDirSync(dist, path.join(target, "dist"));
   }
-
-  // Build staging package.json: no workspaces, no devDeps, filtered optionalDeps
-  const stagingPkg = { ...rootPkg };
-  delete stagingPkg.workspaces;
-  delete stagingPkg.devDependencies;
-  delete stagingPkg.scripts; // Not needed in staging
-  stagingPkg.optionalDependencies = filteredOptional;
-
-  // Override onnxruntime-web with local stub (not needed in Node.js, saves ~92MB)
-  // Use both a direct dependency and $ref override to ensure ALL instances
-  // (including nested transitive deps) use the stub instead of the real package
-  if (!stagingPkg.dependencies) stagingPkg.dependencies = {};
-  stagingPkg.dependencies['onnxruntime-web'] = 'file:stubs/onnxruntime-web';
-  stagingPkg.overrides = {
-    ...stagingPkg.overrides,
-    'onnxruntime-web': '$onnxruntime-web',
-  };
-
-  fs.writeFileSync(
-    path.join(stagingDir, 'package.json'),
-    JSON.stringify(stagingPkg, null, 2) + '\n'
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -113,11 +93,18 @@ function createStagingPackageJson(stagingDir, targetPlatform) {
 // ---------------------------------------------------------------------------
 
 function copyToStaging(stagingDir) {
-  // Note: package-lock.json is NOT copied — the staging package.json is structurally
-  // different (no workspaces, onnxruntime-web override, filtered optionalDeps) so the
-  // root lockfile would cause resolution conflicts. npm generates a fresh lockfile in
-  // staging. Reproducibility is ensured by exact version pins in the root package.json.
-  const filesToCopy = ['README.md', 'LICENSE', 'ARCHITECTURE.md', '.vscodeignore', '.npmrc'];
+  const filesToCopy = [
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_MODELS.md",
+    "ARCHITECTURE.md",
+    ".vscodeignore",
+    ".npmrc",
+    "bom.cdx.json",
+    "bom.spdx.json",
+    "release-policy.json",
+  ];
   for (const file of filesToCopy) {
     const src = path.join(ROOT, file);
     if (fs.existsSync(src)) {
@@ -126,7 +113,7 @@ function copyToStaging(stagingDir) {
   }
 
   // Copy directories
-  const dirsToCopy = ['dist', 'assets', 'stubs'];
+  const dirsToCopy = ["dist", "assets", "stubs"];
   for (const dir of dirsToCopy) {
     const src = path.join(ROOT, dir);
     if (fs.existsSync(src)) {
@@ -137,9 +124,9 @@ function copyToStaging(stagingDir) {
   // Bundled ONNX models live in the core package (shipped with the npm
   // package); stage them under assets/models where findAssetsModelsDir()
   // expects them relative to the extension bundle.
-  const modelsSrc = path.join(ROOT, 'packages', 'core', 'assets', 'models');
+  const modelsSrc = path.join(ROOT, "packages", "core", "assets", "models");
   if (fs.existsSync(modelsSrc)) {
-    copyDirSync(modelsSrc, path.join(stagingDir, 'assets', 'models'));
+    copyDirSync(modelsSrc, path.join(stagingDir, "assets", "models"));
   }
 }
 
@@ -157,21 +144,21 @@ function copyDirSync(src, dest) {
 }
 
 function verifyStagedModels(stagingDir) {
-  const modelsDir = path.join(stagingDir, 'assets', 'models');
-  const manifestPath = path.join(modelsDir, 'manifest.json');
+  const modelsDir = path.join(stagingDir, "assets", "models");
+  const manifestPath = path.join(modelsDir, "manifest.json");
   if (!fs.existsSync(manifestPath)) {
     throw new Error(`Missing staged model manifest: ${manifestPath}`);
   }
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0) {
-    throw new Error('Staged model manifest has no artifacts');
+    throw new Error("Staged model manifest has no artifacts");
   }
   for (const artifact of manifest.artifacts) {
     const filePath = path.resolve(modelsDir, artifact.filename);
     if (!filePath.startsWith(modelsDir + path.sep) || !fs.existsSync(filePath)) {
       throw new Error(`Missing or invalid staged model artifact: ${artifact.filename}`);
     }
-    const actual = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    const actual = crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
     if (actual !== artifact.sha256) {
       throw new Error(`Staged model checksum mismatch: ${artifact.filename}`);
     }
@@ -183,13 +170,29 @@ function verifyStagedModels(stagingDir) {
 // 4. npm install in staging
 // ---------------------------------------------------------------------------
 
-function npmInstallStaging(stagingDir) {
-  console.log('\nInstalling production dependencies in staging...');
-  execSync('npm install --omit=dev --ignore-scripts', {
-    cwd: stagingDir,
-    stdio: 'inherit',
-    env: { ...process.env, npm_config_install_strategy: 'shallow' },
-  });
+function npmInstallStaging(stagingDir, targetPlatform) {
+  console.log("\nInstalling exact production dependency tree from package-lock.json...");
+  execFileSync(
+    "npm",
+    [
+      "ci",
+      "--omit=dev",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      `--os=${targetNpmPlatform(targetPlatform.platform)}`,
+      `--cpu=${targetPlatform.arch}`,
+    ],
+    {
+      cwd: stagingDir,
+      stdio: "inherit",
+      env: { ...process.env, npm_config_install_strategy: "shallow" },
+    },
+  );
+}
+
+function targetNpmPlatform(platform) {
+  return platform === "win32" ? "win32" : platform;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,45 +200,61 @@ function npmInstallStaging(stagingDir) {
 // ---------------------------------------------------------------------------
 
 const PLATFORM_PACKAGE_CONFIGS = [
-  { scope: '@lancedb', prefix: 'lancedb-', description: 'LanceDB', expectedCount: 1 },
-  { scope: '@img', prefix: 'sharp-', description: 'Sharp', expectedCount: 1 },
-  { scope: '@img', prefix: 'sharp-libvips-', description: 'Sharp libvips', expectedCount: 1 },
+  { scope: "@lancedb", prefix: "lancedb-", description: "LanceDB", expectedCount: 1 },
+  { scope: "@img", prefix: "sharp-", description: "Sharp", expectedCount: 1 },
+  { scope: "@img", prefix: "sharp-libvips-", description: "Sharp libvips", expectedCount: 1 },
 ];
 
+function getNativePackageConfig(packageName) {
+  const [scope, name, ...extra] = packageName.split("/");
+  if (!scope || !name || extra.length > 0) return undefined;
+  return PLATFORM_PACKAGE_CONFIGS.filter((config) => config.scope === scope && name.startsWith(config.prefix)).sort(
+    (left, right) => right.prefix.length - left.prefix.length,
+  )[0];
+}
+
+function expectedNativePackageName(config, targetPlatform) {
+  let suffix = targetPlatform.target;
+  if (config.scope === "@lancedb" && targetPlatform.platform === "linux") suffix += "-gnu";
+  if (config.scope === "@lancedb" && targetPlatform.platform === "win32") suffix += "-msvc";
+  return `${config.scope}/${config.prefix}${suffix}`;
+}
+
 function matchesTargetPlatform(packageName, patterns) {
-  const parts = packageName.split('/');
+  const parts = packageName.split("/");
   if (parts.length !== 2) return false;
   const name = parts[1];
-  return patterns.some(p => {
+  return patterns.some((p) => {
     const idx = name.indexOf(p);
     if (idx === -1) return false;
     const rest = name.substring(idx + p.length);
-    return rest === '' || rest.startsWith('-');
+    return rest === "" || rest.startsWith("-");
   });
 }
 
 async function installNativeDeps(stagingDir, targetPlatform) {
-  console.log('\nInstalling platform-specific native binaries...');
-  const nodeModules = path.join(stagingDir, 'node_modules');
-  const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  console.log("\nInstalling platform-specific native binaries...");
+  const nodeModules = path.join(stagingDir, "node_modules");
+  const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
 
-  const platformDeps = [];
-  for (const config of PLATFORM_PACKAGE_CONFIGS) {
-    for (const source of ['dependencies', 'optionalDependencies']) {
-      const deps = rootPkg[source] || {};
-      for (const [name, version] of Object.entries(deps)) {
-        if (name.startsWith(`${config.scope}/${config.prefix}`) &&
-            matchesTargetPlatform(name, targetPlatform.patterns)) {
-          platformDeps.push({ name, version: version.replace(/^[\^~]/, ''), config });
-        }
-      }
+  const declaredDependencies = {
+    ...(rootPkg.dependencies || {}),
+    ...(rootPkg.optionalDependencies || {}),
+  };
+  const platformDeps = PLATFORM_PACKAGE_CONFIGS.map((config) => {
+    const name = expectedNativePackageName(config, targetPlatform);
+    const version = declaredDependencies[name];
+    if (!version) {
+      throw new Error(`Missing declared target native package: ${name}`);
     }
-  }
+    return { name, version: version.replace(/^[\^~]/, ""), config };
+  });
 
   for (const { name, version, config } of platformDeps) {
     const scopeDir = path.join(nodeModules, config.scope);
     fs.mkdirSync(scopeDir, { recursive: true });
-    const packageDir = path.join(scopeDir, name.split('/')[1]);
+    const packageDir = path.join(scopeDir, name.split("/")[1]);
 
     if (fs.existsSync(packageDir)) {
       console.log(`  ✓ ${name} already installed`);
@@ -243,57 +262,124 @@ async function installNativeDeps(stagingDir, targetPlatform) {
       continue;
     }
 
-    fs.mkdirSync(packageDir, { recursive: true });
-    try {
-      await downloadAndExtract(name, version, packageDir);
-      removePlatformRestrictions(packageDir);
-      console.log(`  ✓ ${name} installed`);
-    } catch (error) {
-      console.error(`  ✗ Failed to install ${name}: ${error.message}`);
-      if (fs.existsSync(packageDir)) {
-        fs.rmSync(packageDir, { recursive: true, force: true });
-      }
+    const locked = lock.packages?.[`node_modules/${name}`];
+    if (!locked || locked.version !== version || !locked.resolved || !locked.integrity) {
+      throw new Error(`No exact lockfile resolution/integrity for ${name}@${version}`);
     }
+    fs.mkdirSync(packageDir, { recursive: true });
+    await downloadAndExtract(locked.resolved, locked.integrity, packageDir, name);
+    removePlatformRestrictions(packageDir);
+    console.log(`  ✓ ${name} installed from verified lockfile artifact`);
   }
+  verifyNativePackages(nodeModules, targetPlatform, platformDeps);
 }
 
 function removePlatformRestrictions(packageDir) {
-  const pkgPath = path.join(packageDir, 'package.json');
+  const pkgPath = path.join(packageDir, "package.json");
   if (fs.existsSync(pkgPath)) {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
     delete pkg.os;
     delete pkg.cpu;
     fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
   }
 }
 
-function downloadAndExtract(packageName, version, targetDir) {
-  const tarball = `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`;
-
+function downloadAndExtract(tarball, integrity, targetDir, packageName) {
   return new Promise((resolve, reject) => {
     const follow = (url, redirects = 0) => {
       if (redirects > 5) {
         reject(new Error(`Too many redirects for ${packageName}`));
         return;
       }
-      https.get(url, (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          follow(res.headers.location, redirects + 1);
-          return;
-        }
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-          return;
-        }
-        const tar = spawn('tar', ['xz', '-C', targetDir, '--strip-components=1'], {
-          stdio: ['pipe', 'inherit', 'inherit'],
-        });
-        res.pipe(tar.stdin);
-        tar.on('close', (code) => code === 0 ? resolve() : reject(new Error(`tar exit ${code}`)));
-      }).on('error', reject);
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") {
+        reject(new Error(`Refusing non-HTTPS native artifact URL for ${packageName}`));
+        return;
+      }
+      https
+        .get(parsed, (res) => {
+          if ([301, 302, 307, 308].includes(res.statusCode)) {
+            if (!res.headers.location) return reject(new Error(`Redirect without location for ${packageName}`));
+            follow(new URL(res.headers.location, parsed).href, redirects + 1);
+            return;
+          }
+          if (res.statusCode !== 200) {
+            reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+            return;
+          }
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("error", reject);
+          res.on("end", () => {
+            try {
+              const archive = Buffer.concat(chunks);
+              verifyIntegrity(archive, integrity, packageName);
+              const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-native-"));
+              const archivePath = path.join(tempDir, "package.tgz");
+              fs.writeFileSync(archivePath, archive);
+              try {
+                const listing = execFileSync("tar", ["tzf", archivePath], { encoding: "utf8" });
+                for (const member of listing.split(/\r?\n/).filter(Boolean)) assertSafeArchiveMember(member);
+                const verboseListing = execFileSync("tar", ["tvzf", archivePath], { encoding: "utf8" });
+                for (const line of verboseListing.split(/\r?\n/).filter(Boolean)) {
+                  if (line.startsWith("l") || line.startsWith("h")) {
+                    throw new Error(`Native archive contains a link entry: ${line}`);
+                  }
+                }
+                execFileSync("tar", ["xzf", archivePath, "-C", targetDir, "--strip-components=1"], {
+                  stdio: "inherit",
+                });
+              } finally {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+              }
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          });
+        })
+        .on("error", reject);
     };
     follow(tarball);
   });
+}
+
+function verifyIntegrity(contents, integrity, packageName) {
+  const candidates = integrity.split(/\s+/);
+  const selected =
+    candidates.find((value) => value.startsWith("sha512-")) || candidates.find((value) => value.startsWith("sha256-"));
+  if (!selected) throw new Error(`Unsupported integrity algorithm for ${packageName}`);
+  const [algorithm, expected] = selected.split("-", 2);
+  const actual = crypto.createHash(algorithm).update(contents).digest("base64");
+  if (!crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected))) {
+    throw new Error(`Integrity mismatch for ${packageName}`);
+  }
+}
+
+function assertSafeArchiveMember(member) {
+  const normalized = member.replace(/\\/g, "/");
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+    throw new Error(`Native archive contains absolute path: ${member}`);
+  }
+  if (normalized.split("/").includes("..")) {
+    throw new Error(`Native archive contains traversal path: ${member}`);
+  }
+}
+
+function verifyNativePackages(nodeModules, targetPlatform, expected) {
+  if (expected.length !== PLATFORM_PACKAGE_CONFIGS.length) {
+    throw new Error(`Expected ${PLATFORM_PACKAGE_CONFIGS.length} target native packages, resolved ${expected.length}`);
+  }
+  for (const config of PLATFORM_PACKAGE_CONFIGS) {
+    const scopeDir = path.join(nodeModules, config.scope);
+    const expectedBasename = expectedNativePackageName(config, targetPlatform).split("/")[1];
+    const matches = fs.existsSync(scopeDir) ? fs.readdirSync(scopeDir).filter((name) => name === expectedBasename) : [];
+    if (matches.length !== config.expectedCount) {
+      throw new Error(
+        `${config.description}: expected ${config.expectedCount} ${targetPlatform.target} package, found ${matches.length}`,
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -305,37 +391,38 @@ function downloadAndExtract(packageName, version, targetDir) {
 // exact runtime files we need, while preserving the nested node_modules tree
 // for the separate gutting step below.
 const LANGCHAIN_COMMUNITY_KEEP_PATHS = [
-  'package.json',
-  'LICENSE',
-  'node_modules',
-  'dist/_virtual/_rolldown/runtime.cjs',
-  'dist/utils/extname.cjs',
-  'dist/utils/@furkantoprak/bm25/BM25.cjs',
-  'dist/document_loaders/web/github.cjs',
-  'dist/document_loaders/web/cheerio.cjs',
-  'dist/document_loaders/fs/pdf.cjs',
-  'dist/retrievers/bm25.cjs',
-  'dist/vectorstores/lancedb.cjs',
+  "package.json",
+  "LICENSE",
+  "node_modules",
+  "dist/_virtual/_rolldown/runtime.cjs",
+  "dist/utils/extname.cjs",
+  "dist/utils/@furkantoprak/bm25/BM25.cjs",
+  "dist/document_loaders/web/github.cjs",
+  "dist/document_loaders/web/cheerio.cjs",
+  "dist/document_loaders/fs/pdf.cjs",
+  "dist/retrievers/bm25.cjs",
+  "dist/vectorstores/lancedb.cjs",
 ];
 
 function pruneBloat(stagingDir, targetPlatform) {
-  console.log('\nPruning package bloat...');
-  const nm = path.join(stagingDir, 'node_modules');
+  console.log("\nPruning package bloat...");
+  const nm = path.join(stagingDir, "node_modules");
 
   // Remove non-target onnxruntime-node platform binaries
   pruneOnnxruntimeNode(nm, targetPlatform);
+  prunePlatformNativePackages(nm, targetPlatform);
 
   // Remove HuggingFace model cache (shouldn't exist in clean install, but just in case)
-  const hfCache = path.join(nm, '@huggingface', 'transformers', '.cache');
+  const hfCache = path.join(nm, "@huggingface", "transformers", ".cache");
   if (fs.existsSync(hfCache)) {
     fs.rmSync(hfCache, { recursive: true, force: true });
-    console.log('  ✓ Removed .cache');
+    console.log("  ✓ Removed .cache");
   }
 
   // Remove unused pdf.js versions from pdf-parse (~24MB) — keep only v1.10.100
-  const pdfJsDir = path.join(nm, 'pdf-parse', 'lib', 'pdf.js');
+  const pdfJsDir = path.join(nm, "pdf-parse", "lib", "pdf.js");
   if (fs.existsSync(pdfJsDir)) {
-    const KEEP_PDFJS = 'v1.10.100';
+    const KEEP_PDFJS = "v1.10.100";
     let removedVersions = 0;
     for (const entry of fs.readdirSync(pdfJsDir, { withFileTypes: true })) {
       if (entry.isDirectory() && entry.name !== KEEP_PDFJS) {
@@ -350,21 +437,31 @@ function pruneBloat(stagingDir, targetPlatform) {
   if (communityPruneResult) {
     console.log(
       `  ✓ Pruned @langchain/community to required runtime files ` +
-      `(removed ${communityPruneResult.files} files and ${communityPruneResult.directories} directories)`
+        `(removed ${communityPruneResult.files} files and ${communityPruneResult.directories} directories)`,
     );
   }
 
   // Remove .map source maps from all packages included in VSIX
   let mapCount = 0;
   const topLevelScopes = [
-    '@huggingface', '@langchain', '@lancedb', '@img',
-    'apache-arrow', 'pdf-parse', 'cheerio', 'archiver',
-    'zod', 'glob', 'sharp', 'lodash', 'semver',
+    "@huggingface",
+    "@langchain",
+    "@lancedb",
+    "@img",
+    "apache-arrow",
+    "pdf-parse",
+    "cheerio",
+    "archiver",
+    "zod",
+    "glob",
+    "sharp",
+    "lodash",
+    "semver",
   ];
   for (const scope of topLevelScopes) {
     const dir = path.join(nm, scope);
     if (!fs.existsSync(dir)) continue;
-    for (const f of findFiles(dir, '.map')) {
+    for (const f of findFiles(dir, ".map")) {
       fs.unlinkSync(f);
       mapCount++;
     }
@@ -373,17 +470,17 @@ function pruneBloat(stagingDir, targetPlatform) {
 
   // Gut unused nested deps in @langchain/community
   // Keep package.json stubs so npm list --production passes (required by vsce)
-  const communityNm = path.join(nm, '@langchain', 'community', 'node_modules');
+  const communityNm = path.join(nm, "@langchain", "community", "node_modules");
   if (fs.existsSync(communityNm)) {
     // @langchain/classic provides BufferLoader base class for PDFLoader.
     // binary-extensions is required by GithubRepoLoader and is only present
     // under @langchain/community/node_modules in the packaged tree.
-    const KEEP = new Set(['@langchain/classic', 'binary-extensions']);
+    const KEEP = new Set(["@langchain/classic", "binary-extensions"]);
     let gutted = 0;
     for (const entry of fs.readdirSync(communityNm, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const dir = path.join(communityNm, entry.name);
-      if (entry.name.startsWith('@')) {
+      if (entry.name.startsWith("@")) {
         for (const scoped of fs.readdirSync(dir, { withFileTypes: true })) {
           if (!scoped.isDirectory()) continue;
           const scopedName = `${entry.name}/${scoped.name}`;
@@ -398,9 +495,46 @@ function pruneBloat(stagingDir, targetPlatform) {
   }
 }
 
+function prunePlatformNativePackages(rootNodeModules, targetPlatform) {
+  let removed = 0;
+  for (const nodeModules of findNodeModulesDirectories(rootNodeModules)) {
+    for (const config of PLATFORM_PACKAGE_CONFIGS) {
+      const scopeDir = path.join(nodeModules, config.scope);
+      if (!fs.existsSync(scopeDir)) continue;
+      const expectedBasename = expectedNativePackageName(config, targetPlatform).split("/")[1];
+      for (const name of fs.readdirSync(scopeDir)) {
+        if (getNativePackageConfig(`${config.scope}/${name}`) !== config) continue;
+        // Retain target copies at every dependency depth. Packages such as the
+        // Sharp instance nested under Transformers resolve their optional
+        // @img binary relative to that package; VSCE does not reliably retain
+        // an unrelated root optional package as a substitute.
+        if (name === expectedBasename) continue;
+        fs.rmSync(path.join(scopeDir, name), { recursive: true, force: true });
+        removed++;
+      }
+    }
+  }
+  if (removed > 0) {
+    console.log(`  ✓ Removed ${removed} non-target native packages`);
+  }
+}
+
+function findNodeModulesDirectories(rootNodeModules) {
+  const directories = [rootNodeModules];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const fullPath = path.join(directory, entry.name);
+      if (entry.name === "node_modules") directories.push(fullPath);
+      visit(fullPath);
+    }
+  };
+  visit(rootNodeModules);
+  return directories;
+}
+
 function pruneOnnxruntimeNode(nm, targetPlatform) {
-  const napiDir = path.join(nm, '@huggingface', 'transformers',
-    'node_modules', 'onnxruntime-node', 'bin', 'napi-v3');
+  const napiDir = path.join(nm, "@huggingface", "transformers", "node_modules", "onnxruntime-node", "bin", "napi-v3");
   if (!fs.existsSync(napiDir)) return;
 
   for (const platformDir of fs.readdirSync(napiDir)) {
@@ -423,7 +557,9 @@ function pruneOnnxruntimeNode(nm, targetPlatform) {
       if (fs.readdirSync(platformPath).length === 0) {
         fs.rmSync(platformPath, { recursive: true, force: true });
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) {
+      /* ignore */
+    }
   }
 }
 
@@ -441,7 +577,7 @@ function findFiles(dir, ext) {
 }
 
 function pruneLangchainCommunityPackage(nodeModulesDir) {
-  const communityDir = path.join(nodeModulesDir, '@langchain', 'community');
+  const communityDir = path.join(nodeModulesDir, "@langchain", "community");
   if (!fs.existsSync(communityDir)) return null;
 
   const keepSet = buildKeepPathSet(LANGCHAIN_COMMUNITY_KEEP_PATHS);
@@ -457,7 +593,7 @@ function buildKeepPathSet(relativePaths) {
     keepSet.add(normalizedPath);
 
     let parent = path.posix.dirname(normalizedPath);
-    while (parent !== '.') {
+    while (parent !== ".") {
       keepSet.add(parent);
       parent = path.posix.dirname(parent);
     }
@@ -471,7 +607,7 @@ function pruneDirectoryToKeepSet(rootDir, currentDir, keepSet, removed) {
     const relativePath = normalizeRelativePath(path.relative(rootDir, fullPath));
 
     if (entry.isDirectory()) {
-      if (relativePath === 'node_modules') continue;
+      if (relativePath === "node_modules") continue;
 
       if (keepSet.has(relativePath)) {
         pruneDirectoryToKeepSet(rootDir, fullPath, keepSet, removed);
@@ -508,15 +644,15 @@ function countTreeEntries(dir) {
 }
 
 function normalizeRelativePath(relativePath) {
-  return relativePath.split(path.sep).join('/');
+  return relativePath.split(path.sep).join("/");
 }
 
 /** Gut a package directory — remove everything except package.json and nested node_modules. Returns 1 if gutted, 0 if skipped. */
 function gutPackage(pkgDir) {
-  if (!fs.existsSync(path.join(pkgDir, 'package.json'))) return 0;
+  if (!fs.existsSync(path.join(pkgDir, "package.json"))) return 0;
   let removed = false;
   for (const entry of fs.readdirSync(pkgDir)) {
-    if (entry === 'package.json' || entry === 'node_modules') continue;
+    if (entry === "package.json" || entry === "node_modules") continue;
     fs.rmSync(path.join(pkgDir, entry), { recursive: true, force: true });
     removed = true;
   }
@@ -528,27 +664,22 @@ function gutPackage(pkgDir) {
 // ---------------------------------------------------------------------------
 
 function packageVsix(stagingDir, targetPlatform) {
-  const publish = process.argv.includes('--publish');
-  const action = publish ? 'publish' : 'package';
-  console.log(`\n${publish ? 'Publishing' : 'Packaging'} VSIX...`);
+  console.log("\nPackaging VSIX...");
 
   // Use the root project's vsce binary
-  const vscebin = path.join(ROOT, 'node_modules', '.bin', 'vsce');
-  const vsceCmd = `${vscebin} ${action} --target ${targetPlatform.target}`;
-  execSync(vsceCmd, { cwd: stagingDir, stdio: 'inherit' });
+  const vscebin = path.join(ROOT, "node_modules", ".bin", "vsce");
+  execFileSync(vscebin, ["package", "--target", targetPlatform.target], { cwd: stagingDir, stdio: "inherit" });
 
-  if (!publish) {
-    // Find the generated VSIX and move it to root
-    const vsix = fs.readdirSync(stagingDir).find(f => f.endsWith('.vsix'));
-    if (!vsix) {
-      throw new Error('No .vsix file produced');
-    }
-    const src = path.join(stagingDir, vsix);
-    const dest = path.join(ROOT, vsix);
-    fs.copyFileSync(src, dest);
-    console.log(`\n✓ VSIX: ${dest}`);
-    return dest;
+  // Find the generated VSIX and move it to root
+  const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
+  if (!vsix) {
+    throw new Error("No .vsix file produced");
   }
+  const src = path.join(stagingDir, vsix);
+  const dest = path.join(ROOT, vsix);
+  fs.copyFileSync(src, dest);
+  console.log(`\n✓ VSIX: ${dest}`);
+  return dest;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,20 +687,32 @@ function packageVsix(stagingDir, targetPlatform) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  if (process.argv.includes("--publish")) {
+    throw new Error("Direct build-and-publish is disabled; use a verified release manifest");
+  }
   const targetPlatform = getTargetPlatform();
   console.log(`Building VSIX for ${targetPlatform.target}...\n`);
 
-  // Ensure dist/extension.js exists
-  const distExtension = path.join(ROOT, 'dist', 'extension.js');
-  if (!fs.existsSync(distExtension)) {
-    console.log('Building extension bundle...');
-    execSync('npm run vscode:prepublish', { cwd: ROOT, stdio: 'inherit' });
+  // A VSIX must never inherit stale output from a developer checkout.
+  console.log("Cleaning and rebuilding extension output from source...");
+  for (const output of [
+    "dist",
+    "packages/core/dist",
+    "packages/core/tsconfig.tsbuildinfo",
+    "packages/mcp-server/dist",
+    "packages/mcp-server/tsconfig.tsbuildinfo",
+    "packages/vscode/dist",
+    "packages/vscode/tsconfig.tsbuildinfo",
+  ]) {
+    fs.rmSync(path.join(ROOT, output), { recursive: true, force: true });
   }
+  execSync("npm run vscode:prepublish", { cwd: ROOT, stdio: "inherit" });
 
+  const distExtension = path.join(ROOT, "dist", "extension.js");
   if (!fs.existsSync(distExtension)) {
     throw new Error(
       `Missing extension bundle: expected ${distExtension} after running "npm run vscode:prepublish". ` +
-      'Check the compile/bundle output and ensure the extension entrypoint is generated before packaging.'
+        "Check the compile/bundle output and ensure the extension entrypoint is generated before packaging.",
     );
   }
 
@@ -580,21 +723,33 @@ async function main() {
     createStagingPackageJson(stagingDir, targetPlatform);
     copyToStaging(stagingDir);
     verifyStagedModels(stagingDir);
-    npmInstallStaging(stagingDir);
+    npmInstallStaging(stagingDir, targetPlatform);
     await installNativeDeps(stagingDir, targetPlatform);
     pruneBloat(stagingDir, targetPlatform);
     packageVsix(stagingDir, targetPlatform);
   } finally {
-    if (process.argv.includes('--keep-staging')) {
+    if (process.argv.includes("--keep-staging")) {
       console.log(`\nKeeping staging directory for inspection: ${stagingDir}`);
     } else {
-      console.log('\nCleaning up staging directory...');
+      console.log("\nCleaning up staging directory...");
       fs.rmSync(stagingDir, { recursive: true, force: true });
     }
   }
 }
 
-main().catch(error => {
-  console.error('\n✗ Build failed:', error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error("\n✗ Build failed:", error.message);
+    process.exit(1);
+  });
+} else {
+  module.exports = {
+    assertSafeArchiveMember,
+    expectedNativePackageName,
+    getNativePackageConfig,
+    matchesTargetPlatform,
+    prunePlatformNativePackages,
+    verifyIntegrity,
+    verifyNativePackages,
+  };
+}

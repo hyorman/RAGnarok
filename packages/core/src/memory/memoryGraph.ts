@@ -13,7 +13,9 @@ export class MemoryGraph {
   private logger = new Logger("MemoryGraph");
 
   constructor() {
-    this.graph = new Graph({ type: "directed", multi: false, allowSelfLoops: false });
+    // Different semantic relationship types may connect the same ordered
+    // entity pair. Graphology must therefore preserve keyed parallel edges.
+    this.graph = new Graph({ type: "directed", multi: true, allowSelfLoops: false });
   }
 
   // ── Entity Operations ──────────────────────────────────────────────
@@ -115,8 +117,8 @@ export class MemoryGraph {
     }
     try {
       this.graph.addEdgeWithKey(rel.id, rel.sourceId, rel.targetId, { ...rel });
-    } catch {
-      this.logger.debug(`Edge from ${rel.sourceId} to ${rel.targetId} already exists`);
+    } catch (error) {
+      this.logger.debug(`Unable to add relationship ${rel.id}`, error);
     }
   }
 

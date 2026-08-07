@@ -34,7 +34,7 @@ describe("storage format v2", () => {
       expect.fail("expected format validation to fail");
     } catch (error) {
       expect((error as Error).message).to.include("unversioned");
-      expect((error as Error).message).to.include("--reset-storage");
+      expect((error as Error).message).to.include("ragnarok-migrate");
     }
   });
 

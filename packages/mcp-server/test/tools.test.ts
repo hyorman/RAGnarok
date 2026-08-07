@@ -1,8 +1,8 @@
 /**
  * Unit tests for MCP tool handlers (registerTools)
  *
- * Strategy: spy on McpServer.prototype.tool to capture each registered
- * handler callback, then invoke handlers directly with mocked dependencies.
+ * Strategy: capture registerTool calls, then invoke handlers directly with
+ * mocked dependencies.
  */
 
 import { expect } from "chai";
@@ -10,8 +10,8 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import sinon from "sinon";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerTools } from "../src/tools";
+import { McpServer } from "@modelcontextprotocol/server";
+import { measureToolResultForResponse, registerTools } from "../src/tools";
 import type { McpConfig } from "../src/config";
 import type {
   TopicManager,
@@ -47,6 +47,20 @@ function makeTopic(overrides: Partial<Topic> = {}): Topic {
 }
 
 type ToolHandler = (...args: any[]) => Promise<any>;
+type CapturedTool = {
+  name: string;
+  config: {
+    description?: string;
+    inputSchema?: { safeParse(value: unknown): unknown };
+    annotations?: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
+  };
+  handler: ToolHandler;
+};
+
+function makeServerContext(signal = new AbortController().signal): any {
+  return { mcpReq: { signal } };
+}
 
 /** Build a full McpConfig for tests that need one (e.g. path allowlisting). */
 function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
@@ -75,13 +89,12 @@ function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     writeApiKey: "",
     corsOrigin: "*",
     httpHost: "127.0.0.1",
+    allowedHosts: [],
     rerankerModel: "Xenova/ms-marco-MiniLM-L-6-v2",
     rerankerEnabled: true,
     rerankerMaxCandidates: 20,
     rerankerCandidateMultiplier: 4,
     queryMemoryEnabled: false,
-    sessionIdleTtlMs: 30_000,
-    maxSessions: 20,
     rateLimitPerMinute: 1_000,
     exportDir: "/tmp/ragnarok-exports",
     githubHosts: ["github.com"],
@@ -93,8 +106,7 @@ function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
 }
 
 /**
- * Register all tools on a real McpServer and capture the handler callbacks
- * keyed by tool name.
+ * Register all tools on a v2-shaped server and capture callbacks by name.
  */
 function captureHandlers(deps: {
   topicManager: sinon.SinonStubbedInstance<TopicManager>;
@@ -106,17 +118,13 @@ function captureHandlers(deps: {
   memoryStore?: unknown;
   accessRole?: "reader" | "writer";
 }): Record<string, ToolHandler> {
-  const handlers: Record<string, ToolHandler> = {};
-  const server = new McpServer({ name: "test", version: "0.0.0" });
-
-  // Wrap server.tool to capture the last argument (handler callback)
-  const originalTool = server.tool.bind(server);
-  server.tool = function (this: McpServer, ...args: any[]) {
-    const name = args[0] as string;
-    const handler = args[args.length - 1] as ToolHandler;
-    handlers[name] = handler;
-    return (originalTool as (...a: unknown[]) => unknown).apply(this, args);
-  } as any;
+  const captured: CapturedTool[] = [];
+  const server = {
+    registerTool(name: string, config: CapturedTool["config"], handler: CapturedTool["handler"]) {
+      captured.push({ name, config, handler });
+      return { name };
+    },
+  } as unknown as McpServer;
 
   registerTools(
     server,
@@ -130,12 +138,38 @@ function captureHandlers(deps: {
     deps.accessRole,
   );
 
-  return handlers;
+  expect(captured.map(({ name }) => name)).to.deep.equal(
+    captured.map(({ name }) => name).sort((left, right) => left.localeCompare(right)),
+  );
+  for (const tool of captured) {
+    expect(tool.config.inputSchema, tool.name).to.respondTo("safeParse");
+  }
+
+  return Object.fromEntries(
+    captured.map(({ name, handler }) => [name, (args: any, context = makeServerContext()) => handler(args, context)]),
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
+
+describe("common tool response wrapper", () => {
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  it("serializes and measures a fitting non-graph result once", () => {
+    const input = { content: [{ type: "text", text: JSON.stringify({ message: "ok" }) }] };
+    const byteLength = sinon.spy(Buffer, "byteLength");
+
+    const measurement = measureToolResultForResponse(input, "local", 1024);
+
+    expect(measurement.fits).to.equal(true);
+    expect(measurement.result.structuredContent).to.deep.equal({ message: "ok" });
+    expect(byteLength.callCount).to.equal(1);
+  });
+});
 
 describe("MCP Tools (registerTools)", () => {
   let topicManager: sinon.SinonStubbedInstance<TopicManager>;
@@ -792,16 +826,13 @@ describe("MCP Tools (registerTools)", () => {
       mockReranker: any,
       mockConfig: any,
     ): Record<string, ToolHandler> {
-      const captured: Record<string, ToolHandler> = {};
-      const server = new McpServer({ name: "test", version: "0.0.0" });
-
-      const originalTool = server.tool.bind(server);
-      server.tool = function (this: McpServer, ...args: any[]) {
-        const name = args[0] as string;
-        const handler = args[args.length - 1] as ToolHandler;
-        captured[name] = handler;
-        return (originalTool as (...a: unknown[]) => unknown).apply(this, args);
-      } as any;
+      const captured: CapturedTool[] = [];
+      const server = {
+        registerTool(name: string, config: CapturedTool["config"], handler: CapturedTool["handler"]) {
+          captured.push({ name, config, handler });
+          return { name };
+        },
+      } as unknown as McpServer;
 
       registerTools(
         server,
@@ -814,7 +845,12 @@ describe("MCP Tools (registerTools)", () => {
         mockConfig,
       );
 
-      return captured;
+      return Object.fromEntries(
+        captured.map(({ name, handler }) => [
+          name,
+          (args: any, context = makeServerContext()) => handler(args, context),
+        ]),
+      );
     }
 
     describe("rag_list_reranker_models", () => {
@@ -980,13 +1016,12 @@ describe("MCP Tools (registerTools)", () => {
   describe("deployment-aware tool descriptions", () => {
     function captureDescriptions(deployment?: "local" | "shared"): Record<string, string> {
       const descriptions: Record<string, string> = {};
-      const server = new McpServer({ name: "test", version: "0.0.0" });
-
-      const originalTool = server.tool.bind(server);
-      server.tool = function (this: McpServer, ...args: any[]) {
-        descriptions[args[0] as string] = args[1] as string;
-        return (originalTool as (...a: unknown[]) => unknown).apply(this, args);
-      } as any;
+      const server = {
+        registerTool(name: string, config: CapturedTool["config"], _handler: CapturedTool["handler"]) {
+          descriptions[name] = config.description ?? "";
+          return { name };
+        },
+      } as unknown as McpServer;
 
       registerTools(
         server,
@@ -1019,6 +1054,133 @@ describe("MCP Tools (registerTools)", () => {
       for (const [name, description] of Object.entries(descriptions)) {
         expect(description, `description of ${name}`).to.not.match(/^\[Team shared KB\]/);
       }
+    });
+  });
+
+  describe("structural role facades and shared output hygiene", () => {
+    function captureForRole(
+      role: "reader" | "curator" | "admin",
+      deployment: "local" | "shared",
+      cfg?: McpConfig,
+      transferManager?: any,
+    ) {
+      const handlers: Record<string, ToolHandler> = {};
+      const server = {
+        registerTool(name: string, _config: CapturedTool["config"], handler: CapturedTool["handler"]) {
+          handlers[name] = (args: any, context = makeServerContext()) => handler(args, context);
+          return { name };
+        },
+      } as unknown as McpServer;
+      registerTools(
+        server,
+        topicManager as unknown as TopicManager,
+        llmProvider as unknown as ILLMProvider,
+        embeddingService as unknown as EmbeddingService,
+        ragQueryService as unknown as RAGQueryService,
+        undefined,
+        undefined,
+        cfg,
+        role,
+        undefined,
+        deployment,
+        undefined,
+        transferManager,
+        `${role}:test`,
+      );
+      return handlers;
+    }
+
+    it("exposes curator content mutations but reserves model, archive, and server-path tools for admin", () => {
+      const reader = Object.keys(captureForRole("reader", "shared"));
+      const transferManager = { consumeUpload: sinon.stub(), createDownload: sinon.stub() };
+      const curator = Object.keys(captureForRole("curator", "shared", undefined, transferManager));
+      const admin = Object.keys(captureForRole("admin", "shared", undefined, transferManager));
+
+      expect(reader).to.not.include.members(["rag_create_topic", "rag_add_url", "rag_switch_embedding_model"]);
+      expect(curator).to.include.members([
+        "rag_create_topic",
+        "rag_add_url",
+        "rag_add_github_repo",
+        "rag_create_document_upload",
+        "rag_ingest_upload",
+      ]);
+      expect(curator).to.not.include.members([
+        "rag_add_documents",
+        "rag_switch_embedding_model",
+        "rag_switch_reranker_model",
+        "rag_export_topic",
+        "rag_create_archive_upload",
+        "rag_import_upload",
+      ]);
+      expect(admin).to.include.members([
+        "rag_switch_embedding_model",
+        "rag_switch_reranker_model",
+        "rag_export_topic",
+        "rag_create_archive_upload",
+        "rag_import_upload",
+      ]);
+      expect(admin).to.not.include("rag_add_documents");
+      expect(admin).to.not.include("rag_import_topic");
+      expect(admin).to.not.include("rag_memory");
+    });
+
+    it("does not create or alter configured storage while registering and invoking every reader tool", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-reader-immutability-"));
+      const marker = path.join(root, "marker.bin");
+      const bytes = Buffer.from([0, 1, 2, 3, 254, 255]);
+      await fs.writeFile(marker, bytes);
+      const cfg = makeMcpConfig({
+        storageDir: path.join(root, "storage"),
+        exportDir: path.join(root, "exports"),
+        workingDir: root,
+        allowedPaths: [root],
+      });
+      const beforeEntries = await fs.readdir(root);
+      const handlers = captureForRole("reader", "shared", cfg);
+      const args: Record<string, any> = {
+        rag_query: { topic: "docs", query: "question" },
+        rag_topic_stats: { topic: "docs" },
+        rag_list_documents: { topic: "docs" },
+      };
+      for (const [name, handler] of Object.entries(handlers)) {
+        await handler(args[name] ?? {}, {});
+      }
+      expect(await fs.readdir(root)).to.deep.equal(beforeEntries);
+      expect(await fs.readFile(marker)).to.deep.equal(bytes);
+      await fs.rm(root, { recursive: true, force: true });
+    });
+
+    it("removes server and model paths from shared structured and text output", async () => {
+      embeddingService.getCurrentModel.returns("model");
+      embeddingService.getActiveBackendType.returns("huggingface");
+      embeddingService.getLocalModelPath.returns("/srv/ragnarok/models/private");
+      const handler = captureForRole("reader", "shared").rag_embedding_info;
+      const result = await handler({});
+      const output = JSON.stringify(result);
+      expect(output).to.not.include("/srv/ragnarok");
+      expect(output).to.not.include("localModelPath");
+      expect(result.structuredContent).to.deep.equal({ currentModel: "model", backend: "huggingface" });
+    });
+
+    it("preserves only validated relative transfer endpoints in shared output", async () => {
+      const uploadEndpoint = "transfer/uploads/123e4567-e89b-42d3-a456-426614174000";
+      const transferManager = {
+        createUpload: sinon.stub().resolves({
+          id: "123e4567-e89b-42d3-a456-426614174000",
+          uploadEndpoint,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      };
+      const handler = captureForRole("curator", "shared", undefined, transferManager).rag_create_document_upload;
+      const result = await handler({
+        filename: "facts.md",
+        contentType: "text/markdown",
+        size: 5,
+        sha256: "a".repeat(64),
+      });
+      expect(result.isError, JSON.stringify(result)).not.to.equal(true);
+      expect(result.structuredContent.uploadEndpoint).to.equal(uploadEndpoint);
+      expect(result.content[0].text).to.include(uploadEndpoint);
     });
   });
 });

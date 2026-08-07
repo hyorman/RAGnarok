@@ -354,12 +354,16 @@ describe("DocumentPipeline", function () {
       const controller = new AbortController();
       controller.abort(new Error("ingestion cancelled"));
       const topicId = "test-topic-cancelled";
-      const result = await pipeline.processDocument(path.join(fixturesPath, "sample.md"), topicId, {
-        signal: controller.signal,
-      });
+      let caught: unknown;
+      try {
+        await pipeline.processDocument(path.join(fixturesPath, "sample.md"), topicId, {
+          signal: controller.signal,
+        });
+      } catch (error) {
+        caught = error;
+      }
 
-      expect(result.success).to.equal(false);
-      expect(result.stages.storing).to.equal(false);
+      expect(caught).to.equal(controller.signal.reason);
       const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService);
       await verifier.initialize();
       expect(await verifier.loadStore(topicId)).to.equal(null);

@@ -64,6 +64,13 @@ export async function downloadFrames(cacheDir: string): Promise<string> {
     return tsvPath;
   }
 
+  if (process.env.RAGNAROK_BENCHMARK_MODE === "release") {
+    throw new Error(
+      `Release benchmark corpus is missing at ${tsvPath}. ` +
+        "Run the documented benchmark acquisition command before the release gate; release mode never downloads or skips.",
+    );
+  }
+
   await fsp.mkdir(cacheDir, { recursive: true });
   await httpsGet(FRAMES_TSV_URL, tsvPath);
 
@@ -153,6 +160,13 @@ export async function fetchWikipediaArticle(
   ) {
     const cached = JSON.parse(await fsp.readFile(cachePath, "utf-8"));
     return cached as { title: string; text: string };
+  }
+
+  if (process.env.RAGNAROK_BENCHMARK_MODE === "release") {
+    throw new Error(
+      `Release benchmark Wikipedia article is missing at ${cachePath}. ` +
+        "Acquire the pinned article set documented in docs/BENCHMARKS.md; release mode never downloads articles.",
+    );
   }
 
   await fsp.mkdir(cacheDir, { recursive: true });

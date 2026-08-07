@@ -15,6 +15,52 @@ export interface StorageFormatMarker {
   initializedAt: number;
 }
 
+const INTERRUPTED_MIGRATION_STAGES = new Set([
+  "cutoverPrepared",
+  "legacyBackedUp",
+  "v2Published",
+  "rollbackPrepared",
+  "rollbackV2BackedUp",
+  "rollbackLegacyPublished",
+]);
+
+/**
+ * Refuse normal initialization while an external migration state records an
+ * incomplete namespace cutover. The state is outside storage because the
+ * source directory can be absent between atomic renames.
+ */
+export async function assertNoInterruptedStorageMigration(storageDir: string): Promise<void> {
+  const sourcePath = path.resolve(storageDir);
+  const parent = path.dirname(sourcePath);
+  const prefix = `.${path.basename(sourcePath)}.migration-`;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(parent);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith(".json")) {
+      continue;
+    }
+    let state: { sourcePath?: string; migrationId?: string; stage?: string };
+    try {
+      state = JSON.parse(await fs.readFile(path.join(parent, entry), "utf8")) as typeof state;
+    } catch {
+      throw new Error(`Migration state is corrupt at ${path.join(parent, entry)}; storage initialization aborted.`);
+    }
+    if (path.resolve(state.sourcePath ?? "") === sourcePath && INTERRUPTED_MIGRATION_STAGES.has(state.stage ?? "")) {
+      throw new Error(
+        `Storage migration ${state.migrationId ?? "unknown"} is interrupted at ${state.stage}. ` +
+          "Run ragnarok-migrate resume before starting normal storage services.",
+      );
+    }
+  }
+}
+
 /** Durably replace a UTF-8 file using a same-directory atomic rename. */
 export async function atomicWriteFile(filePath: string, contents: string): Promise<void> {
   const directory = path.dirname(filePath);
@@ -73,6 +119,7 @@ async function hasManagedData(storageDir: string): Promise<boolean> {
 
 /** Validate storage format v2, initializing only a genuinely empty directory. */
 export async function ensureStorageFormatV2(storageDir: string): Promise<StorageFormatMarker> {
+  await assertNoInterruptedStorageMigration(storageDir);
   await fs.mkdir(storageDir, { recursive: true });
   const formatPath = markerPath(storageDir);
   try {
@@ -95,7 +142,8 @@ export async function ensureStorageFormatV2(storageDir: string): Promise<Storage
   if (await hasManagedData(storageDir)) {
     throw new Error(
       `Existing unversioned RAGnarōk storage was found at ${storageDir}. ` +
-        `Start with --reset-storage or RAGNAROK_RESET_STORAGE=1 to back it up and initialize storage format v2.`,
+        `Run "ragnarok-migrate --storage ${storageDir} --dry-run" to preview the supported v0.3 migration. ` +
+        `Reset is destructive continuity loss and requires separate explicit consent.`,
     );
   }
 

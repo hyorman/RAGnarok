@@ -26,7 +26,6 @@ import type { LoaderOptions } from "../loaders/documentLoaderFactory";
 import { SemanticChunker } from "../splitters/semanticChunker";
 import { EntityExtractor } from "./entityExtractor";
 import { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "./entityExtractorTypes";
-import { KnowledgeGraph } from "../stores/knowledgeGraph";
 import { IndexingPipelineState, IndexingPipelineStateType, IndexingPipelineUpdateType } from "./graphState";
 import { upsertExtractedGraphData } from "../utils/knowledgeGraphAssembly";
 import { Logger } from "../logger";
@@ -43,6 +42,7 @@ export interface IndexingGraphDeps {
   checkpointer?: BaseCheckpointSaver;
   loaderOptions?: Partial<LoaderOptions>;
   signal?: AbortSignal;
+  ingestionTransactionId?: string;
 }
 
 // ── Node Functions ───────────────────────────────────────────────────
@@ -64,6 +64,15 @@ function stableId(prefix: string, value: string): string {
   return `${prefix}-${createHash("sha256").update(value).digest("hex")}`;
 }
 
+function rethrowCancellation(error: unknown, signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? error;
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    throw error;
+  }
+}
+
 /**
  * Load documents from file paths using DocumentLoaderFactory.
  * Delegates to the same loader the DocumentPipeline uses internally.
@@ -73,9 +82,15 @@ function createLoadDocumentsNode(deps: IndexingGraphDeps) {
     logger.info("loadDocuments: starting", { fileCount: state.filePaths.length });
 
     try {
+      deps.signal?.throwIfAborted();
       const loader = new DocumentLoaderFactory();
-      const loaderInputs = state.filePaths.map((filePath) => ({ filePath, ...deps.loaderOptions }));
+      const loaderInputs = state.filePaths.map((filePath) => ({
+        filePath,
+        ...deps.loaderOptions,
+        signal: deps.signal,
+      }));
       const results = await loader.loadDocuments(loaderInputs);
+      deps.signal?.throwIfAborted();
       const docs = results.flatMap((r) => r.documents);
 
       if (docs.length === 0) {
@@ -101,13 +116,21 @@ function createLoadDocumentsNode(deps: IndexingGraphDeps) {
           .update(documents.map((document) => document.pageContent).join("\0"))
           .digest("hex");
         for (const document of documents) {
-          Object.assign(document.metadata, { source, sourceType, sourceDescriptor, sourceRevision, documentId });
+          Object.assign(document.metadata, {
+            source,
+            sourceType,
+            sourceDescriptor,
+            sourceRevision,
+            documentId,
+            ingestionTransactionId: deps.ingestionTransactionId ?? "",
+          });
         }
       }
 
       logger.info("loadDocuments: complete", { documentCount: docs.length });
       return { loadedDocs: docs, documentCount: docs.length, completedStage: "loaded" };
     } catch (error) {
+      rethrowCancellation(error, deps.signal);
       const msg = `loadDocuments failed: ${error instanceof Error ? error.message : String(error)}`;
       logger.error(msg);
       return { errors: [msg], completedStage: "loaded" };
@@ -125,8 +148,10 @@ function createChunkDocumentsNode(deps: IndexingGraphDeps) {
     logger.info("chunkDocuments: starting", { documentCount: state.loadedDocs.length });
 
     try {
+      deps.signal?.throwIfAborted();
       const chunker = new SemanticChunker(deps.config);
       const result = await chunker.chunkDocuments(state.loadedDocs);
+      deps.signal?.throwIfAborted();
 
       if (result.chunkCount === 0) {
         const msg = "chunkDocuments failed: no chunks produced";
@@ -151,6 +176,7 @@ function createChunkDocumentsNode(deps: IndexingGraphDeps) {
       logger.info("chunkDocuments: complete", { chunkCount: result.chunkCount });
       return { loadedDocs: [], chunks: result.chunks, chunkCount: result.chunkCount, completedStage: "chunked" };
     } catch (error) {
+      rethrowCancellation(error, deps.signal);
       const msg = `chunkDocuments failed: ${error instanceof Error ? error.message : String(error)}`;
       logger.error(msg);
       return { errors: [msg], completedStage: "chunked" };
@@ -172,14 +198,20 @@ function createEmbedAndStoreNode(deps: IndexingGraphDeps) {
     });
 
     try {
-      await deps.topicManager.storeProcessedChunks(state.topicId, state.chunks);
+      deps.signal?.throwIfAborted();
+      await deps.topicManager.storeProcessedChunks(state.topicId, state.chunks, deps.signal);
+      deps.signal?.throwIfAborted();
 
       logger.info("embedAndStore: complete", { chunksStored: state.chunks.length });
-      return { completedStage: "stored" };
+      return { completedStage: "stored", storageOutcome: "succeeded" };
     } catch (error) {
+      rethrowCancellation(error, deps.signal);
       const msg = `embedAndStore failed: ${error instanceof Error ? error.message : String(error)}`;
       logger.error(msg);
-      return { errors: [msg], completedStage: "stored" };
+      // Do not advance completedStage for an attempted write. In particular,
+      // callers must never infer that vectors exist merely because the
+      // storage node ran and caught an exception.
+      return { errors: [msg], storageOutcome: "failed" };
     }
   };
 }
@@ -203,13 +235,16 @@ function createExtractEntitiesNode(deps: IndexingGraphDeps) {
     logger.info("extractEntities: starting", { chunkCount: state.chunks.length });
 
     try {
+      deps.signal?.throwIfAborted();
       const extractor = new EntityExtractor(deps.llmProvider);
       const result = await extractor.extractFromChunks(state.chunks, {
         batchSize: DEFAULT_ENTITY_EXTRACTOR_OPTIONS.batchSize,
         rateLimitMs: DEFAULT_ENTITY_EXTRACTOR_OPTIONS.rateLimitMs,
         maxConsecutiveFailures: DEFAULT_ENTITY_EXTRACTOR_OPTIONS.maxConsecutiveFailures,
         entityTypes: [...DEFAULT_ENTITY_EXTRACTOR_OPTIONS.entityTypes],
+        signal: deps.signal,
       });
+      deps.signal?.throwIfAborted();
 
       logger.info("extractEntities: complete", {
         entities: result.entities.length,
@@ -224,6 +259,7 @@ function createExtractEntitiesNode(deps: IndexingGraphDeps) {
         completedStage: "extracted",
       };
     } catch (error) {
+      rethrowCancellation(error, deps.signal);
       const msg = `extractEntities failed: ${error instanceof Error ? error.message : String(error)}`;
       logger.error(msg);
       return { errors: [msg], completedStage: "extracted" };
@@ -247,31 +283,34 @@ function createStoreEntitiesNode(deps: IndexingGraphDeps) {
     });
 
     try {
+      deps.signal?.throwIfAborted();
       const kgStore = deps.topicManager.getKnowledgeGraphStore();
       if (!kgStore) {
         logger.warn("storeEntities: no KnowledgeGraphStore available");
         return { completedStage: "entities_stored" };
       }
 
-      // Load existing graph or create a new one
-      const existingKg = await deps.topicManager.getKnowledgeGraph(state.topicId);
-      const kg = existingKg ?? new KnowledgeGraph(state.topicId);
-
       // Embed entity descriptions
       const embeddingService = deps.topicManager.getEmbeddingService();
       const extractor = new EntityExtractor(deps.llmProvider!);
-      const entityEmbeddings = await extractor.embedEntities(state.extractedEntities, embeddingService);
+      const entityEmbeddings = await extractor.embedEntities(state.extractedEntities, embeddingService, deps.signal);
+      const embeddingFingerprint = await embeddingService.getFingerprint(deps.signal);
+      deps.signal?.throwIfAborted();
 
-      const graphUpsert = upsertExtractedGraphData({
-        knowledgeGraph: kg,
-        entities: state.extractedEntities,
-        relationships: state.extractedRelationships,
-        entityEmbeddings,
-        chunks: state.chunks,
-      });
-
-      // Persist to LanceDB
-      await kgStore.saveGraph(state.topicId, kg.toJSON());
+      const graphUpsert = await deps.topicManager.mutateKnowledgeGraph(
+        state.topicId,
+        (kg) => {
+          kg.setEmbeddingFingerprint(embeddingFingerprint);
+          return upsertExtractedGraphData({
+            knowledgeGraph: kg,
+            entities: state.extractedEntities,
+            relationships: state.extractedRelationships,
+            entityEmbeddings,
+            chunks: state.chunks,
+          });
+        },
+        deps.signal,
+      );
 
       logger.info("storeEntities: complete", {
         entities: graphUpsert.entityCount,
@@ -281,15 +320,15 @@ function createStoreEntitiesNode(deps: IndexingGraphDeps) {
       return {
         entityCount: graphUpsert.entityCount,
         relationshipCount: graphUpsert.relationshipCount,
-        chunks: [],
         extractedEntities: [],
         extractedRelationships: [],
         completedStage: "entities_stored",
       };
     } catch (error) {
+      rethrowCancellation(error, deps.signal);
       const msg = `storeEntities failed: ${error instanceof Error ? error.message : String(error)}`;
       logger.error(msg);
-      return { errors: [msg], completedStage: "entities_stored" };
+      return { errors: [msg] };
     }
   };
 }
@@ -300,8 +339,43 @@ function createStoreEntitiesNode(deps: IndexingGraphDeps) {
 function createBuildResultNode(_deps: IndexingGraphDeps) {
   return async (state: IndexingPipelineStateType): Promise<IndexingPipelineUpdateType> => {
     const hasErrors = state.errors.length > 0;
-    const vectorStored = ["stored", "extracted", "entities_stored"].includes(state.completedStage);
+    const vectorStored = state.storageOutcome === "succeeded";
     const success = vectorStored && state.chunkCount > 0;
+
+    const sourceDocuments = new Map<
+      string,
+      {
+        documentId: string;
+        canonicalSource: string;
+        sourceType: string;
+        sourceRevision: string;
+        fileName: string;
+        filePath: string;
+        fileType: string;
+        chunkCount: number;
+      }
+    >();
+    for (const chunk of state.chunks) {
+      const documentId = String(chunk.metadata.documentId ?? "");
+      if (!documentId) {
+        continue;
+      }
+      const current = sourceDocuments.get(documentId);
+      if (current) {
+        current.chunkCount += 1;
+      } else {
+        sourceDocuments.set(documentId, {
+          documentId,
+          canonicalSource: String(chunk.metadata.source ?? chunk.metadata.filePath ?? ""),
+          sourceType: String(chunk.metadata.sourceType ?? "file"),
+          sourceRevision: String(chunk.metadata.sourceRevision ?? ""),
+          fileName: String(chunk.metadata.fileName ?? path.basename(String(chunk.metadata.source ?? ""))),
+          filePath: String(chunk.metadata.filePath ?? chunk.metadata.source ?? ""),
+          fileType: String(chunk.metadata.fileType ?? "text"),
+          chunkCount: 1,
+        });
+      }
+    }
 
     const result: Record<string, unknown> = {
       success,
@@ -311,8 +385,12 @@ function createBuildResultNode(_deps: IndexingGraphDeps) {
       chunkCount: state.chunkCount,
       entityCount: state.entityCount,
       relationshipCount: state.relationshipCount,
+      sourceDocuments: [...sourceDocuments.values()],
       completedStage: state.completedStage,
-      graphExtracted: success && state.entityCount > 0,
+      stageOutcomes: {
+        storage: state.storageOutcome,
+      },
+      graphExtracted: success && state.completedStage === "entities_stored" && state.entityCount > 0,
       partial: success && hasErrors,
       warnings: success && hasErrors ? state.errors.map((message) => ({ stage: "graph", message })) : [],
       errors: !success && hasErrors ? state.errors : undefined,

@@ -19,7 +19,11 @@ import { connect } from "@lancedb/lancedb";
 import type { Connection, Table } from "@lancedb/lancedb";
 import { Field, FixedSizeList, Float32, Float64, Schema, Utf8 } from "apache-arrow";
 import { Mutex } from "async-mutex";
+import * as crypto from "crypto";
+import * as fs from "fs/promises";
+import * as path from "path";
 import { Logger } from "../logger";
+import { atomicWriteJson } from "../utils/storageV2";
 import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "./types";
 
 export class MemoryVectorStore {
@@ -29,6 +33,7 @@ export class MemoryVectorStore {
   private dbPromise: ReturnType<typeof connect> | null = null;
   private db: Connection | null = null;
   private openTables = new Set<Table>();
+  private readonly maxOpenTables = 32;
   // Persistence is drop-table + recreate, so data operations must not
   // interleave: a concurrent save would race the drop ("table already
   // exists") and an overlapping read can hit files deleted mid-drop.
@@ -46,17 +51,25 @@ export class MemoryVectorStore {
 
   /** Serialize a data operation against the drop-and-recreate persistence. */
   private locked<T>(operation: () => Promise<T>): Promise<T> {
-    return this.opMutex.runExclusive(operation);
+    return this.opMutex.runExclusive(async () => {
+      await this.recoverResetUnlocked();
+      return operation();
+    });
   }
 
   // ── Public API (serialized) ────────────────────────────────────────
 
   async saveEntries(entries: MemoryEntry[], scope: MemoryScope, branch?: string): Promise<void> {
-    return this.locked(() => this.saveEntriesUnlocked(entries, scope, branch));
+    return this.locked(() =>
+      this.withScopeJournal(scope, branch, () => this.saveEntriesUnlocked(entries, scope, branch)),
+    );
   }
 
   async loadEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
-    return this.locked(() => this.loadEntriesUnlocked(scope, branch));
+    return this.locked(async () => {
+      await this.recoverScopeUnlocked(scope, branch);
+      return this.loadEntriesUnlocked(scope, branch);
+    });
   }
 
   async searchEntries(
@@ -65,23 +78,44 @@ export class MemoryVectorStore {
     branch: string | undefined,
     topK: number,
   ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
-    return this.locked(() => this.searchEntriesUnlocked(queryVector, scope, branch, topK));
+    return this.locked(async () => {
+      await this.recoverScopeUnlocked(scope, branch);
+      return this.searchEntriesUnlocked(queryVector, scope, branch, topK);
+    });
   }
 
   async saveGraph(data: MemoryGraphData, scope: MemoryScope, branch?: string): Promise<void> {
-    return this.locked(() => this.saveGraphUnlocked(data, scope, branch));
+    return this.locked(() => this.withScopeJournal(scope, branch, () => this.saveGraphUnlocked(data, scope, branch)));
   }
 
   async loadGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraphData | null> {
-    return this.locked(() => this.loadGraphUnlocked(scope, branch));
+    return this.locked(async () => {
+      await this.recoverScopeUnlocked(scope, branch);
+      return this.loadGraphUnlocked(scope, branch);
+    });
+  }
+
+  /** Atomically persist the entry and graph views of one memory scope. */
+  async saveScopeAtomic(
+    entries: MemoryEntry[],
+    graph: MemoryGraphData,
+    scope: MemoryScope,
+    branch?: string,
+  ): Promise<void> {
+    return this.locked(() =>
+      this.withScopeJournal(scope, branch, async () => {
+        await this.saveEntriesUnlocked(entries, scope, branch);
+        await this.saveGraphUnlocked(graph, scope, branch);
+      }),
+    );
   }
 
   async deleteBranchMemories(branch: string): Promise<void> {
-    return this.locked(() => this.deleteBranchMemoriesUnlocked(branch));
+    return this.locked(() => this.withScopeJournal("branch", branch, () => this.deleteBranchMemoriesUnlocked(branch)));
   }
 
   async deleteAll(): Promise<void> {
-    return this.locked(() => this.deleteAllUnlocked());
+    return this.locked(() => this.deleteAllAtomicallyUnlocked());
   }
 
   // ── Table naming ───────────────────────────────────────────────────
@@ -115,6 +149,199 @@ export class MemoryVectorStore {
   /** Decode a table-name segment back to the original branch name. */
   private decodeBranch(encoded: string): string {
     return Buffer.from(encoded, "base64url").toString("utf8");
+  }
+
+  private scopeJournalPath(scope: MemoryScope, branch?: string): string {
+    const identity = scope === "branch" ? `branch:${branch ?? ""}` : "workspace";
+    const digest = crypto.createHash("sha256").update(identity).digest("hex").slice(0, 24);
+    return path.join(path.dirname(this.lanceDbUri), `.memory-scope-${digest}.journal.json`);
+  }
+
+  private resetJournalPath(): string {
+    return path.join(path.dirname(this.lanceDbUri), ".memory-reset.journal.json");
+  }
+
+  private async snapshotAllScopesUnlocked(): Promise<
+    Array<{ scope: MemoryScope; branch?: string; entries: MemoryEntry[]; graph: MemoryGraphData | null }>
+  > {
+    const db = await this.getDb();
+    const tableNames = await db.tableNames();
+    const branchPrefixes = [
+      `${MEMORY_TABLE_PREFIX}-entries-branch-`,
+      `${MEMORY_TABLE_PREFIX}-entities-branch-`,
+      `${MEMORY_TABLE_PREFIX}-edges-branch-`,
+    ];
+    const branches = new Set<string>();
+    for (const name of tableNames) {
+      for (const prefix of branchPrefixes) {
+        if (name.startsWith(prefix)) {
+          branches.add(this.decodeBranch(name.slice(prefix.length)));
+        }
+      }
+    }
+    const scopes: Array<{ scope: MemoryScope; branch?: string }> = [
+      { scope: "workspace" },
+      ...[...branches].sort().map((branch) => ({ scope: "branch" as const, branch })),
+    ];
+    const snapshots = [];
+    for (const { scope, branch } of scopes) {
+      snapshots.push({
+        scope,
+        branch,
+        entries: await this.loadEntriesUnlocked(scope, branch),
+        graph: await this.loadGraphUnlocked(scope, branch),
+      });
+    }
+    return snapshots;
+  }
+
+  private async restoreResetSnapshotUnlocked(
+    scopes: Array<{ scope: MemoryScope; branch?: string; entries: MemoryEntry[]; graph: MemoryGraphData | null }>,
+  ): Promise<void> {
+    for (const snapshot of scopes) {
+      await this.saveEntriesUnlocked(snapshot.entries, snapshot.scope, snapshot.branch);
+      await this.saveGraphUnlocked(
+        snapshot.graph ?? { entities: [], relationships: [] },
+        snapshot.scope,
+        snapshot.branch,
+      );
+    }
+  }
+
+  private async deleteAllAtomicallyUnlocked(): Promise<void> {
+    const journalPath = this.resetJournalPath();
+    const journal = {
+      version: 1,
+      state: "prepared" as const,
+      scopes: await this.snapshotAllScopesUnlocked(),
+      createdAt: Date.now(),
+    };
+    await atomicWriteJson(journalPath, journal);
+    try {
+      await this.deleteAllUnlocked();
+      await atomicWriteJson(journalPath, { ...journal, state: "committed", committedAt: Date.now() });
+      await fs.unlink(journalPath);
+    } catch (error) {
+      try {
+        await this.restoreResetSnapshotUnlocked(journal.scopes);
+        await fs.unlink(journalPath);
+      } catch (rollbackError) {
+        this.logger.error(`Memory reset rollback failed; recovery journal retained at ${journalPath}`, rollbackError);
+      }
+      throw error;
+    }
+  }
+
+  private async recoverResetUnlocked(): Promise<void> {
+    const journalPath = this.resetJournalPath();
+    let journal: {
+      version: number;
+      state: "prepared" | "committed";
+      scopes: Array<{ scope: MemoryScope; branch?: string; entries: MemoryEntry[]; graph: MemoryGraphData | null }>;
+    };
+    try {
+      journal = JSON.parse(await fs.readFile(journalPath, "utf8"));
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return;
+      }
+      throw new Error(`Memory reset journal is corrupt at ${journalPath}; refusing to expose partially reset storage`);
+    }
+    if (journal.version !== 1 || !Array.isArray(journal.scopes)) {
+      throw new Error(`Memory reset journal is invalid at ${journalPath}`);
+    }
+    if (journal.state === "committed") {
+      await fs.unlink(journalPath);
+      return;
+    }
+    if (journal.state !== "prepared") {
+      throw new Error(`Memory reset journal has invalid state at ${journalPath}`);
+    }
+    await this.restoreResetSnapshotUnlocked(journal.scopes);
+    await fs.unlink(journalPath);
+  }
+
+  private trackTable(table: Table): void {
+    this.openTables.add(table);
+    while (this.openTables.size > this.maxOpenTables) {
+      const oldest = this.openTables.values().next().value as Table | undefined;
+      if (!oldest) {
+        break;
+      }
+      this.openTables.delete(oldest);
+      oldest.close();
+    }
+  }
+
+  private async withScopeJournal<T>(
+    scope: MemoryScope,
+    branch: string | undefined,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    await this.recoverScopeUnlocked(scope, branch);
+    const previousEntries = await this.loadEntriesUnlocked(scope, branch);
+    const previousGraph = await this.loadGraphUnlocked(scope, branch);
+    const journalPath = this.scopeJournalPath(scope, branch);
+    const journal = {
+      version: 1,
+      state: "prepared",
+      scope,
+      branch,
+      previousEntries,
+      previousGraph,
+      createdAt: Date.now(),
+    };
+    await atomicWriteJson(journalPath, journal);
+    try {
+      const result = await operation();
+      await atomicWriteJson(journalPath, { ...journal, state: "committed", committedAt: Date.now() });
+      await fs.unlink(journalPath);
+      return result;
+    } catch (error) {
+      try {
+        await this.saveEntriesUnlocked(previousEntries, scope, branch);
+        await this.saveGraphUnlocked(previousGraph ?? { entities: [], relationships: [] }, scope, branch);
+        await fs.unlink(journalPath);
+      } catch (rollbackError) {
+        this.logger.error(`Memory scope rollback failed; recovery journal retained at ${journalPath}`, rollbackError);
+      }
+      throw error;
+    }
+  }
+
+  private async recoverScopeUnlocked(scope: MemoryScope, branch?: string): Promise<void> {
+    const journalPath = this.scopeJournalPath(scope, branch);
+    let journal: {
+      version: number;
+      state: "prepared" | "committed";
+      scope: MemoryScope;
+      branch?: string;
+      previousEntries: MemoryEntry[];
+      previousGraph: MemoryGraphData | null;
+    };
+    try {
+      journal = JSON.parse(await fs.readFile(journalPath, "utf8"));
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return;
+      }
+      throw new Error(
+        `Memory transaction journal is corrupt at ${journalPath}; refusing to read a potentially torn scope`,
+      );
+    }
+    if (journal.version !== 1 || journal.scope !== scope || journal.branch !== branch) {
+      throw new Error(`Memory transaction journal identity mismatch at ${journalPath}`);
+    }
+    if (journal.state === "committed") {
+      await fs.unlink(journalPath);
+      return;
+    }
+    if (journal.state !== "prepared") {
+      throw new Error(`Memory transaction journal has invalid state at ${journalPath}`);
+    }
+    await this.saveEntriesUnlocked(journal.previousEntries, scope, branch);
+    await this.saveGraphUnlocked(journal.previousGraph ?? { entities: [], relationships: [] }, scope, branch);
+    await fs.unlink(journalPath);
   }
 
   /**
@@ -163,10 +390,10 @@ export class MemoryVectorStore {
           return;
         }
         const created = await db.createEmptyTable(tableName, this.entriesSchema(entries[0].vector.length));
-        this.openTables.add(created);
+        this.trackTable(created);
       }
       const table = await db.openTable(tableName);
-      this.openTables.add(table);
+      this.trackTable(table);
       if (rows.length === 0) {
         await table.delete("true");
       } else {
@@ -198,6 +425,7 @@ export class MemoryVectorStore {
 
     try {
       const table = await db.openTable(tableName);
+      this.trackTable(table);
       const rows = await table.query().limit(100000).toArray();
 
       return rows.map((row) => ({
@@ -244,6 +472,7 @@ export class MemoryVectorStore {
 
     try {
       const table = await db.openTable(tableName);
+      this.trackTable(table);
       // Filter superseded versions at query time, BEFORE the limit: a query
       // close to many historical versions would otherwise fill the top-K with
       // superseded rows and crowd out current memories entirely.
@@ -308,14 +537,14 @@ export class MemoryVectorStore {
       }));
       let tableNames = await db.tableNames();
       if (!tableNames.includes(entitiesTableName) && entityRows.length > 0) {
-        this.openTables.add(
+        this.trackTable(
           await db.createEmptyTable(entitiesTableName, this.entitiesSchema(data.entities[0].vector.length)),
         );
       }
       tableNames = await db.tableNames();
       if (tableNames.includes(entitiesTableName)) {
         const table = await db.openTable(entitiesTableName);
-        this.openTables.add(table);
+        this.trackTable(table);
         if (entityRows.length === 0) {
           await table.delete("true");
         } else {
@@ -347,12 +576,12 @@ export class MemoryVectorStore {
       }));
       let tableNames = await db.tableNames();
       if (!tableNames.includes(edgesTableName) && edgeRows.length > 0) {
-        this.openTables.add(await db.createEmptyTable(edgesTableName, this.edgesSchema()));
+        this.trackTable(await db.createEmptyTable(edgesTableName, this.edgesSchema()));
       }
       tableNames = await db.tableNames();
       if (tableNames.includes(edgesTableName)) {
         const table = await db.openTable(edgesTableName);
-        this.openTables.add(table);
+        this.trackTable(table);
         if (edgeRows.length === 0) {
           await table.delete("true");
         } else {
@@ -377,10 +606,16 @@ export class MemoryVectorStore {
 
     try {
       const tableNames = await db.tableNames();
+      if (!tableNames.includes(entitiesTableName) && tableNames.includes(edgesTableName)) {
+        throw new Error(
+          `Memory graph is corrupt for scope ${scope}${branch ? `/${branch}` : ""}: edge table exists without entities`,
+        );
+      }
 
       const entities = [];
       if (tableNames.includes(entitiesTableName)) {
         const table = await db.openTable(entitiesTableName);
+        this.trackTable(table);
         const rows = await table.query().limit(100000).toArray();
         for (const row of rows) {
           entities.push({
@@ -404,6 +639,7 @@ export class MemoryVectorStore {
       const relationships = [];
       if (tableNames.includes(edgesTableName)) {
         const table = await db.openTable(edgesTableName);
+        this.trackTable(table);
         const rows = await table.query().limit(100000).toArray();
         for (const row of rows) {
           relationships.push({
@@ -424,6 +660,17 @@ export class MemoryVectorStore {
         return null;
       }
 
+      const entityIds = new Set(entities.map((entity) => entity.id));
+      const dangling = relationships.find(
+        (relationship) => !entityIds.has(relationship.sourceId) || !entityIds.has(relationship.targetId),
+      );
+      if (dangling) {
+        throw new Error(
+          `Memory graph is corrupt for scope ${scope}${branch ? `/${branch}` : ""}: ` +
+            `relationship ${dangling.id} references a missing entity`,
+        );
+      }
+
       return { entities, relationships } as MemoryGraphData;
     } catch (error) {
       // Missing tables are handled above; anything reaching here is real
@@ -438,36 +685,40 @@ export class MemoryVectorStore {
   // ── Scope Management ───────────────────────────────────────────────
 
   async listBranches(): Promise<string[]> {
-    const db = await this.getDb();
-    const tableNames = await db.tableNames();
+    return this.locked(async () => {
+      const db = await this.getDb();
+      const tableNames = await db.tableNames();
 
-    const prefix = `${MEMORY_TABLE_PREFIX}-entries-branch-`;
-    const branches = new Set<string>();
+      const prefix = `${MEMORY_TABLE_PREFIX}-entries-branch-`;
+      const branches = new Set<string>();
 
-    for (const name of tableNames) {
-      if (name.startsWith(prefix)) {
-        branches.add(this.decodeBranch(name.slice(prefix.length)));
+      for (const name of tableNames) {
+        if (name.startsWith(prefix)) {
+          branches.add(this.decodeBranch(name.slice(prefix.length)));
+        }
       }
-    }
 
-    return Array.from(branches);
+      return Array.from(branches);
+    });
   }
 
   /** List branches that have entity graph tables (may differ from entry branches). */
   async listEntityBranches(): Promise<string[]> {
-    const db = await this.getDb();
-    const tableNames = await db.tableNames();
+    return this.locked(async () => {
+      const db = await this.getDb();
+      const tableNames = await db.tableNames();
 
-    const prefix = `${MEMORY_TABLE_PREFIX}-entities-branch-`;
-    const branches = new Set<string>();
+      const prefix = `${MEMORY_TABLE_PREFIX}-entities-branch-`;
+      const branches = new Set<string>();
 
-    for (const name of tableNames) {
-      if (name.startsWith(prefix)) {
-        branches.add(this.decodeBranch(name.slice(prefix.length)));
+      for (const name of tableNames) {
+        if (name.startsWith(prefix)) {
+          branches.add(this.decodeBranch(name.slice(prefix.length)));
+        }
       }
-    }
 
-    return Array.from(branches);
+      return Array.from(branches);
+    });
   }
 
   private async deleteBranchMemoriesUnlocked(branch: string): Promise<void> {

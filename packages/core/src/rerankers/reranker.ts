@@ -11,14 +11,24 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 export interface ScoredDocument {
   document: LangChainDocument;
   score: number;
+  /** Semantics of the current score. */
+  scoreKind?: string;
+  /** Retrieval-arm components for the current score. */
+  componentScores?: { vector?: number; keyword?: number; graph?: number };
   /** Original first-stage retrieval score (preserved through reranking) */
   originalScore?: number;
+  /** Semantics of the preserved first-stage score. */
+  originalScoreKind?: string;
+  /** Preserved first-stage retrieval-arm components. */
+  originalComponentScores?: { vector?: number; keyword?: number; graph?: number };
 }
 
 /** Options for reranking */
 export interface RerankerOptions {
   /** Maximum number of candidates to rerank (caps input) */
   maxCandidates?: number;
+  /** Maximum number of query/document pairs in one model invocation. */
+  batchSize?: number;
 }
 
 /** Reranker contract implemented by cross-encoder backends */
@@ -30,6 +40,8 @@ export interface Reranker {
   /** Whether the reranker is ready for use */
   isAvailable(): boolean;
   getMaxCandidates?(): number;
+  getCurrentModel?(): string;
+  switchModel?(modelName: string): Promise<void>;
   /** Release resources */
   dispose(): void | Promise<void>;
 }

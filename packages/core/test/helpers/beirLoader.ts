@@ -52,6 +52,13 @@ export async function downloadAndExtract(dataset: string, cacheDir: string): Pro
     return datasetDir;
   }
 
+  if (process.env.RAGNAROK_BENCHMARK_MODE === "release") {
+    throw new Error(
+      `Release benchmark corpus is missing at ${datasetDir}. ` +
+        "Run the documented benchmark acquisition command before the release gate; release mode never downloads or skips.",
+    );
+  }
+
   await fsp.mkdir(cacheDir, { recursive: true });
 
   const zipPath = path.join(cacheDir, `${dataset}.zip`);

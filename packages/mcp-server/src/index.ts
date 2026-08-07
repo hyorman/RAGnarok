@@ -26,9 +26,8 @@
  *   RAGNAROK_LOG_LEVEL        — Log level: debug, info, warn, error
  *   ... see config.ts for all options
  */
-
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { serveStdio, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import * as path from "path";
 import {
   setLoggerFactory,
@@ -49,8 +48,11 @@ import { loadConfig, getServerVersion } from "./config";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
-import type { MutationRunner } from "./tools";
+import { registerGraphUiResource } from "./uiResource";
+import type { MutationRunner, ToolRuntime } from "./tools";
 import { startHttpTransport, HttpTransportHandle } from "./httpServer";
+import type { AccessRole } from "./httpServer";
+import { TransferManager } from "./transferManager";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -121,13 +123,19 @@ async function main(): Promise<void> {
   const ragQueryService = new RAGQueryService(topicManager, configProvider, llmProvider);
   TopicManager.onAgentCacheCleanup.subscribe((topicId) => ragQueryService.clearAgentCache(topicId));
 
-  // Deployment mode: an HTTP server with auth tokens configured serves
-  // multiple parties (a shared team KB). Memory is always personal (never
-  // hosted), so shared deployments get no MemoryStore and no memory tools.
-  // stdio and token-less loopback HTTP are personal setups and keep them.
   const useHttp = process.argv.includes("--http");
-  const sharedDeployment = useHttp && Boolean(config.apiKey || config.writeApiKey);
-  const deployment: "local" | "shared" = sharedDeployment ? "shared" : "local";
+  const deployment: "local" | "shared" = config.deploymentMode ?? "local";
+  const sharedDeployment = deployment === "shared";
+  const transferManager =
+    useHttp && sharedDeployment
+      ? new TransferManager(path.join(config.storageDir, ".transfers"), {
+          maxFileBytes: config.transferMaxFileBytes ?? 64 * 1024 * 1024,
+          maxAggregateBytes: config.transferMaxAggregateBytes ?? 256 * 1024 * 1024,
+          maxSessionsPerPrincipal: config.transferMaxSessions ?? 8,
+          ttlMs: config.transferTtlMs ?? 15 * 60_000,
+        })
+      : undefined;
+  await transferManager?.initialize();
 
   // Create standalone memory store
   // Branch-scoped memory needs the PROJECT's directory, not the server's.
@@ -161,22 +169,54 @@ async function main(): Promise<void> {
   const reranker = config.rerankerEnabled
     ? new CrossEncoderReranker(config.rerankerModel, { maxCandidates: config.rerankerMaxCandidates })
     : null;
+  let rerankerReady = reranker === null;
+  let rerankerFailure: string | undefined;
   // Share the SAME instance with the query path so rag_switch_reranker_model
   // affects query behaviour, not just the management tools' private copy.
   if (reranker) {
     ragQueryService.setReranker(reranker);
     // Non-blocking warm-up: the first query skips the model-load stall, and a
     // broken model surfaces in the startup log instead of at query time.
-    void reranker.initialize().catch((error) => {
-      logger.warn(
-        "Reranker warm-up failed — queries will fall back to original ranking",
-        error instanceof Error ? error.message : error,
-      );
-    });
+    void reranker
+      .initialize()
+      .then(() => {
+        rerankerReady = true;
+      })
+      .catch((error) => {
+        rerankerFailure = error instanceof Error ? error.message : String(error);
+        logger.warn("Reranker warm-up failed — queries will fall back to original ranking", rerankerFailure);
+      });
   }
 
-  // Server factory: stdio uses a single instance; the HTTP transport creates
-  // one server+transport pair per client session (all sharing the services).
+  // Server factory: HTTP creates one instance per request; stdio pins one
+  // instance per modern connection. All instances share the services.
+  let acceptingOperations = true;
+  let activeOperations = 0;
+  const operationDrainWaiters: Array<() => void> = [];
+  const toolRuntime: ToolRuntime = {
+    async run<T>(operation: () => Promise<T>): Promise<T> {
+      if (!acceptingOperations) {
+        throw new Error("SERVER_DRAINING: new tool operations are not accepted");
+      }
+      activeOperations++;
+      try {
+        return await operation();
+      } finally {
+        activeOperations--;
+        if (activeOperations === 0) {
+          for (const resolve of operationDrainWaiters.splice(0)) {
+            resolve();
+          }
+        }
+      }
+    },
+  };
+  const closeOperationAdmission = (): void => {
+    acceptingOperations = false;
+  };
+  const waitForOperationDrain = (): Promise<void> =>
+    activeOperations === 0 ? Promise.resolve() : new Promise((resolve) => operationDrainWaiters.push(resolve));
+
   let mutationTail = Promise.resolve();
   const runMutation: MutationRunner = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = mutationTail;
@@ -203,7 +243,7 @@ async function main(): Promise<void> {
       "If a remote team RAGnarōk server is also configured, prefer this local server for personal topics " +
       "and memory; use the remote one for team-shared topics.";
 
-  const createMcpServer = (role: "reader" | "writer" = "writer"): McpServer => {
+  const createMcpServer = (role: AccessRole = "admin", principal = "local-owner"): McpServer => {
     const server = new McpServer(
       {
         name: "ragnarok",
@@ -223,24 +263,52 @@ async function main(): Promise<void> {
       role,
       runMutation,
       deployment,
+      toolRuntime,
+      transferManager,
+      principal,
     );
+    registerGraphUiResource(server);
     return server;
   };
 
   // Start transport
   let httpHandle: HttpTransportHandle | null = null;
-  let stdioServer: McpServer | null = null;
-  let stdioTransport: StdioServerTransport | null = null;
+  let stdioHandle: StdioServerHandle | null = null;
 
   if (useHttp) {
-    httpHandle = await startHttpTransport(createMcpServer, config);
+    httpHandle = await startHttpTransport(createMcpServer, config, {
+      readiness: async () => {
+        const blockingReasons: string[] = [];
+        const modelState: string[] = [];
+        if (!acceptingOperations) {
+          blockingReasons.push("draining");
+        }
+        try {
+          await topicManager.getStorageStatus();
+        } catch {
+          blockingReasons.push("storage_unavailable_or_locked");
+        }
+        if (!embeddingService.getCurrentModel()) {
+          blockingReasons.push("embedding_model_unavailable");
+        }
+        if (!rerankerReady) {
+          modelState.push(rerankerFailure ? "reranker_model_degraded" : "reranker_model_loading");
+        }
+        return {
+          ready: blockingReasons.length === 0,
+          reasons: [...blockingReasons, ...modelState],
+        };
+      },
+      transferManager,
+    });
   } else {
     // stdio transport for local agents (default)
     logger.info("Starting stdio transport");
-    stdioServer = createMcpServer();
-    stdioTransport = new StdioServerTransport();
-    await stdioServer.connect(stdioTransport);
-    logger.info("RAGnarōk MCP server running (stdio)");
+    stdioHandle = serveStdio(() => createMcpServer(), {
+      legacy: "reject",
+      onerror: (error) => logger.error("stdio MCP error", error),
+    });
+    logger.info("RAGnarōk MCP server running (stdio, MCP 2026-07-28)");
   }
 
   // Graceful shutdown: close transports, then release native/model resources
@@ -252,20 +320,25 @@ async function main(): Promise<void> {
     }
     shuttingDown = true;
     logger.info(`Received ${signal} — shutting down`);
-    const hardExit = setTimeout(() => process.exit(1), 10_000);
+    closeOperationAdmission();
+    httpHandle?.closeAdmission();
+    const drainBudgetMs = config.shutdownDrainMs ?? 10_000;
+    const shutdownDeadline = Date.now() + drainBudgetMs;
+    const hardExit = setTimeout(() => process.exit(1), drainBudgetMs + 5_000);
 
     try {
+      const drainDeadline = new Promise<void>((resolve) => setTimeout(resolve, drainBudgetMs).unref());
+      await Promise.race([waitForOperationDrain(), drainDeadline]);
       if (httpHandle) {
-        await httpHandle.shutdown();
+        await httpHandle.shutdown(shutdownDeadline);
       }
-      if (stdioServer) {
-        await stdioServer.close();
-      }
+      await stdioHandle?.close();
       await memoryStore?.dispose();
       await ragQueryService.dispose();
-      topicManager.dispose();
+      await topicManager.dispose();
       await embeddingService.dispose();
-      checkpointer?.dispose();
+      await Promise.resolve(checkpointer?.dispose());
+      await transferManager?.dispose();
       logger.info("Shutdown complete");
       clearTimeout(hardExit);
     } catch (error) {
@@ -276,8 +349,8 @@ async function main(): Promise<void> {
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  if (stdioTransport) {
-    stdioTransport.onclose = () => void shutdown("stdio EOF");
+  if (stdioHandle) {
+    process.stdin.once("end", () => void shutdown("stdio EOF"));
   }
 }
 

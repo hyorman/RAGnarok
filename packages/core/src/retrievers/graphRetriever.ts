@@ -8,10 +8,13 @@
 
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { KnowledgeGraph } from "../stores/knowledgeGraph";
-import { VectorRetriever } from "./vectorRetriever";
+import { VectorRetriever, VectorSearchResult } from "./vectorRetriever";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { GraphEntity } from "../utils/graphTypes";
 import { Logger } from "../logger";
+import { getChunkId, getDocumentIdentity } from "../utils/retrievalIdentity";
+
+export { getChunkId, getDocumentIdentity } from "../utils/retrievalIdentity";
 
 export interface GraphSearchOptions {
   /** Number of results to return */
@@ -22,6 +25,14 @@ export interface GraphSearchOptions {
   hopDecay?: number;
   /** Minimum score threshold (default: 0) */
   minScore?: number;
+  /** Minimum raw cosine similarity for embedding entity matches (default: 0.6) */
+  entitySimilarityThreshold?: number;
+  /**
+   * Vector results already fetched by a composing retriever. Supplying these
+   * prevents a second vector query while preserving document hydration and
+   * standalone graph/vector blending.
+   */
+  precomputedVectorResults?: readonly VectorSearchResult[];
 }
 
 /** Default graph search options */
@@ -29,18 +40,35 @@ export const DEFAULT_GRAPH_OPTIONS = {
   maxHopDepth: 2,
   hopDecay: 0.5,
   minScore: 0,
+  entitySimilarityThreshold: 0.6,
 } as const;
 
 export interface GraphSearchResult {
   document: LangChainDocument;
   score: number;
+  scoreKind: "graph_similarity" | "weighted_fusion" | "vector_similarity";
+  componentScores: { graph?: number; vector?: number };
   /** Entities that contributed to this result */
   matchedEntities: string[];
   /** Minimum hop distance from a matched entity */
   hopDepth: number;
+  /** Requested strategy that degraded to this result's effective strategy. */
+  degradedFrom?: "graph";
+  fallbackReason?: "no_graph_matches" | "no_graph_chunks";
+  effectiveStrategy: "graph" | "vector";
 }
 
 const MAX_DOCS_FOR_GRAPH_LOOKUP = 50_000;
+
+export class GraphRetrievalLimitError extends Error {
+  constructor(limit: number) {
+    super(
+      `Graph retrieval requires hydrating more than ${limit} chunks. ` +
+        "Narrow or rebuild the topic before using graph retrieval; results were not silently truncated.",
+    );
+    this.name = "GraphRetrievalLimitError";
+  }
+}
 
 /**
  * Shared chunk-id accessor. Extracts a normalized chunk-id string from a
@@ -50,14 +78,6 @@ const MAX_DOCS_FOR_GRAPH_LOOKUP = 50_000;
  * it (ad-hoc `metadata.chunkId` variants can silently disagree on type
  * coercion or fallback behavior and break dedup/merge across retrievers).
  */
-export function getChunkId(metadata: Record<string, unknown> | null | undefined): string | null {
-  const rawChunkId = metadata?.chunkId;
-  if (typeof rawChunkId === "string" || typeof rawChunkId === "number") {
-    return String(rawChunkId);
-  }
-  return null;
-}
-
 /**
  * Graph retriever that leverages knowledge graph entity relationships
  * to find relevant document chunks.
@@ -85,6 +105,8 @@ export class GraphRetriever {
     const maxHopDepth = options.maxHopDepth ?? 2;
     const hopDecay = options.hopDecay ?? 0.5;
     const minScore = options.minScore ?? 0;
+    const entitySimilarityThreshold =
+      options.entitySimilarityThreshold ?? DEFAULT_GRAPH_OPTIONS.entitySimilarityThreshold;
 
     this.logger.info("Starting graph search", {
       query: query.substring(0, 100),
@@ -92,12 +114,16 @@ export class GraphRetriever {
       maxHopDepth,
     });
 
+    if (typeof this.embeddingService.getFingerprint === "function") {
+      this.knowledgeGraph.validateEmbeddingFingerprint(await this.embeddingService.getFingerprint());
+    }
+
     // Step 1: Find matching entities (name match + embedding similarity)
-    const matchedEntities = await this.findMatchingEntities(query, options.k * 2);
+    const matchedEntities = await this.findMatchingEntities(query, options.k * 2, entitySimilarityThreshold);
 
     if (matchedEntities.length === 0) {
       this.logger.info("No matching entities found, falling back to vector search");
-      return this.fallbackToVector(query, options.k);
+      return this.fallbackToVector(query, options.k, "no_graph_matches", options.precomputedVectorResults);
     }
 
     this.logger.debug("Matched entities", {
@@ -135,7 +161,7 @@ export class GraphRetriever {
 
     if (rankedChunkIds.length === 0) {
       this.logger.info("No chunks found from graph traversal, falling back to vector search");
-      return this.fallbackToVector(query, options.k);
+      return this.fallbackToVector(query, options.k, "no_graph_chunks", options.precomputedVectorResults);
     }
 
     // Step 4: Hydrate graph-derived chunk IDs to documents.
@@ -143,13 +169,15 @@ export class GraphRetriever {
 
     await this.hydrateGraphChunkResults(rankedChunkIds, chunkScores, resultsByKey);
 
-    let vectorResults: Array<{ document: LangChainDocument; score: number }> = [];
-    try {
-      vectorResults = await this.vectorRetriever.search(query, options.k * 3);
-    } catch (error) {
-      this.logger.warn("Vector search failed during graph search; using graph-only results when available", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+    let vectorResults: readonly VectorSearchResult[] = options.precomputedVectorResults ?? [];
+    if (!options.precomputedVectorResults) {
+      try {
+        vectorResults = await this.vectorRetriever.search(query, options.k * 3);
+      } catch (error) {
+        this.logger.warn("Vector search failed during graph search; using graph-only results when available", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     const vectorFallbacks: GraphSearchResult[] = [];
@@ -163,8 +191,11 @@ export class GraphRetriever {
         resultsByKey.set(resultKey, {
           document: vr.document,
           score: Math.min(1, vr.score * 0.5 + chunkData.score * 0.5),
+          scoreKind: "weighted_fusion",
+          componentScores: { vector: vr.score, graph: chunkData.score },
           matchedEntities: Array.from(chunkData.entities),
           hopDepth: chunkData.hopDepth,
+          effectiveStrategy: "graph",
         });
         continue;
       }
@@ -172,9 +203,14 @@ export class GraphRetriever {
       if (!resultsByKey.has(resultKey)) {
         vectorFallbacks.push({
           document: vr.document,
-          score: vr.score * 0.8,
+          score: vr.score,
+          scoreKind: "vector_similarity",
+          componentScores: { vector: vr.score },
           matchedEntities: [],
           hopDepth: -1,
+          degradedFrom: "graph",
+          fallbackReason: "no_graph_chunks",
+          effectiveStrategy: "vector",
         });
       }
     }
@@ -206,6 +242,7 @@ export class GraphRetriever {
   private async findMatchingEntities(
     query: string,
     limit: number,
+    entitySimilarityThreshold: number,
   ): Promise<Array<{ entity: GraphEntity; score: number }>> {
     const matchMap = new Map<string, { entity: GraphEntity; score: number }>();
 
@@ -234,8 +271,13 @@ export class GraphRetriever {
       const embeddingResults = this.knowledgeGraph.searchEntitiesByEmbedding(queryVector, limit);
 
       for (const { entity, score } of embeddingResults) {
-        // Normalize cosine similarity to [0, 1] range (it can be negative)
-        const normalizedScore = Math.max(0, Math.min(1, (score + 1) / 2));
+        // Entity search returns raw cosine similarity. Zero is orthogonal (or
+        // a dimension mismatch), not a neutral 0.5 match. Only positive,
+        // sufficiently similar entities may seed graph traversal.
+        if (!Number.isFinite(score) || score < entitySimilarityThreshold) {
+          continue;
+        }
+        const normalizedScore = Math.max(0, Math.min(1, score));
         const existing = matchMap.get(entity.id);
         if (!existing || existing.score < normalizedScore) {
           matchMap.set(entity.id, { entity, score: Math.max(existing?.score ?? 0, normalizedScore) });
@@ -281,13 +323,23 @@ export class GraphRetriever {
   /**
    * Fallback to pure vector search when no graph entities match.
    */
-  private async fallbackToVector(query: string, k: number): Promise<GraphSearchResult[]> {
-    const vectorResults = await this.vectorRetriever.search(query, k);
+  private async fallbackToVector(
+    query: string,
+    k: number,
+    fallbackReason: "no_graph_matches" | "no_graph_chunks",
+    precomputedVectorResults?: readonly VectorSearchResult[],
+  ): Promise<GraphSearchResult[]> {
+    const vectorResults = precomputedVectorResults ?? (await this.vectorRetriever.search(query, k));
     return vectorResults.map((vr) => ({
       document: vr.document,
       score: vr.score,
+      scoreKind: "vector_similarity",
+      componentScores: { vector: vr.score },
       matchedEntities: [],
       hopDepth: -1,
+      degradedFrom: "graph",
+      fallbackReason,
+      effectiveStrategy: "vector",
     }));
   }
 
@@ -313,11 +365,17 @@ export class GraphRetriever {
         resultsByKey.set(this.getResultKey(document), {
           document,
           score: chunkData.score,
+          scoreKind: "graph_similarity",
+          componentScores: { graph: chunkData.score },
           matchedEntities: Array.from(chunkData.entities),
           hopDepth: chunkData.hopDepth,
+          effectiveStrategy: "graph",
         });
       }
     } catch (error) {
+      if (error instanceof GraphRetrievalLimitError) {
+        throw error;
+      }
       this.logger.warn("Failed to hydrate graph chunk documents from table scan", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -330,8 +388,11 @@ export class GraphRetriever {
     }
 
     if (!this.chunkDocumentMapPromise) {
-      this.chunkDocumentMapPromise = this.documentFetcher(MAX_DOCS_FOR_GRAPH_LOOKUP)
+      this.chunkDocumentMapPromise = this.documentFetcher(MAX_DOCS_FOR_GRAPH_LOOKUP + 1)
         .then((documents) => {
+          if (documents.length > MAX_DOCS_FOR_GRAPH_LOOKUP) {
+            throw new GraphRetrievalLimitError(MAX_DOCS_FOR_GRAPH_LOOKUP);
+          }
           const documentMap = new Map<string, LangChainDocument>();
 
           for (const document of documents) {
@@ -358,6 +419,6 @@ export class GraphRetriever {
   }
 
   private getResultKey(document: LangChainDocument): string {
-    return getChunkId(document.metadata) ?? document.pageContent.substring(0, 100);
+    return getDocumentIdentity(document);
   }
 }

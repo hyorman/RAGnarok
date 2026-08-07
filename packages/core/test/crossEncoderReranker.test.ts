@@ -128,6 +128,10 @@ describe("CrossEncoderReranker", function () {
       expect((r as any).maxCandidates).to.equal(10);
       r.dispose();
     });
+
+    it("should use the memory-bounded default batch size", () => {
+      expect((reranker as any).batchSize).to.equal(4);
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -195,7 +199,10 @@ describe("CrossEncoderReranker", function () {
 
     it("should preserve originalScore from first-stage retrieval", async () => {
       (reranker as any).model = createMockModel([1.0, 2.0]);
-      const candidates = [makeDoc("a", 0.95), makeDoc("b", 0.8)];
+      const candidates = [
+        { ...makeDoc("a", 0.95), scoreKind: "vector_similarity", componentScores: { vector: 0.95 } },
+        { ...makeDoc("b", 0.8), scoreKind: "weighted_fusion", componentScores: { vector: 0.7, keyword: 0.1 } },
+      ];
 
       const result = await reranker.rerank("query", candidates, 2);
 
@@ -205,6 +212,10 @@ describe("CrossEncoderReranker", function () {
       // doc "b" gets higher reranker score (logit=2.0), its originalScore should be 0.80
       const docB = result.find((r) => r.document.pageContent === "b")!;
       expect(docB.originalScore).to.equal(0.8);
+      expect(docB.scoreKind).to.equal("cross_encoder_probability");
+      expect(docB.originalScoreKind).to.equal("weighted_fusion");
+      expect(docB.originalComponentScores).to.deep.equal({ vector: 0.7, keyword: 0.1 });
+      expect(docB.componentScores).to.equal(undefined);
     });
 
     it("should cap candidates to maxCandidates", async () => {
@@ -340,7 +351,7 @@ describe("CrossEncoderReranker", function () {
       expect(result[1].score).to.equal(sigmoid(-1.0));
     });
 
-    it("should handle [N,2] binary classification shape using positive class", async () => {
+    it("should handle [N,2] binary classification shape using positive-class softmax", async () => {
       // For [N,2] shape: [neg0, pos0, neg1, pos1]
       // doc0: negative=-5, positive=3 → uses 3
       // doc1: negative=1, positive=-2 → uses -2
@@ -349,12 +360,36 @@ describe("CrossEncoderReranker", function () {
 
       const result = await reranker.rerank("query", candidates, 2);
 
-      // doc "a" should use positive class logit = 3
-      // doc "b" should use positive class logit = -2
+      // softmax([negative, positive]).positive = sigmoid(positive-negative)
       expect(result[0].document.pageContent).to.equal("a");
-      expect(result[0].score).to.equal(sigmoid(3));
+      expect(result[0].score).to.equal(sigmoid(3 - -5));
       expect(result[1].document.pageContent).to.equal("b");
-      expect(result[1].score).to.equal(sigmoid(-2));
+      expect(result[1].score).to.equal(sigmoid(-2 - 1));
+    });
+
+    it("scores candidates in bounded batches without changing index mapping", async () => {
+      const batchSizes: number[] = [];
+      const r = new CrossEncoderReranker(undefined, { maxCandidates: 10, batchSize: 2 });
+      (r as any).tokenizer = (queries: string[]) => ({ input_ids: queries.map((_, i) => [i]) });
+      let nextLogit = 0;
+      (r as any).model = async (inputs: { input_ids: number[][] }) => {
+        batchSizes.push(inputs.input_ids.length);
+        const data = Array.from({ length: inputs.input_ids.length }, () => nextLogit++);
+        return { logits: { dims: [data.length, 1], data: new Float32Array(data) } };
+      };
+      const candidates = Array.from({ length: 5 }, (_, i) => makeDoc(`doc-${i}`, 1 - i / 10));
+
+      const result = await r.rerank("query", candidates, 5);
+
+      expect(batchSizes).to.deep.equal([2, 2, 1]);
+      expect(result.map((item) => item.document.pageContent)).to.deep.equal([
+        "doc-4",
+        "doc-3",
+        "doc-2",
+        "doc-1",
+        "doc-0",
+      ]);
+      await r.dispose();
     });
 
     it("should handle flat array fallback", async () => {
@@ -385,24 +420,24 @@ describe("CrossEncoderReranker", function () {
   // -----------------------------------------------------------------------
 
   describe("dispose", () => {
-    it("should null out model, tokenizer, and transformers", () => {
+    it("should null out model, tokenizer, and transformers", async () => {
       (reranker as any).model = {};
       (reranker as any).tokenizer = {};
       (reranker as any).transformers = {};
 
-      reranker.dispose();
+      await reranker.dispose();
 
       expect((reranker as any).model).to.be.null;
       expect((reranker as any).tokenizer).to.be.null;
       expect((reranker as any).transformers).to.be.null;
     });
 
-    it("should report not available after dispose", () => {
+    it("should report not available after dispose", async () => {
       (reranker as any).model = {};
       (reranker as any).tokenizer = {};
       expect(reranker.isAvailable()).to.be.true;
 
-      reranker.dispose();
+      await reranker.dispose();
 
       expect(reranker.isAvailable()).to.be.false;
     });
@@ -446,6 +481,70 @@ describe("CrossEncoderReranker", function () {
   // -----------------------------------------------------------------------
 
   describe("switchModel", () => {
+    it("rejects even an empty rerank after disposal", async () => {
+      const r = new CrossEncoderReranker();
+      await r.dispose();
+      let caught: unknown;
+      try {
+        await r.rerank("query", [], 1);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).to.be.instanceOf(Error);
+      expect((caught as Error).message).to.include("disposed");
+    });
+
+    it("keeps an in-flight rerank leased until the old model drains", async () => {
+      const r = new CrossEncoderReranker("Xenova/ms-marco-MiniLM-L-6-v2");
+      let finishInference!: () => void;
+      const inferenceGate = new Promise<void>((resolve) => (finishInference = resolve));
+      const dispose = sinon.spy(async () => {});
+      (r as any).tokenizer = createMockTokenizer();
+      (r as any).model = Object.assign(
+        async () => {
+          await inferenceGate;
+          return { logits: { dims: [1, 1], data: new Float32Array([1]) } };
+        },
+        { dispose },
+      );
+      const initialize = sinon.stub(CrossEncoderReranker.prototype, "initialize").callsFake(async function (
+        this: CrossEncoderReranker,
+      ) {
+        if (this === r) {
+          return;
+        }
+        (this as any).tokenizer = createMockTokenizer();
+        (this as any).model = createMockModel([2]);
+      });
+
+      const rerankPromise = r.rerank("query", [makeDoc("old-generation", 0.9)], 1);
+      await Promise.resolve();
+      const switchPromise = r.switchModel("Xenova/ms-marco-MiniLM-L-12-v2");
+      await Promise.resolve();
+      expect(dispose.called).to.equal(false);
+      finishInference();
+      await rerankPromise;
+      await switchPromise;
+      expect(dispose.calledOnce).to.equal(true);
+      initialize.restore();
+      await r.dispose();
+    });
+
+    it("coalesces concurrent initialization into one model load", async () => {
+      const r = new CrossEncoderReranker();
+      let loads = 0;
+      const load = sinon.stub(r as any, "_loadModel").callsFake(async () => {
+        loads++;
+        await Promise.resolve();
+        (r as any).tokenizer = createMockTokenizer();
+        (r as any).model = createMockModel([1]);
+      });
+      await Promise.all(Array.from({ length: 8 }, () => r.initialize()));
+      expect(loads).to.equal(1);
+      load.restore();
+      await r.dispose();
+    });
+
     it("should retain the working model when replacement initialization fails", async () => {
       const r = new CrossEncoderReranker("Xenova/ms-marco-MiniLM-L-6-v2");
       const workingModel = { id: "working-model" };

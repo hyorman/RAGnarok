@@ -135,6 +135,10 @@ export const IndexingPipelineState = Annotation.Root({
     reducer: (_prev, next) => next,
     default: () => "",
   }),
+  storageOutcome: Annotation<"not_started" | "succeeded" | "failed" | "cancelled">({
+    reducer: (_prev, next) => next,
+    default: () => "not_started",
+  }),
 
   // Errors — accumulates
   errors: Annotation<string[]>({

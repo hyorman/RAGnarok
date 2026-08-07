@@ -30,26 +30,73 @@ class VsCodeLLMModel implements ILLMModel {
 
     // Convert AbortSignal to CancellationToken
     const cts = new vscode.CancellationTokenSource();
-    if (signal) {
-      signal.addEventListener("abort", () => cts.cancel(), { once: true });
+    const abort = () => cts.cancel();
+    if (signal?.aborted) {
+      abort();
+    } else {
+      signal?.addEventListener("abort", abort, { once: true });
     }
 
-    const response = await this.model.sendRequest(vsMessages, {}, cts.token);
+    let response: vscode.LanguageModelChatResponse;
+    try {
+      response = await this.model.sendRequest(vsMessages, {}, cts.token);
+    } catch (error) {
+      signal?.removeEventListener("abort", abort);
+      cts.dispose();
+      throw error;
+    }
 
     // Wrap the response as AsyncIterable<string>
     return {
       [Symbol.asyncIterator]() {
         const reader = response.stream[Symbol.asyncIterator]();
+        let disposed = false;
+        const dispose = () => {
+          if (disposed) {
+            return;
+          }
+          disposed = true;
+          signal?.removeEventListener("abort", abort);
+          cts.dispose();
+        };
         return {
           async next(): Promise<IteratorResult<string>> {
-            const result = await reader.next();
-            if (result.done) {
-              return { done: true, value: undefined };
+            try {
+              const result = await reader.next();
+              if (result.done) {
+                dispose();
+                return { done: true, value: undefined };
+              }
+              // vscode.LanguageModelTextPart has a `value` property
+              const part = result.value;
+              const text = typeof part === "string" ? part : ((part as any).value ?? String(part));
+              return { done: false, value: text };
+            } catch (error) {
+              dispose();
+              throw error;
             }
-            // vscode.LanguageModelTextPart has a `value` property
-            const part = result.value;
-            const text = typeof part === "string" ? part : ((part as any).value ?? String(part));
-            return { done: false, value: text };
+          },
+          async return(): Promise<IteratorResult<string>> {
+            dispose();
+            if (typeof reader.return === "function") {
+              await reader.return();
+            }
+            return { done: true, value: undefined };
+          },
+          async throw(error?: unknown): Promise<IteratorResult<string>> {
+            dispose();
+            if (typeof reader.throw === "function") {
+              const result = await reader.throw(error);
+              if (result.done) {
+                return { done: true, value: undefined };
+              }
+              const part = result.value;
+              return {
+                done: false,
+                value: typeof part === "string" ? part : ((part as any).value ?? String(part)),
+              };
+            }
+            throw error;
           },
         };
       },

@@ -39,6 +39,12 @@ export interface Document {
   source?: DocumentSource;
   addedAt: number;
   chunkCount: number;
+  /** Stable identity of the directory/repository/request that expanded this leaf. */
+  containerId?: string;
+  /** Canonical leaf source used to derive the document ID. */
+  canonicalSource?: string;
+  /** Content revision captured while loading this leaf. */
+  sourceRevision?: string;
 }
 
 export type DocumentSource =
@@ -103,6 +109,20 @@ export interface RAGQueryResult {
       position: string;
       headingPath?: string; // e.g., "Memory Allocation → Malloc"
       sectionTitle?: string;
+      /** Semantics of similarity (for example vector_similarity, rrf, or weighted_fusion). */
+      scoreKind?: string;
+      /** Individual retrieval-arm contributions to the returned score. */
+      componentScores?: { vector?: number; keyword?: number; graph?: number };
+      /** First-stage score retained when a reranker replaces similarity. */
+      originalScore?: number;
+      /** Semantics of the retained first-stage score. */
+      originalScoreKind?: string;
+      /** Retained first-stage retrieval-arm contributions. */
+      originalComponentScores?: { vector?: number; keyword?: number; graph?: number };
+      matchedEntities?: string[];
+      hopDepth?: number;
+      degradedFrom?: string;
+      fallbackReason?: string;
     };
   }>;
   query: string;

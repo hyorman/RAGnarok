@@ -163,6 +163,19 @@ describe("EntityExtractor", function () {
       expect(result.relationships).to.have.length(0);
     });
 
+    it("propagates caller cancellation before extraction", async function () {
+      const controller = new AbortController();
+      controller.abort(new DOMException("cancelled", "AbortError"));
+      const extractor = new EntityExtractor(createMockLLMProvider(validResponse));
+      let caught: unknown;
+      try {
+        await extractor.extractFromChunks([createChunk("Some text")], defaultOptions({ signal: controller.signal }));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).to.equal(controller.signal.reason);
+    });
+
     it("should resume from lastProcessedIndex", async function () {
       let callCount = 0;
       const countingProvider: ILLMProvider = {
@@ -333,6 +346,34 @@ describe("EntityExtractor", function () {
       };
       const embeddings = await extractor.embedEntities([], mockEmbeddingService);
       expect(embeddings.size).to.equal(0);
+    });
+
+    it("passes cancellation through entity embedding", async function () {
+      const noModelProvider: ILLMProvider = {
+        selectModel: async () => null,
+        isAvailable: async () => false,
+      };
+      const extractor = new EntityExtractor(noModelProvider);
+      const controller = new AbortController();
+      const mockEmbeddingService = {
+        embedBatch: async (_texts: string[], _progress: undefined, signal?: AbortSignal) => {
+          expect(signal).to.equal(controller.signal);
+          controller.abort(new DOMException("embedding cancelled", "AbortError"));
+          signal?.throwIfAborted();
+          return [];
+        },
+      };
+      let caught: unknown;
+      try {
+        await extractor.embedEntities(
+          [{ name: "A", type: "concept", description: "Entity A" }],
+          mockEmbeddingService,
+          controller.signal,
+        );
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).to.equal(controller.signal.reason);
     });
   });
 });

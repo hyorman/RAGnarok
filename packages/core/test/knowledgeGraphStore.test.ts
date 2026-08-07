@@ -61,6 +61,15 @@ function createTestGraphData(topicId: string): KnowledgeGraphData {
       edgeCount: relationships.length,
       communityCount: 0,
       embeddingModel: "test-model",
+      embeddingDimension: 5,
+      embeddingFingerprint: {
+        backendKind: "test",
+        providerFormat: "test-format",
+        model: "test-model",
+        revision: "v1",
+        dimension: 5,
+        endpointHash: "local",
+      },
     },
   };
 }
@@ -90,11 +99,32 @@ describe("KnowledgeGraphStore Integration", function () {
     expect(loaded!.relationships).to.have.length(2);
     expect(loaded!.entities[0].name).to.equal("JavaScript");
     expect(loaded!.relationships[0].type).to.equal("related_to");
+    expect(loaded!.metadata.embeddingDimension).to.equal(5);
+    expect(loaded!.metadata.embeddingFingerprint).to.deep.equal(testData.metadata.embeddingFingerprint);
   });
 
   it("should return null for non-existent graph", async function () {
     const result = await store.loadGraph("nonexistent-topic");
     expect(result).to.be.null;
+  });
+
+  it("rejects entity and relationship collections above the persisted graph limits before writing", async function () {
+    const base = createTestGraphData("topic-over-limit");
+    for (const oversized of [
+      { ...base, entities: new Array(100_001).fill(base.entities[0]), relationships: [] },
+      { ...base, entities: [], relationships: new Array(100_001).fill(base.relationships[0]) },
+    ]) {
+      let caught: unknown;
+      try {
+        await store.saveGraph("topic-over-limit", oversized);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).to.be.instanceOf(Error);
+      expect((caught as Error).name).to.equal("KnowledgeGraphLimitError");
+      expect((caught as Error).message).to.include("100000 entities, 100000 relationships");
+    }
+    expect(await store.hasGraph("topic-over-limit")).to.equal(false);
   });
 
   it("should delete graph tables", async function () {
@@ -223,6 +253,43 @@ describe("KnowledgeGraphStore Integration", function () {
     expect(await store.hasGraph("topic-has-test")).to.be.true;
   });
 
+  it("surfaces an incomplete entity/edge table set as corruption", async function () {
+    const topicId = "topic-corrupt-table-set";
+    await store.saveGraph(topicId, createTestGraphData(topicId));
+    const db = await (store as any).getDb();
+    await db.dropTable(`kg-entities-${topicId}`);
+
+    let caught: unknown;
+    try {
+      await store.loadGraph(topicId);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.be.instanceOf(Error);
+    expect((caught as Error).message).to.include("corrupt");
+  });
+
+  it("surfaces metadata-only state with non-zero counts as a torn graph", async function () {
+    const topicId = "topic-metadata-only-torn";
+    const data = createTestGraphData(topicId);
+    data.relationships = [];
+    data.metadata.edgeCount = 0;
+    await store.saveGraph(topicId, data);
+    const db = await (store as any).getDb();
+    await db.dropTable(`kg-entities-${topicId}`);
+
+    for (const operation of [() => store.hasGraph(topicId), () => store.loadGraph(topicId)]) {
+      let caught: unknown;
+      try {
+        await operation();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).to.be.instanceOf(Error);
+      expect((caught as Error).message).to.include("corrupt");
+    }
+  });
+
   it("should integrate with KnowledgeGraph toJSON/fromJSON", async function () {
     // Build graph in-memory
     const kg = new KnowledgeGraph("topic-integrate");
@@ -241,5 +308,49 @@ describe("KnowledgeGraphStore Integration", function () {
     expect(restored.getEntity("e1")!.name).to.equal("A");
     expect(restored.getEntity("e2")!.name).to.equal("B");
     expect(restored.getRelationship("r1")).to.not.be.null;
+  });
+});
+
+describe("KnowledgeGraphStore atomic recovery", function () {
+  this.timeout(30000);
+
+  it("restores the previous entity+edge snapshot after restart", async function () {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "kg-atomic-recovery-"));
+    const topicId = "atomic-topic";
+    const first = new KnowledgeGraphStore(directory);
+    const original = createTestGraphData(topicId);
+    await first.saveGraph(topicId, original);
+
+    const rawSave = (first as any).saveGraphUnlocked.bind(first);
+    let injectedFailures = 2;
+    (first as any).saveGraphUnlocked = async (...args: unknown[]) => {
+      await rawSave(...args);
+      if (injectedFailures-- > 0) {
+        throw new Error("simulated entity/edge commit interruption");
+      }
+    };
+    let caught: unknown;
+    try {
+      await first.saveGraph(topicId, {
+        ...createTestGraphData(topicId),
+        entities: [createEntity("replacement", "Replacement")],
+        relationships: [],
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.be.instanceOf(Error);
+    first.dispose();
+
+    const restarted = new KnowledgeGraphStore(directory);
+    const recovered = await restarted.loadGraph(topicId);
+    expect(recovered?.entities.map((entity) => entity.id).sort()).to.deep.equal(
+      original.entities.map((entity) => entity.id).sort(),
+    );
+    expect(recovered?.relationships.map((relationship) => relationship.id).sort()).to.deep.equal(
+      original.relationships.map((relationship) => relationship.id).sort(),
+    );
+    restarted.dispose();
+    await fs.rm(directory, { recursive: true, force: true });
   });
 });

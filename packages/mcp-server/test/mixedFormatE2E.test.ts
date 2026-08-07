@@ -96,7 +96,7 @@ describe("mixed-format ingestion E2E (MB-1 gate)", function () {
 
   it("ingests txt→md→html and html→md→txt identically", async function () {
     harness = new StdioHarness(storageDir, sourceDir);
-    expect((await harness.initialize()).error).to.equal(undefined);
+    expect((await harness.discover()).error).to.equal(undefined);
 
     await ingestInOrder("mixed-a", [files.txt, files.md, files.html], 10);
     await ingestInOrder("mixed-b", [files.html, files.md, files.txt], 30);

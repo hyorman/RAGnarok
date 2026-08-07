@@ -1,0 +1,24 @@
+RAGnarōk third-party notices
+============================
+
+This distribution includes converted machine-learning model artifacts. The
+model files are redistributed under Apache License 2.0. RAGnarōk does not
+modify the bundled bytes after obtaining the upstream Transformers.js
+artifacts.
+
+Xenova/all-MiniLM-L6-v2
+Source: https://huggingface.co/Xenova/all-MiniLM-L6-v2
+Revision: 751bff37182d3f1213fa05d7196b954e230abad9
+Upstream model: sentence-transformers/all-MiniLM-L6-v2
+License: Apache-2.0
+Purpose: text embedding
+
+Xenova/ms-marco-MiniLM-L-6-v2
+Source: https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2
+Revision: a09144355adeed5f58c8ed011d209bf8ee5a1fec
+Upstream model: cross-encoder/ms-marco-MiniLM-L-6-v2
+License: Apache-2.0
+Purpose: cross-encoder reranking
+
+Exact artifact paths, sizes, and SHA-256 hashes are recorded in
+packages/core/assets/models/manifest.json and in the generated SBOMs.

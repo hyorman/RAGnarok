@@ -53,11 +53,13 @@ try {
         `${JSON.stringify({
           jsonrpc: "2.0",
           id: 1,
-          method: "initialize",
+          method: "server/discover",
           params: {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: { name: "shutdown-soak", version: "1.0.0" },
+            _meta: {
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+              "io.modelcontextprotocol/clientInfo": { name: "e2e-harness", version: "1.0.0" },
+              "io.modelcontextprotocol/clientCapabilities": {},
+            },
           },
         })}\n`,
       );

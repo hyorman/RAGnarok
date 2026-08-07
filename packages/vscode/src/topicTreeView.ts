@@ -16,6 +16,7 @@ import {
   Document,
   RetrievalStrategy,
   RerankerModelRegistry,
+  CrossEncoderReranker,
 } from "@ragnarok/core";
 import { COMMANDS, TREE_CONFIG_KEY, CONTEXT, VSCODE_CONFIG } from "./constants";
 
@@ -744,6 +745,20 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     }
 
     if (modelId) {
+      const candidate = new CrossEncoderReranker(modelId, {
+        maxCandidates: config.get<number>(CONFIG.RERANKER_MAX_CANDIDATES, DEFAULTS.RERANKER_MAX_CANDIDATES),
+        registry,
+      });
+      try {
+        await candidate.initialize();
+      } catch (error) {
+        await candidate.dispose();
+        vscode.window.showErrorMessage(
+          `Reranker model was not changed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
+      await candidate.dispose();
       await config.update(CONFIG.RERANKER_MODEL, modelId, vscode.ConfigurationTarget.Workspace);
       vscode.window.showInformationMessage(`Reranker model set to: ${modelId}`);
       this.refresh();

@@ -20,6 +20,7 @@ import {
   MemoryEntity,
   MemoryScope,
   MemoryStats,
+  MemoryGraphSnapshot,
   StoreOptions,
   RecallOptions,
   RecallResult,
@@ -37,7 +38,12 @@ import { GitBranchDetector } from "./gitBranchDetector";
 import { MemoryDecayEngine } from "./memoryDecayEngine";
 import { MemoryScopeLinker } from "./memoryScopeLinker";
 import { cosineSimilarity } from "../utils/vectorMath";
-import { atomicWriteJson } from "../utils/storageV2";
+import {
+  assertNoInterruptedStorageMigration,
+  atomicWriteFile,
+  atomicWriteJson,
+  ensureStorageFormatV2,
+} from "../utils/storageV2";
 import { acquireStorageLock } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
@@ -94,8 +100,12 @@ export class MemoryStore {
   private reinforcementTimer: ReturnType<typeof setTimeout> | null = null;
   private memoryManifestPath: string;
   private fingerprintCheck: Promise<void> | null = null;
+  private storageReady: Promise<void> | null = null;
   private storageDir: string;
   private lockPromise: Promise<StorageLockHandle> | null = null;
+  private backgroundTasks = new Set<Promise<unknown>>();
+  private disposing = false;
+  private disposed = false;
 
   constructor(options: MemoryStoreOptions) {
     const lanceDbUri = path.join(options.storageDir, "memory-lancedb");
@@ -112,7 +122,8 @@ export class MemoryStore {
 
     if (options.decayOptions?.autoDecayIntervalMs) {
       this.autoDecayTimer = setInterval(() => {
-        this.runDecay().catch((err) => this.logger.debug("Auto-decay cycle failed", err));
+        const task = this.trackBackgroundTask(this.runDecay());
+        void task.catch((err) => this.logger.debug("Auto-decay cycle failed", err));
       }, options.decayOptions.autoDecayIntervalMs);
     }
   }
@@ -194,6 +205,16 @@ export class MemoryStore {
       duplicate.isLatest = false;
       duplicate.supersededBy = entry.id;
       duplicate.updatedAt = Date.now();
+      const graph = await this.getGraph(scope, branch);
+      for (const entityId of duplicate.entityIds) {
+        const entity = graph.getEntity(entityId);
+        if (entity) {
+          graph.updateEntity(entityId, {
+            sourceMemoryIds: [...new Set(entity.sourceMemoryIds.filter((id) => id !== duplicate.id).concat(entry.id))],
+            updatedAt: Date.now(),
+          });
+        }
+      }
     }
     entries.push(entry);
     this.entryCache.set(cacheKey, entries);
@@ -226,7 +247,7 @@ export class MemoryStore {
       const graph = await this.getGraph(scope, branch);
       const results = (await this.vectorStore.searchEntries(queryVector, scope, branch, topK * 2))
         .filter(({ entry }) => options.includeAuto || !entry.tags.some((tag) => tag.startsWith("auto:")))
-        .filter(({ entry }) => !entry.expiresAt || entry.expiresAt > Date.now())
+        .filter(({ entry }) => this.decayEngine.isRecallable(entry, graph))
         .map((result) => ({
           ...result,
           score: result.score * this.decayEngine.effectiveConfidence(result.entry, graph),
@@ -303,6 +324,7 @@ export class MemoryStore {
   // ── Forget ─────────────────────────────────────────────────────────
 
   async forget(options: ForgetOptions): Promise<number> {
+    options = await this.validateAndResolveForgetOptions(options);
     let count = 0;
 
     if (options.expired) {
@@ -318,6 +340,46 @@ export class MemoryStore {
     this.scheduleMarkdownRegeneration();
 
     return count;
+  }
+
+  /**
+   * Destructive filters must resolve to the scope the caller named. In
+   * particular, `{ branch, olderThan }` means that branch only; it must never
+   * fall through the historical "all scopes" path.
+   */
+  private async validateAndResolveForgetOptions(options: ForgetOptions): Promise<ForgetOptions> {
+    if (options.branch !== undefined && options.branch.trim().length === 0) {
+      throw new Error("Memory forget branch must not be empty");
+    }
+    if (options.scope === "workspace" && options.branch) {
+      throw new Error("Memory forget cannot combine workspace scope with a branch");
+    }
+    if (options.olderThan !== undefined && (!Number.isFinite(options.olderThan) || options.olderThan <= 0)) {
+      throw new Error("Memory forget olderThan must be greater than zero days");
+    }
+    if (options.olderThan !== undefined && options.expired) {
+      throw new Error("Memory forget cannot combine olderThan with expired");
+    }
+    if (options.id && (options.scope || options.branch || options.olderThan !== undefined || options.expired)) {
+      throw new Error("Memory forget by id cannot be combined with scope, branch, olderThan, or expired");
+    }
+
+    let scope = options.scope;
+    let branch = options.branch;
+    if (branch && scope === undefined) {
+      scope = "branch";
+    }
+    if (scope === "branch" && !branch) {
+      branch = (await this.branchDetector.getCurrentBranch()) ?? undefined;
+      if (!branch) {
+        throw new Error("Memory forget branch scope requires an explicit branch or a detectable git branch");
+      }
+    }
+    if (options.olderThan !== undefined && scope === undefined) {
+      throw new Error("Memory forget with olderThan requires an explicit scope or branch");
+    }
+
+    return { ...options, scope, branch };
   }
 
   // ── Stats ──────────────────────────────────────────────────────────
@@ -542,6 +604,10 @@ export class MemoryStore {
    * memories.md). Await this during shutdown so nothing is lost.
    */
   async dispose(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    this.disposing = true;
     if (this.autoDecayTimer) {
       clearInterval(this.autoDecayTimer);
       this.autoDecayTimer = null;
@@ -554,13 +620,23 @@ export class MemoryStore {
       clearTimeout(this.reinforcementTimer);
       this.reinforcementTimer = null;
     }
-    await this.flushReinforcement();
-    await this.flushMarkdown();
-    await this.vectorStore.dispose();
-    if (this.lockPromise) {
-      const lock = await this.lockPromise.catch(() => null);
-      this.lockPromise = null;
-      await lock?.release();
+    try {
+      await this.drainBackgroundTasks();
+      await this.flushReinforcement();
+      await this.flushMarkdown();
+      await this.drainBackgroundTasks();
+      await this.vectorStore.dispose();
+      if (this.lockPromise) {
+        const lock = await this.lockPromise.catch(() => null);
+        this.lockPromise = null;
+        await lock?.release();
+      }
+      this.disposed = true;
+    } catch (error) {
+      // Failed deferred persistence retains its dirty scope and the store/lease
+      // remain open, allowing an explicit retry instead of silently losing it.
+      this.disposing = false;
+      throw error;
     }
   }
 
@@ -583,6 +659,7 @@ export class MemoryStore {
   }
 
   private async ensureEmbeddingFingerprint(): Promise<void> {
+    await this.ensureStorageReady();
     if (this.fingerprintCheck) {
       return this.fingerprintCheck;
     }
@@ -624,8 +701,22 @@ export class MemoryStore {
     })();
     try {
       await this.fingerprintCheck;
-    } finally {
+    } catch (error) {
       this.fingerprintCheck = null;
+      throw error;
+    }
+  }
+
+  private async ensureStorageReady(): Promise<void> {
+    this.storageReady ??= (async () => {
+      await this.ensureStorageLock();
+      await ensureStorageFormatV2(this.storageDir);
+    })();
+    try {
+      await this.storageReady;
+    } catch (error) {
+      this.storageReady = null;
+      throw error;
     }
   }
 
@@ -651,7 +742,7 @@ export class MemoryStore {
    * @param entryIds — optional list of specific entry IDs to promote
    */
   async promoteToWorkspace(branch: string, entryIds?: string[]): Promise<number> {
-    await this.ensureStorageLock();
+    await this.ensureStorageReady();
     const count = await this.scopeLinker.promoteToWorkspace(`branch:${branch}`, "workspace", entryIds);
     // Invalidate workspace caches so next access reloads from store
     this.invalidateCache("workspace");
@@ -671,7 +762,29 @@ export class MemoryStore {
     return this.branchDetector.getCurrentBranch();
   }
 
+  async getGraphSnapshot(scope: MemoryScope, branch?: string): Promise<MemoryGraphSnapshot> {
+    const graph = await this.getGraph(scope, branch);
+    return {
+      entities: graph.getAllEntities().map((source) => {
+        const { vector: _vector, ...entity } = source;
+        return {
+          ...entity,
+          sourceMemoryIds: [...entity.sourceMemoryIds],
+          metadata: this.cloneJsonSafe(entity.metadata),
+        };
+      }),
+      relationships: graph.getAllRelationships().map((relationship) => ({
+        ...relationship,
+        metadata: this.cloneJsonSafe(relationship.metadata),
+      })),
+    };
+  }
+
   // ── Private Methods ────────────────────────────────────────────────
+
+  private cloneJsonSafe<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
 
   private scopeKey(scope: MemoryScope, branch?: string): string {
     return scope === "branch" && branch ? `branch:${branch}` : "workspace";
@@ -694,7 +807,9 @@ export class MemoryStore {
    */
   private async ensureStorageLock(): Promise<void> {
     if (!this.lockPromise) {
-      const acquisition = acquireStorageLock(this.storageDir);
+      const acquisition = assertNoInterruptedStorageMigration(this.storageDir).then(() =>
+        acquireStorageLock(this.storageDir),
+      );
       this.lockPromise = acquisition;
       acquisition.catch(() => {
         // A failed acquisition must not poison later attempts.
@@ -801,8 +916,10 @@ export class MemoryStore {
    */
   private async persistScopeOrInvalidate(scope: MemoryScope, branch?: string): Promise<void> {
     try {
-      await this.persistEntries(scope, branch);
-      await this.persistGraph(scope, branch);
+      const key = this.scopeKey(scope, branch);
+      const entries = this.entryCache.get(key) ?? (await this.getEntries(scope, branch));
+      const graph = this.graphCache.get(key) ?? (await this.getGraph(scope, branch));
+      await this.vectorStore.saveScopeAtomic(entries, graph.toJSON(), scope, branch);
     } catch (error) {
       this.invalidateCache(this.scopeKey(scope, branch));
       throw error;
@@ -817,8 +934,7 @@ export class MemoryStore {
     if (scope === "branch") {
       const branch = options.branch ?? (await this.branchDetector.getCurrentBranch()) ?? undefined;
       if (!branch) {
-        this.logger.warn("Branch scope requested but no branch detected, falling back to workspace");
-        return { scope: "workspace", branch: undefined };
+        throw new Error("Branch scope requested but no attached git branch was detected; pass branch explicitly");
       }
       return { scope: "branch", branch };
     }
@@ -834,7 +950,7 @@ export class MemoryStore {
     if (options.scope === "branch") {
       const branch = options.branch ?? (await this.branchDetector.getCurrentBranch()) ?? undefined;
       if (!branch) {
-        return [{ scope: "workspace" }];
+        throw new Error("Branch scope requested but no attached git branch was detected; pass branch explicitly");
       }
       return [{ scope: "branch", branch }];
     }
@@ -1143,7 +1259,8 @@ export class MemoryStore {
     }
     this.markdownTimer = setTimeout(() => {
       this.markdownTimer = null;
-      void this.flushMarkdown();
+      const task = this.trackBackgroundTask(this.flushMarkdown());
+      void task.catch((err) => this.logger.debug("Markdown regeneration failed", err));
     }, 1_000);
     this.markdownTimer.unref?.();
   }
@@ -1160,7 +1277,8 @@ export class MemoryStore {
         try {
           await this.regenerateMarkdown();
         } catch (err) {
-          this.logger.debug("Markdown regeneration failed", err);
+          this.markdownDirty = true;
+          throw err;
         }
       }
     } finally {
@@ -1176,27 +1294,55 @@ export class MemoryStore {
     // One scan feeds both the export and its stats section.
     const snapshot = await this.loadAllScopes();
 
+    const visibleScope = (entries: MemoryEntry[], graph: MemoryGraph) => {
+      const visibleEntries = entries.filter(
+        (entry) =>
+          entry.isLatest !== false &&
+          !entry.tags.some((tag) => tag.startsWith("auto:")) &&
+          this.decayEngine.isRecallable(entry, graph),
+      );
+      const referencedEntityIds = new Set(visibleEntries.flatMap((entry) => entry.entityIds));
+      const entities = graph.getAllEntities().filter((entity) => referencedEntityIds.has(entity.id));
+      const entityIds = new Set(entities.map((entity) => entity.id));
+      const relationships = graph
+        .getAllRelationships()
+        .filter((relationship) => entityIds.has(relationship.sourceId) && entityIds.has(relationship.targetId));
+      return { entries: visibleEntries, graph: MemoryGraph.fromJSON({ entities, relationships }) };
+    };
+
+    const workspace = visibleScope(snapshot.workspaceEntries, snapshot.workspaceGraph);
+    const visibleBranchEntries = new Map<string, MemoryEntry[]>();
+    const visibleBranchGraphs = new Map<string, MemoryGraph>();
     const branchEntities = new Map<string, MemoryEntity[]>();
     const branchRelationships = new Map<string, import("./types").MemoryRelationship[]>();
     for (const branch of snapshot.branches) {
       const graph = snapshot.branchGraphs.get(branch);
-      branchEntities.set(branch, graph?.getAllEntities() ?? []);
-      branchRelationships.set(branch, graph?.getAllRelationships() ?? []);
+      const visible = visibleScope(snapshot.branchEntries.get(branch) ?? [], graph ?? new MemoryGraph());
+      visibleBranchEntries.set(branch, visible.entries);
+      visibleBranchGraphs.set(branch, visible.graph);
+      branchEntities.set(branch, visible.graph.getAllEntities());
+      branchRelationships.set(branch, visible.graph.getAllRelationships());
     }
 
     const markdown = this.exporter.generate({
-      workspaceEntries: snapshot.workspaceEntries,
-      workspaceEntities: snapshot.workspaceGraph.getAllEntities(),
-      workspaceRelationships: snapshot.workspaceGraph.getAllRelationships(),
-      branchEntries: snapshot.branchEntries,
+      workspaceEntries: workspace.entries,
+      workspaceEntities: workspace.graph.getAllEntities(),
+      workspaceRelationships: workspace.graph.getAllRelationships(),
+      branchEntries: visibleBranchEntries,
       branchEntities,
       branchRelationships,
-      stats: this.computeStats(snapshot),
+      stats: this.computeStats({
+        branches: snapshot.branches.filter((branch) => (visibleBranchEntries.get(branch)?.length ?? 0) > 0),
+        workspaceEntries: workspace.entries,
+        workspaceGraph: workspace.graph,
+        branchEntries: visibleBranchEntries,
+        branchGraphs: visibleBranchGraphs,
+      }),
     });
 
     // Ensure directory exists
     await fs.mkdir(path.dirname(this.markdownPath), { recursive: true });
-    await fs.writeFile(this.markdownPath, markdown, "utf-8");
+    await atomicWriteFile(this.markdownPath, markdown);
   }
 
   /** Queue a scope for deferred reinforcement persistence. */
@@ -1207,7 +1353,8 @@ export class MemoryStore {
     }
     this.reinforcementTimer = setTimeout(() => {
       this.reinforcementTimer = null;
-      void this.flushReinforcement();
+      const task = this.trackBackgroundTask(this.flushReinforcement());
+      void task.catch((err) => this.logger.debug("Reinforcement flush failed", err));
     }, 2_000);
     this.reinforcementTimer.unref?.();
   }
@@ -1216,13 +1363,27 @@ export class MemoryStore {
   async flushReinforcement(): Promise<void> {
     const dirty = [...this.reinforcementDirty];
     this.reinforcementDirty.clear();
+    const failures: unknown[] = [];
     for (const key of dirty) {
       const { scope, branch } = this.parseScopeKey(key);
       try {
         await this.persistEntries(scope, branch);
       } catch (err) {
+        this.reinforcementDirty.add(key);
+        failures.push(err);
         this.logger.debug(`Reinforcement flush failed for ${key}`, err);
       }
+    }
+    if (this.reinforcementDirty.size > 0 && !this.disposing) {
+      const { scope, branch } = this.parseScopeKey(this.reinforcementDirty.values().next().value as string);
+      this.scheduleReinforcementFlush(scope, branch);
+    }
+    if (failures.length > 0) {
+      const error = new Error(`Failed to persist ${failures.length} reinforced memory scope(s)`) as Error & {
+        failures: unknown[];
+      };
+      error.failures = failures;
+      throw error;
     }
   }
 
@@ -1231,5 +1392,17 @@ export class MemoryStore {
       return { scope: "branch", branch: key.slice("branch:".length) };
     }
     return { scope: "workspace" };
+  }
+
+  private trackBackgroundTask<T>(task: Promise<T>): Promise<T> {
+    this.backgroundTasks.add(task);
+    void task.finally(() => this.backgroundTasks.delete(task)).catch(() => undefined);
+    return task;
+  }
+
+  private async drainBackgroundTasks(): Promise<void> {
+    while (this.backgroundTasks.size > 0) {
+      await Promise.allSettled([...this.backgroundTasks]);
+    }
   }
 }

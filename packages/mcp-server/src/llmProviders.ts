@@ -9,6 +9,35 @@
 import { ILLMProvider, ILLMModel, ILLMMessage, Logger, PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "./config";
 
+function deadlineSignal(
+  parent: AbortSignal | undefined,
+  timeoutMs: number,
+): {
+  signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(parent?.reason);
+  parent?.addEventListener("abort", onAbort, { once: true });
+  if (parent?.aborted) {
+    onAbort();
+  }
+  const timer = setTimeout(() => controller.abort(new Error(`LLM request timed out after ${timeoutMs}ms`)), timeoutMs);
+  timer.unref();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+export function normalizeOllamaBaseUrl(baseUrl: string): string {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return /\/v1$/i.test(normalized) ? normalized : `${normalized}/v1`;
+}
+
 // ────────────────────────────────────────────────────────────
 // OpenAI provider
 // ────────────────────────────────────────────────────────────
@@ -20,31 +49,43 @@ class OpenAIModel implements ILLMModel {
   constructor(
     private client: any, // OpenAI instance
     private modelName: string,
+    private requestTimeoutMs: number,
   ) {
     this.id = modelName;
     this.family = modelName.split("-")[0]; // e.g. "gpt" from "gpt-4o-mini"
   }
 
   async sendRequest(messages: ILLMMessage[], signal?: AbortSignal): Promise<AsyncIterable<string>> {
-    const stream = await this.client.chat.completions.create(
-      {
-        model: this.modelName,
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        stream: true,
-      },
-      { signal },
-    );
+    const deadline = deadlineSignal(signal, this.requestTimeoutMs);
+    let stream: any;
+    try {
+      stream = await this.client.chat.completions.create(
+        {
+          model: this.modelName,
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          stream: true,
+        },
+        { signal: deadline.signal },
+      );
+    } catch (error) {
+      deadline.dispose();
+      throw error;
+    }
 
     return {
       async *[Symbol.asyncIterator]() {
-        for await (const chunk of stream) {
-          const content = chunk.choices?.[0]?.delta?.content;
-          if (content !== undefined && content !== null && typeof content !== "string") {
-            throw new Error("OpenAI streaming response contained non-text content");
+        try {
+          for await (const chunk of stream) {
+            const content = chunk.choices?.[0]?.delta?.content;
+            if (content !== undefined && content !== null && typeof content !== "string") {
+              throw new Error("OpenAI streaming response contained non-text content");
+            }
+            if (content) {
+              yield content;
+            }
           }
-          if (content) {
-            yield content;
-          }
+        } finally {
+          deadline.dispose();
         }
       },
     };
@@ -60,6 +101,7 @@ export class OpenAILLMProvider implements ILLMProvider {
     private apiKey: string,
     private defaultModel: string,
     private baseUrl?: string,
+    private requestTimeoutMs = 30_000,
   ) {}
 
   private async getClient(): Promise<any> {
@@ -77,7 +119,7 @@ export class OpenAILLMProvider implements ILLMProvider {
     try {
       const client = await this.getClient();
       const modelName = options?.family ?? this.defaultModel;
-      return new OpenAIModel(client, modelName);
+      return new OpenAIModel(client, modelName, this.requestTimeoutMs);
     } catch (error) {
       this.logger.error("Failed to create OpenAI model", error);
       return null;
@@ -90,7 +132,12 @@ export class OpenAILLMProvider implements ILLMProvider {
     }
     try {
       const client = await this.getClient();
-      await client.models.list();
+      const deadline = deadlineSignal(undefined, this.requestTimeoutMs);
+      try {
+        await client.models.list({}, { signal: deadline.signal });
+      } finally {
+        deadline.dispose();
+      }
       this.availability = { value: true, expiresAt: Date.now() + 10_000 };
       return true;
     } catch {
@@ -111,6 +158,7 @@ class AnthropicModel implements ILLMModel {
   constructor(
     private client: any, // Anthropic instance
     private modelName: string,
+    private requestTimeoutMs: number,
   ) {
     this.id = modelName;
     this.family = modelName.split("-")[0]; // e.g. "claude" from "claude-sonnet-4-20250514"
@@ -118,36 +166,47 @@ class AnthropicModel implements ILLMModel {
 
   async sendRequest(messages: ILLMMessage[], signal?: AbortSignal): Promise<AsyncIterable<string>> {
     // Anthropic uses a system parameter instead of a system message
-    let systemPrompt: string | undefined;
+    const systemPrompts: string[] = [];
     const chatMessages: Array<{ role: string; content: string }> = [];
 
     for (const m of messages) {
       if (m.role === "system") {
-        systemPrompt = m.content;
+        systemPrompts.push(m.content);
       } else {
         chatMessages.push({ role: m.role, content: m.content });
       }
     }
 
-    const stream = this.client.messages.stream(
-      {
-        model: this.modelName,
-        max_tokens: 4096,
-        ...(systemPrompt ? { system: systemPrompt } : {}),
-        messages: chatMessages,
-      },
-      ...(signal ? [{ signal }] : []),
-    );
+    const deadline = deadlineSignal(signal, this.requestTimeoutMs);
+    let stream: any;
+    try {
+      stream = this.client.messages.stream(
+        {
+          model: this.modelName,
+          max_tokens: 4096,
+          ...(systemPrompts.length ? { system: systemPrompts.join("\n\n") } : {}),
+          messages: chatMessages,
+        },
+        { signal: deadline.signal },
+      );
+    } catch (error) {
+      deadline.dispose();
+      throw error;
+    }
 
     return {
       async *[Symbol.asyncIterator]() {
-        for await (const event of stream) {
-          if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-            if (typeof event.delta.text !== "string") {
-              throw new Error("Anthropic stream contained invalid text");
+        try {
+          for await (const event of stream) {
+            if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+              if (typeof event.delta.text !== "string") {
+                throw new Error("Anthropic stream contained invalid text");
+              }
+              yield event.delta.text;
             }
-            yield event.delta.text;
           }
+        } finally {
+          deadline.dispose();
         }
       },
     };
@@ -162,12 +221,17 @@ export class AnthropicLLMProvider implements ILLMProvider {
   constructor(
     private apiKey: string,
     private defaultModel: string,
+    private baseUrl?: string,
+    private requestTimeoutMs = 30_000,
   ) {}
 
   private async getClient(): Promise<any> {
     if (!this.client) {
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      this.client = new Anthropic({ apiKey: this.apiKey });
+      this.client = new Anthropic({
+        apiKey: this.apiKey,
+        ...(this.baseUrl ? { baseURL: this.baseUrl } : {}),
+      });
     }
     return this.client;
   }
@@ -176,7 +240,7 @@ export class AnthropicLLMProvider implements ILLMProvider {
     try {
       const client = await this.getClient();
       const modelName = options?.family ?? this.defaultModel;
-      return new AnthropicModel(client, modelName);
+      return new AnthropicModel(client, modelName, this.requestTimeoutMs);
     } catch (error) {
       this.logger.error("Failed to create Anthropic model", error);
       return null;
@@ -190,7 +254,12 @@ export class AnthropicLLMProvider implements ILLMProvider {
     try {
       const client = await this.getClient();
       if (client.models?.list) {
-        await client.models.list({ limit: 1 });
+        const deadline = deadlineSignal(undefined, this.requestTimeoutMs);
+        try {
+          await client.models.list({ limit: 1 }, { signal: deadline.signal });
+        } finally {
+          deadline.dispose();
+        }
       }
       this.availability = { value: true, expiresAt: Date.now() + 10_000 };
       return true;
@@ -212,31 +281,43 @@ class OllamaModel implements ILLMModel {
   constructor(
     private client: any, // OpenAI-compatible client
     private modelName: string,
+    private requestTimeoutMs: number,
   ) {
     this.id = modelName;
     this.family = "ollama";
   }
 
   async sendRequest(messages: ILLMMessage[], signal?: AbortSignal): Promise<AsyncIterable<string>> {
-    const stream = await this.client.chat.completions.create(
-      {
-        model: this.modelName,
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        stream: true,
-      },
-      { signal },
-    );
+    const deadline = deadlineSignal(signal, this.requestTimeoutMs);
+    let stream: any;
+    try {
+      stream = await this.client.chat.completions.create(
+        {
+          model: this.modelName,
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          stream: true,
+        },
+        { signal: deadline.signal },
+      );
+    } catch (error) {
+      deadline.dispose();
+      throw error;
+    }
 
     return {
       async *[Symbol.asyncIterator]() {
-        for await (const chunk of stream) {
-          const content = chunk.choices?.[0]?.delta?.content;
-          if (content !== undefined && content !== null && typeof content !== "string") {
-            throw new Error("Ollama streaming response contained non-text content");
+        try {
+          for await (const chunk of stream) {
+            const content = chunk.choices?.[0]?.delta?.content;
+            if (content !== undefined && content !== null && typeof content !== "string") {
+              throw new Error("Ollama streaming response contained non-text content");
+            }
+            if (content) {
+              yield content;
+            }
           }
-          if (content) {
-            yield content;
-          }
+        } finally {
+          deadline.dispose();
         }
       },
     };
@@ -251,13 +332,14 @@ export class OllamaLLMProvider implements ILLMProvider {
   constructor(
     private baseUrl: string,
     private defaultModel: string,
+    private requestTimeoutMs = 30_000,
   ) {}
 
   private async getClient(): Promise<any> {
     if (!this.client) {
       const { default: OpenAI } = await import("openai");
       this.client = new OpenAI({
-        baseURL: `${this.baseUrl}/v1`,
+        baseURL: normalizeOllamaBaseUrl(this.baseUrl),
         apiKey: "ollama", // Ollama doesn't require a real key
       });
     }
@@ -268,7 +350,7 @@ export class OllamaLLMProvider implements ILLMProvider {
     try {
       const client = await this.getClient();
       const modelName = options?.family ?? this.defaultModel;
-      return new OllamaModel(client, modelName);
+      return new OllamaModel(client, modelName, this.requestTimeoutMs);
     } catch (error) {
       this.logger.error("Failed to create Ollama model", error);
       return null;
@@ -281,7 +363,12 @@ export class OllamaLLMProvider implements ILLMProvider {
     }
     try {
       const client = await this.getClient();
-      await client.models.list();
+      const deadline = deadlineSignal(undefined, this.requestTimeoutMs);
+      try {
+        await client.models.list({}, { signal: deadline.signal });
+      } finally {
+        deadline.dispose();
+      }
       this.availability = { value: true, expiresAt: Date.now() + 3_000 };
       return true;
     } catch {
@@ -312,7 +399,12 @@ export function createLLMProvider(config: McpConfig): ILLMProvider {
       logger.info(
         `Using OpenAI provider (model: ${openaiModel}${config.llmBaseUrl ? `, baseUrl: ${config.llmBaseUrl}` : ""})`,
       );
-      return new OpenAILLMProvider(config.llmApiKey, openaiModel, config.llmBaseUrl || undefined);
+      return new OpenAILLMProvider(
+        config.llmApiKey,
+        openaiModel,
+        config.llmBaseUrl || undefined,
+        config.llmRequestTimeoutMs,
+      );
     }
 
     case "anthropic": {
@@ -321,15 +413,22 @@ export function createLLMProvider(config: McpConfig): ILLMProvider {
         return new NullProvider();
       }
       const anthropicModel = config.llmModel || PROVIDER_DEFAULT_MODELS.anthropic;
-      logger.info(`Using Anthropic provider (model: ${anthropicModel})`);
-      return new AnthropicLLMProvider(config.llmApiKey, anthropicModel);
+      logger.info(
+        `Using Anthropic provider (model: ${anthropicModel}${config.llmBaseUrl ? `, baseUrl: ${config.llmBaseUrl}` : ""})`,
+      );
+      return new AnthropicLLMProvider(
+        config.llmApiKey,
+        anthropicModel,
+        config.llmBaseUrl || undefined,
+        config.llmRequestTimeoutMs,
+      );
     }
 
     case "ollama": {
       const ollamaModel = config.llmModel || PROVIDER_DEFAULT_MODELS.ollama;
       const ollamaUrl = config.llmBaseUrl || "http://localhost:11434";
       logger.info(`Using Ollama provider (model: ${ollamaModel}, url: ${ollamaUrl})`);
-      return new OllamaLLMProvider(ollamaUrl, ollamaModel);
+      return new OllamaLLMProvider(ollamaUrl, ollamaModel, config.llmRequestTimeoutMs);
     }
 
     case "none":

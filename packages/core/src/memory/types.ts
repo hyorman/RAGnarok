@@ -185,6 +185,11 @@ export interface MemoryGraphData {
   relationships: MemoryRelationship[];
 }
 
+export interface MemoryGraphSnapshot {
+  entities: Array<Omit<MemoryEntity, "vector">>;
+  relationships: MemoryRelationship[];
+}
+
 // ── Scope Linking ────────────────────────────────────────────────────
 
 /** A cross-scope link between two matching entities */

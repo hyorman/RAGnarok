@@ -388,6 +388,32 @@ describe("RAGQueryService", () => {
   });
 
   describe("reranker caching", () => {
+    it("switches a config-managed cached reranker and invalidates dependent caches", async () => {
+      let currentModel = "org/old";
+      const switchModel = sinon.stub().callsFake(async (model: string) => {
+        currentModel = model;
+      });
+      const reranker = {
+        initialize: async () => {},
+        isAvailable: () => true,
+        rerank: async () => [],
+        dispose: () => {},
+        getCurrentModel: () => currentModel,
+        switchModel,
+      };
+      (service as any).cachedReranker = reranker;
+      (service as any).ragAgents.set("cached", {});
+      (service as any).compiledQueryGraph = {};
+      config.get = (<T>(key: string, defaultValue: T): T =>
+        (key === "rerankerModel" ? "org/new" : defaultValue) as T) as IConfigProvider["get"];
+
+      expect(await (service as any).getOrCreateReranker()).to.equal(reranker);
+
+      expect(switchModel.calledOnceWithExactly("org/new")).to.equal(true);
+      expect((service as any).ragAgents.size).to.equal(0);
+      expect((service as any).compiledQueryGraph).to.equal(null);
+    });
+
     it("should pass the same reranker instance to agents for different topics", async () => {
       // Setup two different topics
       (topicManager.resolveTopicByName as sinon.SinonStub)
@@ -470,6 +496,49 @@ describe("RAGQueryService", () => {
 
       // Agent for Topic0 was evicted, so initialize should be called again
       expect(initStub.calledOnce).to.be.true;
+    });
+  });
+
+  describe("retrieval explanation mapping", () => {
+    it("exposes score components, graph evidence, and fallback metadata in public results", () => {
+      const result = (service as any).mapGraphResult(
+        {
+          results: [
+            {
+              content: "Graph evidence",
+              source: "doc.md",
+              score: 0.7,
+              metadata: {
+                chunkIndex: 1,
+                retrievalStrategy: "vector",
+                scoreKind: "vector_similarity",
+                componentScores: { vector: 0.7 },
+                originalScore: 0.03,
+                originalScoreKind: "rrf",
+                originalComponentScores: { vector: 0.02, keyword: 0.01 },
+                matchedEntities: [],
+                hopDepth: -1,
+                degradedFrom: "graph_hybrid",
+                fallbackReason: "no_graph_matches",
+              },
+            },
+          ],
+          confidence: 0.7,
+          iterations: 1,
+        },
+        { topic: "Docs", query: "query", retrievalStrategy: "graph_hybrid" },
+        { topic: { name: "Docs" }, matchType: "exact" },
+      );
+
+      expect(result.graphUsed).to.equal(false);
+      expect(result.fallbackReason).to.include("relevance threshold");
+      expect(result.results[0].metadata.scoreKind).to.equal("vector_similarity");
+      expect(result.results[0].metadata.componentScores).to.deep.equal({ vector: 0.7 });
+      expect(result.results[0].metadata.originalScore).to.equal(0.03);
+      expect(result.results[0].metadata.originalScoreKind).to.equal("rrf");
+      expect(result.results[0].metadata.originalComponentScores).to.deep.equal({ vector: 0.02, keyword: 0.01 });
+      expect(result.results[0].metadata.degradedFrom).to.equal("graph_hybrid");
+      expect(result.results[0].metadata.fallbackReason).to.equal("no_graph_matches");
     });
   });
 });

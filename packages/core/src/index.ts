@@ -74,7 +74,12 @@ export type { RemoteEmbeddingFormat } from "./embeddings/remoteEmbeddingBackend"
 export { TransformersEmbeddings } from "./embeddings/langchainEmbeddings";
 
 // Vector Store
-export { VectorStoreFactory } from "./stores/vectorStoreFactory";
+export {
+  VectorStoreFactory,
+  EmbeddingReindexRequiredError,
+  VectorStoreMetadataCorruptionError,
+  EmbeddingFingerprintMismatchError,
+} from "./stores/vectorStoreFactory";
 export type { VectorStoreConfig, VectorStoreMetadata } from "./stores/vectorStoreFactory";
 
 // Knowledge Graph
@@ -89,17 +94,43 @@ export {
   VALID_ENTITY_TYPES,
   VALID_RELATIONSHIP_TYPES,
 } from "./utils/graphTypes";
-export { KnowledgeGraph } from "./stores/knowledgeGraph";
-export { KnowledgeGraphStore } from "./stores/knowledgeGraphStore";
+export { KnowledgeGraph, KnowledgeGraphEmbeddingMismatchError } from "./stores/knowledgeGraph";
+export {
+  projectKnowledgeGraphVisualization,
+  projectMemoryGraphVisualization,
+  reduceGraphVisualizationDocument,
+} from "./visualization/graphVisualization";
+export type {
+  JsonValue,
+  GraphVisualizationSource,
+  GraphVisualizationNode,
+  GraphVisualizationEdge,
+  GraphVisualizationGroup,
+  GraphVisualizationDocument,
+  GraphVisualizationOptions,
+} from "./visualization/graphVisualization";
+export {
+  KnowledgeGraphStore,
+  KnowledgeGraphCorruptionError,
+  KnowledgeGraphLimitError,
+} from "./stores/knowledgeGraphStore";
 
 // Retrievers
 export { VectorRetriever } from "./retrievers/vectorRetriever";
+export type { VectorSearchResult } from "./retrievers/vectorRetriever";
+export { lanceDistanceToSimilarity, unitCosineToLanceDistance } from "./utils/vectorMath";
 export { KeywordRetriever } from "./retrievers/keywordRetriever";
 export { HybridRetriever, DEFAULT_HYBRID_OPTIONS } from "./retrievers/hybridRetriever";
 export type { HybridSearchOptions } from "./retrievers/hybridRetriever";
 export { EnsembleRetrieverWrapper, DEFAULT_ENSEMBLE_OPTIONS } from "./retrievers/ensembleRetriever";
 export type { EnsembleSearchOptions } from "./retrievers/ensembleRetriever";
-export { GraphRetriever, DEFAULT_GRAPH_OPTIONS, getChunkId } from "./retrievers/graphRetriever";
+export {
+  GraphRetriever,
+  DEFAULT_GRAPH_OPTIONS,
+  getChunkId,
+  getDocumentIdentity,
+  GraphRetrievalLimitError,
+} from "./retrievers/graphRetriever";
 export type { GraphSearchOptions, GraphSearchResult } from "./retrievers/graphRetriever";
 export { GraphHybridRetriever, DEFAULT_GRAPH_HYBRID_OPTIONS } from "./retrievers/graphHybridRetriever";
 export type { GraphHybridSearchOptions, GraphHybridSearchResult } from "./retrievers/graphHybridRetriever";
@@ -176,8 +207,33 @@ export {
   resetStorageToV2,
 } from "./utils/storageV2";
 export type { StorageFormatMarker } from "./utils/storageV2";
+export {
+  MIGRATION_REPORT_FILENAME,
+  MIGRATION_STATE_VERSION,
+  StorageMigrationError,
+  applyStorageMigration,
+  getStorageMigrationStatus,
+  planStorageMigration,
+  resumeStorageMigration,
+  rollbackStorageMigration,
+} from "./utils/storageMigration";
+export type {
+  LegacyLayout,
+  MigrationApplyOptions,
+  MigrationDiagnosticCode,
+  MigrationInventory,
+  MigrationInventoryFile,
+  MigrationRemap,
+  MigrationReport,
+  MigrationStage,
+  MigrationState,
+  MigrationTopicPlan,
+  StorageMigrationPlan,
+} from "./utils/storageMigration";
 export { acquireStorageLock, StorageLockHeldError, STORAGE_LOCK_FILENAME } from "./utils/storageLock";
 export type { StorageLockHandle, StorageLockOptions } from "./utils/storageLock";
+export { StorageTransactionCoordinator } from "./utils/storageTransactionCoordinator";
+export type { StorageTransactionFence, StorageTransactionOperation } from "./utils/storageTransactionCoordinator";
 export type {
   MemoryStoreOptions,
   MemoryScope,
@@ -192,6 +248,7 @@ export type {
   ForgetOptions as MemoryForgetOpts,
   MemoryStats as StandaloneMemoryStats,
   MemoryGraphData,
+  MemoryGraphSnapshot,
   DecayStatus,
   ScopeLink,
   ExtractedMemoryEntity,

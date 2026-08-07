@@ -54,11 +54,7 @@ export class EntityExtractor {
 
     // Process chunks in batches
     for (let i = startIndex; i < chunks.length; i += options.batchSize) {
-      // Check cancellation
-      if (options.signal?.aborted) {
-        this.logger.info("Entity extraction cancelled");
-        break;
-      }
+      options.signal?.throwIfAborted();
 
       // Circuit breaker
       if (consecutiveFailures >= options.maxConsecutiveFailures) {
@@ -105,7 +101,7 @@ export class EntityExtractor {
 
       // Rate limiting (skip on last batch)
       if (i + options.batchSize < chunks.length && options.rateLimitMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, options.rateLimitMs));
+        await this.abortableDelay(options.rateLimitMs, options.signal);
       }
     }
 
@@ -276,20 +272,48 @@ export class EntityExtractor {
    */
   async embedEntities(
     entities: ExtractedEntity[],
-    embeddingService: { embedBatch(texts: string[]): Promise<number[][]> },
+    embeddingService: {
+      embedBatch(
+        texts: string[],
+        progressCallback?: (progress: number) => void,
+        signal?: AbortSignal,
+      ): Promise<number[][]>;
+    },
+    signal?: AbortSignal,
   ): Promise<Map<string, number[]>> {
+    signal?.throwIfAborted();
     if (entities.length === 0) {
       return new Map();
     }
 
     const descriptions = entities.map((e) => e.description);
-    const embeddings = await embeddingService.embedBatch(descriptions);
+    const embeddings = await embeddingService.embedBatch(descriptions, undefined, signal);
+    signal?.throwIfAborted();
 
     const result = new Map<string, number[]>();
     for (let i = 0; i < entities.length; i++) {
       result.set(EntityExtractor.embeddingKey(entities[i]), embeddings[i]);
     }
     return result;
+  }
+
+  private async abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    let onAbort: (() => void) | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(resolve, milliseconds);
+        onAbort = () => {
+          clearTimeout(timeout);
+          reject(signal?.reason ?? new DOMException("The operation was aborted", "AbortError"));
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    } finally {
+      if (onAbort) {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    }
   }
 
   /** Stable key for the entity embedding map: "name::type" (lowercased). */

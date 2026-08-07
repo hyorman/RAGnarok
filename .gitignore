@@ -32,8 +32,24 @@ coverage/
 .nyc_output/
 test/chunk-output/
 test/.temp-storage/
+benchmark-results/
+release-manifest.json
+release-provenance.json
+release-manifest.attestation.jsonl
+release-publication-journal.json
 
 # Environment
 .env
 .env.local
+.docker-tls-*
 .vsce-staging-*/
+
+# Generated package metadata (canonical copies live at repository root)
+packages/core/NOTICE
+packages/core/THIRD_PARTY_MODELS.md
+packages/core/bom.cdx.json
+packages/core/bom.spdx.json
+packages/mcp-server/NOTICE
+packages/mcp-server/THIRD_PARTY_MODELS.md
+packages/mcp-server/bom.cdx.json
+packages/mcp-server/bom.spdx.json

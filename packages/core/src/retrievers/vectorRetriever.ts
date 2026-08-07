@@ -1,17 +1,21 @@
 /**
  * VectorRetriever - Pure vector similarity search with score normalization
  *
- * Wraps a LangChain VectorStore and normalizes L2 distances to [0,1] similarity scores.
+ * Wraps a LangChain VectorStore and normalizes LanceDB squared-L2 distances
+ * to [0,1] similarity scores.
  * Used as a building block by HybridRetriever and EnsembleRetriever.
  */
 
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { Logger } from "../logger";
+import { lanceDistanceToSimilarity } from "../utils/vectorMath";
 
 export interface VectorSearchResult {
   document: LangChainDocument;
   score: number;
+  scoreKind: "vector_similarity";
+  componentScores: { vector: number };
 }
 
 /**
@@ -37,10 +41,15 @@ export class VectorRetriever {
 
     const results = await this.vectorStore.similaritySearchWithScore(query, k);
 
-    return results.map(([doc, distance]) => ({
-      document: doc,
-      score: this.normalizeDistance(distance, doc),
-    }));
+    return results.map(([doc, distance]) => {
+      const score = this.normalizeDistance(distance, doc);
+      return {
+        document: doc,
+        score,
+        scoreKind: "vector_similarity" as const,
+        componentScores: { vector: score },
+      };
+    });
   }
 
   /**
@@ -60,24 +69,21 @@ export class VectorRetriever {
   }
 
   /**
-   * Normalize LanceDB L2 distance to a similarity score in [0, 1].
+   * Normalize LanceDB squared-L2 distance to a similarity score in [0, 1].
    *
-   * LanceDB returns L2 (Euclidean) distance by default. For unit-normalized
-   * embeddings (e.g., all-MiniLM-L6-v2), L2 distance falls in [0, 2]:
-   *   0 = identical vectors, 2 = opposite vectors.
+   * For unit-normalized embeddings (e.g., all-MiniLM-L6-v2), LanceDB's
+   * squared-L2 distance falls in [0, 4]:
+   *   0 = identical vectors, 2 = orthogonal vectors, 4 = opposite vectors.
    *
    * Formula: similarity = 1 - (distance / 2), clamped to [0, 1].
    */
   private normalizeDistance(distance: number | undefined, doc: LangChainDocument): number {
     let d: number | undefined = distance;
-    if (d === undefined || isNaN(d)) {
-      d = doc.metadata?._distance;
+    if (d === undefined || !Number.isFinite(d)) {
+      const metadataDistance = doc.metadata?._distance;
+      d = typeof metadataDistance === "number" ? metadataDistance : undefined;
     }
 
-    if (d === undefined || isNaN(d) || !isFinite(d)) {
-      return 0.5;
-    }
-
-    return Math.max(0, Math.min(1, 1 - d / 2));
+    return lanceDistanceToSimilarity(d);
   }
 }

@@ -10,6 +10,7 @@ import { VectorRetriever } from "./vectorRetriever";
 import { KeywordRetriever } from "./keywordRetriever";
 import { Logger } from "../logger";
 import { extractKeywords } from "../utils/keywords";
+import { getDocumentIdentity } from "../utils/retrievalIdentity";
 
 export interface HybridSearchOptions {
   /** Number of results to return */
@@ -36,6 +37,8 @@ export interface HybridSearchResult {
   score: number;
   vectorScore: number;
   keywordScore: number;
+  scoreKind: "weighted_fusion" | "vector_similarity";
+  componentScores: { vector?: number; keyword?: number };
   explanation?: string;
 }
 
@@ -62,8 +65,10 @@ export class HybridRetriever {
     const startTime = Date.now();
 
     const k = options.k;
-    const vectorWeight = options.vectorWeight;
-    const keywordWeight = options.keywordWeight;
+    this.validateOptions(options);
+    const totalWeight = options.vectorWeight + options.keywordWeight;
+    const vectorWeight = options.vectorWeight / totalWeight;
+    const keywordWeight = options.keywordWeight / totalWeight;
     const minSimilarity = options.minSimilarity;
 
     this.logger.info("Starting hybrid search", {
@@ -91,9 +96,9 @@ export class HybridRetriever {
       });
 
       // Step 3: Build candidate map from vector results
-      const candidateMap = new Map<string, { doc: LangChainDocument; vectorScore: number }>();
+      const candidateMap = new Map<string, { doc: LangChainDocument; vectorScore?: number }>();
       for (const { document: doc, score: vectorScore } of vectorResults) {
-        const key = doc.metadata?.chunkId ?? doc.pageContent;
+        const key = getDocumentIdentity(doc);
         if (!candidateMap.has(key)) {
           candidateMap.set(key, { doc, vectorScore });
         }
@@ -107,19 +112,15 @@ export class HybridRetriever {
 
         // Build a map of BM25 scores for all BM25 results
         for (const { document: doc, score: bm25Score } of bm25Results) {
-          const key = doc.metadata?.chunkId ?? doc.pageContent;
-          bm25ScoreMap.set(key, bm25Score ?? 0);
+          const key = getDocumentIdentity(doc);
+          bm25ScoreMap.set(key, bm25Score);
         }
-
-        // Compute vector score floor: minimum of all vector scores (so BM25-only docs aren't penalized asymmetrically)
-        const vectorScores = Array.from(candidateMap.values()).map((c) => c.vectorScore);
-        const vectorScoreFloor = vectorScores.length > 0 ? Math.min(...vectorScores) : 0;
 
         let bm25Added = 0;
         for (const { document: doc } of bm25Results) {
-          const key = doc.metadata?.chunkId ?? doc.pageContent;
+          const key = getDocumentIdentity(doc);
           if (!candidateMap.has(key)) {
-            candidateMap.set(key, { doc, vectorScore: vectorScoreFloor });
+            candidateMap.set(key, { doc });
             bm25Added++;
           }
         }
@@ -127,38 +128,38 @@ export class HybridRetriever {
           bm25Total: bm25Results.length,
           bm25Added,
           totalCandidates: candidateMap.size,
-          vectorScoreFloor,
         });
       }
 
       // Step 5: Score all candidates with hybrid formula
       // Normalize BM25 scores to [0,1] range using min-max normalization for fair fusion with vector scores
-      const bm25Values = bm25ScoreMap.size > 0 ? Array.from(bm25ScoreMap.values()) : [];
-      const maxBm25Score = bm25Values.length > 0 ? Math.max(...bm25Values) : 0;
-      const minBm25Score = bm25Values.length > 0 ? Math.min(...bm25Values) : 0;
-      const bm25Range = maxBm25Score - minBm25Score;
       const hybridResults: HybridSearchResult[] = [];
       for (const [key, { doc, vectorScore }] of candidateMap.entries()) {
         let keywordScore: number;
         const rawBm25 = bm25ScoreMap.get(key);
-        if (rawBm25 !== undefined && bm25Range > 0) {
-          // Min-max normalization: spreads scores across [0,1] based on relative position
-          keywordScore = (rawBm25 - minBm25Score) / bm25Range;
-        } else if (rawBm25 !== undefined && maxBm25Score > 0) {
-          // All BM25 scores identical — assign uniform score
-          keywordScore = 1.0;
+        const lexicalScore = this.keywordRetriever.scoreDocument(doc.pageContent, keywords, options.keywordBoosting);
+        if (rawBm25 !== undefined) {
+          // BM25 can collapse to an all-zero score set for small corpora (for
+          // example when IDF is non-positive). Preserve real literal-match
+          // evidence rather than reporting the matching component as absent.
+          keywordScore = Math.max(rawBm25, lexicalScore);
         } else {
           // Fallback to TF scorer for candidates not in BM25 results
-          keywordScore = this.keywordRetriever.scoreDocument(doc.pageContent, keywords, options.keywordBoosting);
+          keywordScore = lexicalScore;
         }
 
-        const hybridScore = vectorWeight * vectorScore + keywordWeight * keywordScore;
+        const hybridScore = vectorWeight * (vectorScore ?? 0) + keywordWeight * keywordScore;
 
         hybridResults.push({
           document: doc,
           score: hybridScore,
-          vectorScore,
+          vectorScore: vectorScore ?? 0,
           keywordScore,
+          scoreKind: "weighted_fusion",
+          componentScores: {
+            ...(vectorScore !== undefined ? { vector: vectorScore } : {}),
+            ...(rawBm25 !== undefined || keywordScore > 0 ? { keyword: keywordScore } : {}),
+          },
         });
       }
 
@@ -205,6 +206,8 @@ export class HybridRetriever {
         score,
         vectorScore: score,
         keywordScore: 0,
+        scoreKind: "vector_similarity",
+        componentScores: { vector: score },
       }));
     } catch (error) {
       this.logger.error("Vector search failed", {
@@ -212,6 +215,24 @@ export class HybridRetriever {
         stack: error instanceof Error ? error.stack : undefined,
       });
       throw error;
+    }
+  }
+
+  private validateOptions(options: HybridSearchOptions): void {
+    if (!Number.isInteger(options.k) || options.k < 1) {
+      throw new Error("Hybrid k must be a positive integer");
+    }
+    if (
+      !Number.isFinite(options.vectorWeight) ||
+      !Number.isFinite(options.keywordWeight) ||
+      options.vectorWeight < 0 ||
+      options.keywordWeight < 0 ||
+      options.vectorWeight + options.keywordWeight <= 0
+    ) {
+      throw new Error("Hybrid weights must be finite, non-negative, and have a positive sum");
+    }
+    if (!Number.isFinite(options.minSimilarity) || options.minSimilarity < 0 || options.minSimilarity > 1) {
+      throw new Error("Hybrid minSimilarity must be between 0 and 1");
     }
   }
 

@@ -9,8 +9,8 @@
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
-import archiver from "archiver";
-import AdmZip from "adm-zip";
+import { AsyncLocalStorage } from "async_hooks";
+import { ZipFile } from "yazl";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { IConfigProvider, ILLMProvider, INotifier } from "../interfaces";
@@ -23,24 +23,45 @@ import {
   TopicMatch,
   DocumentSource,
 } from "../utils/types";
-import { DocumentPipeline, PipelineOptions, PipelineResult } from "./documentPipeline";
+import { DocumentPipeline, PipelineOptions, PipelineResult, type PipelineSourceDocument } from "./documentPipeline";
 import { executeIndexingGraph } from "../agents/indexingGraph";
-import { VectorStoreFactory } from "../stores/vectorStoreFactory";
-import { KnowledgeGraphStore } from "../stores/knowledgeGraphStore";
-import { KnowledgeGraph } from "../stores/knowledgeGraph";
+import {
+  EmbeddingFingerprintMismatchError,
+  EmbeddingReindexRequiredError,
+  VectorStoreFactory,
+  VectorStoreMetadataCorruptionError,
+} from "../stores/vectorStoreFactory";
+import {
+  KnowledgeGraphCorruptionError,
+  KnowledgeGraphLimitError,
+  KnowledgeGraphStore,
+} from "../stores/knowledgeGraphStore";
+import { KnowledgeGraph, KnowledgeGraphEmbeddingMismatchError } from "../stores/knowledgeGraph";
 import { EventEmitter } from "events";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
 import { EXTENSION, CONFIG } from "../constants";
-import { atomicWriteJson, ensureStorageFormatV2, resetStorageToV2 } from "../utils/storageV2";
+import {
+  assertNoInterruptedStorageMigration,
+  atomicWriteJson,
+  ensureStorageFormatV2,
+  resetStorageToV2,
+} from "../utils/storageV2";
 import { acquireStorageLock } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
-import { createHash } from "crypto";
+import {
+  StorageTransactionCoordinator,
+  type StorageTransactionOperation,
+} from "../utils/storageTransactionCoordinator";
+import { createHash, randomUUID } from "crypto";
 import { LanceDBCheckpointSaver } from "../stores/lanceDBCheckpointer";
 import { Mutex } from "async-mutex";
-
-/** Current export format version */
-const EXPORT_FORMAT_VERSION = "2.0";
+import {
+  TOPIC_ARCHIVE_FORMAT_VERSION,
+  TOPIC_ARCHIVE_LIMITS,
+  type TopicArchiveManifestFile,
+  validateAndStageTopicArchive,
+} from "../utils/topicArchive";
 
 export interface TopicManagerOptions {
   storageDir: string;
@@ -78,10 +99,158 @@ export interface AddDocumentResult {
 
 interface IngestionJournalEntry {
   id: string;
+  transactionId?: string;
+  containerId?: string;
   topicId: string;
-  stage: "started" | "vectorCommitted";
+  stage: "started" | "vectorCommitted" | "graphCommitted" | "metadataCommitted";
   document: TopicDocument;
+  containerLeafIds?: string[];
+  warnings?: Array<{ stage: string; message: string }>;
   updatedAt: number;
+}
+
+type PostCommitCleanupEntry =
+  | {
+      version: 1;
+      id: string;
+      kind: "document";
+      topicId: string;
+      documents: TopicDocument[];
+      legacyContainer: boolean;
+      updatedAt: number;
+    }
+  | {
+      version: 1;
+      id: string;
+      kind: "topic";
+      topicId: string;
+      checkpointPrefix: string;
+      updatedAt: number;
+    };
+
+interface ArchiveSourceFile {
+  sourcePath: string;
+  archivePath: string;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
+
+interface ExportSnapshotFile {
+  stagedPath: string;
+  manifest: TopicArchiveManifestFile;
+}
+
+interface StagedTopicImportCommit {
+  contentDir: string;
+  originalTopicId: string;
+  newTopicId: string;
+  preparedDocumentsPath: string;
+  preparedMetadataPath?: string;
+  preparedIndexPath: string;
+  expectedIndexSha256: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isDocumentSource(value: unknown): value is DocumentSource {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+  if (value.type === "file") {
+    return typeof value.path === "string";
+  }
+  if (value.type === "url") {
+    return typeof value.url === "string";
+  }
+  return (
+    value.type === "github" &&
+    typeof value.url === "string" &&
+    (value.branch === undefined || typeof value.branch === "string")
+  );
+}
+
+function parseTopicsIndex(data: string): TopicsIndex {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    throw new Error(`Invalid ${EXTENSION.TOPICS_INDEX_FILENAME}: malformed JSON`);
+  }
+
+  if (
+    !isRecord(parsed) ||
+    !isRecord(parsed.topics) ||
+    typeof parsed.modelName !== "string" ||
+    parsed.modelName.length === 0 ||
+    !isFiniteNumber(parsed.lastUpdated)
+  ) {
+    throw new Error(`Invalid ${EXTENSION.TOPICS_INDEX_FILENAME}: expected a topics map, modelName, and lastUpdated`);
+  }
+
+  for (const [topicId, value] of Object.entries(parsed.topics)) {
+    if (
+      !isRecord(value) ||
+      value.id !== topicId ||
+      typeof value.name !== "string" ||
+      value.name.length === 0 ||
+      !isFiniteNumber(value.createdAt) ||
+      !isFiniteNumber(value.updatedAt) ||
+      !Number.isInteger(value.documentCount) ||
+      (value.documentCount as number) < 0 ||
+      (value.description !== undefined && typeof value.description !== "string") ||
+      (value.source !== undefined && value.source !== "local" && value.source !== "common")
+    ) {
+      throw new Error(`Invalid ${EXTENSION.TOPICS_INDEX_FILENAME}: invalid topic entry "${topicId}"`);
+    }
+  }
+
+  return parsed as unknown as TopicsIndex;
+}
+
+function parseTopicDocuments(data: string, topicId: string): TopicDocument[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    throw new Error(`Invalid document metadata for topic "${topicId}": malformed JSON`);
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Invalid document metadata for topic "${topicId}": expected an array`);
+  }
+
+  const validFileTypes = new Set(["pdf", "markdown", "html", "text", "web", "github"]);
+  for (const value of parsed) {
+    if (
+      !isRecord(value) ||
+      typeof value.id !== "string" ||
+      value.id.length === 0 ||
+      value.topicId !== topicId ||
+      typeof value.name !== "string" ||
+      value.name.length === 0 ||
+      typeof value.filePath !== "string" ||
+      typeof value.fileType !== "string" ||
+      !validFileTypes.has(value.fileType) ||
+      !isFiniteNumber(value.addedAt) ||
+      !Number.isInteger(value.chunkCount) ||
+      (value.chunkCount as number) < 0 ||
+      (value.source !== undefined && !isDocumentSource(value.source)) ||
+      (value.containerId !== undefined && (typeof value.containerId !== "string" || value.containerId.length === 0)) ||
+      (value.canonicalSource !== undefined && typeof value.canonicalSource !== "string") ||
+      (value.sourceRevision !== undefined && typeof value.sourceRevision !== "string")
+    ) {
+      throw new Error(`Invalid document metadata for topic "${topicId}": invalid document entry`);
+    }
+  }
+
+  return parsed as TopicDocument[];
 }
 
 /**
@@ -136,7 +305,17 @@ export class TopicManager {
   private commonDatabasePath: string | null = null;
   private commonKnowledgeGraphStore: KnowledgeGraphStore | null = null;
   private journalMutex = new Mutex();
+  private archiveMutex = new Mutex();
+  private storageMutationMutex = new Mutex();
+  private topicMutationMutexes = new Map<string, Mutex>();
+  private graphMutationMutexes = new Map<string, Mutex>();
   private storageLock: StorageLockHandle | null = null;
+  private transactionCoordinator: StorageTransactionCoordinator | null = null;
+  private acceptingManagedOperations = true;
+  private activeManagedOperations = 0;
+  private operationDrainWaiters: Array<() => void> = [];
+  private managedOperationContext = new AsyncLocalStorage<{ active: boolean }>();
+  private disposePromise: Promise<void> | null = null;
 
   /**
    * Create and initialize a TopicManager
@@ -174,6 +353,7 @@ export class TopicManager {
       // Cross-process single-writer guard: a second OS process on the same
       // storage dir would race whole-table rewrites the in-process
       // serializers cannot see. Fail fast naming the holder instead.
+      await assertNoInterruptedStorageMigration(this.storageDir);
       this.storageLock = await acquireStorageLock(this.storageDir);
 
       if (this.options.resetStorage) {
@@ -185,6 +365,8 @@ export class TopicManager {
 
       // Ensure storage directory exists
       await this.ensureStorageDirectory();
+      this.transactionCoordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), this.storageLock);
+      await this.transactionCoordinator.initialize();
 
       // Ensure embedding service is initialized so we know the active model
       await this.embeddingService.initialize();
@@ -198,6 +380,7 @@ export class TopicManager {
 
       this.vectorStoreFactory = new VectorStoreFactory(storageDir, this.topicsIndex!.modelName, this.embeddingService);
       this.knowledgeGraphStore = new KnowledgeGraphStore(path.join(storageDir, "lancedb"));
+      await this.recoverPostCommitCleanupJournal();
       await this.recoverIngestionJournal();
 
       // Load common database if configured
@@ -213,12 +396,46 @@ export class TopicManager {
       this.logger.error("Failed to initialize TopicManager", {
         error: error instanceof Error ? error.message : String(error),
       });
-      // Don't hold the lock hostage after a failed init (e.g., unversioned
-      // storage rejected) — the user will retry with --reset-storage.
+      // A rejected factory call gives the caller no manager instance to
+      // dispose. Close every resource opened before the failure here so a
+      // long-lived extension host can retry without leaked native handles.
+      this.acceptingManagedOperations = false;
+      const cleanupFailures: unknown[] = [];
+      const close = async (operation: () => void | Promise<void>): Promise<void> => {
+        try {
+          await operation();
+        } catch (cleanupError) {
+          cleanupFailures.push(cleanupError);
+        }
+      };
+      await close(() => this.options.checkpointer?.dispose());
+      await close(() => this.documentPipeline.dispose());
+      if (this.vectorStoreFactory) {
+        const factory = this.vectorStoreFactory;
+        this.vectorStoreFactory = null;
+        await close(() => factory.dispose());
+      }
+      if (this.knowledgeGraphStore) {
+        const graphStore = this.knowledgeGraphStore;
+        this.knowledgeGraphStore = null;
+        await close(() => graphStore.dispose());
+      }
+      if (this.commonKnowledgeGraphStore) {
+        const commonGraphStore = this.commonKnowledgeGraphStore;
+        this.commonKnowledgeGraphStore = null;
+        await close(() => commonGraphStore.dispose());
+      }
       if (this.storageLock) {
         const lock = this.storageLock;
         this.storageLock = null;
-        await lock.release().catch(() => undefined);
+        await close(() => lock.release());
+      }
+      if (cleanupFailures.length > 0) {
+        this.logger.warn("TopicManager initialization cleanup encountered failures", {
+          failures: cleanupFailures.map((cleanupError) =>
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          ),
+        });
       }
       throw error;
     }
@@ -228,6 +445,12 @@ export class TopicManager {
    * Create a new topic
    */
   public async createTopic(options: CreateTopicOptions): Promise<Topic> {
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(() => this.createTopicUnlocked(options)),
+    );
+  }
+
+  private async createTopicUnlocked(options: CreateTopicOptions): Promise<Topic> {
     this.logger.info("Creating topic", { name: options.name });
 
     try {
@@ -240,14 +463,21 @@ export class TopicManager {
       const existingTopic = Object.values(this.topicsIndex.topics).find(
         (t) => t.name.toLowerCase() === options.name.toLowerCase(),
       );
+      const commonNameConflict = Object.values(this.commonTopicsIndex?.topics ?? {}).find(
+        (topic) => topic.name.toLowerCase() === options.name.toLowerCase(),
+      );
 
-      if (existingTopic) {
+      if (existingTopic || commonNameConflict) {
         throw new Error(`Topic with name "${options.name}" already exists`);
       }
 
       // Create topic object
+      let topicId = this.generateTopicId();
+      while (this.topicsIndex.topics[topicId] || this.commonTopicsIndex?.topics[topicId]) {
+        topicId = this.generateTopicId();
+      }
       const topic: Topic = {
-        id: this.generateTopicId(),
+        id: topicId,
         name: options.name,
         description: options.description,
         createdAt: Date.now(),
@@ -272,7 +502,9 @@ export class TopicManager {
           documentCount: options.initialDocuments.length,
         });
 
-        await this.addDocuments(topic.id, options.initialDocuments);
+        await this.getTopicMutationMutex(topic.id).runExclusive(() =>
+          this.addDocumentsUnlocked(topic.id, options.initialDocuments!, undefined),
+        );
       }
 
       this.logger.info("Topic created successfully", {
@@ -294,6 +526,14 @@ export class TopicManager {
    * Delete a topic and its vector store
    */
   public async deleteTopic(topicId: string): Promise<void> {
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(() =>
+        this.getTopicMutationMutex(topicId).runExclusive(() => this.deleteTopicUnlocked(topicId)),
+      ),
+    );
+  }
+
+  private async deleteTopicUnlocked(topicId: string): Promise<void> {
     this.logger.info("Deleting topic", { topicId });
 
     try {
@@ -307,33 +547,76 @@ export class TopicManager {
       }
 
       const topicName = this.topicsIndex.topics[topicId].name;
+      await this.assertStorageOwnership();
+      const coordinator = await this.ensureTransactionCoordinator();
+      const cleanupEntry: PostCommitCleanupEntry = {
+        version: 1,
+        id: `topic:${topicId}`,
+        kind: "topic",
+        topicId,
+        checkpointPrefix: `ingest:${topicId}:`,
+        updatedAt: Date.now(),
+      };
+      await this.upsertPostCommitCleanup(cleanupEntry);
 
-      // Delete vector store
-      await this.vectorStoreFactory.deleteStore(topicId);
+      // The topics index is the visibility boundary and is published first.
+      // Once it no longer advertises the topic, remaining table directories
+      // are unreachable cleanup. A pre-commit crash restores every backup.
+      const nextTopicsIndex: TopicsIndex = {
+        ...this.topicsIndex,
+        topics: { ...this.topicsIndex.topics },
+        lastUpdated: Date.now(),
+      };
+      delete nextTopicsIndex.topics[topicId];
+      const preparedIndex = path.join(this.getDatabaseDir(), `.delete-${topicId}-${randomUUID()}.json`);
+      await atomicWriteJson(preparedIndex, nextTopicsIndex);
+      const lancedbDir = path.join(this.getDatabaseDir(), "lancedb");
+      const operations: StorageTransactionOperation[] = [
+        { type: "replace", source: preparedIndex, destination: this.getTopicsIndexPath() },
+        { type: "delete", destination: this.getTopicDocumentsPath(topicId) },
+        { type: "delete", destination: path.join(this.getDatabaseDir(), `vector-${topicId}-metadata.json`) },
+        { type: "delete", destination: path.join(lancedbDir, `${topicId}.lance`) },
+        { type: "delete", destination: path.join(lancedbDir, `kg-entities-${topicId}.lance`) },
+        { type: "delete", destination: path.join(lancedbDir, `kg-edges-${topicId}.lance`) },
+        { type: "delete", destination: path.join(lancedbDir, `kg-metadata-${topicId}.lance`) },
+      ];
 
-      // Delete knowledge graph tables if they exist
-      if (this.knowledgeGraphStore) {
-        await this.knowledgeGraphStore.deleteGraph(topicId);
-      }
-
-      // Remove from cache
-      this.invalidateVectorStoreCache(topicId);
-      this.topicDocuments.delete(topicId);
-
-      // Delete document metadata file
+      // Closing the shared factory invalidates handles for every local/common
+      // topic, so clear the complete cache before reopening it.
+      this.invalidateVectorStoreCache();
+      this.vectorStoreFactory.dispose();
+      this.knowledgeGraphStore?.dispose();
+      const previousTopicsIndex = this.topicsIndex;
+      this.topicsIndex = nextTopicsIndex;
+      let committed = false;
       try {
-        const documentsPath = this.getTopicDocumentsPath(topicId);
-        await fs.unlink(documentsPath);
-      } catch {
-        // File might not exist
+        await coordinator.commit("delete-topic", operations, { topicId });
+        committed = true;
+      } finally {
+        if (!committed) {
+          this.topicsIndex = previousTopicsIndex;
+        }
+        await fs.rm(preparedIndex, { force: true }).catch(() => undefined);
+        this.vectorStoreFactory = new VectorStoreFactory(
+          this.getDatabaseDir(),
+          nextTopicsIndex.modelName,
+          this.embeddingService,
+        );
+        this.knowledgeGraphStore = new KnowledgeGraphStore(lancedbDir);
       }
 
-      // Remove from index
-      delete this.topicsIndex.topics[topicId];
-      this.topicsIndex.lastUpdated = Date.now();
-
-      // Save index
-      await this.saveTopicsIndex();
+      this.topicDocuments.delete(topicId);
+      this.topicMutationMutexes.delete(topicId);
+      this.graphMutationMutexes.delete(topicId);
+      try {
+        await this.completePostCommitCleanup(cleanupEntry);
+        await this.removePostCommitCleanup(cleanupEntry.id);
+      } catch (cleanupError) {
+        this.logger.warn("Topic deletion committed; checkpoint cleanup is deferred and will retry on startup", {
+          topicId,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      }
 
       this.notifyAgentCacheCleanup(topicId);
 
@@ -378,23 +661,54 @@ export class TopicManager {
     if (!graphStore) {
       return null;
     }
-    try {
-      const hasGraph = await graphStore.hasGraph(topicId);
-      if (!hasGraph) {
-        return null;
-      }
-      const data = await graphStore.loadGraph(topicId);
-      if (!data) {
-        return null;
-      }
-      return KnowledgeGraph.fromJSON(data);
-    } catch (error) {
-      this.logger.warn("Failed to load knowledge graph", {
-        topicId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    const hasGraph = await graphStore.hasGraph(topicId);
+    if (!hasGraph) {
       return null;
     }
+    const data = await graphStore.loadGraph(topicId);
+    if (!data) {
+      return null;
+    }
+    return KnowledgeGraph.fromJSON(data);
+  }
+
+  /**
+   * Serialize a complete graph read-modify-write for one topic. Entity
+   * embeddings may be prepared outside this critical section, but every merge
+   * reloads the latest committed graph so concurrent ingests preserve union.
+   */
+  public async mutateKnowledgeGraph<T>(
+    topicId: string,
+    mutation: (graph: KnowledgeGraph) => T | Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.runManagedOperation(() => this.mutateKnowledgeGraphUnlocked(topicId, mutation, signal));
+  }
+
+  private async mutateKnowledgeGraphUnlocked<T>(
+    topicId: string,
+    mutation: (graph: KnowledgeGraph) => T | Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const store = this.knowledgeGraphStore;
+    if (!store) {
+      throw new Error("Knowledge graph store is not initialized");
+    }
+    return this.getGraphMutationMutex(topicId).runExclusive(async () => {
+      signal?.throwIfAborted();
+      // Mutation must fail closed on a read error; only true absence creates a
+      // new graph. Corruption is never converted into "no graph."
+      const existingData = (await store.hasGraph(topicId)) ? await store.loadGraph(topicId) : null;
+      signal?.throwIfAborted();
+      const graph = existingData ? KnowledgeGraph.fromJSON(existingData) : new KnowledgeGraph(topicId);
+      const result = await mutation(graph);
+      signal?.throwIfAborted();
+      await store.saveGraph(topicId, graph.toJSON());
+      // A save is not interruptible. If cancellation arrived while LanceDB
+      // committed, surface it so the ingestion journal remains recoverable.
+      signal?.throwIfAborted();
+      return result;
+    });
   }
 
   /**
@@ -423,6 +737,15 @@ export class TopicManager {
    * Update topic metadata
    */
   public async updateTopic(topicId: string, updates: Partial<Pick<Topic, "name" | "description">>): Promise<Topic> {
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(() => this.updateTopicUnlocked(topicId, updates)),
+    );
+  }
+
+  private async updateTopicUnlocked(
+    topicId: string,
+    updates: Partial<Pick<Topic, "name" | "description">>,
+  ): Promise<Topic> {
     this.logger.info("Updating topic", { topicId, updates });
 
     try {
@@ -440,8 +763,11 @@ export class TopicManager {
         const existingTopic = Object.values(this.topicsIndex.topics).find(
           (t) => t.id !== topicId && t.name.toLowerCase() === updates.name!.toLowerCase(),
         );
+        const commonTopic = Object.values(this.commonTopicsIndex?.topics ?? {}).find(
+          (candidate) => candidate.name.toLowerCase() === updates.name!.toLowerCase(),
+        );
 
-        if (existingTopic) {
+        if (existingTopic || commonTopic) {
           throw new Error(`Topic with name "${updates.name}" already exists`);
         }
       }
@@ -554,7 +880,7 @@ export class TopicManager {
    * Check if a topic is from the common database (read-only)
    */
   public isCommonTopic(topicId: string): boolean {
-    return this.commonTopicsIndex?.topics[topicId] !== undefined;
+    return this.topicsIndex?.topics[topicId] === undefined && this.commonTopicsIndex?.topics[topicId] !== undefined;
   }
 
   /**
@@ -585,6 +911,17 @@ export class TopicManager {
     topicId: string,
     documentId: string,
   ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(() =>
+        this.getTopicMutationMutex(topicId).runExclusive(() => this.removeDocumentUnlocked(topicId, documentId)),
+      ),
+    );
+  }
+
+  private async removeDocumentUnlocked(
+    topicId: string,
+    documentId: string,
+  ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
     if (this.isCommonTopic(topicId)) {
       throw new Error("Common database topics are read-only");
     }
@@ -592,51 +929,82 @@ export class TopicManager {
       throw new Error("TopicManager not initialized");
     }
     const documents = this.topicDocuments.get(topicId);
-    const document = documents?.get(documentId);
-    if (!document) {
+    const exactDocument = documents?.get(documentId);
+    const selectedDocuments = exactDocument
+      ? [exactDocument]
+      : [...(documents?.values() ?? [])].filter((candidate) => candidate.containerId === documentId);
+    if (selectedDocuments.length === 0) {
       throw new Error(`Document not found: ${documentId}`);
     }
-    const removedChunkIds = await this.vectorStoreFactory.removeDocument(topicId, documentId);
-    if (this.knowledgeGraphStore && removedChunkIds.length > 0) {
-      const graph = await this.getKnowledgeGraph(topicId);
-      if (graph) {
-        const removed = new Set(removedChunkIds);
-        for (const relationship of graph.getAllRelationships()) {
-          const sourceChunkIds = relationship.sourceChunkIds.filter((id) => !removed.has(id));
-          if (sourceChunkIds.length === 0) {
-            graph.removeRelationship(relationship.id);
-          } else {
-            graph.updateRelationship(relationship.id, { sourceChunkIds });
-          }
-        }
-        for (const entity of graph.getAllEntities()) {
-          const sourceChunkIds = entity.sourceChunkIds.filter((id) => !removed.has(id));
-          if (sourceChunkIds.length === 0) {
-            graph.removeEntity(entity.id);
-          } else {
-            graph.updateEntity(entity.id, { sourceChunkIds });
-          }
-        }
-        await this.knowledgeGraphStore.saveGraph(topicId, graph.toJSON());
-      }
+    const cleanupEntry: PostCommitCleanupEntry = {
+      version: 1,
+      id: `document:${topicId}:${randomUUID()}`,
+      kind: "document",
+      topicId,
+      documents: selectedDocuments.map((document) => ({
+        ...document,
+        source: document.source ? { ...document.source } : undefined,
+      })),
+      legacyContainer: Boolean(exactDocument && !exactDocument.containerId),
+      updatedAt: Date.now(),
+    };
+    await this.upsertPostCommitCleanup(cleanupEntry);
+
+    // Publish metadata removal before destructive row deletion. A crash after
+    // this transaction can leave unreachable rows for cleanup, but can never
+    // advertise a document whose vectors were already destroyed.
+    const nextDocuments = new Map(documents);
+    for (const selectedDocument of selectedDocuments) {
+      nextDocuments.delete(selectedDocument.id);
     }
-    documents!.delete(documentId);
-    const topic = this.topicsIndex.topics[topicId];
-    topic.documentCount = documents!.size;
-    topic.updatedAt = Date.now();
-    this.topicsIndex.lastUpdated = Date.now();
-    await this.saveTopicDocuments(topicId);
-    await this.saveTopicsIndex();
-    const stats = await this.vectorStoreFactory.getStoredStats(topicId);
-    const existing = await this.vectorStoreFactory.getStoreMetadata(topicId);
-    await this.vectorStoreFactory.saveStore(topicId, {
-      ...existing,
-      documentCount: stats.documentCount,
-      chunkCount: stats.chunkCount,
-    });
+    const nextIndex: TopicsIndex = {
+      ...this.topicsIndex,
+      topics: { ...this.topicsIndex.topics },
+      lastUpdated: Date.now(),
+    };
+    nextIndex.topics[topicId] = {
+      ...nextIndex.topics[topicId],
+      documentCount: nextDocuments.size,
+      updatedAt: Date.now(),
+    };
+    const preparedDocuments = path.join(this.getDatabaseDir(), `.remove-documents-${randomUUID()}.json`);
+    const preparedIndex = path.join(this.getDatabaseDir(), `.remove-index-${randomUUID()}.json`);
+    await atomicWriteJson(preparedDocuments, [...nextDocuments.values()]);
+    await atomicWriteJson(preparedIndex, nextIndex);
+    try {
+      const coordinator = await this.ensureTransactionCoordinator();
+      await coordinator.commit(
+        "remove-document-metadata",
+        [
+          { type: "replace", source: preparedDocuments, destination: this.getTopicDocumentsPath(topicId) },
+          { type: "replace", source: preparedIndex, destination: this.getTopicsIndexPath() },
+        ],
+        { topicId, documentIds: selectedDocuments.map((document) => document.id) },
+      );
+    } finally {
+      await fs.rm(preparedDocuments, { force: true }).catch(() => undefined);
+      await fs.rm(preparedIndex, { force: true }).catch(() => undefined);
+    }
+    this.topicDocuments.set(topicId, nextDocuments);
+    this.topicsIndex = nextIndex;
+
+    let removedChunkIds: string[] = [];
+    try {
+      removedChunkIds = await this.completePostCommitCleanup(cleanupEntry);
+      await this.removePostCommitCleanup(cleanupEntry.id);
+    } catch (cleanupError) {
+      // Metadata publication is the logical delete commit. Returning success is
+      // unambiguous; the retained journal makes physical cleanup durable and
+      // retryable instead of turning a committed delete into a false failure.
+      this.logger.warn("Document removal committed; storage cleanup is deferred and will retry on startup", {
+        topicId,
+        documentIds: selectedDocuments.map((document) => document.id),
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+    }
     this.invalidateVectorStoreCache(topicId);
     this.notifyAgentCacheCleanup(topicId);
-    return { document, chunksRemoved: removedChunkIds.length };
+    return { document: exactDocument ?? selectedDocuments[0], chunksRemoved: removedChunkIds.length };
   }
 
   public async getStorageStatus(): Promise<{
@@ -663,6 +1031,18 @@ export class TopicManager {
     filePaths: string[],
     options?: PipelineOptions,
   ): Promise<AddDocumentResult[]> {
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(() =>
+        this.getTopicMutationMutex(topicId).runExclusive(() => this.addDocumentsUnlocked(topicId, filePaths, options)),
+      ),
+    );
+  }
+
+  private async addDocumentsUnlocked(
+    topicId: string,
+    filePaths: string[],
+    options?: PipelineOptions,
+  ): Promise<AddDocumentResult[]> {
     this.logger.info("Adding documents to topic", {
       topicId,
       documentCount: filePaths.length,
@@ -681,8 +1061,8 @@ export class TopicManager {
       const results: AddDocumentResult[] = [];
       const useLangGraph = this.config.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false);
 
-      // Process each document
       for (const filePath of filePaths) {
+        options?.signal?.throwIfAborted();
         const fileName = path.basename(filePath);
         const fileExt = path.extname(filePath).substring(1);
         const source: DocumentSource =
@@ -692,6 +1072,7 @@ export class TopicManager {
               ? { type: "url", url: filePath }
               : { type: "file", path: path.resolve(filePath) };
         const stableDocumentId = this.documentIdForSource(filePath, source.type === "url" ? "web" : source.type);
+        const transactionId = `ingest-${randomUUID()}`;
         const plannedDocument: TopicDocument = {
           id: stableDocumentId,
           topicId,
@@ -706,23 +1087,33 @@ export class TopicManager {
           source,
           addedAt: Date.now(),
           chunkCount: 0,
+          containerId: stableDocumentId,
+          canonicalSource: source.type === "file" ? source.path : source.url,
         };
-        const journalId = `${topicId}:${stableDocumentId}`;
+        const journalId = `${transactionId}:container`;
         await this.upsertIngestionJournal({
           id: journalId,
+          transactionId,
+          containerId: stableDocumentId,
           topicId,
           stage: "started",
           document: plannedDocument,
           updatedAt: Date.now(),
         });
         try {
-          // Process document through the LangGraph pipeline (single-pass
-          // load/chunk/store with topic-graph extraction) or the legacy
-          // pipeline, depending on the langGraphEnabled flag.
+          const pipelineOptions: PipelineOptions = {
+            ...options,
+            ingestionTransactionId: transactionId,
+          };
           const pipelineResult = useLangGraph
-            ? await this.processDocumentViaGraph(filePath, topicId, options)
-            : await this.documentPipeline.processDocument(filePath, topicId, options);
+            ? await this.processDocumentViaGraph(filePath, topicId, pipelineOptions)
+            : await this.documentPipeline.processDocument(filePath, topicId, pipelineOptions);
 
+          // The standard pipeline can return a failure after a native vector
+          // merge partially committed. Always reconcile graph provenance
+          // before interpreting the outcome or observing cancellation.
+          await this.reconcileKnowledgeGraphProvenance(topicId);
+          options?.signal?.throwIfAborted();
           if (!pipelineResult.success) {
             this.logger.warn("Document processing failed", {
               filePath,
@@ -730,67 +1121,98 @@ export class TopicManager {
             });
             continue;
           }
-          await this.reconcileKnowledgeGraphProvenance(topicId);
+          options?.signal?.throwIfAborted();
 
-          const document: TopicDocument = {
-            ...plannedDocument,
-            id: String(pipelineResult.chunks[0]?.metadata.documentId ?? "") || stableDocumentId,
-            chunkCount: pipelineResult.metadata.chunksStored,
-          };
-          await this.upsertIngestionJournal({
-            id: journalId,
+          const leafDocuments = this.createLeafTopicDocuments(
             topicId,
-            stage: "vectorCommitted",
-            document,
-            updatedAt: Date.now(),
-          });
+            plannedDocument,
+            pipelineResult.metadata.sourceDocuments ?? this.summarizePipelineChunks(pipelineResult.chunks),
+          );
+          if (leafDocuments.length === 0) {
+            throw new Error("Ingestion stored vectors but produced no leaf document metadata");
+          }
+          const leafIds = leafDocuments.map((document) => document.id);
+          const durableStage = pipelineResult.metadata.graphExtracted ? "graphCommitted" : "vectorCommitted";
+          await this.replaceIngestionTransaction(
+            transactionId,
+            leafDocuments.map((document) => ({
+              id: `${transactionId}:${document.id}`,
+              transactionId,
+              containerId: stableDocumentId,
+              topicId,
+              stage: durableStage,
+              document,
+              containerLeafIds: leafIds,
+              warnings: pipelineResult.metadata.warnings,
+              updatedAt: Date.now(),
+            })),
+          );
 
-          // Store document metadata
           if (!this.topicDocuments.has(topicId)) {
             this.topicDocuments.set(topicId, new Map());
           }
-          this.topicDocuments.get(topicId)!.set(document.id, document);
-          topic.documentCount = this.topicDocuments.get(topicId)!.size;
+          const documents = this.topicDocuments.get(topicId)!;
+          const staleDocuments = [...documents.values()].filter(
+            (document) =>
+              (document.containerId === stableDocumentId || document.id === stableDocumentId) &&
+              !leafIds.includes(document.id),
+          );
+          for (const staleDocument of staleDocuments) {
+            await this.removeDocumentStorage(topicId, staleDocument.id, options?.signal);
+            documents.delete(staleDocument.id);
+          }
+          for (const document of leafDocuments) {
+            documents.set(document.id, document);
+          }
+          topic.documentCount = documents.size;
           topic.updatedAt = Date.now();
           this.topicsIndex.lastUpdated = Date.now();
           await this.saveTopicDocuments(topicId);
           await this.saveTopicsIndex();
-          await this.removeIngestionJournal(journalId);
+          await this.markAndRemoveCommittedIngestion(transactionId);
 
-          results.push({
-            topic,
-            document,
-            pipelineResult,
-          });
-
-          this.logger.info("Document added successfully", {
-            topicId,
-            documentId: document.id,
-            fileName,
-            chunkCount: document.chunkCount,
-          });
+          for (const document of leafDocuments) {
+            results.push({ topic, document, pipelineResult });
+            this.logger.info("Document leaf added successfully", {
+              topicId,
+              documentId: document.id,
+              containerId: stableDocumentId,
+              fileName: document.name,
+              chunkCount: document.chunkCount,
+            });
+          }
         } catch (error) {
+          let reconciliationFailure: unknown;
+          try {
+            await this.reconcileKnowledgeGraphProvenance(topicId);
+          } catch (reconciliationError) {
+            reconciliationFailure = reconciliationError;
+            this.logger.error("Failed to reconcile graph after interrupted ingestion", {
+              topicId,
+              error: reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError),
+            });
+          }
           this.logger.error("Failed to add document", {
             error: error instanceof Error ? error.message : String(error),
             filePath,
           });
-          await this.removeIngestionJournal(journalId).catch(() => undefined);
-          // Continue with other documents
+          // The journal intentionally survives all ordinary failures. Recovery
+          // decides from durable transaction-tagged rows whether to complete
+          // committed leaves or roll back an uncommitted starter.
+          if (options?.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+            throw options?.signal?.reason ?? error;
+          }
+          if (this.isIngestionIntegrityFailure(reconciliationFailure)) {
+            throw reconciliationFailure;
+          }
+          if (this.isIngestionIntegrityFailure(error)) {
+            throw error;
+          }
         }
       }
 
-      // Invalidate cached vector store so next read picks up new documents
       this.invalidateVectorStoreCache(topicId);
       this.notifyAgentCacheCleanup(topicId);
-
-      // Update topic document count
-      topic.documentCount = this.topicDocuments.get(topicId)?.size || 0;
-      topic.updatedAt = Date.now();
-      this.topicsIndex.lastUpdated = Date.now();
-      await this.saveTopicsIndex();
-
-      // Persist document metadata to disk
-      await this.saveTopicDocuments(topicId);
 
       this.logger.info("Documents added to topic", {
         topicId,
@@ -808,13 +1230,37 @@ export class TopicManager {
     }
   }
 
+  private isIngestionIntegrityFailure(error: unknown): error is Error {
+    return (
+      error instanceof EmbeddingReindexRequiredError ||
+      error instanceof VectorStoreMetadataCorruptionError ||
+      error instanceof EmbeddingFingerprintMismatchError ||
+      error instanceof KnowledgeGraphCorruptionError ||
+      error instanceof KnowledgeGraphLimitError ||
+      error instanceof KnowledgeGraphEmbeddingMismatchError
+    );
+  }
+
   public async addSources(
+    topicId: string,
+    sources: DocumentSource[],
+    options?: PipelineOptions,
+  ): Promise<AddDocumentResult[]> {
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(() =>
+        this.getTopicMutationMutex(topicId).runExclusive(() => this.addSourcesUnlocked(topicId, sources, options)),
+      ),
+    );
+  }
+
+  private async addSourcesUnlocked(
     topicId: string,
     sources: DocumentSource[],
     options?: PipelineOptions,
   ): Promise<AddDocumentResult[]> {
     const outcomes: AddDocumentResult[] = [];
     for (const source of sources) {
+      options?.signal?.throwIfAborted();
       const input = source.type === "file" ? source.path : source.url;
       const loaderOptions =
         source.type === "github"
@@ -823,7 +1269,7 @@ export class TopicManager {
             ? { fileType: "web" as const }
             : options?.loaderOptions;
       outcomes.push(
-        ...(await this.addDocuments(topicId, [input], {
+        ...(await this.addDocumentsUnlocked(topicId, [input], {
           ...options,
           loaderOptions: { ...options?.loaderOptions, ...loaderOptions },
         })),
@@ -832,48 +1278,212 @@ export class TopicManager {
     return outcomes;
   }
 
+  private createLeafTopicDocuments(
+    topicId: string,
+    container: TopicDocument,
+    sources: PipelineSourceDocument[],
+  ): TopicDocument[] {
+    const fileTypes = new Set<TopicDocument["fileType"]>(["pdf", "markdown", "html", "text", "web", "github"]);
+    return sources.map((source) => {
+      const leafSource: DocumentSource =
+        container.source?.type === "github"
+          ? container.source
+          : source.sourceType === "web"
+            ? { type: "url", url: source.canonicalSource }
+            : { type: "file", path: source.canonicalSource };
+      const candidateType = source.fileType as TopicDocument["fileType"];
+      return {
+        id: source.documentId,
+        topicId,
+        name: this.displayNameForSource(source.canonicalSource, source.fileName),
+        filePath: source.canonicalSource || source.filePath,
+        fileType: fileTypes.has(candidateType) ? candidateType : container.fileType,
+        source: leafSource,
+        addedAt: Date.now(),
+        chunkCount: source.chunkCount,
+        containerId: container.id,
+        canonicalSource: source.canonicalSource,
+        sourceRevision: source.sourceRevision,
+      };
+    });
+  }
+
+  private summarizePipelineChunks(chunks: LangChainDocument[]): PipelineSourceDocument[] {
+    const summaries = new Map<string, PipelineSourceDocument>();
+    for (const chunk of chunks) {
+      const documentId = String(chunk.metadata.documentId ?? "");
+      if (!documentId) {
+        continue;
+      }
+      const existing = summaries.get(documentId);
+      if (existing) {
+        existing.chunkCount += 1;
+        continue;
+      }
+      summaries.set(documentId, {
+        documentId,
+        canonicalSource: String(chunk.metadata.source ?? chunk.metadata.filePath ?? ""),
+        sourceType: String(chunk.metadata.sourceType ?? "file"),
+        sourceRevision: String(chunk.metadata.sourceRevision ?? ""),
+        fileName: String(chunk.metadata.fileName ?? ""),
+        filePath: String(chunk.metadata.filePath ?? ""),
+        fileType: String(chunk.metadata.fileType ?? "text"),
+        chunkCount: 1,
+      });
+    }
+    return [...summaries.values()];
+  }
+
+  private displayNameForSource(canonicalSource: string, fallback: string): string {
+    try {
+      const url = new URL(canonicalSource);
+      return path.posix.basename(url.pathname) || fallback || url.hostname;
+    } catch {
+      return path.basename(canonicalSource) || fallback;
+    }
+  }
+
+  private async removeDocumentStorage(topicId: string, documentId: string, signal?: AbortSignal): Promise<string[]> {
+    if (!this.vectorStoreFactory) {
+      throw new Error("TopicManager not initialized");
+    }
+    signal?.throwIfAborted();
+    const removedChunkIds = await this.vectorStoreFactory.removeDocument(topicId, documentId);
+    // Once vector deletion commits, graph cleanup is a required consistency
+    // continuation. Do not let a cancellation arriving during the
+    // non-interruptible delete strand graph provenance; surface it after the
+    // graph has been reconciled. Reconciliation scans live chunks, so retrying
+    // after a graph-save failure is safe even though the vector delete is
+    // already idempotently complete.
+    if (this.knowledgeGraphStore && (await this.knowledgeGraphStore.hasGraph(topicId))) {
+      await this.reconcileKnowledgeGraphProvenance(topicId);
+    }
+    signal?.throwIfAborted();
+    return removedChunkIds;
+  }
+
+  private async legacyLeafIdsForContainer(topicId: string, container: TopicDocument): Promise<string[]> {
+    if (!this.vectorStoreFactory) {
+      return [];
+    }
+    const rows = await this.vectorStoreFactory.getAllDocuments(topicId, 1_000_000);
+    const containerSource =
+      container.source?.type === "file"
+        ? container.source.path
+        : container.source?.type === "url" || container.source?.type === "github"
+          ? container.source.url
+          : (container.canonicalSource ?? container.filePath);
+    let containerUrl: URL | undefined;
+    try {
+      containerUrl = new URL(containerSource);
+      containerUrl.hash = "";
+    } catch {
+      // Local path comparison below.
+    }
+    const containerPath = containerUrl ? undefined : path.resolve(containerSource);
+    const matchesContainer = (candidate: string): boolean => {
+      if (!candidate) {
+        return false;
+      }
+      if (containerUrl) {
+        try {
+          const candidateUrl = new URL(candidate);
+          const basePath = containerUrl.pathname.replace(/\/$/, "");
+          return (
+            candidateUrl.origin === containerUrl.origin &&
+            (candidateUrl.pathname === basePath || candidateUrl.pathname.startsWith(`${basePath}/`))
+          );
+        } catch {
+          return false;
+        }
+      }
+      const relative = path.relative(containerPath!, path.resolve(candidate));
+      return (
+        relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+      );
+    };
+    const leafIds = new Set<string>();
+    for (const row of rows) {
+      const leafId = String(row.metadata.documentId ?? "");
+      if (!leafId || leafId === container.id) {
+        continue;
+      }
+      const source = String(row.metadata.source ?? row.metadata.filePath ?? "");
+      let descriptorSource = "";
+      try {
+        const descriptor = JSON.parse(String(row.metadata.sourceDescriptor ?? "{}")) as unknown;
+        if (isRecord(descriptor) && typeof descriptor.source === "string") {
+          descriptorSource = descriptor.source;
+        }
+      } catch {
+        // A malformed legacy descriptor is not evidence for deletion.
+      }
+      if (matchesContainer(source) || matchesContainer(descriptorSource)) {
+        leafIds.add(leafId);
+      }
+    }
+    return [...leafIds];
+  }
+
   /**
    * Embed and persist already-chunked documents (store-only path).
    * Used by the LangGraph indexing pipeline, which owns loading/chunking.
    */
-  public async storeProcessedChunks(topicId: string, chunks: LangChainDocument[]): Promise<void> {
-    await this.documentPipeline.storeProcessedChunks(chunks, topicId);
-    await this.reconcileKnowledgeGraphProvenance(topicId);
+  public async storeProcessedChunks(topicId: string, chunks: LangChainDocument[], signal?: AbortSignal): Promise<void> {
+    return this.runManagedOperation(() => this.storeProcessedChunksUnlocked(topicId, chunks, signal));
   }
 
-  private async reconcileKnowledgeGraphProvenance(topicId: string): Promise<void> {
+  private async storeProcessedChunksUnlocked(
+    topicId: string,
+    chunks: LangChainDocument[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
+    try {
+      await this.documentPipeline.storeProcessedChunks(chunks, topicId, { signal });
+    } catch (error) {
+      // A storage error/cancellation can arrive after one or more native
+      // merge commits. Repair graph provenance from the live vector table
+      // before surfacing the original operation failure.
+      await this.reconcileKnowledgeGraphProvenance(topicId);
+      throw error;
+    }
+    // Treat provenance reconciliation as the consistency tail of the durable
+    // vector commit. Cancellation is observed after that tail completes.
+    await this.reconcileKnowledgeGraphProvenance(topicId);
+    signal?.throwIfAborted();
+  }
+
+  private async reconcileKnowledgeGraphProvenance(topicId: string, signal?: AbortSignal): Promise<void> {
     if (!this.knowledgeGraphStore || !(await this.knowledgeGraphStore.hasGraph(topicId))) {
       return;
     }
-    const graph = await this.getKnowledgeGraph(topicId);
-    if (!graph) {
-      return;
-    }
+    signal?.throwIfAborted();
     const liveChunks = new Set(
       (await this.getAllDocuments(topicId, 1_000_000)).map((document) => String(document.metadata.chunkId)),
     );
-    let changed = false;
-    for (const relationship of graph.getAllRelationships()) {
-      const sourceChunkIds = relationship.sourceChunkIds.filter((id) => liveChunks.has(id));
-      if (sourceChunkIds.length === 0) {
-        graph.removeRelationship(relationship.id);
-      } else if (sourceChunkIds.length !== relationship.sourceChunkIds.length) {
-        graph.updateRelationship(relationship.id, { sourceChunkIds });
-      }
-      changed ||= sourceChunkIds.length !== relationship.sourceChunkIds.length;
-    }
-    for (const entity of graph.getAllEntities()) {
-      const sourceChunkIds = entity.sourceChunkIds.filter((id) => liveChunks.has(id));
-      if (sourceChunkIds.length === 0) {
-        graph.removeEntity(entity.id);
-      } else if (sourceChunkIds.length !== entity.sourceChunkIds.length) {
-        graph.updateEntity(entity.id, { sourceChunkIds });
-      }
-      changed ||= sourceChunkIds.length !== entity.sourceChunkIds.length;
-    }
-    if (changed) {
-      await this.knowledgeGraphStore.saveGraph(topicId, graph.toJSON());
-    }
+    await this.mutateKnowledgeGraph(
+      topicId,
+      (graph) => {
+        for (const relationship of graph.getAllRelationships()) {
+          const sourceChunkIds = relationship.sourceChunkIds.filter((id) => liveChunks.has(id));
+          if (sourceChunkIds.length === 0) {
+            graph.removeRelationship(relationship.id);
+          } else if (sourceChunkIds.length !== relationship.sourceChunkIds.length) {
+            graph.updateRelationship(relationship.id, { sourceChunkIds });
+          }
+        }
+        for (const entity of graph.getAllEntities()) {
+          const sourceChunkIds = entity.sourceChunkIds.filter((id) => liveChunks.has(id));
+          if (sourceChunkIds.length === 0) {
+            graph.removeEntity(entity.id);
+          } else if (sourceChunkIds.length !== entity.sourceChunkIds.length) {
+            graph.updateEntity(entity.id, { sourceChunkIds });
+          }
+        }
+      },
+      signal,
+    );
   }
 
   /**
@@ -899,6 +1509,7 @@ export class TopicManager {
         checkpointer: this.options.checkpointer,
         loaderOptions: { ...options?.loaderOptions, signal: options?.signal },
         signal: options?.signal,
+        ingestionTransactionId: options?.ingestionTransactionId,
       },
       [filePath],
       topicId,
@@ -919,6 +1530,7 @@ export class TopicManager {
     const relationshipCount = (graphResult.relationshipCount as number) ?? 0;
     const errors = (graphResult.errors as string[] | undefined) ?? [];
     const warnings = (graphResult.warnings as Array<{ stage: string; message: string }> | undefined) ?? [];
+    const sourceDocuments = (graphResult.sourceDocuments as PipelineSourceDocument[] | undefined) ?? [];
     const completedStage = (graphResult.completedStage as string) ?? "";
 
     const stageReached = (stage: string): boolean => {
@@ -948,6 +1560,7 @@ export class TopicManager {
         graphExtracted: graphResult.graphExtracted === true,
         partial: graphResult.partial === true,
         documentId: this.documentIdForSource(filePath),
+        sourceDocuments,
         warnings,
       },
       chunks: [],
@@ -1152,8 +1765,12 @@ export class TopicManager {
    * Refresh topics from disk
    */
   public async refresh(): Promise<void> {
-    this.logger.info("Refreshing topics");
-    await this.loadTopicsIndex();
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(async () => {
+        this.logger.info("Refreshing topics");
+        await this.loadTopicsIndex();
+      }),
+    );
   }
 
   /**
@@ -1161,6 +1778,12 @@ export class TopicManager {
    * Called when the embedding model configuration changes
    */
   public async reinitializeWithNewModel(): Promise<void> {
+    return this.runManagedOperation(() =>
+      this.storageMutationMutex.runExclusive(() => this.reinitializeWithNewModelUnlocked()),
+    );
+  }
+
+  private async reinitializeWithNewModelUnlocked(): Promise<void> {
     this.logger.info("Reinitializing TopicManager with new embedding model");
 
     try {
@@ -1212,44 +1835,65 @@ export class TopicManager {
    * Dispose of all resources and clean up
    * Should be called when TopicManager is no longer needed
    */
-  public dispose(): void {
-    this.logger.info("Disposing TopicManager");
+  public dispose(): Promise<void> {
+    this.disposePromise ??= this.disposeOnce();
+    return this.disposePromise;
+  }
 
-    // Clear all caches
+  private async disposeOnce(): Promise<void> {
+    this.logger.info("Disposing TopicManager");
+    this.acceptingManagedOperations = false;
+    await this.waitForManagedOperationsToDrain();
+
+    const failures: unknown[] = [];
+    const close = async (operation: () => void | Promise<void>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+
+    await close(() => this.options.checkpointer?.dispose());
+    await close(() => this.documentPipeline.dispose());
+    if (this.vectorStoreFactory) {
+      const factory = this.vectorStoreFactory;
+      this.vectorStoreFactory = null;
+      await close(() => factory.dispose());
+    }
+    if (this.knowledgeGraphStore) {
+      const graphStore = this.knowledgeGraphStore;
+      this.knowledgeGraphStore = null;
+      await close(() => graphStore.dispose());
+    }
+    if (this.commonKnowledgeGraphStore) {
+      const commonGraphStore = this.commonKnowledgeGraphStore;
+      this.commonKnowledgeGraphStore = null;
+      await close(() => commonGraphStore.dispose());
+    }
+
     this.vectorStoreCache.clear();
     this.topicDocuments.clear();
-
-    // Dispose of document pipeline
-    if (this.documentPipeline) {
-      this.documentPipeline.dispose();
-    }
-
-    // Dispose of vector store factory if it exists
-    if (this.vectorStoreFactory) {
-      this.vectorStoreFactory.dispose();
-      this.vectorStoreFactory = null;
-    }
-    this.knowledgeGraphStore?.dispose();
-    this.knowledgeGraphStore = null;
-    this.commonKnowledgeGraphStore?.dispose();
-    this.commonKnowledgeGraphStore = null;
-
-    // Clear references
+    this.topicMutationMutexes.clear();
+    this.graphMutationMutexes.clear();
     this.topicsIndex = null;
     this.isInitialized = false;
-
-    // Clear all agent cache cleanup listeners
     TopicManager._onAgentCacheCleanup.removeAllListeners();
 
-    // dispose() is sync; the exit hook and heartbeat staleness back this up
-    // if the async release never completes.
     if (this.storageLock) {
       const lock = this.storageLock;
       this.storageLock = null;
-      void lock.release().catch(() => undefined);
+      await close(() => lock.release());
     }
 
     this.logger.info("TopicManager disposed");
+    if (failures.length > 0) {
+      const error = new Error(`TopicManager disposal encountered ${failures.length} cleanup failure(s)`) as Error & {
+        failures: unknown[];
+      };
+      error.failures = failures;
+      throw error;
+    }
   }
 
   // ==================== Export/Import Methods ====================
@@ -1258,100 +1902,86 @@ export class TopicManager {
    * Export a topic to a .rag archive file (ZIP format with DEFLATE compression)
    */
   public async exportTopic(topicId: string, exportPath: string): Promise<void> {
+    return this.runManagedOperation(() =>
+      this.archiveMutex.runExclusive(() => this.exportTopicUnlocked(topicId, exportPath)),
+    );
+  }
+
+  /**
+   * Import a topic from a .rag archive file
+   */
+  public async importTopic(archivePath: string): Promise<Topic> {
+    return this.runManagedOperation(() =>
+      this.archiveMutex.runExclusive(() =>
+        this.storageMutationMutex.runExclusive(() => this.importTopicUnlocked(archivePath)),
+      ),
+    );
+  }
+
+  private async exportTopicUnlocked(topicId: string, exportPath: string): Promise<void> {
     this.logger.info("Exporting topic", { topicId, exportPath });
+    const databaseDir = this.getDatabaseDir();
+    let stagingDir: string | undefined;
+    let temporaryArchivePath: string | undefined;
 
     try {
       if (!this.topicsIndex) {
         throw new Error("TopicManager not initialized");
       }
-
-      // Only allow exporting local topics
       if (this.isCommonTopic(topicId)) {
         throw new Error("Cannot export topics from common database");
       }
-
-      const topic = this.topicsIndex.topics[topicId];
-      if (!topic) {
+      if (!this.topicsIndex.topics[topicId]) {
         throw new Error(`Topic not found: ${topicId}`);
       }
 
-      const documents = this.getTopicDocuments(topicId);
-      const databaseDir = this.getDatabaseDir();
+      await fs.mkdir(databaseDir, { recursive: true });
+      stagingDir = await fs.mkdtemp(path.join(databaseDir, ".rag-export-"));
+      const snapshot = await this.createStableExportSnapshot(topicId, stagingDir);
+      const manifestContents = JSON.stringify(
+        {
+          formatVersion: TOPIC_ARCHIVE_FORMAT_VERSION,
+          files: snapshot.files.map((file) => file.manifest),
+        },
+        null,
+        2,
+      );
+      if (Buffer.byteLength(manifestContents) > TOPIC_ARCHIVE_LIMITS.maxManifestBytes) {
+        throw new Error("Topic is too large to export: archive manifest exceeds size limit");
+      }
 
-      // Create export metadata
-      const exportData: ExportedTopicData = {
-        version: EXPORT_FORMAT_VERSION,
-        topic: { ...topic },
-        documents,
-        embeddingModel: this.topicsIndex.modelName,
-        exportedAt: Date.now(),
-      };
       await fs.mkdir(path.dirname(exportPath), { recursive: true });
-
-      // Create ZIP archive
-      const output = fsSync.createWriteStream(exportPath);
-      const archive = archiver("zip", { zlib: { level: 9 } });
-
+      const realDatabaseDir = await fs.realpath(databaseDir);
+      const realExportParent = await fs.realpath(path.dirname(exportPath));
+      if (this.isSameOrNestedPath(realDatabaseDir, realExportParent)) {
+        throw new Error("Export destination cannot be inside the managed database directory");
+      }
+      temporaryArchivePath = path.join(path.dirname(exportPath), `.${path.basename(exportPath)}.${randomUUID()}.tmp`);
+      const output = fsSync.createWriteStream(temporaryArchivePath, { flags: "wx", mode: 0o600 });
+      const zip = new ZipFile();
       const archivePromise = new Promise<void>((resolve, reject) => {
-        output.on("close", resolve);
-        archive.on("error", reject);
-      });
-
-      archive.pipe(output);
-
-      // Add topic metadata
-      const manifestFiles: Array<{ path: string; size: number; sha256: string }> = [];
-      const topicJson = Buffer.from(JSON.stringify(exportData, null, 2));
-      archive.append(topicJson, { name: "topic.json" });
-      manifestFiles.push({
-        path: "topic.json",
-        size: topicJson.byteLength,
-        sha256: createHash("sha256").update(topicJson).digest("hex"),
-      });
-
-      // Add vector store files (LanceDB tables are directories with .lance extension)
-      for (const tableName of [topicId, `kg-entities-${topicId}`, `kg-edges-${topicId}`]) {
-        const lanceDbDir = path.join(databaseDir, "lancedb", `${tableName}.lance`);
-        try {
-          await fs.access(lanceDbDir);
-          for (const filePath of await this.listFilesRecursively(lanceDbDir)) {
-            const relative = path.relative(lanceDbDir, filePath).replace(/\\/g, "/");
-            const archiveEntryPath = `lancedb/${tableName}.lance/${relative}`;
-            const bytes = await fs.readFile(filePath);
-            archive.append(bytes, { name: archiveEntryPath });
-            manifestFiles.push({
-              path: archiveEntryPath,
-              size: bytes.byteLength,
-              sha256: createHash("sha256").update(bytes).digest("hex"),
-            });
+        let archiveError: unknown;
+        const closeWithError = (error: unknown) => {
+          archiveError = error;
+          if (!output.destroyed) {
+            output.destroy();
           }
-        } catch {
-          this.logger.debug("No LanceDB directory found", { tableName, path: lanceDbDir });
-        }
-      }
-
-      // Add vector metadata file
-      const vectorMetadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
-      try {
-        await fs.access(vectorMetadataPath);
-        const bytes = await fs.readFile(vectorMetadataPath);
-        const metadataName = `vector-${topicId}-metadata.json`;
-        archive.append(bytes, { name: metadataName });
-        manifestFiles.push({
-          path: metadataName,
-          size: bytes.byteLength,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-        });
-      } catch {
-        this.logger.debug("No vector metadata file found for topic", { topicId });
-      }
-
-      archive.append(JSON.stringify({ formatVersion: EXPORT_FORMAT_VERSION, files: manifestFiles }, null, 2), {
-        name: "manifest.json",
+        };
+        output.once("close", () => (archiveError === undefined ? resolve() : reject(archiveError)));
+        output.once("error", closeWithError);
+        zip.outputStream.once("error", closeWithError);
       });
+      zip.outputStream.pipe(output);
 
-      await archive.finalize();
+      for (const file of snapshot.files) {
+        zip.addFile(file.stagedPath, file.manifest.path);
+      }
+      zip.addBuffer(Buffer.from(manifestContents, "utf8"), "manifest.json");
+      zip.end();
+
       await archivePromise;
+      await fs.rename(temporaryArchivePath, exportPath);
+      temporaryArchivePath = undefined;
 
       this.logger.info("Topic exported successfully", { topicId, exportPath });
     } catch (error) {
@@ -1360,71 +1990,30 @@ export class TopicManager {
         topicId,
       });
       throw error;
+    } finally {
+      if (temporaryArchivePath) {
+        await fs.rm(temporaryArchivePath, { force: true }).catch(() => undefined);
+      }
+      if (stagingDir) {
+        await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+      }
     }
   }
 
-  /**
-   * Import a topic from a .rag archive file
-   */
-  public async importTopic(archivePath: string): Promise<Topic> {
+  private async importTopicUnlocked(archivePath: string): Promise<Topic> {
     this.logger.info("Importing topic", { archivePath });
+    const databaseDir = this.getDatabaseDir();
+    let stagingDir: string | undefined;
 
     try {
       if (!this.topicsIndex) {
         throw new Error("TopicManager not initialized");
       }
+      await fs.mkdir(databaseDir, { recursive: true });
+      stagingDir = await fs.mkdtemp(path.join(databaseDir, ".rag-import-"));
+      const stagedArchive = await validateAndStageTopicArchive(archivePath, stagingDir);
+      const exportData = stagedArchive.exportData;
 
-      // Use adm-zip for extraction
-      const zip = new AdmZip(archivePath);
-      const entries = zip.getEntries();
-      if (entries.length > 100_000) {
-        throw new Error("Invalid archive: too many entries");
-      }
-      const uncompressedSize = entries.reduce((sum, entry) => sum + Number(entry.header.size || 0), 0);
-      if (uncompressedSize > 2 * 1024 * 1024 * 1024) {
-        throw new Error("Invalid archive: decompressed size exceeds 2 GiB");
-      }
-      for (const entry of entries) {
-        const normalized = entry.entryName.replace(/\\/g, "/");
-        if (normalized.startsWith("/") || normalized.split("/").includes("..")) {
-          throw new Error(`Invalid archive path: ${entry.entryName}`);
-        }
-      }
-      const manifestEntry = entries.find((entry) => entry.entryName === "manifest.json");
-      if (!manifestEntry) {
-        throw new Error("Invalid archive: manifest.json not found");
-      }
-      const manifest = JSON.parse(manifestEntry.getData().toString("utf8"));
-      if (manifest.formatVersion !== EXPORT_FORMAT_VERSION || !Array.isArray(manifest.files)) {
-        throw new Error("Invalid archive manifest");
-      }
-      const entriesByName = new Map(entries.map((entry) => [entry.entryName, entry]));
-      for (const expected of manifest.files) {
-        const entry = entriesByName.get(expected.path);
-        if (!entry || entry.isDirectory) {
-          throw new Error(`Archive checksum entry missing: ${expected.path}`);
-        }
-        const bytes = entry.getData();
-        if (
-          bytes.byteLength !== expected.size ||
-          createHash("sha256").update(bytes).digest("hex") !== expected.sha256
-        ) {
-          throw new Error(`Archive checksum mismatch: ${expected.path}`);
-        }
-      }
-
-      // Find and parse topic.json
-      const topicEntry = entries.find((e: AdmZip.IZipEntry) => e.entryName === "topic.json");
-      if (!topicEntry) {
-        throw new Error("Invalid archive: topic.json not found");
-      }
-
-      const exportData: ExportedTopicData = JSON.parse(topicEntry.getData().toString("utf8"));
-      if (exportData.version !== EXPORT_FORMAT_VERSION) {
-        throw new Error(`Unsupported .rag format ${exportData.version}; expected ${EXPORT_FORMAT_VERSION}`);
-      }
-
-      // Log if embedding model differs - actual compatibility check happens at query time
       const currentModel = this.embeddingService.getCurrentModel();
       if (exportData.embeddingModel !== currentModel) {
         this.logger.warn("Imported topic uses different embedding model", {
@@ -1434,91 +2023,77 @@ export class TopicManager {
         });
       }
 
-      // Generate new topic ID to avoid conflicts
-      const newTopicId = this.generateTopicId();
-      const originalTopicId = exportData.topic.id;
-
-      // Create new topic with imported data
+      let newTopicId = this.generateTopicId();
+      while (this.topicsIndex.topics[newTopicId] || this.commonTopicsIndex?.topics[newTopicId]) {
+        newTopicId = this.generateTopicId();
+      }
+      const now = Date.now();
       const newTopic: Topic = {
         ...exportData.topic,
         id: newTopicId,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
         source: "local",
       };
-
-      // Check for name conflicts
-      const existingTopic = Object.values(this.topicsIndex.topics).find(
-        (t) => t.name.toLowerCase() === newTopic.name.toLowerCase(),
+      const occupiedNames = new Set(
+        [...Object.values(this.topicsIndex.topics), ...Object.values(this.commonTopicsIndex?.topics ?? {})].map(
+          (topic) => topic.name.toLowerCase(),
+        ),
       );
-      if (existingTopic) {
-        newTopic.name = `${newTopic.name} (imported)`;
+      const baseName = newTopic.name;
+      let suffix = 0;
+      while (occupiedNames.has(newTopic.name.toLowerCase())) {
+        suffix += 1;
+        newTopic.name = `${baseName} (imported${suffix === 1 ? "" : ` ${suffix}`})`;
       }
 
-      // Extract LanceDB files with new topic ID
-      const databaseDir = this.getDatabaseDir();
-
-      const tableMappings = [
-        { oldName: originalTopicId, newName: newTopicId },
-        { oldName: `kg-entities-${originalTopicId}`, newName: `kg-entities-${newTopicId}` },
-        { oldName: `kg-edges-${originalTopicId}`, newName: `kg-edges-${newTopicId}` },
-      ];
-      for (const mapping of tableMappings) {
-        const prefix = `lancedb/${mapping.oldName}.lance/`;
-        const matching = entries.filter((entry) => !entry.isDirectory && entry.entryName.startsWith(prefix));
-        if (matching.length === 0) {
-          continue;
-        }
-        const targetDir = path.join(databaseDir, "lancedb", `${mapping.newName}.lance`);
-        await fs.mkdir(targetDir, { recursive: true });
-        for (const entry of matching) {
-          const relativePath = entry.entryName.slice(prefix.length);
-          const targetPath = path.resolve(targetDir, relativePath);
-          if (!targetPath.startsWith(path.resolve(targetDir) + path.sep)) {
-            throw new Error("Archive path traversal");
-          }
-          await fs.mkdir(path.dirname(targetPath), { recursive: true });
-          await fs.writeFile(targetPath, entry.getData());
-        }
-      }
-
-      // Extract and update vector metadata
-      const vectorMetadataEntry = entries.find(
-        (e: AdmZip.IZipEntry) => e.entryName === `vector-${originalTopicId}-metadata.json`,
-      );
-      if (vectorMetadataEntry) {
-        const metadata = JSON.parse(vectorMetadataEntry.getData().toString("utf8"));
-        metadata.topicId = newTopicId;
-        const newMetadataPath = path.join(databaseDir, `vector-${newTopicId}-metadata.json`);
-        await atomicWriteJson(newMetadataPath, metadata);
-      }
-
-      // Update document IDs and topic references
-      const newDocuments = exportData.documents.map((doc) => ({
-        ...doc,
+      const newDocuments = exportData.documents.map((document) => ({
+        ...document,
         topicId: newTopicId,
       }));
+      const preparedDocumentsPath = path.join(stagingDir, "prepared-documents.json");
+      await atomicWriteJson(preparedDocumentsPath, newDocuments);
 
-      // Save to index
-      this.topicsIndex.topics[newTopicId] = newTopic;
-      this.topicsIndex.lastUpdated = Date.now();
-      await this.saveTopicsIndex();
-
-      // Save documents
-      const documentsMap = new Map<string, TopicDocument>();
-      for (const doc of newDocuments) {
-        documentsMap.set(doc.id, doc);
+      const originalMetadataPath = path.join(stagedArchive.contentDir, `vector-${exportData.topic.id}-metadata.json`);
+      const preparedMetadataPath = path.join(stagingDir, "prepared-vector-metadata.json");
+      if (await this.pathExists(originalMetadataPath)) {
+        const metadata = JSON.parse(await fs.readFile(originalMetadataPath, "utf8"));
+        metadata.topicId = newTopicId;
+        await atomicWriteJson(preparedMetadataPath, metadata);
       }
+
+      const nextTopicsIndex: TopicsIndex = {
+        ...this.topicsIndex,
+        topics: { ...this.topicsIndex.topics, [newTopicId]: newTopic },
+        lastUpdated: now,
+      };
+      const preparedIndexPath = path.join(stagingDir, "prepared-topics.json");
+      await atomicWriteJson(preparedIndexPath, nextTopicsIndex);
+      const expectedIndexSha256 = await this.hashFile(this.getTopicsIndexPath());
+
+      await this.commitStagedTopicImport({
+        contentDir: stagedArchive.contentDir,
+        originalTopicId: exportData.topic.id,
+        newTopicId,
+        preparedDocumentsPath,
+        preparedMetadataPath: (await this.pathExists(preparedMetadataPath)) ? preparedMetadataPath : undefined,
+        preparedIndexPath,
+        expectedIndexSha256,
+      });
+
+      const documentsMap = new Map<string, TopicDocument>();
+      for (const document of newDocuments) {
+        documentsMap.set(document.id, document);
+      }
+      this.topicsIndex = nextTopicsIndex;
       this.topicDocuments.set(newTopicId, documentsMap);
-      await this.saveTopicDocuments(newTopicId);
 
       this.logger.info("Topic imported successfully", {
-        originalId: originalTopicId,
+        originalId: exportData.topic.id,
         newId: newTopicId,
         name: newTopic.name,
         documentCount: newDocuments.length,
       });
-
       return newTopic;
     } catch (error) {
       this.logger.error("Failed to import topic", {
@@ -1526,13 +2101,320 @@ export class TopicManager {
         archivePath,
       });
       throw error;
+    } finally {
+      if (stagingDir) {
+        await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+      }
     }
+  }
+
+  /**
+   * Copy a point-in-time candidate into same-filesystem staging. LanceDB does
+   * not currently expose a transaction snapshot for its directory, so compare
+   * the complete file inventory and identity before/after the streamed copies.
+   * A concurrent mutation causes a bounded retry instead of a mixed archive.
+   */
+  private async createStableExportSnapshot(
+    topicId: string,
+    stagingRoot: string,
+  ): Promise<{ files: ExportSnapshotFile[] }> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const attemptDir = path.join(stagingRoot, `snapshot-${attempt}`);
+      await fs.mkdir(attemptDir, { recursive: true });
+
+      const topicBefore = this.topicsIndex?.topics[topicId];
+      if (!topicBefore) {
+        throw new Error(`Topic not found: ${topicId}`);
+      }
+      const topicSnapshot = { ...topicBefore };
+      const documentsSnapshot = this.getTopicDocuments(topicId).map((document) => ({
+        ...document,
+        source: document.source ? { ...document.source } : undefined,
+      }));
+      const exportData: ExportedTopicData = {
+        version: TOPIC_ARCHIVE_FORMAT_VERSION,
+        topic: topicSnapshot,
+        documents: documentsSnapshot,
+        embeddingModel: this.topicsIndex!.modelName,
+        exportedAt: Date.now(),
+      };
+      const metadataIdentity = JSON.stringify({
+        topic: topicSnapshot,
+        documents: documentsSnapshot,
+        modelName: this.topicsIndex!.modelName,
+      });
+      let sourcesBefore: ArchiveSourceFile[];
+      try {
+        sourcesBefore = await this.collectArchiveSourceFiles(topicId);
+      } catch (error: any) {
+        if (error?.code === "ENOENT" || error?.code === "ESTALE") {
+          await fs.rm(attemptDir, { recursive: true, force: true });
+          continue;
+        }
+        throw error;
+      }
+      const files: ExportSnapshotFile[] = [];
+
+      const topicBytes = Buffer.from(JSON.stringify(exportData, null, 2));
+      if (topicBytes.byteLength > TOPIC_ARCHIVE_LIMITS.maxEntryBytes) {
+        throw new Error("Topic is too large to export: topic metadata exceeds entry size limit");
+      }
+      if (sourcesBefore.length + 2 > TOPIC_ARCHIVE_LIMITS.maxEntries) {
+        throw new Error("Topic is too large to export: archive entry count exceeds limit");
+      }
+      const snapshotSize = sourcesBefore.reduce((total, source) => total + source.size, topicBytes.byteLength);
+      if (
+        sourcesBefore.some((source) => source.size > TOPIC_ARCHIVE_LIMITS.maxEntryBytes) ||
+        snapshotSize > TOPIC_ARCHIVE_LIMITS.maxTotalBytes
+      ) {
+        throw new Error("Topic is too large to export: archive payload exceeds size limit");
+      }
+      const stagedTopicPath = path.join(attemptDir, "topic.json");
+      await fs.writeFile(stagedTopicPath, topicBytes, { flag: "wx", mode: 0o600 });
+      files.push({
+        stagedPath: stagedTopicPath,
+        manifest: {
+          path: "topic.json",
+          size: topicBytes.byteLength,
+          sha256: createHash("sha256").update(topicBytes).digest("hex"),
+        },
+      });
+
+      let copyFailed = false;
+      for (const source of sourcesBefore) {
+        const stagedPath = path.join(attemptDir, ...source.archivePath.split("/"));
+        try {
+          await fs.mkdir(path.dirname(stagedPath), { recursive: true });
+          await fs.copyFile(source.sourcePath, stagedPath, fsSync.constants.COPYFILE_EXCL);
+          const stagedStat = await fs.stat(stagedPath);
+          files.push({
+            stagedPath,
+            manifest: {
+              path: source.archivePath,
+              size: stagedStat.size,
+              sha256: await this.hashFile(stagedPath),
+            },
+          });
+        } catch (error: any) {
+          if (error?.code === "ENOENT" || error?.code === "ESTALE") {
+            copyFailed = true;
+            break;
+          }
+          throw error;
+        }
+      }
+
+      const topicAfter = this.topicsIndex?.topics[topicId];
+      const metadataAfter = topicAfter
+        ? JSON.stringify({
+            topic: topicAfter,
+            documents: this.getTopicDocuments(topicId),
+            modelName: this.topicsIndex!.modelName,
+          })
+        : "";
+      let sourcesAfter: ArchiveSourceFile[] = [];
+      if (!copyFailed) {
+        try {
+          sourcesAfter = await this.collectArchiveSourceFiles(topicId);
+        } catch (error: any) {
+          if (error?.code === "ENOENT" || error?.code === "ESTALE") {
+            copyFailed = true;
+          } else {
+            throw error;
+          }
+        }
+      }
+      if (
+        !copyFailed &&
+        metadataIdentity === metadataAfter &&
+        this.archiveSourceInventoriesEqual(sourcesBefore, sourcesAfter) &&
+        files.every((file) => {
+          if (file.manifest.path === "topic.json") {
+            return true;
+          }
+          const source = sourcesAfter.find((candidate) => candidate.archivePath === file.manifest.path);
+          return source !== undefined && source.size === file.manifest.size;
+        })
+      ) {
+        files.sort((left, right) => left.manifest.path.localeCompare(right.manifest.path));
+        return { files };
+      }
+      await fs.rm(attemptDir, { recursive: true, force: true });
+    }
+    throw new Error("Topic changed during export; retry after active writes finish");
+  }
+
+  private async collectArchiveSourceFiles(topicId: string): Promise<ArchiveSourceFile[]> {
+    const databaseDir = this.getDatabaseDir();
+    const sources: ArchiveSourceFile[] = [];
+    for (const tableName of [topicId, `kg-entities-${topicId}`, `kg-edges-${topicId}`, `kg-metadata-${topicId}`]) {
+      const tableDir = path.join(databaseDir, "lancedb", `${tableName}.lance`);
+      let tableStat: fsSync.Stats;
+      try {
+        tableStat = await fs.lstat(tableDir);
+      } catch (error: any) {
+        if (error?.code === "ENOENT") {
+          continue;
+        }
+        throw error;
+      }
+      if (tableStat.isSymbolicLink() || !tableStat.isDirectory()) {
+        throw new Error(`Refusing to export unsafe LanceDB path: ${tableDir}`);
+      }
+      for (const filePath of await this.listFilesRecursively(tableDir)) {
+        const stat = await fs.lstat(filePath);
+        const relativePath = path.relative(tableDir, filePath).replace(/\\/g, "/");
+        sources.push({
+          sourcePath: filePath,
+          archivePath: `lancedb/${tableName}.lance/${relativePath}`,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          ctimeMs: stat.ctimeMs,
+        });
+      }
+    }
+
+    const vectorMetadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
+    try {
+      const stat = await fs.lstat(vectorMetadataPath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error(`Refusing to export unsafe vector metadata path: ${vectorMetadataPath}`);
+      }
+      sources.push({
+        sourcePath: vectorMetadataPath,
+        archivePath: `vector-${topicId}-metadata.json`,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ctimeMs: stat.ctimeMs,
+      });
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+    return sources.sort((left, right) => left.archivePath.localeCompare(right.archivePath));
+  }
+
+  private archiveSourceInventoriesEqual(left: ArchiveSourceFile[], right: ArchiveSourceFile[]): boolean {
+    return (
+      left.length === right.length &&
+      left.every((source, index) => {
+        const candidate = right[index];
+        return (
+          source.archivePath === candidate.archivePath &&
+          source.size === candidate.size &&
+          source.mtimeMs === candidate.mtimeMs &&
+          source.ctimeMs === candidate.ctimeMs
+        );
+      })
+    );
+  }
+
+  private async hashFile(filePath: string): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const hash = createHash("sha256");
+      const input = fsSync.createReadStream(filePath);
+      input.on("data", (chunk) => hash.update(chunk));
+      input.once("error", reject);
+      input.once("end", () => resolve(hash.digest("hex")));
+    });
+  }
+
+  /**
+   * Publish a validated import under a fresh topic ID. Every payload is moved
+   * before the topics index; the index rename is the visibility point. Runtime
+   * failures before that point move all payloads back into staging.
+   */
+  private async commitStagedTopicImport(commit: StagedTopicImportCommit): Promise<void> {
+    const databaseDir = this.getDatabaseDir();
+    const operations: StorageTransactionOperation[] = [];
+    const tableMappings = [
+      { oldName: commit.originalTopicId, newName: commit.newTopicId },
+      { oldName: `kg-entities-${commit.originalTopicId}`, newName: `kg-entities-${commit.newTopicId}` },
+      { oldName: `kg-edges-${commit.originalTopicId}`, newName: `kg-edges-${commit.newTopicId}` },
+      { oldName: `kg-metadata-${commit.originalTopicId}`, newName: `kg-metadata-${commit.newTopicId}` },
+    ];
+    for (const mapping of tableMappings) {
+      const source = path.join(commit.contentDir, "lancedb", `${mapping.oldName}.lance`);
+      if (await this.pathExists(source)) {
+        operations.push({
+          type: "replace",
+          source,
+          destination: path.join(databaseDir, "lancedb", `${mapping.newName}.lance`),
+        });
+      }
+    }
+    if (commit.preparedMetadataPath) {
+      operations.push({
+        type: "replace",
+        source: commit.preparedMetadataPath,
+        destination: path.join(databaseDir, `vector-${commit.newTopicId}-metadata.json`),
+      });
+    }
+    operations.push({
+      type: "replace",
+      source: commit.preparedDocumentsPath,
+      destination: this.getTopicDocumentsPath(commit.newTopicId),
+    });
+    // Topics index publication is last and is the visibility point.
+    operations.push({
+      type: "replace",
+      source: commit.preparedIndexPath,
+      destination: this.getTopicsIndexPath(),
+    });
+
+    for (const operation of operations.slice(0, -1)) {
+      if (await this.pathExists(operation.destination)) {
+        throw new Error(`Import destination already exists: ${operation.destination}`);
+      }
+    }
+    if ((await this.hashFile(this.getTopicsIndexPath())) !== commit.expectedIndexSha256) {
+      throw new Error("Topics index changed during import; retry after active writes finish");
+    }
+    // Retained as a deterministic failure-injection seam for archive tests.
+    await this.publishPreparedTopicsIndex(commit.preparedIndexPath);
+    await this.assertStorageOwnership();
+    const coordinator = await this.ensureTransactionCoordinator();
+    await coordinator.commit("import-topic", operations, {
+      originalTopicId: commit.originalTopicId,
+      newTopicId: commit.newTopicId,
+      expectedIndexSha256: commit.expectedIndexSha256,
+    });
+  }
+
+  /** Testable pre-publication seam. Durable publication is owned by the coordinator. */
+  private async publishPreparedTopicsIndex(_preparedIndexPath: string): Promise<void> {
+    // Intentionally empty.
+  }
+
+  private async pathExists(candidatePath: string): Promise<boolean> {
+    try {
+      await fs.lstat(candidatePath);
+      return true;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private isSameOrNestedPath(parentPath: string, candidatePath: string): boolean {
+    const normalize = (value: string): string =>
+      process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
+    const normalizedParent = normalize(parentPath);
+    const normalizedCandidate = normalize(candidatePath);
+    return normalizedCandidate === normalizedParent || normalizedCandidate.startsWith(`${normalizedParent}${path.sep}`);
   }
 
   /**
    * Load topics from common database path (read-only)
    */
   public async loadCommonDatabase(): Promise<void> {
+    return this.runManagedOperation(() => this.loadCommonDatabaseUnlocked());
+  }
+
+  private async loadCommonDatabaseUnlocked(): Promise<void> {
     const commonPath = this.config.get<string>(CONFIG.COMMON_DATABASE_PATH, "");
 
     if (!commonPath) {
@@ -1573,7 +2455,8 @@ export class TopicManager {
 
       // Load topics index from common path
       const data = await fs.readFile(indexPath, "utf-8");
-      this.commonTopicsIndex = JSON.parse(data);
+      this.commonTopicsIndex = parseTopicsIndex(data);
+      this.commonTopicDocuments.clear();
 
       this.logger.info("Common database loaded", {
         path: commonPath,
@@ -1584,18 +2467,19 @@ export class TopicManager {
       if (this.commonTopicsIndex) {
         // Check for name conflicts with local topics BEFORE fully loading
         const localTopicNames = new Set(Object.values(this.topicsIndex?.topics || {}).map((t) => t.name.toLowerCase()));
+        const localTopicIds = new Set(Object.keys(this.topicsIndex?.topics || {}));
 
         const conflicts: string[] = [];
 
         for (const topic of Object.values(this.commonTopicsIndex.topics)) {
-          if (localTopicNames.has(topic.name.toLowerCase())) {
-            conflicts.push(topic.name);
+          if (localTopicNames.has(topic.name.toLowerCase()) || localTopicIds.has(topic.id)) {
+            conflicts.push(`${topic.name} (${topic.id})`);
           }
         }
 
         if (conflicts.length > 0) {
           const conflictList = conflicts.slice(0, 3).join(", ") + (conflicts.length > 3 ? "..." : "");
-          const message = `Cannot load common database due to name conflicts. Local topics [${conflictList}] already exist. Please rename your local topics first.`;
+          const message = `Cannot load common database due to topic ID/name conflicts. Local topics [${conflictList}] already exist. Please rename or re-ID the conflicting topics first.`;
 
           this.logger.warn("Common database load aborted due to name conflicts", { conflicts });
           this.notifier.showError(message);
@@ -1697,22 +2581,19 @@ export class TopicManager {
    * Load topics index from file
    */
   private async loadTopicsIndex(): Promise<void> {
+    const indexPath = this.getTopicsIndexPath();
+    let data: string;
     try {
-      const indexPath = this.getTopicsIndexPath();
-      const data = await fs.readFile(indexPath, "utf-8");
-      this.topicsIndex = JSON.parse(data);
+      data = await fs.readFile(indexPath, "utf-8");
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
 
-      this.logger.info("Topics index loaded", {
-        topicCount: Object.keys(this.topicsIndex?.topics || {}).length,
-      });
-
-      // Load document metadata for each topic
-      await this.loadAllTopicDocuments();
-    } catch (_error) {
-      // File doesn't exist, create new index
+      // Only a genuinely missing index may initialize empty storage. Parse,
+      // schema, permission, and other I/O errors must leave the source intact
+      // and abort initialization.
       this.logger.info("Topics index not found, creating new one");
-
-      // Embedding service is already initialized by loadTopics()
       this.topicsIndex = {
         topics: {},
         modelName: this.embeddingService.getCurrentModel(),
@@ -1720,7 +2601,20 @@ export class TopicManager {
       };
 
       await this.saveTopicsIndex();
+      this.topicDocuments = new Map();
+      return;
     }
+
+    const parsedIndex = parseTopicsIndex(data);
+    // Load every document file into a temporary map before publishing either
+    // the index or documents. A single corrupt topic file therefore cannot
+    // partially replace a manager's previously loaded state during refresh.
+    await this.loadAllTopicDocuments(parsedIndex);
+    this.topicsIndex = parsedIndex;
+
+    this.logger.info("Topics index loaded", {
+      topicCount: Object.keys(parsedIndex.topics).length,
+    });
   }
 
   /**
@@ -1732,6 +2626,7 @@ export class TopicManager {
     }
 
     try {
+      await this.assertStorageOwnership();
       const indexPath = this.getTopicsIndexPath();
       await atomicWriteJson(indexPath, this.topicsIndex);
 
@@ -1803,6 +2698,118 @@ export class TopicManager {
     return path.join(this.getDatabaseDir(), "ingestion-journal.json");
   }
 
+  private getPostCommitCleanupJournalPath(): string {
+    return path.join(this.getDatabaseDir(), "post-commit-cleanup-journal.json");
+  }
+
+  private async readPostCommitCleanupJournal(): Promise<PostCommitCleanupEntry[]> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fs.readFile(this.getPostCommitCleanupJournalPath(), "utf8"));
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return [];
+      }
+      throw new Error("Post-commit cleanup journal is corrupt; refusing to expose potentially orphaned storage");
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error("Post-commit cleanup journal is invalid; expected an array");
+    }
+    for (const entry of parsed) {
+      if (
+        !isRecord(entry) ||
+        entry.version !== 1 ||
+        typeof entry.id !== "string" ||
+        typeof entry.topicId !== "string" ||
+        !isFiniteNumber(entry.updatedAt) ||
+        (entry.kind !== "document" && entry.kind !== "topic")
+      ) {
+        throw new Error("Post-commit cleanup journal contains an invalid entry");
+      }
+      if (
+        (entry.kind === "document" &&
+          (!Array.isArray(entry.documents) || typeof entry.legacyContainer !== "boolean")) ||
+        (entry.kind === "topic" && typeof entry.checkpointPrefix !== "string")
+      ) {
+        throw new Error("Post-commit cleanup journal contains invalid cleanup details");
+      }
+    }
+    return parsed as PostCommitCleanupEntry[];
+  }
+
+  private async upsertPostCommitCleanup(entry: PostCommitCleanupEntry): Promise<void> {
+    await this.journalMutex.runExclusive(async () => {
+      const entries = await this.readPostCommitCleanupJournal();
+      const index = entries.findIndex((candidate) => candidate.id === entry.id);
+      if (index >= 0) {
+        entries[index] = entry;
+      } else {
+        entries.push(entry);
+      }
+      await atomicWriteJson(this.getPostCommitCleanupJournalPath(), entries);
+    });
+  }
+
+  private async removePostCommitCleanup(id: string): Promise<void> {
+    await this.journalMutex.runExclusive(async () => {
+      const entries = (await this.readPostCommitCleanupJournal()).filter((entry) => entry.id !== id);
+      await atomicWriteJson(this.getPostCommitCleanupJournalPath(), entries);
+    });
+  }
+
+  private async completePostCommitCleanup(entry: PostCommitCleanupEntry): Promise<string[]> {
+    if (entry.kind === "topic") {
+      await this.options.checkpointer?.deleteOlderThan(Number.POSITIVE_INFINITY, entry.checkpointPrefix);
+      return [];
+    }
+    if (!this.vectorStoreFactory) {
+      throw new Error("Vector store is not initialized");
+    }
+    const removedChunkIds: string[] = [];
+    for (const document of entry.documents) {
+      removedChunkIds.push(...(await this.removeDocumentStorage(entry.topicId, document.id)));
+    }
+    if (entry.legacyContainer && entry.documents.length === 1 && removedChunkIds.length === 0) {
+      for (const legacyLeafId of await this.legacyLeafIdsForContainer(entry.topicId, entry.documents[0])) {
+        removedChunkIds.push(...(await this.removeDocumentStorage(entry.topicId, legacyLeafId)));
+      }
+    }
+    const stats = await this.vectorStoreFactory.getStoredStats(entry.topicId);
+    const existing = await this.vectorStoreFactory.getStoreMetadata(entry.topicId);
+    await this.vectorStoreFactory.saveStore(entry.topicId, {
+      ...existing,
+      documentCount: stats.documentCount,
+      chunkCount: stats.chunkCount,
+    });
+    return removedChunkIds;
+  }
+
+  private async recoverPostCommitCleanupJournal(): Promise<void> {
+    const entries = await this.readPostCommitCleanupJournal();
+    for (const entry of entries) {
+      if (entry.kind === "topic") {
+        if (this.topicsIndex?.topics[entry.topicId]) {
+          await this.removePostCommitCleanup(entry.id);
+          continue;
+        }
+      } else {
+        const documents = this.topicDocuments.get(entry.topicId);
+        if (!this.topicsIndex?.topics[entry.topicId]) {
+          await this.removePostCommitCleanup(entry.id);
+          continue;
+        }
+        // If any selected document is still advertised, coordinator recovery
+        // rolled metadata publication back. Physical rows remain live.
+        if (entry.documents.some((document) => documents?.has(document.id))) {
+          await this.removePostCommitCleanup(entry.id);
+          continue;
+        }
+      }
+      await this.completePostCommitCleanup(entry);
+      await this.removePostCommitCleanup(entry.id);
+    }
+  }
+
   private async readIngestionJournal(): Promise<IngestionJournalEntry[]> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.getIngestionJournalPath(), "utf8"));
@@ -1828,10 +2835,33 @@ export class TopicManager {
     });
   }
 
-  private async removeIngestionJournal(id: string): Promise<void> {
+  private async replaceIngestionTransaction(
+    transactionId: string,
+    replacement: IngestionJournalEntry[],
+  ): Promise<void> {
     await this.journalMutex.runExclusive(async () => {
-      const entries = (await this.readIngestionJournal()).filter((entry) => entry.id !== id);
+      const entries = (await this.readIngestionJournal()).filter(
+        (entry) => (entry.transactionId ?? entry.id) !== transactionId,
+      );
+      entries.push(...replacement);
       await atomicWriteJson(this.getIngestionJournalPath(), entries);
+    });
+  }
+
+  private async markAndRemoveCommittedIngestion(transactionId: string): Promise<void> {
+    await this.journalMutex.runExclusive(async () => {
+      const entries = await this.readIngestionJournal();
+      const committedAt = Date.now();
+      const marked = entries.map((entry) =>
+        (entry.transactionId ?? entry.id) === transactionId
+          ? { ...entry, stage: "metadataCommitted" as const, updatedAt: committedAt }
+          : entry,
+      );
+      await atomicWriteJson(this.getIngestionJournalPath(), marked);
+      await atomicWriteJson(
+        this.getIngestionJournalPath(),
+        marked.filter((entry) => (entry.transactionId ?? entry.id) !== transactionId),
+      );
     });
   }
 
@@ -1841,24 +2871,111 @@ export class TopicManager {
     }
     await this.journalMutex.runExclusive(async () => {
       const pending = await this.readIngestionJournal();
-      const remaining: IngestionJournalEntry[] = [];
+      if (pending.length === 0) {
+        return;
+      }
       const touched = new Set<string>();
+      const journalTopics = new Set<string>();
+      const rowsByTopic = new Map<string, LangChainDocument[]>();
+      const transactions = new Map<string, IngestionJournalEntry[]>();
       for (const entry of pending) {
-        const topic = this.topicsIndex!.topics[entry.topicId];
+        const transactionId = entry.transactionId ?? entry.id;
+        const group = transactions.get(transactionId) ?? [];
+        group.push(entry);
+        transactions.set(transactionId, group);
+      }
+
+      for (const [transactionId, originalEntries] of transactions) {
+        const starter = originalEntries.find((entry) => entry.stage === "started") ?? originalEntries[0];
+        const topic = this.topicsIndex!.topics[starter.topicId];
         if (!topic) {
           continue;
         }
-        const chunkCount = await this.vectorStoreFactory!.getDocumentChunkCount(entry.topicId, entry.document.id);
-        if (chunkCount === 0) {
-          // No vector commit occurred; the started operation is safe to discard.
+        journalTopics.add(starter.topicId);
+
+        let durableEntries = originalEntries.filter((entry) => entry.stage !== "started");
+        if (durableEntries.length === 0) {
+          let rows = rowsByTopic.get(starter.topicId);
+          if (!rows) {
+            rows = await this.vectorStoreFactory!.getAllDocuments(starter.topicId, 1_000_000);
+            rowsByTopic.set(starter.topicId, rows);
+          }
+          const transactionRows = rows.filter(
+            (row) => String(row.metadata.ingestionTransactionId ?? "") === transactionId,
+          );
+          let sourceDocuments = this.summarizePipelineChunks(transactionRows);
+          if (sourceDocuments.length === 0) {
+            // Backward compatibility for the pre-transaction journal.
+            const legacyCount = await this.vectorStoreFactory!.getDocumentChunkCount(
+              starter.topicId,
+              starter.document.id,
+            );
+            if (legacyCount > 0) {
+              sourceDocuments = [
+                {
+                  documentId: starter.document.id,
+                  canonicalSource: starter.document.filePath,
+                  sourceType: starter.document.fileType === "web" ? "web" : starter.document.fileType,
+                  sourceRevision: starter.document.sourceRevision ?? "",
+                  fileName: starter.document.name,
+                  filePath: starter.document.filePath,
+                  fileType: starter.document.fileType,
+                  chunkCount: legacyCount,
+                },
+              ];
+            }
+          }
+          if (sourceDocuments.length === 0) {
+            // No durable vector row exists for this starter. Recovery rolls it
+            // back by removing the journal record without publishing metadata.
+            continue;
+          }
+          const leaves = this.createLeafTopicDocuments(starter.topicId, starter.document, sourceDocuments);
+          const leafIds = leaves.map((document) => document.id);
+          durableEntries = leaves.map((document) => ({
+            id: `${transactionId}:${document.id}`,
+            transactionId,
+            containerId: starter.containerId ?? starter.document.id,
+            topicId: starter.topicId,
+            stage: "vectorCommitted",
+            document,
+            containerLeafIds: leafIds,
+            updatedAt: Date.now(),
+          }));
+        }
+
+        const documents = this.topicDocuments.get(starter.topicId) ?? new Map<string, TopicDocument>();
+        const durableLeafIds = new Set<string>();
+        for (const entry of durableEntries) {
+          const chunkCount = await this.vectorStoreFactory!.getDocumentChunkCount(entry.topicId, entry.document.id);
+          if (chunkCount === 0) {
+            continue;
+          }
+          durableLeafIds.add(entry.document.id);
+          documents.set(entry.document.id, { ...entry.document, chunkCount });
+        }
+        if (durableLeafIds.size === 0) {
           continue;
         }
-        const documents = this.topicDocuments.get(entry.topicId) ?? new Map<string, TopicDocument>();
-        documents.set(entry.document.id, { ...entry.document, chunkCount });
-        this.topicDocuments.set(entry.topicId, documents);
+        const containerId = starter.containerId ?? starter.document.containerId ?? starter.document.id;
+        const declaredLeafIds = new Set(durableEntries.flatMap((entry) => entry.containerLeafIds ?? []));
+        const desiredLeafIds = declaredLeafIds.size > 0 ? declaredLeafIds : durableLeafIds;
+        const staleDocuments = [...documents.values()].filter(
+          (document) =>
+            (document.containerId === containerId || document.id === containerId) && !desiredLeafIds.has(document.id),
+        );
+        for (const staleDocument of staleDocuments) {
+          await this.removeDocumentStorage(starter.topicId, staleDocument.id);
+          documents.delete(staleDocument.id);
+        }
+
+        this.topicDocuments.set(starter.topicId, documents);
         topic.documentCount = documents.size;
-        topic.updatedAt = Math.max(topic.updatedAt, entry.updatedAt);
-        touched.add(entry.topicId);
+        topic.updatedAt = Math.max(topic.updatedAt, ...durableEntries.map((entry) => entry.updatedAt));
+        touched.add(starter.topicId);
+      }
+      for (const topicId of journalTopics) {
+        await this.reconcileKnowledgeGraphProvenance(topicId);
       }
       for (const topicId of touched) {
         await this.saveTopicDocuments(topicId);
@@ -1867,7 +2984,10 @@ export class TopicManager {
         this.topicsIndex!.lastUpdated = Date.now();
         await this.saveTopicsIndex();
       }
-      await atomicWriteJson(this.getIngestionJournalPath(), remaining);
+      // Every transaction was either completed from proven rows or rolled back
+      // because no durable row existed. The metadata writes above must all
+      // succeed before the journal is cleared.
+      await atomicWriteJson(this.getIngestionJournalPath(), []);
     });
   }
 
@@ -1876,6 +2996,7 @@ export class TopicManager {
    */
   private async saveTopicDocuments(topicId: string): Promise<void> {
     try {
+      await this.assertStorageOwnership();
       const documents = this.topicDocuments.get(topicId);
       if (!documents) {
         return;
@@ -1902,46 +3023,55 @@ export class TopicManager {
   /**
    * Load document metadata for a topic from disk
    */
-  private async loadTopicDocuments(topicId: string): Promise<void> {
+  private async loadTopicDocuments(topicId: string): Promise<Map<string, TopicDocument>> {
+    const documentsPath = this.getTopicDocumentsPath(topicId);
+    let data: string;
     try {
-      const documentsPath = this.getTopicDocumentsPath(topicId);
-      const data = await fs.readFile(documentsPath, "utf-8");
-      const documentsArray: TopicDocument[] = JSON.parse(data);
-
-      const documentsMap = new Map<string, TopicDocument>();
-      for (const doc of documentsArray) {
-        documentsMap.set(doc.id, doc);
+      data = await fs.readFile(documentsPath, "utf-8");
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") {
+        throw error;
       }
 
-      this.topicDocuments.set(topicId, documentsMap);
-
-      this.logger.debug("Topic documents loaded", {
-        topicId,
-        documentCount: documentsArray.length,
-      });
-    } catch (_error) {
-      // File might not exist for older topics
+      // Missing metadata is valid for topics created by older releases.
       this.logger.debug("No document metadata found for topic", { topicId });
-      this.topicDocuments.set(topicId, new Map());
+      return new Map();
     }
+
+    const documentsArray = parseTopicDocuments(data, topicId);
+    const documentsMap = new Map<string, TopicDocument>();
+    for (const doc of documentsArray) {
+      if (documentsMap.has(doc.id)) {
+        throw new Error(`Invalid document metadata for topic "${topicId}": duplicate document id "${doc.id}"`);
+      }
+      documentsMap.set(doc.id, doc);
+    }
+
+    this.logger.debug("Topic documents loaded", {
+      topicId,
+      documentCount: documentsArray.length,
+    });
+    return documentsMap;
   }
 
   /**
    * Load document metadata for all topics
    */
-  private async loadAllTopicDocuments(): Promise<void> {
-    if (!this.topicsIndex) {
+  private async loadAllTopicDocuments(index: TopicsIndex | null = this.topicsIndex): Promise<void> {
+    if (!index) {
       return;
     }
 
-    const topicIds = Object.keys(this.topicsIndex.topics);
+    const topicIds = Object.keys(index.topics);
     this.logger.debug("Loading documents for all topics", {
       topicCount: topicIds.length,
     });
 
+    const loadedDocuments = new Map<string, Map<string, TopicDocument>>();
     for (const topicId of topicIds) {
-      await this.loadTopicDocuments(topicId);
+      loadedDocuments.set(topicId, await this.loadTopicDocuments(topicId));
     }
+    this.topicDocuments = loadedDocuments;
   }
 
   private async listFilesRecursively(directory: string): Promise<string[]> {
@@ -1958,5 +3088,79 @@ export class TopicManager {
       }
     }
     return files;
+  }
+
+  private getTopicMutationMutex(topicId: string): Mutex {
+    let mutex = this.topicMutationMutexes.get(topicId);
+    if (!mutex) {
+      mutex = new Mutex();
+      this.topicMutationMutexes.set(topicId, mutex);
+    }
+    return mutex;
+  }
+
+  private async assertStorageOwnership(): Promise<void> {
+    if (this.storageLock) {
+      await this.storageLock.assertOwned();
+      return;
+    }
+    // Direct unit fixtures construct the private manager without running
+    // initialization. A live initialized manager must never commit unlocked.
+    if (this.isInitialized) {
+      throw new Error("Storage lease is unavailable; refusing to commit");
+    }
+  }
+
+  private async ensureTransactionCoordinator(): Promise<StorageTransactionCoordinator> {
+    if (!this.transactionCoordinator) {
+      const fence = this.storageLock ?? {
+        ownerId: "unmanaged-test-fixture",
+        assertOwned: async () => {
+          await this.assertStorageOwnership();
+        },
+      };
+      this.transactionCoordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), fence);
+      await this.transactionCoordinator.initialize();
+    }
+    return this.transactionCoordinator;
+  }
+
+  private getGraphMutationMutex(topicId: string): Mutex {
+    let mutex = this.graphMutationMutexes.get(topicId);
+    if (!mutex) {
+      mutex = new Mutex();
+      this.graphMutationMutexes.set(topicId, mutex);
+    }
+    return mutex;
+  }
+
+  private async runManagedOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const parentContext = this.managedOperationContext.getStore();
+    if (parentContext?.active) {
+      return operation();
+    }
+    if (!this.acceptingManagedOperations) {
+      throw new Error("TopicManager is shutting down and is not accepting new storage operations");
+    }
+    this.activeManagedOperations += 1;
+    const context = { active: true };
+    try {
+      return await this.managedOperationContext.run(context, operation);
+    } finally {
+      context.active = false;
+      this.activeManagedOperations -= 1;
+      if (this.activeManagedOperations === 0) {
+        for (const resolve of this.operationDrainWaiters.splice(0)) {
+          resolve();
+        }
+      }
+    }
+  }
+
+  private async waitForManagedOperationsToDrain(): Promise<void> {
+    if (this.activeManagedOperations === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => this.operationDrainWaiters.push(resolve));
   }
 }

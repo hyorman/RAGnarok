@@ -19,6 +19,8 @@ import { IConfigProvider, INotifier } from "../interfaces";
 import { EmbeddingBackend, EmbeddingBackendType, EmbeddingFingerprint } from "./embeddingBackend";
 import { ModelRegistry, AvailableModel } from "../models/modelRegistry.js";
 import { cosineSimilarity as langchainCosineSimilarity } from "@langchain/core/utils/math";
+import { Mutex } from "async-mutex";
+import { AsyncLocalStorage } from "async_hooks";
 
 // Re-export for consumers that imported AvailableModel from here
 export type { AvailableModel } from "../models/modelRegistry.js";
@@ -36,6 +38,17 @@ export class EmbeddingService {
 
   /** Promise-based lock to prevent concurrent ensureBackend() initialization. */
   private initPromise: Promise<void> | null = null;
+  /** Serializes backend/model publication while queries use generation leases. */
+  private switchMutex = new Mutex();
+  private backendLeaseCounts = new Map<EmbeddingBackend, number>();
+  private backendDrainWaiters = new Map<EmbeddingBackend, Array<() => void>>();
+  private admissionsBlocked = false;
+  private admissionWaiters: Array<() => void> = [];
+  private transactionContext = new AsyncLocalStorage<boolean>();
+  private deferModelEvents = false;
+  private pendingModelEvent: string | null = null;
+  private disposed = false;
+  private disposePromise: Promise<void> | null = null;
 
   /** Flag indicating an ingestion pipeline is actively using the backend. */
   private _processing = false;
@@ -77,11 +90,16 @@ export class EmbeddingService {
    * Registered backends are considered during auto-resolution.
    */
   public registerBackend(backend: EmbeddingBackend): void {
+    this.assertNotDisposed();
     this.registeredBackends.push(backend);
     // Wire model-change notifications if the backend supports them
     if ("onModelChanged" in backend) {
       (backend as any).onModelChanged = (newModel: string) => {
-        EmbeddingService._onModelChanged.emit("modelChanged", newModel);
+        if (this.deferModelEvents) {
+          this.pendingModelEvent = newModel;
+        } else {
+          EmbeddingService._onModelChanged.emit("modelChanged", newModel);
+        }
       };
     }
   }
@@ -117,6 +135,7 @@ export class EmbeddingService {
   }
 
   private async ensureBackend(): Promise<void> {
+    this.assertNotDisposed();
     if (this.backendResolved) {
       return;
     }
@@ -124,7 +143,10 @@ export class EmbeddingService {
       await this.initPromise;
       return;
     }
-    this.initPromise = this._doEnsureBackend();
+    this.initPromise = this.switchMutex.runExclusive(async () => {
+      this.assertNotDisposed();
+      await this._doEnsureBackend();
+    });
     try {
       await this.initPromise;
     } finally {
@@ -144,7 +166,12 @@ export class EmbeddingService {
       throw new Error(`Embedding backend "${resolved}" not registered`);
     }
 
+    // Scoped callers may already be using a registered backend before it is
+    // globally selected. The switch mutex prevents new scoped admissions while
+    // this drain and initialization are in progress.
+    await this.waitForBackendDrain(registered);
     await registered.initialize();
+    this.assertNotDisposed();
     this.activeBackend = registered;
     this.activeBackendType = resolved;
 
@@ -155,37 +182,166 @@ export class EmbeddingService {
     this.backendResolved = true;
   }
 
-  public resetBackendSelection(): void {
-    this.backendResolved = false;
-    if (this.activeBackend) {
-      this.activeBackend.dispose();
-    }
-    this.activeBackend = null;
-    this.activeBackendType = "";
-    this.logger.info("Backend selection reset; will re-resolve on next initialization");
+  public async resetBackendSelection(): Promise<void> {
+    this.assertNotDisposed();
+    await this.switchMutex.runExclusive(async () => {
+      this.assertNotDisposed();
+      this.blockAdmissions();
+      const previous = this.activeBackend;
+      this.backendResolved = false;
+      this.activeBackend = null;
+      this.activeBackendType = "";
+      this.initPromise = null;
+      try {
+        if (previous) {
+          await this.waitForBackendDrain(previous);
+          await previous.dispose();
+        }
+      } finally {
+        this.unblockAdmissions();
+      }
+      this.logger.info("Backend selection reset; will re-resolve on next initialization");
+    });
   }
 
   /** Resolve and initialize the configured backend before replacing the active one. */
   public async reselectBackendTransactional(modelName?: string): Promise<void> {
+    this.assertNotDisposed();
     const resolved = await this.resolveBackend();
     await this.selectBackendTransactional(resolved, modelName);
   }
 
   public async selectBackendTransactional(backendType: string, modelName?: string): Promise<void> {
+    this.assertNotDisposed();
     const replacement = this.registeredBackends.find((backend) => backend.name === backendType);
     if (!replacement) {
       throw new Error(`Embedding backend "${backendType}" not registered`);
     }
     const prefix = `${backendType}:`;
     const rawModel = modelName?.startsWith(prefix) ? modelName.slice(prefix.length) : modelName;
-    await replacement.initialize(rawModel || undefined);
-    const previous = this.activeBackend;
-    this.activeBackend = replacement;
-    this.activeBackendType = backendType;
-    this.backendResolved = true;
-    if (previous && previous !== replacement) {
-      await previous.dispose();
-    }
+    await this.switchMutex.runExclusive(async () => {
+      this.assertNotDisposed();
+      const targetModel = rawModel || undefined;
+      if (
+        this.backendResolved &&
+        replacement === this.activeBackend &&
+        (!targetModel || replacement.getModelId?.() === targetModel)
+      ) {
+        return;
+      }
+
+      const previous = this.activeBackend;
+      if (replacement === previous) {
+        // Backends such as Transformers.js swap their own pipeline. Stop new
+        // admissions and let current readers finish before asking that backend
+        // to replace/dispose its internal generation.
+        this.blockAdmissions();
+        try {
+          await this.waitForBackendDrain(replacement);
+          await replacement.initialize(targetModel);
+          this.activeBackendType = backendType;
+          this.backendResolved = true;
+        } finally {
+          this.unblockAdmissions();
+        }
+        return;
+      }
+
+      // A different backend can be prepared while readers continue using the
+      // old one. It can still have scoped readers, so drain those readers
+      // before mutating its model and publish only after initialization succeeds.
+      await this.waitForBackendDrain(replacement);
+      await replacement.initialize(targetModel);
+      this.activeBackend = replacement;
+      this.activeBackendType = backendType;
+      this.backendResolved = true;
+      if (previous) {
+        await this.waitForBackendDrain(previous);
+        await previous.dispose();
+      }
+    });
+  }
+
+  /**
+   * Keep a model/backend switch invisible until dependent managers validate
+   * and rebuild. Operations spawned by `validateAndCommit` may use the
+   * candidate; unrelated callers remain queued on the admission gate.
+   */
+  public async runTransactionalSwitch(
+    backendType: string | undefined,
+    modelName: string | undefined,
+    validateAndCommit: () => Promise<void>,
+  ): Promise<void> {
+    this.assertNotDisposed();
+    await this.switchMutex.runExclusive(async () => {
+      this.assertNotDisposed();
+      const resolvedType = backendType ?? (await this.resolveBackend());
+      const replacement = this.registeredBackends.find((backend) => backend.name === resolvedType);
+      if (!replacement) {
+        throw new Error(`Embedding backend "${resolvedType}" not registered`);
+      }
+      const prefix = `${resolvedType}:`;
+      const rawModel = modelName?.startsWith(prefix) ? modelName.slice(prefix.length) : modelName;
+      const previous = this.activeBackend;
+      const previousType = this.activeBackendType;
+      const previousResolved = this.backendResolved;
+      const previousModel = previous?.getModelId?.() ?? undefined;
+
+      this.blockAdmissions();
+      this.deferModelEvents = true;
+      this.pendingModelEvent = null;
+      try {
+        if (previous) {
+          await this.waitForBackendDrain(previous);
+        }
+        if (replacement !== previous) {
+          await this.waitForBackendDrain(replacement);
+        }
+        await replacement.beginSwitchTransaction?.();
+        try {
+          await replacement.initialize(rawModel || undefined);
+        } catch (error) {
+          await replacement.rollbackSwitchTransaction?.();
+          throw error;
+        }
+        this.activeBackend = replacement;
+        this.activeBackendType = resolvedType;
+        this.backendResolved = true;
+
+        try {
+          await this.transactionContext.run(true, validateAndCommit);
+        } catch (error) {
+          // No unrelated operation observed the candidate, so rollback is an
+          // atomic publication from their perspective.
+          if (replacement.rollbackSwitchTransaction) {
+            await replacement.rollbackSwitchTransaction();
+          } else if (replacement === previous && previousModel) {
+            await replacement.initialize(previousModel);
+          }
+          this.activeBackend = previous;
+          this.activeBackendType = previousType;
+          this.backendResolved = previousResolved;
+          if (replacement !== previous) {
+            await replacement.dispose();
+          }
+          this.pendingModelEvent = null;
+          throw error;
+        }
+
+        if (previous && previous !== replacement) {
+          await previous.dispose();
+        }
+        await replacement.commitSwitchTransaction?.();
+        if (this.pendingModelEvent) {
+          EmbeddingService._onModelChanged.emit("modelChanged", this.pendingModelEvent);
+          this.pendingModelEvent = null;
+        }
+      } finally {
+        this.deferModelEvents = false;
+        this.pendingModelEvent = null;
+        this.unblockAdmissions();
+      }
+    });
   }
 
   public getActiveBackendType(): string {
@@ -195,21 +351,21 @@ export class EmbeddingService {
   /** Stable identity for the exact semantic vector space currently in use. */
   public async getFingerprint(signal?: AbortSignal): Promise<EmbeddingFingerprint> {
     signal?.throwIfAborted();
-    await this.ensureBackend();
-    const backend = this.activeBackend!;
-    let dimension = backend.getDimension();
-    if (!dimension) {
-      dimension = (await backend.embed("RAGnarok embedding fingerprint probe", signal)).length;
-    }
-    const details = backend.getFingerprintInfo?.() ?? {};
-    return {
-      backendKind: backend.name,
-      providerFormat: details.providerFormat ?? backend.name,
-      model: backend.getModelId?.() ?? "auto",
-      revision: details.revision ?? "unknown",
-      dimension,
-      endpointHash: details.endpointHash ?? "local",
-    };
+    return this.withActiveBackend(async (backend) => {
+      let dimension = backend.getDimension();
+      if (!dimension) {
+        dimension = (await backend.embed("RAGnarok embedding fingerprint probe", signal)).length;
+      }
+      const details = backend.getFingerprintInfo?.() ?? {};
+      return {
+        backendKind: backend.name,
+        providerFormat: details.providerFormat ?? backend.name,
+        model: backend.getModelId?.() ?? "auto",
+        revision: details.revision ?? "unknown",
+        dimension,
+        endpointHash: details.endpointHash ?? "local",
+      };
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -217,6 +373,25 @@ export class EmbeddingService {
   // ---------------------------------------------------------------------------
 
   public async initialize(modelName?: string): Promise<void> {
+    this.assertNotDisposed();
+    if (modelName) {
+      try {
+        const backendType = this.backendResolved ? this.activeBackendType : await this.resolveBackend();
+        await this.selectBackendTransactional(backendType, modelName);
+        return;
+      } catch (backendError: any) {
+        const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+        if (setting !== "auto" || this.registeredBackends.length === 0) {
+          throw backendError;
+        }
+        const fallback = this.registeredBackends[this.registeredBackends.length - 1];
+        this.logger.warn(
+          `Backend initialization failed, falling back to "${fallback.name}": ${backendError?.message ?? backendError}`,
+        );
+        await this.selectBackendTransactional(fallback.name, modelName);
+        return;
+      }
+    }
     try {
       await this.ensureBackend();
     } catch (backendError: any) {
@@ -233,24 +408,10 @@ export class EmbeddingService {
         this.notifier.showWarning(
           `RAGnarōk: Preferred embeddings unavailable — falling back to ${fallback.name}. Reason: ${backendError?.message ?? backendError}`,
         );
-        // Strip backend prefix if present (e.g. "vscodeLM:model-id" → "model-id")
-        const prefix = fallback.name + ":";
-        const rawModelName = modelName?.startsWith(prefix) ? modelName.slice(prefix.length) : modelName;
-        await fallback.initialize(rawModelName);
-        this.activeBackend = fallback;
-        this.activeBackendType = fallback.name;
-        this.backendResolved = true;
+        await this.selectBackendTransactional(fallback.name, modelName);
         return;
       }
       throw backendError;
-    }
-
-    // Initialize the active backend with the model name if provided
-    if (modelName && this.activeBackend) {
-      // Strip backend prefix if present (e.g. "huggingface:Xenova/all-MiniLM-L6-v2" → "Xenova/all-MiniLM-L6-v2")
-      const prefix = this.activeBackendType + ":";
-      const rawModelName = modelName.startsWith(prefix) ? modelName.slice(prefix.length) : modelName;
-      await this.activeBackend.initialize(rawModelName);
     }
   }
 
@@ -280,6 +441,7 @@ export class EmbeddingService {
    * Initialize a specific backend for scoped queries (does not change the global active backend).
    */
   public async initializeForBackend(backendType: string, modelName?: string): Promise<void> {
+    this.assertNotDisposed();
     const registered = this.registeredBackends.find((b) => b.name === backendType);
     if (!registered) {
       throw new Error(`Backend "${backendType}" not registered`);
@@ -287,7 +449,20 @@ export class EmbeddingService {
     // Strip the backend prefix if present (e.g. "vscodeLM:model-id" → "model-id")
     const prefix = backendType + ":";
     const rawModelName = modelName?.startsWith(prefix) ? modelName.slice(prefix.length) : modelName;
-    await registered.initialize(rawModelName === "auto" ? undefined : rawModelName);
+    await this.switchMutex.runExclusive(async () => {
+      this.assertNotDisposed();
+      if (registered === this.activeBackend) {
+        this.blockAdmissions();
+      }
+      try {
+        await this.waitForBackendDrain(registered);
+        await registered.initialize(rawModelName === "auto" ? undefined : rawModelName);
+      } finally {
+        if (registered === this.activeBackend) {
+          this.unblockAdmissions();
+        }
+      }
+    });
   }
 
   /**
@@ -295,8 +470,9 @@ export class EmbeddingService {
    * Used when querying topics that were ingested with a different backend.
    */
   public async embedWithBackend(backendType: string, text: string): Promise<number[]> {
+    this.assertNotDisposed();
     const backend = this.getBackendByType(backendType);
-    return backend.embed(text);
+    return this.withScopedBackendLease(backend, () => backend.embed(text));
   }
 
   /**
@@ -307,8 +483,9 @@ export class EmbeddingService {
     texts: string[],
     progressCallback?: (progress: number) => void,
   ): Promise<number[][]> {
+    this.assertNotDisposed();
     const backend = this.getBackendByType(backendType);
-    return backend.embedBatch(texts, progressCallback);
+    return this.withScopedBackendLease(backend, () => backend.embedBatch(texts, progressCallback));
   }
 
   /**
@@ -337,29 +514,28 @@ export class EmbeddingService {
     operation: (backend: EmbeddingBackend) => Promise<T>,
     operationName: string,
   ): Promise<T> {
-    if (this.activeBackend) {
-      try {
-        return await operation(this.activeBackend);
-      } catch (error: any) {
-        if (await this.shouldFallback(error)) {
-          const fallback = this.registeredBackends[this.registeredBackends.length - 1];
-          if (fallback && fallback.name !== this.activeBackendType) {
-            this.logger.warn(
-              `${this.activeBackendType} ${operationName} failed, falling back to ${fallback.name}: ${error?.message}`,
-            );
-            this.notifier.showWarning(
-              `RAGnarōk: ${this.activeBackendType} ${operationName} failed — falling back to ${fallback.name}. Reason: ${error?.message ?? error}`,
-            );
-            await this.switchToFallback();
-            return operation(this.activeBackend!);
-          }
+    let failedBackendType = "";
+    try {
+      return await this.withActiveBackend(async (backend) => {
+        failedBackendType = backend.name;
+        return operation(backend);
+      });
+    } catch (error: any) {
+      if (await this.shouldFallback(error)) {
+        const fallback = this.registeredBackends[this.registeredBackends.length - 1];
+        if (fallback && fallback.name !== failedBackendType) {
+          this.logger.warn(
+            `${failedBackendType} ${operationName} failed, falling back to ${fallback.name}: ${error?.message}`,
+          );
+          this.notifier.showWarning(
+            `RAGnarōk: ${failedBackendType} ${operationName} failed — falling back to ${fallback.name}. Reason: ${error?.message ?? error}`,
+          );
+          await this.switchToFallback();
+          return this.withActiveBackend(operation);
         }
-        throw error;
       }
+      throw error;
     }
-
-    await this.initialize();
-    return operation(this.activeBackend!);
   }
 
   // ---------------------------------------------------------------------------
@@ -424,22 +600,36 @@ export class EmbeddingService {
 
   public async clearCache(): Promise<void> {
     this.logger.info("Clearing embedding model cache");
-    this.resetBackendSelection();
+    await this.resetBackendSelection();
     this.logger.info("Embedding model cache cleared successfully");
     this.notifier.showInfo("Embedding model cache cleared. Model will reload on next use.");
   }
 
   public async dispose(): Promise<void> {
-    this.logger.info("Disposing EmbeddingService");
-
-    for (const backend of this.registeredBackends) {
-      await backend.dispose();
+    if (this.disposePromise) {
+      return this.disposePromise;
     }
-
-    this.activeBackend = null;
-    this.backendResolved = false;
-    this.activeBackendType = "";
-    this.logger.info("EmbeddingService disposed");
+    this.disposed = true;
+    this.logger.info("Disposing EmbeddingService");
+    this.blockAdmissions();
+    this.disposePromise = this.switchMutex.runExclusive(async () => {
+      try {
+        for (const backend of this.registeredBackends) {
+          await this.waitForBackendDrain(backend);
+          await backend.dispose();
+        }
+      } finally {
+        this.activeBackend = null;
+        this.backendResolved = false;
+        this.activeBackendType = "";
+        this.initPromise = null;
+        // Wake callers that were queued before disposal; they fail the
+        // terminal-state assertion instead of waiting forever.
+        this.unblockAdmissions();
+      }
+      this.logger.info("EmbeddingService disposed");
+    });
+    return this.disposePromise;
   }
 
   // ---------------------------------------------------------------------------
@@ -452,18 +642,126 @@ export class EmbeddingService {
   }
 
   private async switchToFallback(): Promise<void> {
-    if (this.activeBackend) {
-      await this.activeBackend.dispose();
-    }
     const fallback = this.registeredBackends[this.registeredBackends.length - 1];
     if (!fallback) {
       throw new Error("No fallback backend registered");
     }
-    await fallback.initialize();
-    this.activeBackend = fallback;
-    this.activeBackendType = fallback.name;
+    await this.selectBackendTransactional(fallback.name);
 
     const newModelId = fallback.getModelId?.() ?? "unknown";
     EmbeddingService._onModelChanged.emit("modelChanged", newModelId);
+  }
+
+  private async withActiveBackend<T>(operation: (backend: EmbeddingBackend) => Promise<T>): Promise<T> {
+    this.assertNotDisposed();
+    await this.ensureBackend();
+    if (this.transactionContext.getStore()) {
+      const backend = this.activeBackend;
+      if (!backend) {
+        throw new Error("No active embedding backend");
+      }
+      return this.withBackendLease(backend, () => operation(backend));
+    }
+
+    let backend: EmbeddingBackend | null = null;
+    while (!backend) {
+      await this.waitForAdmissions();
+      backend = await this.switchMutex.runExclusive(() => {
+        this.assertNotDisposed();
+        if (this.admissionsBlocked) {
+          return null;
+        }
+        const selected = this.activeBackend;
+        if (!selected) {
+          throw new Error("No active embedding backend");
+        }
+        this.acquireBackendLease(selected);
+        return selected;
+      });
+    }
+    try {
+      return await operation(backend);
+    } finally {
+      this.releaseBackendLease(backend);
+    }
+  }
+
+  private async withScopedBackendLease<T>(backend: EmbeddingBackend, operation: () => Promise<T>): Promise<T> {
+    if (this.transactionContext.getStore()) {
+      return this.withBackendLease(backend, operation);
+    }
+    await this.switchMutex.runExclusive(() => {
+      this.assertNotDisposed();
+      this.acquireBackendLease(backend);
+    });
+    try {
+      return await operation();
+    } finally {
+      this.releaseBackendLease(backend);
+    }
+  }
+
+  private async withBackendLease<T>(backend: EmbeddingBackend, operation: () => Promise<T>): Promise<T> {
+    this.acquireBackendLease(backend);
+    try {
+      return await operation();
+    } finally {
+      this.releaseBackendLease(backend);
+    }
+  }
+
+  private acquireBackendLease(backend: EmbeddingBackend): void {
+    this.backendLeaseCounts.set(backend, (this.backendLeaseCounts.get(backend) ?? 0) + 1);
+  }
+
+  private releaseBackendLease(backend: EmbeddingBackend): void {
+    const remaining = (this.backendLeaseCounts.get(backend) ?? 1) - 1;
+    if (remaining > 0) {
+      this.backendLeaseCounts.set(backend, remaining);
+      return;
+    }
+    this.backendLeaseCounts.delete(backend);
+    for (const resolve of this.backendDrainWaiters.get(backend) ?? []) {
+      resolve();
+    }
+    this.backendDrainWaiters.delete(backend);
+  }
+
+  private async waitForBackendDrain(backend: EmbeddingBackend): Promise<void> {
+    if (!this.backendLeaseCounts.has(backend)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const waiters = this.backendDrainWaiters.get(backend) ?? [];
+      waiters.push(resolve);
+      this.backendDrainWaiters.set(backend, waiters);
+    });
+  }
+
+  private blockAdmissions(): void {
+    this.admissionsBlocked = true;
+  }
+
+  private unblockAdmissions(): void {
+    this.admissionsBlocked = false;
+    for (const resolve of this.admissionWaiters.splice(0)) {
+      resolve();
+    }
+  }
+
+  private async waitForAdmissions(): Promise<void> {
+    if (this.transactionContext.getStore()) {
+      return;
+    }
+    while (this.admissionsBlocked) {
+      await new Promise<void>((resolve) => this.admissionWaiters.push(resolve));
+    }
+    this.assertNotDisposed();
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) {
+      throw new Error("EmbeddingService has been disposed");
+    }
   }
 }

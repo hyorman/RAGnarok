@@ -511,3 +511,58 @@ describe("MemoryVectorStore", function () {
     });
   });
 });
+
+describe("MemoryVectorStore atomic scope recovery", function () {
+  this.timeout(30000);
+
+  it("restores the previous coherent entry+graph snapshot after an interrupted rollback", async function () {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-atomic-recovery-"));
+    const uri = path.join(directory, "memory-lancedb");
+    const first = new MemoryVectorStore(uri);
+    const oldEntry = createTestEntry({ id: "old-entry", content: "old coherent memory", entityIds: ["old-entity"] });
+    const oldEntity = createTestEntity({ id: "old-entity", sourceMemoryIds: [oldEntry.id] });
+    await first.saveScopeAtomic([oldEntry], { entities: [oldEntity], relationships: [] }, "workspace");
+
+    const originalSaveGraph = (first as any).saveGraphUnlocked.bind(first);
+    let injectedFailures = 2;
+    (first as any).saveGraphUnlocked = async (...args: unknown[]) => {
+      await originalSaveGraph(...args);
+      if (injectedFailures-- > 0) {
+        throw new Error("simulated interruption between memory components");
+      }
+    };
+
+    const newEntry = createTestEntry({ id: "new-entry", content: "must roll back", entityIds: ["new-entity"] });
+    const newEntity = createTestEntity({ id: "new-entity", sourceMemoryIds: [newEntry.id] });
+    let caught: unknown;
+    try {
+      await first.saveScopeAtomic([newEntry], { entities: [newEntity], relationships: [] }, "workspace");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.be.instanceOf(Error);
+    await first.dispose();
+
+    const restarted = new MemoryVectorStore(uri);
+    expect((await restarted.loadEntries("workspace")).map((entry) => entry.id)).to.deep.equal([oldEntry.id]);
+    expect((await restarted.loadGraph("workspace"))?.entities.map((entity) => entity.id)).to.deep.equal([oldEntity.id]);
+    await restarted.dispose();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it("bounds retained table handles across many scopes", async function () {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-handle-soak-"));
+    const bounded = new MemoryVectorStore(path.join(directory, "memory-lancedb"));
+    for (let index = 0; index < 50; index++) {
+      const branch = `handle-branch-${index}`;
+      await bounded.saveEntries(
+        [createTestEntry({ scope: "branch", branch, content: `entry ${index}` })],
+        "branch",
+        branch,
+      );
+    }
+    expect((bounded as any).openTables.size).to.be.at.most(32);
+    await bounded.dispose();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+});

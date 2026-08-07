@@ -106,6 +106,55 @@ describe("EnsembleRetriever", () => {
       expect(results).to.be.an("array");
       expect(results.length).to.be.at.most(3);
     });
+
+    it("rejects non-finite, zero-total, and invalid rank-fusion options", async () => {
+      const invalid = [
+        { k: 0, vectorWeight: 0.5, bm25Weight: 0.5 },
+        { k: 1.5, vectorWeight: 0.5, bm25Weight: 0.5 },
+        { k: 1, vectorWeight: Number.NaN, bm25Weight: 0.5 },
+        { k: 1, vectorWeight: 0, bm25Weight: 0 },
+        { k: 1, vectorWeight: 0.5, bm25Weight: 0.5, rrfK: 0 },
+      ];
+      for (const options of invalid) {
+        let caught: unknown;
+        try {
+          await retriever.search("query", options);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).to.be.instanceOf(Error);
+      }
+    });
+
+    it("preserves the exact RRF score and per-arm contributions", async () => {
+      const docA = new LangChainDocument({ pageContent: "A", metadata: { chunkId: "a" } });
+      const docB = new LangChainDocument({ pageContent: "B", metadata: { chunkId: "b" } });
+      const fixedVector = {
+        getDocuments: async () => [docA, docB],
+      } as any;
+      const fixedKeyword = {
+        isInitialized: () => true,
+        search: async () => [
+          { document: docA, score: 10 },
+          { document: docB, score: 5 },
+        ],
+        getDocumentCount: () => 2,
+      } as any;
+      const exactRetriever = new EnsembleRetrieverWrapper(fixedVector, fixedKeyword, 10);
+
+      const [first] = await exactRetriever.search("query", {
+        k: 2,
+        vectorWeight: 0.5,
+        bm25Weight: 0.5,
+      });
+
+      expect(first.document.metadata.chunkId).to.equal("a");
+      expect(first.scoreKind).to.equal("rrf");
+      expect(first.componentScores.vector).to.be.closeTo(0.5 / 11, 1e-12);
+      expect(first.componentScores.keyword).to.be.closeTo(0.5 / 11, 1e-12);
+      expect(first.score).to.be.closeTo(1 / 11, 1e-12);
+      expect(first.score).to.equal(first.componentScores.vector + first.componentScores.keyword);
+    });
   });
 
   describe("Vector Store Management", () => {

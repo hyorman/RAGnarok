@@ -230,6 +230,12 @@ describe("QueryGraph", function () {
     });
 
     it("should use graph retrieval when strategy is graph and a knowledge graph is available", async () => {
+      planStub.resolves({
+        originalQuery: "TypeScript",
+        complexity: "simple" as const,
+        subQueries: [{ query: "TypeScript", reasoning: "direct entity match", topK: 5 }],
+        explanation: "Graph entity query",
+      });
       const vectorStore = createMockVectorStore([]);
       const knowledgeGraph = new KnowledgeGraph("t1");
       knowledgeGraph.addEntity({
@@ -453,7 +459,7 @@ describe("QueryGraph", function () {
       // keeps confidence at ~0.3, below threshold, forcing refinement.
       //
       // Mock scores are fed through VectorRetriever.similaritySearchWithScore
-      // as raw LanceDB L2 distances, then normalized to a [0,1] similarity via
+      // as raw LanceDB squared-L2 distances, then normalized to a [0,1] similarity via
       // `1 - distance / 2` (see VectorRetriever.normalizeDistance) — so a
       // distance of 1.4 yields the ~0.3 similarity this test targets, not 0.3
       // itself. Strategy is pinned to "vector" (not "hybrid") so the mocked

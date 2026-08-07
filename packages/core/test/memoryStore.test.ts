@@ -6,6 +6,7 @@ import * as path from "path";
 import { MemoryStore, MemoryStoreOptions } from "../src/memory/memoryStore";
 import { EmbeddingService } from "../src/embeddings/embeddingService";
 import type { EmbeddingFingerprint } from "../src/embeddings/embeddingBackend";
+import type { ILLMProvider } from "../src/interfaces";
 
 // ── Mock Embedding Service ───────────────────────────────────────────
 // Returns a deterministic 32-dim vector derived from a simple text hash.
@@ -238,17 +239,14 @@ describe("MemoryStore", function () {
 
   // ── 9. Branch detection fallback to workspace ──────────────────────
 
-  it("should fall back to workspace when branch scope requested but no branch available", async function () {
-    // Request branch scope without specifying a branch,
-    // and workingDir is undefined → no git detection → falls back to workspace.
-    const entry = await store.store({
-      content: "Fallback test — no branch available",
-      scope: "branch",
-      // branch: undefined → triggers detection → fails → workspace fallback
-    });
-
-    expect(entry.scope).to.equal("workspace");
-    expect(entry.branch).to.be.undefined;
+  it("should reject branch scope when no attached branch is available", async function () {
+    const error = await captureError(
+      store.store({
+        content: "Detached branch must not leak into workspace",
+        scope: "branch",
+      }),
+    );
+    expect((error as Error).message).to.include("no attached git branch");
   });
 });
 
@@ -307,9 +305,9 @@ describe("MemoryStore restart persistence", function () {
 
     // Inject a one-shot persistence failure at the vector-store boundary.
     const vectorStore = (store as any).vectorStore;
-    const originalSave = vectorStore.saveEntries.bind(vectorStore);
-    vectorStore.saveEntries = async () => {
-      vectorStore.saveEntries = originalSave;
+    const originalSave = vectorStore.saveScopeAtomic.bind(vectorStore);
+    vectorStore.saveScopeAtomic = async () => {
+      vectorStore.saveScopeAtomic = originalSave;
       throw new Error("simulated LanceDB write failure");
     };
 
@@ -388,6 +386,166 @@ describe("MemoryStore concurrent operations", function () {
 
     const branch = await store.list({ scope: "branch", branch: "feat/concurrent", limit: 100 });
     expect(branch.map((e) => e.content)).to.deep.equal(["branch op"]);
+  });
+});
+
+describe("MemoryStore graph snapshot", function () {
+  this.timeout(30000);
+
+  let tempDir: string;
+  let store: MemoryStore;
+
+  beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-graph-snapshot-test-"));
+    store = new MemoryStore({
+      storageDir: tempDir,
+      embeddingService: createMockEmbeddingService(),
+      workingDir: tempDir,
+      markdownPath: null,
+    });
+  });
+
+  afterEach(async function () {
+    await store.dispose();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function seedGraph(scope: "workspace" | "branch", branch?: string): Promise<void> {
+    const graph = await (store as any).getGraph(scope, branch);
+    graph.addEntity({
+      id: `${scope}-source`,
+      name: `${scope} source`,
+      type: "concept",
+      description: "source entity",
+      vector: [0.25, 0.75],
+      scope,
+      branch,
+      confidence: 0.9,
+      strength: 0.8,
+      createdAt: 1,
+      updatedAt: 2,
+      sourceMemoryIds: ["memory-1"],
+      metadata: { nested: { values: ["original"] } },
+    });
+    graph.addEntity({
+      id: `${scope}-target`,
+      name: `${scope} target`,
+      type: "tool",
+      description: "target entity",
+      vector: [0.5, 0.5],
+      scope,
+      branch,
+      confidence: 0.7,
+      strength: 0.6,
+      createdAt: 3,
+      updatedAt: 4,
+      sourceMemoryIds: ["memory-2"],
+      metadata: {},
+    });
+    graph.addRelationship({
+      id: `${scope}-relationship`,
+      sourceId: `${scope}-source`,
+      targetId: `${scope}-target`,
+      type: "uses",
+      description: "original relationship",
+      weight: 1,
+      scope,
+      branch,
+      metadata: { nested: { values: ["original"] } },
+    });
+  }
+
+  for (const scopeCase of [
+    { scope: "workspace" as const, branch: undefined },
+    { scope: "branch" as const, branch: "feature/graph" },
+  ]) {
+    it(`returns a detached ${scopeCase.scope} graph snapshot without vectors`, async function () {
+      await seedGraph(scopeCase.scope, scopeCase.branch);
+
+      const snapshot = await store.getGraphSnapshot(scopeCase.scope, scopeCase.branch);
+      expect(snapshot.entities).to.have.length(2);
+      expect(snapshot.relationships).to.have.length(1);
+      expect(snapshot.entities.every((entity) => !("vector" in entity))).to.equal(true);
+
+      snapshot.entities[0].name = "mutated outside";
+      snapshot.entities[0].sourceMemoryIds.push("mutated-memory");
+      ((snapshot.entities[0].metadata.nested as { values: string[] }).values as string[]).push("mutated");
+      snapshot.relationships[0].description = "mutated outside";
+      ((snapshot.relationships[0].metadata.nested as { values: string[] }).values as string[]).push("mutated");
+
+      const second = await store.getGraphSnapshot(scopeCase.scope, scopeCase.branch);
+      expect(second.entities[0].name).not.to.equal("mutated outside");
+      expect(second.entities[0].sourceMemoryIds).to.deep.equal(["memory-1"]);
+      expect(second.entities[0].metadata).to.deep.equal({ nested: { values: ["original"] } });
+      expect(second.relationships[0].description).to.equal("original relationship");
+      expect(second.relationships[0].metadata).to.deep.equal({ nested: { values: ["original"] } });
+    });
+  }
+
+  it("returns an empty graph snapshot for an absent branch", async function () {
+    expect(await store.getGraphSnapshot("branch", "feature/absent")).to.deep.equal({
+      entities: [],
+      relationships: [],
+    });
+  });
+});
+
+describe("MemoryStore forget scope containment", function () {
+  this.timeout(30000);
+
+  let tempDir: string;
+  let store: MemoryStore;
+
+  beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-forget-scope-test-"));
+    store = new MemoryStore({
+      storageDir: tempDir,
+      embeddingService: createMockEmbeddingService(),
+      workingDir: tempDir,
+      markdownPath: null,
+    });
+  });
+
+  afterEach(async function () {
+    await store.dispose();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("derives branch scope when branch is supplied and never deletes workspace or sibling branches", async function () {
+    const workspace = await store.store({ content: "workspace memory must survive branch forget" });
+    const target = await store.store({
+      content: "target branch memory should be forgotten",
+      scope: "branch",
+      branch: "feature/target",
+    });
+    const sibling = await store.store({
+      content: "sibling branch memory must survive",
+      scope: "branch",
+      branch: "feature/sibling",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const removed = await store.forget({ branch: "feature/target", olderThan: 1 / 86_400_000 });
+
+    expect(removed).to.equal(1);
+    expect((await store.list({ scope: "workspace" })).map((entry) => entry.id)).to.include(workspace.id);
+    expect((await store.list({ scope: "branch", branch: "feature/target" })).map((entry) => entry.id)).to.not.include(
+      target.id,
+    );
+    expect((await store.list({ scope: "branch", branch: "feature/sibling" })).map((entry) => entry.id)).to.include(
+      sibling.id,
+    );
+  });
+
+  it("rejects age-based deletion without an explicit scope and conflicting branch filters", async function () {
+    const unscoped = await captureError(store.forget({ olderThan: 30 }));
+    expect((unscoped as Error).message).to.include("explicit scope or branch");
+
+    const conflicting = await captureError(store.forget({ scope: "workspace", branch: "feature/nope", olderThan: 30 }));
+    expect((conflicting as Error).message).to.include("workspace scope with a branch");
+
+    const zeroDays = await captureError(store.forget({ scope: "workspace", olderThan: 0 }));
+    expect((zeroDays as Error).message).to.include("greater than zero");
   });
 });
 
@@ -494,5 +652,134 @@ describe("MemoryStore release contracts", function () {
     const error = await captureError(current.store({ content: "must never be written", signal: controller.signal }));
     expect(error).to.be.instanceOf(Error);
     expect(await current.list({ scope: "workspace", includeAuto: true })).to.deep.equal([]);
+  });
+
+  it("requeues failed reinforcement scopes and persists them on retry", async function () {
+    const current = makeStore();
+    await current.store({ content: "reinforcement retry memory" });
+    const vectorStore = (current as any).vectorStore;
+    const originalSaveEntries = vectorStore.saveEntries.bind(vectorStore);
+    let fail = true;
+    vectorStore.saveEntries = async (...args: unknown[]) => {
+      if (fail) {
+        throw new Error("injected reinforcement failure");
+      }
+      return originalSaveEntries(...args);
+    };
+    (current as any).reinforcementDirty.add("workspace");
+
+    const error = await captureError(current.flushReinforcement());
+    expect((error as Error).message).to.include("reinforced memory scope");
+    expect([...(current as any).reinforcementDirty]).to.deep.equal(["workspace"]);
+
+    fail = false;
+    await current.flushReinforcement();
+    expect([...(current as any).reinforcementDirty]).to.deep.equal([]);
+  });
+
+  it("awaits timer-started background work before disposing native storage", async function () {
+    const current = makeStore();
+    await current.store({ content: "background drain memory" });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (current as any).trackBackgroundTask(gate);
+
+    let disposed = false;
+    const disposal = current.dispose().then(() => {
+      disposed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disposed).to.equal(false);
+
+    release();
+    await disposal;
+    expect(disposed).to.equal(true);
+  });
+});
+
+describe("MemoryStore standalone format and markdown privacy", function () {
+  this.timeout(30000);
+
+  it("fails closed before writing into non-empty unversioned standalone storage", async function () {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-format-gate-"));
+    await fs.writeFile(path.join(directory, "legacy-memory.json"), "{}", "utf8");
+    const standalone = new MemoryStore({
+      storageDir: directory,
+      embeddingService: createMockEmbeddingService(),
+      workingDir: directory,
+      markdownPath: null,
+    });
+
+    const error = await captureError(standalone.store({ content: "must not enter unversioned storage" }));
+    expect((error as Error).message).to.include("Existing unversioned RAGnarōk storage");
+    expect(await fs.readdir(directory)).to.include("legacy-memory.json");
+    await standalone.dispose();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it("atomically exports only current, non-auto, non-expired memories", async function () {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-markdown-privacy-"));
+    const markdownPath = path.join(directory, "memories.md");
+    const standalone = new MemoryStore({
+      storageDir: directory,
+      embeddingService: createMockEmbeddingService(),
+      workingDir: directory,
+      markdownPath,
+    });
+
+    await standalone.store({ content: "visible current memory" });
+    await standalone.store({ content: "reserved automatic secret", tags: ["auto:query-insight"] });
+    await standalone.store({ content: "expired secret", ttlDays: 0.00000001 });
+    await standalone.store({ content: "one visible version" });
+    await standalone.store({ content: "one visible version" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await standalone.flushMarkdown();
+
+    const markdown = await fs.readFile(markdownPath, "utf8");
+    expect(markdown).to.include("visible current memory");
+    expect(markdown).to.not.include("reserved automatic secret");
+    expect(markdown).to.not.include("expired secret");
+    expect(markdown.match(/one visible version/g)).to.have.lengthOf(1);
+    expect((await fs.readdir(directory)).filter((name) => name.includes(".tmp"))).to.deep.equal([]);
+
+    await standalone.dispose();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it("moves entity provenance from a superseded memory onto its current version", async function () {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-supersession-provenance-"));
+    const llmProvider: ILLMProvider = {
+      isAvailable: async () => true,
+      selectModel: async () => ({
+        id: "memory-test",
+        family: "test",
+        sendRequest: async () =>
+          (async function* () {
+            yield JSON.stringify({
+              entities: [{ name: "RAGnarok", type: "project", description: "The current project" }],
+              relationships: [],
+            });
+          })(),
+      }),
+    };
+    const standalone = new MemoryStore({
+      storageDir: directory,
+      embeddingService: createMockEmbeddingService(),
+      llmProvider,
+      workingDir: directory,
+      markdownPath: null,
+    });
+
+    const first = await standalone.store({ content: "RAGnarok is the current project" });
+    const current = await standalone.store({ content: "RAGnarok is the current project" });
+    const graph = await (standalone as any).getGraph("workspace");
+    const entity = graph.getAllEntities()[0];
+    expect(entity.sourceMemoryIds).to.deep.equal([current.id]);
+    expect(entity.sourceMemoryIds).to.not.include(first.id);
+
+    await standalone.dispose();
+    await fs.rm(directory, { recursive: true, force: true });
   });
 });

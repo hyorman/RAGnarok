@@ -387,6 +387,13 @@ describe(`BEIR ${DATASET} Retrieval Benchmark`, function (this: Mocha.Suite) {
     console.log(header);
     console.log("  " + "─".repeat(header.length - 2));
 
+    const machineMetrics: Record<string, { ndcgAt5: number; recallAt5: number; mrrAt10: number }> = {};
+    const canonicalNames: Partial<Record<ConfigName, string>> = {
+      "VECTOR-only": "vector",
+      "HYBRID-default": "hybrid",
+      "ENSEMBLE-default": "ensemble",
+      "BM25-keyword": "bm25",
+    };
     for (const config of ALL_CONFIGS) {
       const configResults = allResults.filter((r) => r.config === config);
 
@@ -403,6 +410,17 @@ describe(`BEIR ${DATASET} Retrieval Benchmark`, function (this: Mocha.Suite) {
       console.log(
         `  ${config.padEnd(22)}|${fmt(mean(metricsByK[1]))} |${fmt(mean(metricsByK[3]))} |${fmt(mean(metricsByK[5]))} |${fmt(mean(metricsByK[10]))}  |${fmt(mean(mapScores))} |${fmtPct(mean(recallScores))}   |${fmt(mean(precScores))} |${fmt(mean(mrrScores))}`,
       );
+      const canonical = canonicalNames[config];
+      if (canonical) {
+        machineMetrics[canonical] = {
+          ndcgAt5: mean(metricsByK[5]),
+          recallAt5: mean(recallScores),
+          mrrAt10: mean(mrrScores),
+        };
+      }
+    }
+    if (process.env.RAGNAROK_BENCHMARK_MODE === "release") {
+      console.log(`RAGNAROK_METRICS beir ${JSON.stringify(machineMetrics)}`);
     }
 
     // Assertions: HYBRID and ENSEMBLE configs should have reasonable NDCG@10

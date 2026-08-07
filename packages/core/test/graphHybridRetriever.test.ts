@@ -6,6 +6,7 @@ import {
   GraphHybridRetriever,
   DEFAULT_GRAPH_HYBRID_OPTIONS,
   GraphEntity,
+  KnowledgeGraphEmbeddingMismatchError,
 } from "../src/index";
 
 // ── Mock helpers ─────────────────────────────────────────────────────
@@ -106,6 +107,91 @@ describe("GraphHybridRetriever", function () {
     expect(results.length).to.be.greaterThan(0);
     // Should have vector scores from fallback
     expect(results[0].vectorScore).to.be.greaterThan(0);
+    expect(results[0].graphScore).to.equal(0);
+    expect(results[0].score).to.equal(results[0].vectorScore);
+    expect(results[0].effectiveStrategy).to.equal("vector");
+    expect(results[0].degradedFrom).to.equal("graph_hybrid");
+    expect(results[0].fallbackReason).to.equal("no_graph_matches");
+  });
+
+  it("performs vector search exactly once and does not double-weight its score", async function () {
+    let vectorCalls = 0;
+    const vectorRetriever = {
+      ...createMockVectorRetriever([{ doc: doc1, score: 0.8 }]),
+      search: async () => {
+        vectorCalls++;
+        return [{ document: doc1, score: 0.8 }];
+      },
+    } as any;
+    const graphRetriever = new GraphRetriever(kg, vectorRetriever, createMockEmbeddingService([1, 0, 0]), async () => [
+      doc1,
+    ]);
+    const hybrid = new GraphHybridRetriever(graphRetriever, vectorRetriever);
+
+    const results = await hybrid.search("JavaScript", { k: 5, graphWeight: 0.3, vectorWeight: 0.7 });
+
+    expect(vectorCalls).to.equal(1);
+    expect(results[0].componentScores.vector).to.equal(0.8);
+    expect(results[0].score).to.be.closeTo(0.3 * results[0].graphScore + 0.7 * results[0].vectorScore, 1e-12);
+  });
+
+  it("tracks arm presence independently from a legitimate zero score", async function () {
+    const zeroGraphRetriever = {
+      search: async () => [
+        {
+          document: doc1,
+          score: 0,
+          scoreKind: "graph_similarity",
+          componentScores: { graph: 0 },
+          matchedEntities: ["JavaScript"],
+          hopDepth: 0,
+          effectiveStrategy: "graph",
+        },
+      ],
+    } as any;
+    const vectorRetriever = createMockVectorRetriever([{ doc: doc1, score: 0.8 }]);
+    const hybrid = new GraphHybridRetriever(zeroGraphRetriever, vectorRetriever);
+
+    const [result] = await hybrid.search("JavaScript", { k: 1, graphWeight: 0.3, vectorWeight: 0.7 });
+
+    expect(result.effectiveStrategy).to.equal("graph_hybrid");
+    expect(result.scoreKind).to.equal("weighted_fusion");
+    expect(result.componentScores).to.deep.equal({ graph: 0, vector: 0.8 });
+    expect(result.score).to.be.closeTo(0.56, 1e-12);
+    expect(result.degradedFrom).to.equal(undefined);
+  });
+
+  it("labels a graph exception as a vector fallback", async function () {
+    const vectorRetriever = createMockVectorRetriever([{ doc: doc1, score: 0.8 }]);
+    const failingGraphRetriever = {
+      search: async () => {
+        throw new Error("graph unavailable");
+      },
+    } as any;
+    const hybrid = new GraphHybridRetriever(failingGraphRetriever, vectorRetriever);
+
+    const results = await hybrid.search("JavaScript", { k: 5 });
+
+    expect(results[0].effectiveStrategy).to.equal("vector");
+    expect(results[0].fallbackReason).to.equal("graph_error");
+    expect(results[0].scoreKind).to.equal("vector_similarity");
+  });
+
+  it("does not hide a persisted graph fingerprint mismatch behind vector fallback", async function () {
+    const vectorRetriever = createMockVectorRetriever([{ doc: doc1, score: 0.8 }]);
+    const failingGraphRetriever = {
+      search: async () => {
+        throw new KnowledgeGraphEmbeddingMismatchError("fingerprint mismatch; reindex");
+      },
+    } as any;
+    const hybrid = new GraphHybridRetriever(failingGraphRetriever, vectorRetriever);
+
+    try {
+      await hybrid.search("JavaScript", { k: 5 });
+      expect.fail("expected mismatch");
+    } catch (error) {
+      expect(error).to.be.instanceOf(KnowledgeGraphEmbeddingMismatchError);
+    }
   });
 
   it("should respect custom weights", async function () {

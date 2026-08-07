@@ -32,7 +32,7 @@ import {
 } from "../src/index";
 import type { ScoredDocument } from "../src/index";
 import { RealVectorStore, mockConfig, mockNotifier } from "./helpers/realVectorStore";
-import { mean, stddev, ndcgAtK, mrrAtK, recallAtK } from "./helpers/metrics";
+import { mean, stddev, percentile, ndcgAtK, mrrAtK, recallAtK } from "./helpers/metrics";
 import { formatSampleSelection, parseBenchmarkSampleSize, sampleDeterministically } from "./helpers/benchmarkSampling";
 import { downloadAndExtract, loadCorpus, loadQueries, loadQrels } from "./helpers/beirLoader";
 
@@ -331,6 +331,18 @@ describe("BEIR Reranking Benchmark", function (this: Mocha.Suite) {
       }
     }
     console.log("  └────────────────┴──────────────┴──────────────┴──────────────┴──────────┘");
+    if (process.env.RAGNAROK_BENCHMARK_MODE === "release") {
+      const measured = results.get("HYBRID+rerank")!;
+      console.log(
+        `RAGNAROK_METRICS beir-rerank ${JSON.stringify({
+          ndcgAt10: mean(measured.ndcg10),
+          mrrAt10: mean(measured.mrr10),
+          recallAt5: mean(measured.recall5),
+          queryP50Ms: percentile(measured.timesMs, 0.5),
+          queryP95Ms: percentile(measured.timesMs, 0.95),
+        })}`,
+      );
+    }
 
     // ── Win/Loss analysis ──
     console.log("\n  Per-Query Win/Loss Analysis (NDCG@10):");

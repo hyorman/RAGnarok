@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "minimumVscodeVersion": "1.105.0",
+  "supportedNodeMajors": [20, 22],
+  "vsixTargets": ["win32-x64", "win32-arm64", "darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64"],
+  "budgets": {
+    "bundledModelsUnpackedBytes": 114957244,
+    "coreTarballCompressedBytes": 104857600,
+    "mcpTarballCompressedBytes": 5242880,
+    "vsixCompressedBytes": 262144000,
+    "vsixUnpackedBytes": 524288000,
+    "dockerImageBytes": 1073741824
+  },
+  "budgetEvidence": {
+    "bundledModels": {
+      "measured": true,
+      "bytes": 114957244,
+      "command": "node scripts/verify-model-manifest.mjs"
+    },
+    "coreTarball": {
+      "measured": true,
+      "bytes": 100188789,
+      "command": "npm pack --workspace=@ragnarok/core --pack-destination <evidence-directory>"
+    },
+    "mcpTarball": {
+      "measured": true,
+      "bytes": 207781,
+      "command": "npm pack --workspace=@ragnarok/mcp-server --pack-destination <evidence-directory>"
+    },
+    "vsix": {
+      "measured": true,
+      "maximumCompressedBytes": 235308763,
+      "maximumUnpackedBytes": 524176440,
+      "maximumTarget": "win32-x64",
+      "command": "node scripts/build-vsix.js <target> && node scripts/check-release-assets.mjs"
+    },
+    "dockerImage": {
+      "measured": true,
+      "bytes": 324193033,
+      "architecture": "arm64",
+      "manifestDigest": "sha256:5c0cdb8cda9a54566fcff3c88133d19de624723fe3d45fc395d8e20780bde9b6",
+      "command": "docker image inspect ragnarok-mcp:ci --format '{{.Size}}'"
+    }
+  },
+  "dependencyExceptions": [
+    {
+      "package": "@langchain/community",
+      "reason": "No narrow packages currently expose GithubRepoLoader, BM25Retriever, and the LanceDB adapter. VSIX staging retains only the runtime entrypoints used by RAGnarok.",
+      "expires": "2026-10-31",
+      "owner": "release-maintainers"
+    }
+  ],
+  "auditExceptions": [
+    {
+      "advisory": "GHSA-frvp-7c67-39w9",
+      "dependency": "@hono/node-server",
+      "range": "<2.0.5",
+      "via": "@modelcontextprotocol/node@2.0.0",
+      "reason": "RAGnarok uses MCP request conversion; neither MCP Node nor RAGnarok imports Hono serve-static.",
+      "invalidatedBy": "Any serve-static import/use or an MCP Node release compatible with patched Hono.",
+      "expires": "2026-08-31",
+      "owner": "release-maintainers"
+    },
+    {
+      "advisory": "GHSA-f88m-g3jw-g9cj",
+      "dependency": "sharp",
+      "range": "<0.35.0",
+      "via": "@huggingface/transformers@3.8.1",
+      "reason": "RAGnarok invokes only text feature-extraction, tokenization, and sequence-classification pipelines; no image input reaches Sharp.",
+      "invalidatedBy": "Any image pipeline/input support or a Transformers release compatible with patched Sharp.",
+      "expires": "2026-08-31",
+      "owner": "release-maintainers",
+      "sourceGuards": [
+        {
+          "path": "packages/core/src/embeddings/huggingFaceBackend.ts",
+          "sha256": "e256d67517a2b831b95835a391a96058b2e1e7169f8122fe1c1164e21565e1c6"
+        },
+        {
+          "path": "packages/core/src/rerankers/crossEncoderReranker.ts",
+          "sha256": "dfc7a3e14a8e1c08dc0e32958a46a70b2f7e62420a43f5d406472a618d590efd"
+        }
+      ]
+    }
+  ]
+}

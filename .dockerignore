@@ -1,30 +1,39 @@
-# Docker build context ignore rules
-# Run from repo root: docker build -f packages/mcp-server/Dockerfile .
+# Deny development and generated content from the MCP image context.
+.git
+.github
+.vscode
+.vscode-test
+.vsce-staging-*
+node_modules
+**/node_modules
+dist
+**/dist
+out
+dist-test
+**/dist-test
+*.tsbuildinfo
+**/*.tsbuildinfo
+coverage
+test
+**/test
+*.vsix
+*.tgz
+*.log
+.env
+.env.*
+.docker-tls-*
+chunk-output
+DELIVERY-REMEDIATION-PLAN.md
 
-node_modules/
-dist/
-out/
-.git/
-.gitignore
-.vscode/
-.github/
-
-# VS Code extension package (not needed for MCP server)
-packages/vscode/
+# The root lock and all three workspace manifests are explicit Docker inputs.
+# VS Code implementation files are not.
+packages/vscode/**
 !packages/vscode/package.json
 
-# Tests
-test/
-
-# Dev files
+# Documentation is excluded except supply-chain metadata copied by Dockerfile.
 *.md
-LICENSE
-eslint.config.mjs
-tsconfig.test.json
-scripts/
-*.vsix
-.vscodeignore
-
-# Chunk output / fixtures
-test/
-chunk-output/
+**/*.md
+!NOTICE
+!THIRD_PARTY_MODELS.md
+!bom.cdx.json
+!bom.spdx.json

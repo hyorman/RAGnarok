@@ -1,58 +1,94 @@
 {
-  "version": 1,
+  "version": 2,
+  "models": [
+    {
+      "id": "Xenova/all-MiniLM-L6-v2",
+      "source": "https://huggingface.co/Xenova/all-MiniLM-L6-v2",
+      "revision": "751bff37182d3f1213fa05d7196b954e230abad9",
+      "upstreamModel": "sentence-transformers/all-MiniLM-L6-v2",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "modifications": "Upstream Transformers.js ONNX conversion; bundled fp32 ONNX artifact is unmodified."
+    },
+    {
+      "id": "Xenova/ms-marco-MiniLM-L-6-v2",
+      "source": "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2",
+      "revision": "a09144355adeed5f58c8ed011d209bf8ee5a1fec",
+      "upstreamModel": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "modifications": "Upstream Transformers.js ONNX conversion; bundled model_quantized.onnx is the upstream quantized artifact."
+    }
+  ],
   "artifacts": [
     {
+      "model": "Xenova/all-MiniLM-L6-v2",
       "filename": "Xenova/all-MiniLM-L6-v2/onnx/model.onnx",
       "sha256": "759c3cd2b7fe7e93933ad23c4c9181b7396442a2ed746ec7c1d46192c469c46e",
+      "size": 90387606,
       "role": "embedding",
       "dtype": "fp32",
       "expectedDimension": 384
     },
     {
+      "model": "Xenova/all-MiniLM-L6-v2",
       "filename": "Xenova/all-MiniLM-L6-v2/config.json",
       "sha256": "7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7",
+      "size": 650,
       "role": "embedding-config",
       "dtype": "json",
       "expectedDimension": 384
     },
     {
+      "model": "Xenova/all-MiniLM-L6-v2",
       "filename": "Xenova/all-MiniLM-L6-v2/tokenizer.json",
       "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
+      "size": 711661,
       "role": "embedding-tokenizer",
       "dtype": "json",
       "expectedDimension": 384
     },
     {
+      "model": "Xenova/all-MiniLM-L6-v2",
       "filename": "Xenova/all-MiniLM-L6-v2/tokenizer_config.json",
       "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3",
+      "size": 366,
       "role": "embedding-tokenizer-config",
       "dtype": "json",
       "expectedDimension": 384
     },
     {
+      "model": "Xenova/ms-marco-MiniLM-L-6-v2",
       "filename": "Xenova/ms-marco-MiniLM-L-6-v2/onnx/model_quantized.onnx",
       "sha256": "e9d8ebf845c413e981c175bfe49a3bfa9b3dcce2a3ba54875ee5df5a58639fbe",
+      "size": 23143499,
       "role": "reranker",
       "dtype": "q8",
       "expectedDimension": 1
     },
     {
+      "model": "Xenova/ms-marco-MiniLM-L-6-v2",
       "filename": "Xenova/ms-marco-MiniLM-L-6-v2/config.json",
       "sha256": "d827779a72d27ae68cf878a6fc2e954542663fe21ca515d9f4783fc96be2d37e",
+      "size": 824,
       "role": "reranker-config",
       "dtype": "json",
       "expectedDimension": 1
     },
     {
+      "model": "Xenova/ms-marco-MiniLM-L-6-v2",
       "filename": "Xenova/ms-marco-MiniLM-L-6-v2/tokenizer.json",
       "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+      "size": 711396,
       "role": "reranker-tokenizer",
       "dtype": "json",
       "expectedDimension": 1
     },
     {
+      "model": "Xenova/ms-marco-MiniLM-L-6-v2",
       "filename": "Xenova/ms-marco-MiniLM-L-6-v2/tokenizer_config.json",
       "sha256": "0b29c7bfc889e53b36d9dd3e686dd4300f6525110eaa98c76a5dafceb2029f53",
+      "size": 1242,
       "role": "reranker-tokenizer-config",
       "dtype": "json",
       "expectedDimension": 1

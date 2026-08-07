@@ -11,6 +11,14 @@ import {
   KnowledgeGraphStats,
   EntityType,
 } from "../utils/graphTypes";
+import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
+
+export class KnowledgeGraphEmbeddingMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KnowledgeGraphEmbeddingMismatchError";
+  }
+}
 
 /**
  * In-memory knowledge graph wrapping graphology DirectedGraph.
@@ -21,11 +29,23 @@ export class KnowledgeGraph {
   private topicId: string;
   private logger: Logger;
   private communities: GraphCommunity[] = [];
+  private metadata: KnowledgeGraphData["metadata"];
+  private loadedFromPersistence = false;
 
   constructor(topicId: string) {
     this.topicId = topicId;
     this.graph = new Graph({ type: "directed", multi: true, allowSelfLoops: false });
     this.logger = new Logger("KnowledgeGraph");
+    const now = Date.now();
+    this.metadata = {
+      topicId,
+      createdAt: now,
+      updatedAt: now,
+      entityCount: 0,
+      edgeCount: 0,
+      communityCount: 0,
+      embeddingModel: "",
+    };
   }
 
   // ── Entity operations ──────────────────────────────────────────────
@@ -218,13 +238,12 @@ export class KnowledgeGraph {
       relationships,
       communities: [],
       metadata: {
+        ...this.metadata,
         topicId: this.topicId,
-        createdAt: Date.now(),
         updatedAt: Date.now(),
         entityCount: entities.length,
         edgeCount: relationships.length,
         communityCount: 0,
-        embeddingModel: "",
       },
     };
   }
@@ -303,13 +322,12 @@ export class KnowledgeGraph {
       relationships: this.getAllRelationships(),
       communities: this.communities,
       metadata: {
+        ...this.metadata,
         topicId: this.topicId,
-        createdAt: Date.now(),
         updatedAt: Date.now(),
         entityCount: this.graph.order,
         edgeCount: this.graph.size,
         communityCount: this.communities.length,
-        embeddingModel: "",
       },
     };
   }
@@ -323,7 +341,45 @@ export class KnowledgeGraph {
       kg.addRelationship(rel);
     }
     kg.communities = data.communities;
+    kg.metadata = { ...data.metadata };
+    kg.loadedFromPersistence = true;
     return kg;
+  }
+
+  setEmbeddingFingerprint(fingerprint: EmbeddingFingerprint): void {
+    this.metadata = {
+      ...this.metadata,
+      embeddingModel: fingerprint.model,
+      embeddingDimension: fingerprint.dimension,
+      embeddingFingerprint: { ...fingerprint },
+      updatedAt: Date.now(),
+    };
+  }
+
+  validateEmbeddingFingerprint(actual: EmbeddingFingerprint): void {
+    if (!this.loadedFromPersistence) {
+      return;
+    }
+    const expected = this.metadata.embeddingFingerprint;
+    if (!expected) {
+      throw new KnowledgeGraphEmbeddingMismatchError(
+        `Knowledge graph for topic "${this.topicId}" has no embedding fingerprint. Reindex the topic before graph retrieval.`,
+      );
+    }
+    const fields: Array<keyof EmbeddingFingerprint> = [
+      "backendKind",
+      "providerFormat",
+      "model",
+      "revision",
+      "dimension",
+      "endpointHash",
+    ];
+    const mismatch = fields.find((field) => expected[field] !== actual[field]);
+    if (mismatch) {
+      throw new KnowledgeGraphEmbeddingMismatchError(
+        `Knowledge graph embedding fingerprint mismatch (${mismatch}: indexed=${String(expected[mismatch])}, current=${String(actual[mismatch])}). Reindex the topic with the active embedding model.`,
+      );
+    }
   }
 
   // ── Statistics ─────────────────────────────────────────────────────

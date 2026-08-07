@@ -22,12 +22,21 @@ import { WorkspaceContextProvider } from "./workspaceContext";
 
 const logger = new Logger("RAGTool");
 
+export interface RAGToolRegistration extends vscode.Disposable {
+  readonly tool: RAGTool;
+  disposeAsync(): Promise<void>;
+}
+
 export class RAGTool {
   private embeddingService: EmbeddingService;
   private config: IConfigProvider;
   private llmProvider: ILLMProvider;
   private ragQueryService: RAGQueryService;
   private cleanupSubscription: { unsubscribe(): void };
+  private readonly activeQueries = new Set<Promise<unknown>>();
+  private readonly activeControllers = new Set<AbortController>();
+  private acceptingQueries = true;
+  private disposePromise: Promise<void> | undefined;
 
   constructor(
     topicManager: TopicManager,
@@ -58,7 +67,7 @@ export class RAGTool {
     llmProvider: ILLMProvider,
     memoryStore?: MemoryStore,
     checkpointer?: LanceDBCheckpointSaver,
-  ): vscode.Disposable {
+  ): RAGToolRegistration {
     const tool = new RAGTool(topicManager, embeddingService, config, llmProvider, memoryStore, checkpointer);
 
     // Register as a language model tool
@@ -70,6 +79,9 @@ export class RAGTool {
         const params = options.input;
         // Convert VS Code CancellationToken to AbortSignal
         const abortController = new AbortController();
+        if (token.isCancellationRequested) {
+          abortController.abort(new Error("RAG query cancelled"));
+        }
         const onCancel = token.onCancellationRequested(() => abortController.abort());
         try {
           const result = await tool.executeQuery(params, abortController.signal);
@@ -89,11 +101,18 @@ export class RAGTool {
     });
 
     // Create a composite disposable that disposes both the tool registration and the RAGTool instance
-    const compositeDisposable = vscode.Disposable.from(ragTool, {
+    const registration = vscode.Disposable.from(ragTool);
+    const compositeDisposable: RAGToolRegistration = {
+      tool,
       dispose: () => {
-        tool.dispose();
+        registration.dispose();
+        tool.stopAdmission();
       },
-    });
+      disposeAsync: async () => {
+        registration.dispose();
+        await tool.disposeAsync();
+      },
+    };
 
     context.subscriptions.push(compositeDisposable);
     return compositeDisposable;
@@ -102,12 +121,37 @@ export class RAGTool {
   /**
    * Execute a RAG query (supports both simple and agentic modes)
    */
-  private async executeQuery(params: RAGQueryParams, signal?: AbortSignal): Promise<RAGQueryResult> {
+  public async executeQuery(params: RAGQueryParams, signal?: AbortSignal): Promise<RAGQueryResult> {
+    if (!this.acceptingQueries) {
+      throw new Error("RAGnarōk is shutting down and is not accepting new queries");
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason ?? new Error("RAG query cancelled"));
+    if (signal?.aborted) {
+      abort();
+    } else {
+      signal?.addEventListener("abort", abort, { once: true });
+    }
+    this.activeControllers.add(controller);
+    const query = this.executeQueryCore(params, controller.signal);
+    this.activeQueries.add(query);
     try {
+      return await query;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      this.activeQueries.delete(query);
+      this.activeControllers.delete(controller);
+    }
+  }
+
+  private async executeQueryCore(params: RAGQueryParams, signal: AbortSignal): Promise<RAGQueryResult> {
+    try {
+      signal.throwIfAborted();
       logger.info(`Executing RAG query: "${params.query}" for topic: "${params.topic}"`);
 
       // Ensure embedding service is ready
       await this.embeddingService.initialize();
+      signal.throwIfAborted();
 
       // Optionally inject workspace context when LLM refinement is plausible
       const includeWorkspace = this.config.get<boolean>(VSCODE_CONFIG.INCLUDE_WORKSPACE, true);
@@ -123,6 +167,7 @@ export class RAGTool {
           maxCodeLength: 1000,
         });
         workspaceContext = JSON.stringify(wsContext, null, 2);
+        signal.throwIfAborted();
       } else if (includeWorkspace) {
         logger.debug("Skipping workspace context: LLM refinement unavailable or not expected", {
           query: params.query.substring(0, 100),
@@ -162,10 +207,27 @@ export class RAGTool {
   /**
    * Dispose of all resources and clean up.
    */
-  private dispose(): void {
-    logger.info("Disposing RAGTool");
-    this.cleanupSubscription.unsubscribe();
-    void this.ragQueryService.dispose();
-    logger.info("RAGTool disposed");
+  private stopAdmission(): void {
+    if (!this.acceptingQueries) {
+      return;
+    }
+    this.acceptingQueries = false;
+    for (const controller of this.activeControllers) {
+      controller.abort(new Error("RAGnarōk is shutting down"));
+    }
+  }
+
+  public disposeAsync(): Promise<void> {
+    if (!this.disposePromise) {
+      this.disposePromise = (async () => {
+        logger.info("Disposing RAGTool");
+        this.stopAdmission();
+        await Promise.allSettled([...this.activeQueries]);
+        this.cleanupSubscription.unsubscribe();
+        await this.ragQueryService.dispose();
+        logger.info("RAGTool disposed");
+      })();
+    }
+    return this.disposePromise;
   }
 }

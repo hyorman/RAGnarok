@@ -132,6 +132,28 @@ Notes:
 - **In-Memory Graph**: Uses [graphology](https://graphology.github.io/) `DirectedGraph` with LanceDB persistence via `KnowledgeGraphStore` — one graph per topic
 - **Community Detection**: Louvain algorithm for automatic community/cluster identification across entities
 
+#### MCP graph visualization
+
+The MCP server's curator/admin-only `rag_graph_visualize` tool accepts exactly
+`{ source: "knowledge", topic, maxNodes? }`,
+`{ source: "memory", memoryScope: "workspace", maxNodes? }`, or
+`{ source: "memory", memoryScope: "branch", branch, maxNodes? }`. It returns
+the deterministic `ragnarok.graph.visualization.v1` document; the unpublished
+layout-v1 contract has been removed. The default is 500 nodes, the accepted
+range is 1 through 2,000, and output is capped at 10,000 edges and the MCP
+response-byte limit.
+
+Authorized documents include full persisted node/edge descriptions,
+provenance, confidence, scope/branch fields, and arbitrary metadata, but never
+embedding vectors. Shared HTTP supports knowledge graphs for curators/admins,
+sanitizes server-managed paths, and returns `GRAPH_MEMORY_UNAVAILABLE` for both
+memory scopes; readers cannot list or invoke the tool. MCP Apps hosts load the
+self-contained `ui://ragnarok/graph` resource as
+`text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. The app provides
+loading, empty, error, keyboard, screen-reader, touch, detail-panel, and viewport
+reset behavior. The VS Code extension webview remains deferred. See the
+[MCP server graph contract](packages/mcp-server/README.md#graph-visualization).
+
 ### 🧠 **Standalone Memory Module**
 
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
@@ -384,7 +406,7 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   // Chunk overlap for context preservation
   "ragnarok.chunkOverlap": 50,
 
-  // Retrieval strategy: hybrid, vector, ensemble, bm25
+  // Retrieval strategy: vector, hybrid, ensemble, bm25, graph, graph_hybrid
   "ragnarok.retrievalStrategy": "hybrid",
 
   // Path to shared/common RAG database (read-only topics)
@@ -454,6 +476,20 @@ copilot-rag/
 | **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                   |
 | **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio + HTTP transports) |
 
+### MCP 0.5.0 protocol
+
+RAGnarok 0.5.0 serves MCP protocol `2026-07-28` only. Clients must use
+`server/discover` or modern version negotiation; legacy `initialize` is
+rejected. There is no compatibility mode and no `Mcp-Session-Id`.
+
+HTTP MCP traffic is POST-only: `GET /mcp` and `DELETE /mcp` return `405`.
+Shared bearer credentials are evaluated on every request, so token rotation
+affects the next request and there are no sessions to invalidate. Cacheable
+discovery, list, and resource-read results advertise `ttlMs=0` and
+`cacheScope=private`. See the
+[MCP server guide](packages/mcp-server/README.md) for client headers and the
+complete role matrix.
+
 ### Build & Test Commands
 
 ```bash
@@ -463,6 +499,9 @@ npm run test:all         # Run all tests (core → vscode → mcp-server)
 npm run test:core        # Run core package tests only
 npm test                 # Run VS Code extension tests only
 npm run test:mcp         # Run MCP server tests only
+npm run bench:smoke      # Fast deterministic retrieval/graph/reranker gate
+npm run bench:release    # Pinned release benchmark; missing inputs fail
+npm run test:docs        # Validate canonical documentation links/contracts
 npm run lint             # Lint all packages
 npm run format           # Format all source and test files
 npm run clean            # Clean all build artifacts
@@ -495,13 +534,41 @@ The MCP server exposes these tools to any MCP-compatible agent:
 | `rag_reset_memory`           | Reset incompatible or unwanted standalone memory after confirmation                      |
 | `rag_storage_status`         | Inspect storage-format readiness and reset requirements                                  |
 
-The MCP server exposes 23 tools in total, including the three reranker operations. HTTP uses separate read and write tokens: `RAGNAROK_API_KEY` creates reader sessions and the distinct `RAGNAROK_WRITE_API_KEY` creates writer sessions. Non-loopback binds require authentication and restricted CORS; local loopback remains usable without tokens.
+The MCP server exposes up to 27 tools, including upload-handle operations and
+the three reranker operations. Shared HTTP uses distinct reader, curator, and
+admin tokens. Non-loopback/shared deployments require verified HTTPS, using
+either native TLS or an explicitly trusted TLS-terminating proxy, plus an exact
+browser Origin. Local loopback remains usable without tokens. The complete
+surface and role matrix are in the
+[MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility
 
-Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty unversioned storage fails closed and must be backed up/reset explicitly with `--reset-storage`, `RAGNAROK_RESET_STORAGE=1`, or the VS Code confirmation prompt. Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
+Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty 0.3/unversioned storage fails closed and must be converted with the supported offline migrator; VS Code offers a preview before migration and never silently resets it. See [MIGRATION.md](MIGRATION.md). Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
 
-**Single-writer constraint:** Only one process (VS Code window, MCP server instance, or CLI tool) may access a storage directory at a time. A second process fails fast with an error naming the first holder's PID instead of silently corrupting data. See [ARCHITECTURE.md §6](ARCHITECTURE.md#6-concurrency-model) for the complete concurrency and locking model.
+**Single-writer constraint:** Only one process (VS Code window, MCP server
+instance, or CLI tool) may access a storage directory at a time. A second
+process fails fast instead of silently corrupting data. See
+[the architecture](ARCHITECTURE.md#storage) for the complete concurrency and
+locking model.
+
+### Delivery and operations
+
+- [Architecture](ARCHITECTURE.md)
+- [Storage migration](MIGRATION.md)
+- [Operations and recovery](docs/OPERATIONS.md)
+- [Shared-server security](docs/SECURITY.md)
+- [Benchmark gates](docs/BENCHMARKS.md)
+- [Release evidence and publication](docs/RELEASE.md)
+
+Release evidence is truthful by construction: required jobs are recorded as
+passed, failed, or unrun. Docker runtime and all six installed VSIX platform
+combinations are release blockers until their designated CI environments
+execute them; a local compile or package build does not imply those gates
+passed. The release benchmark also exits nonzero with `status: "blocked"` when
+aggregate graph quality, child-process peak RSS, isolated index time, or exact
+package-size measurements are absent; deterministic smoke tests do not stand
+in for those declared measurements.
 
 ---
 
@@ -637,17 +704,12 @@ Complete: Documents ready for retrieval
 
 ## 📊 Performance
 
-### Benchmarks (M1 Mac, 16GB RAM)
-
-| Operation                       | Time   | Notes                       |
-| ------------------------------- | ------ | --------------------------- |
-| Load PDF (10 pages)             | ~2s    | Using PDFLoader             |
-| Chunk document (50 chunks)      | ~100ms | Semantic chunking           |
-| Generate embeddings (50 chunks) | ~3-5s  | Local Transformers.js model |
-| Store in LanceDB                | ~100ms | File-based persistence      |
-| Hybrid search (k=5)             | ~50ms  | Vector + BM25               |
-| Query planning (LLM)            | ~2s    | GPT-4o via Copilot          |
-| Query planning (heuristic)      | <10ms  | Rule-based                  |
+Performance depends on CPU architecture, model revision, corpus, storage, and
+Node version. Reproducible smoke and release-grade benchmark commands, pinned
+inputs, quality thresholds, latency/memory/package budgets, and the reviewed
+baseline update process are documented in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md). Historical approximate timings are
+not treated as release evidence.
 
 ### Optimization Tips
 
@@ -656,7 +718,8 @@ Complete: Documents ready for retrieval
 3. **Adjust chunk size** based on document type
 4. **Use simple mode** for fast queries
 5. **Batch document uploads** for efficiency
-6. **LanceDB scales well** - no size limits like in-memory stores
+6. **Measure your corpus** — capacity and latency are bounded by local storage,
+   memory, native dependencies, and workload shape
 
 ---
 
@@ -686,7 +749,8 @@ npm test
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Open an issue before large changes and include the relevant compile, lint,
+test, benchmark, migration, or packaging evidence with the pull request.
 
 ### Development Setup
 

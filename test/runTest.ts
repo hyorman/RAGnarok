@@ -4,6 +4,8 @@
  */
 
 import * as path from "path";
+import { mkdtemp, readFile, rm } from "fs/promises";
+import { tmpdir } from "os";
 import { runTests } from "@vscode/test-electron";
 
 const EXTENSION_HOST_ENV_KEYS = [
@@ -21,6 +23,7 @@ const EXTENSION_HOST_ENV_KEYS = [
 
 async function main() {
   const savedEnv = new Map<string, string | undefined>();
+  let testProfileDir: string | undefined;
   try {
     // When tests are launched from inside a VS Code extension host, Electron/VS Code
     // bootstrap variables leak into the child process. In particular,
@@ -36,24 +39,41 @@ async function main() {
 
     // The path to the extension test script
     const extensionTestsPath = path.resolve(__dirname, "./suite/index");
+    const manifest = JSON.parse(await readFile(path.resolve(__dirname, "../../package.json"), "utf8")) as {
+      engines: { vscode: string };
+    };
+    const minimumVersion = manifest.engines.vscode.replace(/^[^\d]*/, "");
+    const requestedVersion = process.env.VSCODE_TEST_VERSION ?? minimumVersion;
+    testProfileDir = await mkdtemp(path.join(tmpdir(), "ragnarok-vscode-test-"));
 
-    // Download VS Code, unzip it and run the integration test
+    // Run against the declared minimum by default. CI can set
+    // VSCODE_TEST_VERSION=stable for a second compatibility lane.
     await runTests({
       extensionDevelopmentPath,
       extensionTestsPath,
-      // Optional: Specify a version of VS Code to use
-      // version: 'stable', // or 'insiders', or a specific version like '1.85.0'
+      version: requestedVersion,
+      extensionTestsEnv: {
+        ...process.env,
+        RAGNAROK_EXTENSION_HOST_TEST: "1",
+      },
 
-      // Optional: Specify launch arguments
       launchArgs: [
+        "--user-data-dir",
+        path.join(testProfileDir, "user-data"),
+        "--extensions-dir",
+        path.join(testProfileDir, "extensions"),
         "--disable-extensions", // Disable other extensions
         "--disable-workspace-trust", // Disable workspace trust dialog
+        "--enable-proposed-api=hyorman.ragnarok",
       ],
     });
   } catch (err) {
     console.error("Failed to run tests:", err);
     process.exit(1);
   } finally {
+    if (testProfileDir) {
+      await rm(testProfileDir, { recursive: true, force: true });
+    }
     for (const [key, value] of savedEnv) {
       if (value === undefined) {
         delete process.env[key];

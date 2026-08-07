@@ -260,6 +260,21 @@ describe("MemoryGraph", function () {
       graph.addRelationship(createTestRelationship({ id: "r1", sourceId: "e1", targetId: "e3" }));
       expect(graph.edgeCount).to.equal(1);
     });
+
+    it("preserves multiple relationship types between the same ordered entity pair", function () {
+      graph.addEntity(createTestEntity({ id: "e1" }));
+      graph.addEntity(createTestEntity({ id: "e2" }));
+      graph.addRelationship(createTestRelationship({ id: "uses", type: "uses" }));
+      graph.addRelationship(createTestRelationship({ id: "depends", type: "depends_on" }));
+
+      expect(
+        graph
+          .getAllRelationships()
+          .map((relationship) => relationship.type)
+          .sort(),
+      ).to.deep.equal(["depends_on", "uses"]);
+      expect(MemoryGraph.fromJSON(graph.toJSON()).edgeCount).to.equal(2);
+    });
   });
 
   describe("getEntityRelationships", function () {

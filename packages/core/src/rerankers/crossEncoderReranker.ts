@@ -21,7 +21,17 @@ import { sigmoid } from "./reranker";
 type TransformersModule = any;
 
 const DEFAULT_MAX_CANDIDATES = 20;
+// Cross-encoder activations scale with both token count and batch width. Four
+// pairs keeps the default bounded for long documents while still amortizing
+// tokenizer/model-call overhead. Callers with a measured memory budget can
+// continue to override this through RerankerOptions.batchSize.
+const DEFAULT_BATCH_SIZE = 4;
 const MAX_DOCUMENT_CHARS = 1500; // ~375 tokens at 4 chars/token, leaving room for query
+
+interface ModelLease {
+  model: any;
+  tokenizer: any;
+}
 
 export class CrossEncoderReranker implements Reranker {
   private model: any = null;
@@ -32,16 +42,31 @@ export class CrossEncoderReranker implements Reranker {
   private logger: Logger;
   private modelName: string;
   private maxCandidates: number;
+  private batchSize: number;
   private registry: RerankerModelRegistry;
+  private switchMutex = new Mutex();
+  private modelLeaseCounts = new Map<any, number>();
+  private modelDrainWaiters = new Map<any, Array<() => void>>();
+  private disposed = false;
+  private disposePromise: Promise<void> | null = null;
 
   constructor(modelName?: string, options?: RerankerOptions & { registry?: RerankerModelRegistry }) {
     this.logger = new Logger("CrossEncoderReranker");
     this.registry = options?.registry ?? RerankerModelRegistry.getInstance();
     this.modelName = modelName ?? this.registry.getDefaultModel();
     this.maxCandidates = options?.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
+    this.batchSize = Math.max(1, Math.floor(options?.batchSize ?? DEFAULT_BATCH_SIZE));
   }
 
   async initialize(): Promise<void> {
+    this.assertNotDisposed();
+    await this.switchMutex.runExclusive(async () => {
+      this.assertNotDisposed();
+      await this.initializeUnlocked();
+    });
+  }
+
+  private async initializeUnlocked(): Promise<void> {
     if (this.model && this.tokenizer) {
       return;
     }
@@ -67,7 +92,7 @@ export class CrossEncoderReranker implements Reranker {
   }
 
   isAvailable(): boolean {
-    return this.model !== null && this.tokenizer !== null;
+    return !this.disposed && this.model !== null && this.tokenizer !== null;
   }
 
   async rerank(
@@ -77,6 +102,7 @@ export class CrossEncoderReranker implements Reranker {
     signal?: AbortSignal,
   ): Promise<ScoredDocument[]> {
     signal?.throwIfAborted();
+    this.assertNotDisposed();
     if (candidates.length === 0) {
       return [];
     }
@@ -92,19 +118,31 @@ export class CrossEncoderReranker implements Reranker {
     const startTime = Date.now();
 
     try {
-      if (!this.isAvailable()) {
-        await this.initialize();
+      const lease = await this.switchMutex.runExclusive(async () => {
+        this.assertNotDisposed();
+        if (!this.isAvailable()) {
+          await this.initializeUnlocked();
+        }
+        signal?.throwIfAborted();
+        this.assertNotDisposed();
+        return this.acquireModelLease();
+      });
+      let scores: number[];
+      try {
+        scores = await this.scorePairs(query, capped, lease, signal);
+        signal?.throwIfAborted();
+      } finally {
+        this.releaseModelLease(lease.model);
       }
-      signal?.throwIfAborted();
-      // Score all (query, document) pairs
-      const scores = await this.scorePairs(query, capped);
-      signal?.throwIfAborted();
 
       // Combine scores with documents, preserving original scores
       const reranked: ScoredDocument[] = capped.map((candidate, i) => ({
         document: candidate.document,
         score: scores[i],
+        scoreKind: "cross_encoder_probability",
         originalScore: candidate.score,
+        originalScoreKind: candidate.scoreKind,
+        originalComponentScores: candidate.componentScores,
       }));
 
       // Sort by reranker score descending, take topK
@@ -123,6 +161,9 @@ export class CrossEncoderReranker implements Reranker {
       if (signal?.aborted) {
         throw signal.reason ?? error;
       }
+      if (this.disposed) {
+        throw error;
+      }
       this.logger.error("Reranking failed, returning original order", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -132,12 +173,21 @@ export class CrossEncoderReranker implements Reranker {
   }
 
   async dispose(): Promise<void> {
-    const model = this.model;
-    this.model = null;
-    this.tokenizer = null;
-    this.transformers = null;
-    await this.releaseModel(model);
-    this.logger.info("CrossEncoderReranker disposed");
+    if (this.disposePromise) {
+      return this.disposePromise;
+    }
+    this.disposed = true;
+    this.disposePromise = this.switchMutex.runExclusive(async () => {
+      const model = this.model;
+      this.model = null;
+      this.tokenizer = null;
+      this.transformers = null;
+      this.initPromise = null;
+      await this.waitForModelDrain(model);
+      await this.releaseModel(model);
+      this.logger.info("CrossEncoderReranker disposed");
+    });
+    return this.disposePromise;
   }
 
   getCurrentModel(): string {
@@ -149,6 +199,7 @@ export class CrossEncoderReranker implements Reranker {
   }
 
   async switchModel(modelName: string): Promise<void> {
+    this.assertNotDisposed();
     // Validate model name — the registry's resolveModelIdentifier handles
     // path traversal checks (blocks "..", absolute paths including Windows drive letters)
     try {
@@ -165,25 +216,34 @@ export class CrossEncoderReranker implements Reranker {
       return;
     }
 
-    this.logger.info("Switching reranker model", { from: this.modelName, to: modelName });
+    await this.switchMutex.runExclusive(async () => {
+      this.assertNotDisposed();
+      if (modelName === this.modelName && this.isAvailable()) {
+        return;
+      }
+      this.logger.info("Switching reranker model", { from: this.modelName, to: modelName });
 
-    // Load into a replacement first; the working model remains available if
-    // validation, download, tokenization, or ONNX initialization fails.
-    const replacement = new CrossEncoderReranker(modelName, {
-      maxCandidates: this.maxCandidates,
-      registry: this.registry,
+      // A replacement is completely initialized before the active generation
+      // is published. Existing leases retain the old model until their
+      // inference finishes; new calls immediately lease the replacement.
+      const replacement = new CrossEncoderReranker(modelName, {
+        maxCandidates: this.maxCandidates,
+        batchSize: this.batchSize,
+        registry: this.registry,
+      });
+      await replacement.initialize();
+      const previousModel = this.model;
+      this.model = replacement.model;
+      this.tokenizer = replacement.tokenizer;
+      this.transformers = replacement.transformers;
+      this.modelName = replacement.modelName;
+      this.initPromise = null;
+      replacement.model = null;
+      replacement.tokenizer = null;
+      replacement.transformers = null;
+      await this.waitForModelDrain(previousModel);
+      await this.releaseModel(previousModel);
     });
-    await replacement.initialize();
-    const previousModel = this.model;
-    this.model = replacement.model;
-    this.tokenizer = replacement.tokenizer;
-    this.transformers = replacement.transformers;
-    this.modelName = replacement.modelName;
-    this.initPromise = null;
-    replacement.model = null;
-    replacement.tokenizer = null;
-    replacement.transformers = null;
-    await this.releaseModel(previousModel);
   }
 
   async listAvailableModels(): Promise<AvailableRerankerModel[]> {
@@ -200,44 +260,56 @@ export class CrossEncoderReranker implements Reranker {
   // Private methods
   // ---------------------------------------------------------------------------
 
-  private async scorePairs(query: string, candidates: ScoredDocument[]): Promise<number[]> {
-    const texts = candidates.map((c) => {
-      const content = c.document.pageContent;
-      // Truncate long documents to fit model context window
-      return content.length > MAX_DOCUMENT_CHARS ? content.substring(0, MAX_DOCUMENT_CHARS) : content;
-    });
-
-    // Tokenize all pairs at once — text_pair must be passed as an option
-    // in @huggingface/transformers (v3), not as a positional argument
-    const inputs = this.tokenizer(Array(texts.length).fill(query), {
-      text_pair: texts,
-      padding: true,
-      truncation: true,
-    });
-
-    // Forward pass — get logits
-    const output = await this.model(inputs);
-
-    // Extract scores: output.logits is a Tensor of shape [N, 1] or [N, 2]
-    const logits = output.logits;
+  private async scorePairs(
+    query: string,
+    candidates: ScoredDocument[],
+    lease: ModelLease,
+    signal?: AbortSignal,
+  ): Promise<number[]> {
     const scores: number[] = [];
 
-    for (let i = 0; i < candidates.length; i++) {
-      // For binary classification models, use the positive class logit
-      // For single-logit models, use the raw logit
-      const dims = logits.dims;
-      let rawScore: number;
-      if (dims.length === 2 && dims[1] === 1) {
-        // Single logit output [N, 1]
-        rawScore = logits.data[i];
-      } else if (dims.length === 2 && dims[1] >= 2) {
-        // Two-class output [N, 2] — use positive class
-        rawScore = logits.data[i * dims[1] + 1];
-      } else {
-        // Fallback: flat array
-        rawScore = logits.data[i];
+    for (let offset = 0; offset < candidates.length; offset += this.batchSize) {
+      signal?.throwIfAborted();
+      const batch = candidates.slice(offset, offset + this.batchSize);
+      const texts = batch.map((candidate) => {
+        const content = candidate.document.pageContent;
+        return content.length > MAX_DOCUMENT_CHARS ? content.substring(0, MAX_DOCUMENT_CHARS) : content;
+      });
+      const inputs = lease.tokenizer(Array(texts.length).fill(query), {
+        text_pair: texts,
+        padding: true,
+        truncation: true,
+      });
+      signal?.throwIfAborted();
+      const output = await lease.model(inputs);
+      signal?.throwIfAborted();
+      const logits = output?.logits;
+      if (!logits?.dims || !logits?.data) {
+        throw new Error("Cross-encoder returned no logits");
       }
-      scores.push(sigmoid(rawScore));
+      const dims = Array.from(logits.dims) as number[];
+      if (dims.length === 2 && dims[0] !== batch.length) {
+        throw new Error(`Cross-encoder returned ${dims[0]} rows for a batch of ${batch.length}`);
+      }
+      for (let i = 0; i < batch.length; i++) {
+        let probability: number;
+        if (dims.length === 2 && dims[1] === 1) {
+          probability = sigmoid(Number(logits.data[i]));
+        } else if (dims.length === 2 && dims[1] === 2) {
+          // softmax([negative, positive]).positive == sigmoid(positive-negative)
+          const negative = Number(logits.data[i * 2]);
+          const positive = Number(logits.data[i * 2 + 1]);
+          probability = sigmoid(positive - negative);
+        } else if (dims.length === 1 && dims[0] === batch.length) {
+          probability = sigmoid(Number(logits.data[i]));
+        } else {
+          throw new Error(`Unsupported cross-encoder logits shape [${dims.join(", ")}]`);
+        }
+        if (!Number.isFinite(probability)) {
+          throw new Error("Cross-encoder returned a non-finite score");
+        }
+        scores.push(probability);
+      }
     }
 
     return scores;
@@ -253,13 +325,21 @@ export class CrossEncoderReranker implements Reranker {
     // Resolve to bundled local path if available, with path traversal protection
     const resolvedModel = this.registry.resolveModelIdentifier(this.modelName);
 
-    this.tokenizer = await AutoTokenizer.from_pretrained(resolvedModel);
-    this.model = await AutoModelForSequenceClassification.from_pretrained(resolvedModel, {
+    const tokenizer = await AutoTokenizer.from_pretrained(resolvedModel);
+    const model = await AutoModelForSequenceClassification.from_pretrained(resolvedModel, {
       dtype: "q8",
     });
+    this.tokenizer = tokenizer;
+    this.model = model;
 
     const elapsed = Date.now() - startTime;
     this.logger.info("Cross-encoder model loaded", { model: this.modelName, elapsed });
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) {
+      throw new Error("CrossEncoderReranker has been disposed");
+    }
   }
 
   private async loadTransformers(): Promise<TransformersModule> {
@@ -289,5 +369,37 @@ export class CrossEncoderReranker implements Reranker {
     if (model && typeof model.dispose === "function") {
       await model.dispose();
     }
+  }
+
+  private acquireModelLease(): ModelLease {
+    if (!this.model || !this.tokenizer) {
+      throw new Error("Cross-encoder model is not initialized");
+    }
+    this.modelLeaseCounts.set(this.model, (this.modelLeaseCounts.get(this.model) ?? 0) + 1);
+    return { model: this.model, tokenizer: this.tokenizer };
+  }
+
+  private releaseModelLease(model: any): void {
+    const remaining = (this.modelLeaseCounts.get(model) ?? 1) - 1;
+    if (remaining > 0) {
+      this.modelLeaseCounts.set(model, remaining);
+      return;
+    }
+    this.modelLeaseCounts.delete(model);
+    for (const resolve of this.modelDrainWaiters.get(model) ?? []) {
+      resolve();
+    }
+    this.modelDrainWaiters.delete(model);
+  }
+
+  private async waitForModelDrain(model: any): Promise<void> {
+    if (!model || !this.modelLeaseCounts.has(model)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const waiters = this.modelDrainWaiters.get(model) ?? [];
+      waiters.push(resolve);
+      this.modelDrainWaiters.set(model, waiters);
+    });
   }
 }

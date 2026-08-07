@@ -1,14 +1,13 @@
 /**
  * Unit tests for the rag_memory tool handler.
  *
- * Strategy: reuse the captureHandlers pattern from tools.test.ts —
- * spy on McpServer.prototype.tool to capture the registered handler,
- * then invoke it directly with a stubbed MemoryStore.
+ * Strategy: reuse the registerTool capture pattern from tools.test.ts, then
+ * invoke the registered handler directly with a stubbed MemoryStore.
  */
 
 import { expect } from "chai";
 import sinon from "sinon";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { registerTools } from "../src/tools";
 import type {
   TopicManager,
@@ -32,6 +31,20 @@ function parseResponse(result: any): any {
 }
 
 type ToolHandler = (...args: any[]) => Promise<any>;
+type CapturedTool = {
+  name: string;
+  config: {
+    description?: string;
+    inputSchema?: { safeParse(value: unknown): unknown };
+    annotations?: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
+  };
+  handler: ToolHandler;
+};
+
+function makeServerContext(signal = new AbortController().signal): any {
+  return { mcpReq: { signal } };
+}
 
 /** Minimal stubs for the non-memory dependencies (not under test). */
 function makeBaseDeps() {
@@ -77,16 +90,13 @@ function makeBaseDeps() {
  * Optionally passes a MemoryStore to registerTools.
  */
 function captureHandlers(memoryStore?: MemoryStore, deployment?: "local" | "shared"): Record<string, ToolHandler> {
-  const handlers: Record<string, ToolHandler> = {};
-  const server = new McpServer({ name: "test", version: "0.0.0" });
-
-  const originalTool = server.tool.bind(server);
-  server.tool = function (this: McpServer, ...args: any[]) {
-    const name = args[0] as string;
-    const handler = args[args.length - 1] as ToolHandler;
-    handlers[name] = handler;
-    return (originalTool as (...a: unknown[]) => unknown).apply(this, args);
-  } as any;
+  const captured: CapturedTool[] = [];
+  const server = {
+    registerTool(name: string, config: CapturedTool["config"], handler: CapturedTool["handler"]) {
+      captured.push({ name, config, handler });
+      return { name };
+    },
+  } as unknown as McpServer;
 
   const deps = makeBaseDeps();
 
@@ -104,7 +114,9 @@ function captureHandlers(memoryStore?: MemoryStore, deployment?: "local" | "shar
     deployment,
   );
 
-  return handlers;
+  return Object.fromEntries(
+    captured.map(({ name, handler }) => [name, (args: any, context = makeServerContext()) => handler(args, context)]),
+  );
 }
 
 /** Build a fake MemoryEntry */
@@ -191,15 +203,19 @@ describe("rag_memory tool", () => {
   describe("store", () => {
     it("calls memoryStore.store() with correct params", async () => {
       const entry = makeEntry();
+      const signal = new AbortController().signal;
       memoryStore.store.resolves(entry);
 
-      const result = await handlers.rag_memory({
-        action: "store",
-        content: "remember this",
-        scope: "branch",
-        branch: "feature-x",
-        tags: ["tag1"],
-      });
+      const result = await handlers.rag_memory(
+        {
+          action: "store",
+          content: "remember this",
+          scope: "branch",
+          branch: "feature-x",
+          tags: ["tag1"],
+        },
+        makeServerContext(signal),
+      );
       const body = parseResponse(result);
 
       expect(memoryStore.store.calledOnce).to.be.true;
@@ -208,6 +224,7 @@ describe("rag_memory tool", () => {
         scope: "branch",
         branch: "feature-x",
         tags: ["tag1"],
+        signal,
       });
       expect(body.action).to.equal("store");
       expect(body.memory.id).to.equal("mem-1");
@@ -262,16 +279,20 @@ describe("rag_memory tool", () => {
         memories: [{ entry: makeEntry(), score: 0.9 }],
         entities: [],
       };
+      const signal = new AbortController().signal;
       memoryStore.recall.resolves(recallResult);
 
-      const result = await handlers.rag_memory({
-        action: "recall",
-        query: "what do I know",
-        topK: 5,
-        scope: "branch",
-        branch: "main",
-        includeEntities: true,
-      });
+      const result = await handlers.rag_memory(
+        {
+          action: "recall",
+          query: "what do I know",
+          topK: 5,
+          scope: "branch",
+          branch: "main",
+          includeEntities: true,
+        },
+        makeServerContext(signal),
+      );
       const body = parseResponse(result);
 
       expect(memoryStore.recall.calledOnce).to.be.true;
@@ -281,6 +302,7 @@ describe("rag_memory tool", () => {
         scope: "branch",
         branch: "main",
         includeEntities: true,
+        signal,
       });
       expect(body.action).to.equal("recall");
       expect(body.count).to.equal(1);
@@ -393,6 +415,47 @@ describe("rag_memory tool", () => {
       });
     });
 
+    it("derives branch scope when a branch filter is supplied", async () => {
+      memoryStore.forget.resolves(1);
+
+      await handlers.rag_memory({
+        action: "forget",
+        branch: "only-this-branch",
+        olderThan: 30,
+      });
+
+      expect(memoryStore.forget.firstCall.args[0]).to.deep.equal({
+        id: undefined,
+        scope: "branch",
+        branch: "only-this-branch",
+        olderThan: 30,
+        expired: undefined,
+      });
+    });
+
+    it("rejects unscoped or zero-day age deletion before calling the store", async () => {
+      const unscoped = await handlers.rag_memory({ action: "forget", olderThan: 30 });
+      expect(unscoped.isError).to.equal(true);
+      expect(parseResponse(unscoped).error).to.include("explicit 'scope' or 'branch'");
+
+      const zeroDay = await handlers.rag_memory({ action: "forget", scope: "workspace", olderThan: 0 });
+      expect(zeroDay.isError).to.equal(true);
+      expect(parseResponse(zeroDay).error).to.include("positive whole number");
+      expect(memoryStore.forget.called).to.equal(false);
+    });
+
+    it("rejects workspace scope combined with a branch", async () => {
+      const result = await handlers.rag_memory({
+        action: "forget",
+        scope: "workspace",
+        branch: "feature/nope",
+        olderThan: 30,
+      });
+      expect(result.isError).to.equal(true);
+      expect(parseResponse(result).error).to.include("cannot be combined");
+      expect(memoryStore.forget.called).to.equal(false);
+    });
+
     it("passes expired: true through so decayed/TTL-expired entries can be purged", async () => {
       memoryStore.forget.resolves(4);
 
@@ -412,10 +475,18 @@ describe("rag_memory tool", () => {
       expect(body.forgottenCount).to.equal(4);
     });
 
+    it("requires a destructive selector", async () => {
+      const result = await handlers.rag_memory({ action: "forget" });
+
+      expect(result.isError).to.equal(true);
+      expect(parseResponse(result).error).to.include("requires 'id', 'olderThan', or 'expired: true'");
+      expect(memoryStore.forget.called).to.equal(false);
+    });
+
     it("sets isError on exception", async () => {
       memoryStore.forget.rejects(new Error("forget failed"));
 
-      const result = await handlers.rag_memory({ action: "forget" });
+      const result = await handlers.rag_memory({ action: "forget", id: "mem-fail" });
 
       expect(result.isError).to.equal(true);
       expect(parseResponse(result).error).to.equal("forget failed");

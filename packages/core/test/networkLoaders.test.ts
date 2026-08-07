@@ -302,6 +302,26 @@ describe("GithubDocumentLoader", function () {
   // ---------------------------------------------------------------------------
 
   describe("error handling", function () {
+    it("never writes dependency progress to stdout", async function () {
+      const stdout = sinon.spy(console, "log");
+      fetchStub.rejects(new Error("deterministic mocked network failure"));
+
+      try {
+        await loader.load(
+          "https://github.com/owner/repo",
+          makeOptions("https://github.com/owner/repo", {
+            fileType: "github",
+            accessToken: "fake-token",
+          }),
+        );
+        expect.fail("Should have thrown");
+      } catch (error: any) {
+        expect(error.message).to.include("deterministic mocked network failure");
+      }
+
+      expect(stdout.called, "GitHub loader wrote non-protocol output to stdout").to.equal(false);
+    });
+
     it("should propagate API errors from GithubRepoLoader", async function () {
       // Stub fetch to simulate a GitHub API 404
       fetchStub.resolves({

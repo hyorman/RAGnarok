@@ -149,4 +149,41 @@ describe("RAGTool workspace context gating", function () {
     expect(capturedOptions[0]).to.be.a("string");
     expect(capturedOptions[0]).to.include("src/index.ts");
   });
+
+  it("handles already-aborted query signals and awaits async query cleanup", async function () {
+    const noLLMProvider: ILLMProvider = {
+      selectModel: async () => null,
+      isAvailable: async () => false,
+    };
+    const { tool } = await createConfiguredTool(noLLMProvider);
+    const controller = new AbortController();
+    controller.abort(new Error("already cancelled"));
+    try {
+      await tool.executeQuery({ topic: "Docs", query: "cancel me" }, controller.signal);
+      expect.fail("expected cancellation");
+    } catch (error) {
+      expect((error as Error).message).to.include("already cancelled");
+    }
+
+    let disposed = false;
+    tool.ragQueryService = {
+      executeQuery: async (_params: any, _context: any, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          const abort = () => reject(signal.reason);
+          if (signal.aborted) {
+            abort();
+          } else {
+            signal.addEventListener("abort", abort, { once: true });
+          }
+        }),
+      clearAgentCache: () => undefined,
+      dispose: async () => {
+        disposed = true;
+      },
+    };
+    const active = tool.executeQuery({ topic: "Docs", query: "active query" });
+    const shutdown = tool.disposeAsync();
+    await Promise.allSettled([active, shutdown]);
+    expect(disposed).to.equal(true);
+  });
 });

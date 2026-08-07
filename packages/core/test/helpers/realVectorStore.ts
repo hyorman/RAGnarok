@@ -1,6 +1,6 @@
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
-import { IConfigProvider, INotifier, TransformersEmbeddings } from "../../src/index";
+import { IConfigProvider, INotifier, TransformersEmbeddings, unitCosineToLanceDistance } from "../../src/index";
 
 export const mockConfig: IConfigProvider = {
   get: <T>(_key: string, defaultValue: T): T => defaultValue,
@@ -16,7 +16,7 @@ export const mockNotifier: INotifier = {
 
 /**
  * In-memory vector store that stores real embedding vectors and computes
- * cosine similarity. Returns L2 distance (not cosine) to be compatible with
+ * cosine similarity. Returns LanceDB squared-L2 distance to be compatible with
  * VectorRetriever.normalizeDistance() which expects L2 in [0, 2].
  */
 export class RealVectorStore extends VectorStore {
@@ -40,9 +40,9 @@ export class RealVectorStore extends VectorStore {
   }
 
   /**
-   * Returns [doc, L2_distance] pairs sorted by ascending L2 distance.
-   * VectorRetriever.normalizeDistance() converts L2 → similarity via 1 - d/2.
-   * For unit-normalized vectors: L2 = sqrt(2 - 2*cosine), so (1 - L2/2) ≈ cosine.
+   * Returns [doc, squared_L2_distance] pairs sorted by ascending distance.
+   * VectorRetriever converts this to similarity via 1 - d/2.
+   * For unit-normalized vectors: d = 2 - 2*cosine, so the score is cosine.
    */
   async similaritySearchVectorWithScore(query: number[], k: number): Promise<[LangChainDocument, number][]> {
     const scores = this.vectors.map((vec) => {
@@ -50,12 +50,12 @@ export class RealVectorStore extends VectorStore {
       const magA = Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
       const magB = Math.sqrt(query.reduce((sum, val) => sum + val * val, 0));
       const cosine = magA > 0 && magB > 0 ? dotProduct / (magA * magB) : 0;
-      // Convert cosine similarity to L2 distance for VectorRetriever compatibility
-      return Math.sqrt(Math.max(0, 2 - 2 * cosine));
+      // Use the same unit-vector score contract as production retrieval.
+      return unitCosineToLanceDistance(cosine);
     });
 
     const results = this.docs.map((doc, i) => [doc, scores[i]] as [LangChainDocument, number]);
-    // Sort by L2 distance ascending (smaller = more similar)
+    // Sort by squared-L2 distance ascending (smaller = more similar)
     results.sort((a, b) => a[1] - b[1]);
     return results.slice(0, k);
   }

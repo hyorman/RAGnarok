@@ -60,6 +60,11 @@ export interface EmbeddingBackend {
    */
   initialize(modelName?: string): Promise<void>;
 
+  /** Optional exact rollback hooks used by multi-component model switches. */
+  beginSwitchTransaction?(): void | Promise<void>;
+  commitSwitchTransaction?(): void | Promise<void>;
+  rollbackSwitchTransaction?(): void | Promise<void>;
+
   /**
    * Quick check whether this backend *can* be used in the current environment.
    * Should not throw.

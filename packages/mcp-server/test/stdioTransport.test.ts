@@ -2,19 +2,174 @@
  * Stdio transport E2E test.
  *
  * Launches the built server (dist/index.js) as a real child process, completes
- * an MCP initialize → initialized → tools/list handshake over stdio, and
+ * a modern MCP discover → tools/list exchange over stdio, and
  * asserts that stdout carried ONLY JSON-RPC protocol frames. Any diagnostic
  * text on stdout corrupts the protocol stream for strict clients.
  *
- * Skips when dist/index.js has not been built (run `npm run build` first;
- * `npm run test:all` at the repo root builds before testing).
+ * Package pretest builds dist/index.js before compiling and running this suite.
  */
 import { expect } from "chai";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import AdmZip from "adm-zip";
-import { StdioHarness, SERVER_ENTRY } from "./helpers/stdioHarness";
+import { KnowledgeGraphStore, MemoryVectorStore } from "@ragnarok/core";
+import { StdioHarness, withStdioHarness } from "./helpers/stdioHarness";
+
+const LOCAL_ADMIN_TOOLS = [
+  "rag_add_documents",
+  "rag_add_github_repo",
+  "rag_add_url",
+  "rag_create_topic",
+  "rag_delete_topic",
+  "rag_embedding_info",
+  "rag_export_topic",
+  "rag_graph_visualize",
+  "rag_import_topic",
+  "rag_list_documents",
+  "rag_list_embedding_models",
+  "rag_list_reranker_models",
+  "rag_list_topics",
+  "rag_llm_status",
+  "rag_memory",
+  "rag_query",
+  "rag_remove_document",
+  "rag_rename_topic",
+  "rag_reranker_info",
+  "rag_reset_memory",
+  "rag_storage_status",
+  "rag_switch_embedding_model",
+  "rag_switch_reranker_model",
+  "rag_topic_stats",
+];
+
+const MODERN_ENVELOPE = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientInfo": { name: "stdio-e2e", version: "1.0.0" },
+  "io.modelcontextprotocol/clientCapabilities": {},
+};
+
+async function seedGraphProtocolFixtures(storageDir: string, topicId: string): Promise<void> {
+  const knowledgeStore = new KnowledgeGraphStore(path.join(storageDir, "database", "lancedb"));
+  try {
+    await knowledgeStore.saveGraph(topicId, {
+      entities: [
+        {
+          id: "knowledge-beta",
+          name: "Beta",
+          type: "technology",
+          description: "Beta graph entity",
+          vector: [0, 1],
+          sourceChunkIds: ["chunk-beta"],
+          confidence: 0.8,
+          strength: 0.7,
+          lastAccessedAt: 20,
+          metadata: { rank: 2 },
+        },
+        {
+          id: "knowledge-alpha",
+          name: "Alpha",
+          type: "concept",
+          description: "Alpha graph entity",
+          vector: [1, 0],
+          sourceChunkIds: ["chunk-alpha"],
+          confidence: 0.9,
+          strength: 0.95,
+          lastAccessedAt: 10,
+          metadata: { rank: 1 },
+        },
+      ],
+      relationships: [
+        {
+          id: "knowledge-edge",
+          sourceId: "knowledge-alpha",
+          targetId: "knowledge-beta",
+          type: "uses",
+          weight: 0.75,
+          description: "Alpha uses Beta",
+          sourceChunkIds: ["chunk-beta", "chunk-alpha"],
+          confidence: 0.85,
+          metadata: { evidence: "protocol fixture" },
+        },
+      ],
+      communities: [],
+      metadata: {
+        topicId,
+        createdAt: 1,
+        updatedAt: 2,
+        entityCount: 2,
+        edgeCount: 1,
+        communityCount: 0,
+        embeddingModel: "protocol-fixture",
+        embeddingDimension: 2,
+      },
+    });
+  } finally {
+    knowledgeStore.dispose();
+  }
+
+  const memoryStore = new MemoryVectorStore(path.join(storageDir, "memory-lancedb"));
+  try {
+    for (const scopeCase of [
+      { scope: "workspace" as const, branch: undefined },
+      { scope: "branch" as const, branch: "feature/protocol" },
+    ]) {
+      await memoryStore.saveGraph(
+        {
+          entities: [
+            {
+              id: `${scopeCase.scope}-alpha`,
+              name: `${scopeCase.scope} alpha`,
+              type: "concept",
+              description: `${scopeCase.scope} alpha detail`,
+              vector: [1, 0],
+              scope: scopeCase.scope,
+              branch: scopeCase.branch,
+              confidence: 0.9,
+              strength: 0.8,
+              createdAt: 1,
+              updatedAt: 2,
+              sourceMemoryIds: [`${scopeCase.scope}-memory-alpha`],
+              metadata: { rank: 1 },
+            },
+            {
+              id: `${scopeCase.scope}-beta`,
+              name: `${scopeCase.scope} beta`,
+              type: "tool",
+              description: `${scopeCase.scope} beta detail`,
+              vector: [0, 1],
+              scope: scopeCase.scope,
+              branch: scopeCase.branch,
+              confidence: 0.8,
+              strength: 0.7,
+              createdAt: 3,
+              updatedAt: 4,
+              sourceMemoryIds: [`${scopeCase.scope}-memory-beta`],
+              metadata: { rank: 2 },
+            },
+          ],
+          relationships: [
+            {
+              id: `${scopeCase.scope}-edge`,
+              sourceId: `${scopeCase.scope}-alpha`,
+              targetId: `${scopeCase.scope}-beta`,
+              type: "uses",
+              description: `${scopeCase.scope} alpha uses beta`,
+              weight: 0.75,
+              scope: scopeCase.scope,
+              branch: scopeCase.branch,
+              metadata: { evidence: "protocol fixture" },
+            },
+          ],
+        },
+        scopeCase.scope,
+        scopeCase.branch,
+      );
+    }
+  } finally {
+    await memoryStore.dispose();
+  }
+}
 
 describe("stdio transport E2E", function () {
   // Server startup loads config + topic manager; allow headroom.
@@ -25,10 +180,6 @@ describe("stdio transport E2E", function () {
   let sourceDir: string;
 
   before(function () {
-    if (!fs.existsSync(SERVER_ENTRY)) {
-      console.error(`Skipping stdio E2E: ${SERVER_ENTRY} not built`);
-      this.skip();
-    }
     storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-stdio-e2e-"));
     sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-source-e2e-"));
   });
@@ -49,8 +200,23 @@ describe("stdio transport E2E", function () {
     }
   });
 
-  it("completes initialize + tools/list with a protocol-clean stdout", async function () {
-    harness = new StdioHarness(storageDir, sourceDir);
+  it("proves the graph visualization protocol and keeps modern discovery protocol-clean", async function () {
+    const fixtureTopic = await withStdioHarness(
+      () => new StdioHarness(storageDir, sourceDir, { RAGNAROK_RERANKER_ENABLED: "false" }),
+      async (fixtureHarness) => {
+        expect((await fixtureHarness.discover(900)).error).to.equal(undefined);
+        const fixtureTopicResponse = await fixtureHarness.callTool(901, "rag_create_topic", {
+          name: "stdio-populated",
+          description: "Persisted graph protocol fixture",
+        });
+        expect(fixtureTopicResponse.result?.isError, JSON.stringify(fixtureTopicResponse.result)).not.to.equal(true);
+        return JSON.parse(fixtureTopicResponse.result?.content?.[0]?.text ?? "{}").topic;
+      },
+      "fixture stdio server",
+    );
+    await seedGraphProtocolFixtures(storageDir, fixtureTopic.id);
+
+    harness = new StdioHarness(storageDir, sourceDir, { RAGNAROK_RERANKER_ENABLED: "false" });
 
     harness.send({
       jsonrpc: "2.0",
@@ -63,20 +229,59 @@ describe("stdio transport E2E", function () {
       },
     });
 
-    const initResponse = await harness.waitFor((m) => m.id === 1, 20000);
-    expect(initResponse.error, "initialize returned an error").to.equal(undefined);
-    expect(initResponse.result?.serverInfo?.name).to.equal("ragnarok");
+    const legacyResponse = await harness.waitFor((m) => m.id === 1, 20000);
+    expect(legacyResponse.error?.code).to.equal(-32022);
 
-    harness.send({ jsonrpc: "2.0", method: "notifications/initialized" });
-    harness.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-
-    const toolsResponse = await harness.waitFor((m) => m.id === 2, 10000);
+    const discoverResponse = await harness.discover(2);
+    expect(discoverResponse.error, "server/discover returned an error").to.equal(undefined);
+    const toolsResponse = await harness.listTools(200);
     expect(toolsResponse.error, "tools/list returned an error").to.equal(undefined);
     expect(toolsResponse.result?.tools).to.be.an("array").with.length.greaterThan(0);
-    const listedTools = toolsResponse.result?.tools as Array<{ name: string; annotations?: Record<string, boolean> }>;
+    const listedTools = toolsResponse.result?.tools as Array<{
+      name: string;
+      annotations?: Record<string, boolean>;
+      _meta?: Record<string, unknown>;
+    }>;
+    expect(listedTools.map((tool) => tool.name).sort()).to.deep.equal([...LOCAL_ADMIN_TOOLS].sort());
     expect(listedTools.find((tool) => tool.name === "rag_list_documents")?.annotations?.readOnlyHint).to.equal(true);
     expect(listedTools.find((tool) => tool.name === "rag_delete_topic")?.annotations?.destructiveHint).to.equal(true);
     expect(listedTools.find((tool) => tool.name === "rag_add_url")?.annotations?.openWorldHint).to.equal(true);
+
+    const graphTool = listedTools.find((tool) => tool.name === "rag_graph_visualize");
+    expect(graphTool, "rag_graph_visualize must be listed").to.exist;
+    expect(graphTool?._meta).to.deep.equal({ ui: { resourceUri: "ui://ragnarok/graph" } });
+    expect(graphTool?._meta).not.to.have.property("ui/resourceUri");
+
+    harness.send({ jsonrpc: "2.0", id: 201, method: "resources/list", params: { _meta: MODERN_ENVELOPE } });
+    const resourcesResponse = await harness.waitFor((message) => message.id === 201, 30_000);
+    expect(resourcesResponse.error, "resources/list returned an error").to.equal(undefined);
+    expect(resourcesResponse.result?.resources).to.deep.include({
+      name: "ragnarok-graph",
+      uri: "ui://ragnarok/graph",
+      description: "Interactive graph visualization for RAGnarōk knowledge and memory graphs.",
+      mimeType: "text/html;profile=mcp-app",
+      annotations: { audience: ["user"], priority: 1 },
+    });
+
+    harness.send({
+      jsonrpc: "2.0",
+      id: 202,
+      method: "resources/read",
+      params: { uri: "ui://ragnarok/graph", _meta: MODERN_ENVELOPE },
+    });
+    const resourceRead = await harness.waitFor((message) => message.id === 202, 30_000);
+    expect(resourceRead.error, "resources/read returned an error").to.equal(undefined);
+    expect(resourceRead.result?.contents).to.have.length(1);
+    const graphResource = resourceRead.result?.contents[0];
+    expect(graphResource).to.include({
+      uri: "ui://ragnarok/graph",
+      mimeType: "text/html;profile=mcp-app",
+    });
+    expect(graphResource.text).to.be.a("string").and.not.equal("");
+    expect(graphResource.text).to.include("data-ragnarok-graph-app");
+    expect(graphResource.text).to.include("<svg");
+    expect(graphResource.text).to.include('id="reset-view"');
+    expect(graphResource.text).not.to.match(/<script\s+[^>]*src\s*=/i);
 
     expect(
       harness.nonProtocolLines,
@@ -96,6 +301,7 @@ describe("stdio transport E2E", function () {
     });
     expect(createResponse.error, "rag_create_topic returned a protocol error").to.equal(undefined);
     expect(createResponse.result?.isError, JSON.stringify(createResponse.result)).not.to.equal(true);
+    const createdTopic = JSON.parse(createResponse.result?.content?.[0]?.text ?? "{}").topic;
 
     const ingestResponse = await harness.callTool(
       4,
@@ -142,23 +348,134 @@ describe("stdio transport E2E", function () {
     expect(statsPayload.documentCount).to.equal(1);
     expect(statsPayload.chunkCount).to.equal(1);
 
+    const graphResponse = await harness.callTool(70, "rag_graph_visualize", {
+      source: "knowledge",
+      topic: "stdio-flow",
+    });
+    expect(graphResponse.error, "rag_graph_visualize returned a protocol error").to.equal(undefined);
+    expect(graphResponse.result?.isError, JSON.stringify(graphResponse.result)).not.to.equal(true);
+    const emptyKnowledge = JSON.parse(graphResponse.result?.content?.[0]?.text ?? "{}");
+    expect(emptyKnowledge).to.deep.include({
+      schema: "ragnarok.graph.visualization.v1",
+      source: { kind: "knowledge", topicId: createdTopic.id, topicName: "stdio-flow" },
+      nodes: [],
+      edges: [],
+      groups: [],
+    });
+    expect(emptyKnowledge.metadata).to.deep.include({
+      originalNodeCount: 0,
+      retainedNodeCount: 0,
+      originalEdgeCount: 0,
+      retainedEdgeCount: 0,
+      truncated: false,
+      truncationReasons: [],
+      empty: true,
+    });
+
+    const populatedGraphResponse = await harness.callTool(71, "rag_graph_visualize", {
+      source: "knowledge",
+      topic: "stdio-populated",
+    });
+    expect(populatedGraphResponse.result?.isError, JSON.stringify(populatedGraphResponse.result)).not.to.equal(true);
+    const populatedKnowledge = JSON.parse(populatedGraphResponse.result?.content?.[0]?.text ?? "{}");
+    expect(populatedKnowledge.schema).to.equal("ragnarok.graph.visualization.v1");
+    expect(populatedKnowledge.source).to.deep.include({ kind: "knowledge", topicName: "stdio-populated" });
+    expect(populatedKnowledge.nodes.map((node: { id: string }) => node.id)).to.deep.equal([
+      "knowledge-alpha",
+      "knowledge-beta",
+    ]);
+    expect(populatedKnowledge.edges.map((edge: { id: string }) => edge.id)).to.deep.equal(["knowledge-edge"]);
+    expect(populatedKnowledge.nodes[0].attributes).to.deep.include({
+      description: "Alpha graph entity",
+      sourceChunkIds: ["chunk-alpha"],
+      confidence: 0.9,
+      strength: 0.95,
+      lastAccessedAt: 10,
+      metadata: { rank: 1 },
+    });
+    expect(populatedKnowledge.edges[0].attributes).to.deep.include({
+      description: "Alpha uses Beta",
+      sourceChunkIds: ["chunk-alpha", "chunk-beta"],
+      confidence: 0.85,
+      metadata: { evidence: "protocol fixture" },
+    });
+    expect(populatedKnowledge.edges[0]).to.deep.include({
+      source: "knowledge-alpha",
+      target: "knowledge-beta",
+      label: "uses",
+      weight: 0.75,
+    });
+    expect(JSON.stringify(populatedKnowledge)).not.to.include("vector");
+    const repeatedPopulatedGraph = await harness.callTool(74, "rag_graph_visualize", {
+      source: "knowledge",
+      topic: "stdio-populated",
+    });
+    expect(repeatedPopulatedGraph.result?.content?.[0]?.text).to.equal(
+      populatedGraphResponse.result?.content?.[0]?.text,
+    );
+
+    for (const memoryCase of [
+      { arguments: { source: "memory", memoryScope: "workspace" }, scope: "workspace" },
+      {
+        arguments: { source: "memory", memoryScope: "branch", branch: "feature/protocol" },
+        scope: "branch",
+      },
+    ] as const) {
+      const memoryGraphResponse = await harness.callTool(
+        72 + (memoryCase.scope === "branch" ? 1 : 0),
+        "rag_graph_visualize",
+        {
+          ...memoryCase.arguments,
+        },
+      );
+      expect(memoryGraphResponse.error, `rag_graph_visualize ${memoryCase.scope} returned a protocol error`).to.equal(
+        undefined,
+      );
+      expect(memoryGraphResponse.result?.isError, JSON.stringify(memoryGraphResponse.result)).not.to.equal(true);
+      const memoryPayload = JSON.parse(memoryGraphResponse.result?.content?.[0]?.text ?? "{}");
+      expect(memoryPayload.schema).to.equal("ragnarok.graph.visualization.v1");
+      expect(memoryPayload.source).to.deep.equal(
+        memoryCase.scope === "branch"
+          ? { kind: "memory", scope: "branch", branch: "feature/protocol" }
+          : { kind: "memory", scope: "workspace" },
+      );
+      expect(memoryPayload.nodes).to.have.length(2);
+      expect(memoryPayload.edges).to.have.length(1);
+      expect(memoryPayload.nodes[0].attributes).to.deep.include({
+        description: `${memoryCase.scope} alpha detail`,
+        scope: memoryCase.scope,
+        ...(memoryCase.scope === "branch" ? { branch: "feature/protocol" } : {}),
+        confidence: 0.9,
+        strength: 0.8,
+        createdAt: 1,
+        updatedAt: 2,
+        sourceMemoryIds: [`${memoryCase.scope}-memory-alpha`],
+        metadata: { rank: 1 },
+      });
+      expect(memoryPayload.edges[0]).to.deep.include({
+        id: `${memoryCase.scope}-edge`,
+        source: `${memoryCase.scope}-alpha`,
+        target: `${memoryCase.scope}-beta`,
+        label: "uses",
+        weight: 0.75,
+      });
+      expect(memoryPayload.edges[0].attributes).to.deep.include({
+        description: `${memoryCase.scope} alpha uses beta`,
+        scope: memoryCase.scope,
+        ...(memoryCase.scope === "branch" ? { branch: "feature/protocol" } : {}),
+        metadata: { evidence: "protocol fixture" },
+      });
+      expect(JSON.stringify(memoryPayload)).not.to.include("vector");
+    }
+
+    expect(harness.nonProtocolLines, "graph visualize diagnostics leaked onto stdout").to.deep.equal([]);
+
     expect(harness.nonProtocolLines, "ingestion/query diagnostics leaked onto stdout").to.deep.equal([]);
 
     expect(await harness.close(), "first stdio server did not exit cleanly").to.equal(0);
-    harness = new StdioHarness(storageDir, sourceDir);
-    harness.send({
-      jsonrpc: "2.0",
-      id: 20,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "stdio-restart-e2e", version: "1.0.0" },
-      },
-    });
-    const restartInit = await harness.waitFor((message) => message.id === 20, 20000);
-    expect(restartInit.error, "restart initialize returned an error").to.equal(undefined);
-    harness.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    harness = new StdioHarness(storageDir, sourceDir, { RAGNAROK_RERANKER_ENABLED: "false" });
+    const restartDiscover = await harness.discover(20);
+    expect(restartDiscover.error, "restart discovery returned an error").to.equal(undefined);
 
     const restartQuery = await harness.callTool(
       21,
@@ -279,6 +596,43 @@ describe("stdio transport E2E", function () {
     const resetMemory = await harness.callTool(48, "rag_reset_memory", { confirm: true });
     expect(resetMemory.result?.isError, JSON.stringify(resetMemory.result)).not.to.equal(true);
 
+    const listTopics = await harness.callTool(49, "rag_list_topics", {});
+    expect(listTopics.result?.isError, JSON.stringify(listTopics.result)).not.to.equal(true);
+    const embeddingModels = await harness.callTool(50, "rag_list_embedding_models", {});
+    expect(embeddingModels.result?.isError, JSON.stringify(embeddingModels.result)).not.to.equal(true);
+    const embeddingInfo = await harness.callTool(51, "rag_embedding_info", {});
+    expect(embeddingInfo.result?.isError, JSON.stringify(embeddingInfo.result)).not.to.equal(true);
+    const activeEmbedding = JSON.parse(embeddingInfo.result?.content?.[0]?.text ?? "{}").currentModel;
+    const sameEmbedding = await harness.callTool(52, "rag_switch_embedding_model", { model: activeEmbedding }, 60000);
+    expect(sameEmbedding.result?.isError, JSON.stringify(sameEmbedding.result)).not.to.equal(true);
+    const llmStatus = await harness.callTool(53, "rag_llm_status", {});
+    expect(llmStatus.result?.isError, JSON.stringify(llmStatus.result)).not.to.equal(true);
+    expect(JSON.parse(llmStatus.result?.content?.[0]?.text ?? "{}").available).to.equal(false);
+    const rerankerModels = await harness.callTool(54, "rag_list_reranker_models", {});
+    expect(rerankerModels.result?.isError, JSON.stringify(rerankerModels.result)).not.to.equal(true);
+    const rerankerInfo = await harness.callTool(55, "rag_reranker_info", {});
+    expect(rerankerInfo.result?.isError, JSON.stringify(rerankerInfo.result)).not.to.equal(true);
+    const rerankerSwitch = await harness.callTool(56, "rag_switch_reranker_model", {
+      model: "Xenova/ms-marco-MiniLM-L-6-v2",
+    });
+    expect(rerankerSwitch.result?.isError, "disabled reranker must reject model switches").to.equal(true);
+    const unsafeUrl = await harness.callTool(57, "rag_add_url", {
+      topic: "restored-flow",
+      url: "file:///etc/passwd",
+    });
+    expect(unsafeUrl.result?.isError, "non-HTTP URL must be rejected").to.equal(true);
+    const unapprovedGithub = await harness.callTool(58, "rag_add_github_repo", {
+      topic: "restored-flow",
+      url: "https://example.invalid/org/repository",
+    });
+    expect(unapprovedGithub.result?.isError, "non-allowlisted GitHub host must be rejected").to.equal(true);
+    const invalidSchema = await harness.callTool(59, "rag_query", {
+      topic: "restored-flow",
+      query: "invalid topK probe",
+      topK: 21,
+    });
+    expect(invalidSchema.error ?? invalidSchema.result?.isError, JSON.stringify(invalidSchema)).to.be.ok;
+
     expect(harness.nonProtocolLines, "restart diagnostics leaked onto stdout").to.deep.equal([]);
     expect(await harness.close(), "restarted stdio server did not exit cleanly").to.equal(0);
     harness = undefined;
@@ -288,19 +642,7 @@ describe("stdio transport E2E", function () {
     const sourcePath = path.join(sourceDir, "langgraph-facts.txt");
     fs.writeFileSync(sourcePath, "The Borealis workflow confirms delivery with an amber sextant.\n", "utf8");
     harness = new StdioHarness(storageDir, sourceDir, { RAGNAROK_LANGGRAPH_ENABLED: "true" });
-    harness.send({
-      jsonrpc: "2.0",
-      id: 100,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "stdio-langgraph-e2e", version: "1.0.0" },
-      },
-    });
-    const init = await harness.waitFor((message) => message.id === 100, 20000);
-    expect(init.error).to.equal(undefined);
-    harness.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    expect((await harness.discover(100)).error).to.equal(undefined);
 
     const create = await harness.callTool(101, "rag_create_topic", { name: "langgraph-flow" });
     expect(create.result?.isError, JSON.stringify(create.result)).not.to.equal(true);

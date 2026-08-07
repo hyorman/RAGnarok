@@ -30,6 +30,8 @@ block:retrieval["Retrievers"]:3
   KeywordRetriever["KeywordRetriever\n(BM25)"]
   HybridRetriever["HybridRetriever\n(weighted fusion)"]
   EnsembleRetriever["EnsembleRetriever\n(RRF)"]
+  GraphRetriever["GraphRetriever\n(entity traversal)"]
+  GraphHybridRetriever["GraphHybridRetriever\n(graph + vector fusion)"]
 end
 
 block:embeddings["Embeddings"]:3
@@ -52,6 +54,8 @@ end
 
 block:stores["Stores"]:3
   VectorStoreFactory["VectorStoreFactory\n(LanceDB, per-topic tables, caching)"]
+  KnowledgeGraphStore["KnowledgeGraphStore\n(entity/edge provenance)"]
+  MemoryStore["MemoryStore\n(workspace/branch scopes)"]
 end
 
 block:infra["Infrastructure"]:3
@@ -90,8 +94,10 @@ src/
 ├── retrievers/
 │   ├── ensembleRetriever.ts   # Reciprocal Rank Fusion across sub-retrievers
 │   ├── hybridRetriever.ts     # Weighted fusion of vector + keyword
-│   ├── vectorRetriever.ts     # Cosine-similarity vector search
-│   └── keywordRetriever.ts    # BM25 keyword scoring
+│   ├── vectorRetriever.ts     # Squared-L2 to unit-cosine score contract
+│   ├── keywordRetriever.ts    # BM25 keyword scoring
+│   ├── graphRetriever.ts      # Entity matching, traversal, provenance
+│   └── graphHybridRetriever.ts # Graph/vector score fusion
 │
 ├── embeddings/
 │   ├── embeddingService.ts        # Pluggable backend router — selects active embedding backend
@@ -115,7 +121,10 @@ src/
 │   └── semanticChunker.ts     # Markdown-aware, code-aware, general chunking
 │
 ├── stores/
-│   └── vectorStoreFactory.ts  # LanceDB store creation, per-topic tables, caching
+│   ├── vectorStoreFactory.ts  # LanceDB store creation, per-topic tables, caching
+│   ├── knowledgeGraphStore.ts # Persistent topic graphs and fingerprints
+│   └── lanceDBCheckpointer.ts # LangGraph checkpoint persistence
+├── memory/                    # Scoped memory, vector recall, graph, decay/export
 │
 └── utils/                     # Shared helpers
 ```
@@ -153,14 +162,34 @@ These are defined in `src/interfaces.ts` and consumed throughout the codebase.
 
 ## Retrieval Strategies
 
-The engine supports four retrieval strategies, selectable per query:
+The engine supports six retrieval strategies, selectable per query:
 
-| Strategy     | Algorithm                                          | When to use                                                 |
-| ------------ | -------------------------------------------------- | ----------------------------------------------------------- |
-| **VECTOR**   | Cosine similarity over embedded vectors            | Best for semantic / natural-language queries                |
-| **BM25**     | TF-IDF keyword scoring                             | Best for exact term matching (e.g. error messages)          |
-| **HYBRID**   | Weighted linear fusion of vector + BM25 scores     | Balanced default — combines semantic and lexical signals    |
-| **ENSEMBLE** | Reciprocal Rank Fusion (RRF) across sub-retrievers | Most robust — merges ranked lists without score calibration |
+| Strategy         | Algorithm                                          | When to use                                                 |
+| ---------------- | -------------------------------------------------- | ----------------------------------------------------------- |
+| **VECTOR**       | Cosine similarity over embedded vectors            | Best for semantic / natural-language queries                |
+| **BM25**         | TF-IDF keyword scoring                             | Best for exact term matching (e.g. error messages)          |
+| **HYBRID**       | Weighted linear fusion of vector + BM25 scores     | Balanced default — combines semantic and lexical signals    |
+| **ENSEMBLE**     | Reciprocal Rank Fusion (RRF) across sub-retrievers | Most robust — merges ranked lists without score calibration |
+| **GRAPH**        | Entity match plus relationship traversal           | Explainable entity/neighborhood queries when a graph exists |
+| **GRAPH_HYBRID** | Weighted graph and vector fusion                   | Semantic recall plus graph provenance                       |
+
+Vector retrieval converts LanceDB squared-L2 distances to the repository's
+unit-vector cosine score contract. Results identify their effective strategy,
+score kind, components, graph entities/hops, and any fallback reason. A graph
+request that falls back is labeled with its actual strategy.
+
+Topic and graph metadata persist the complete embedding fingerprint, not only
+vector dimension. Changing backend, model, revision, normalization, or distance
+contract requires reindexing. Fingerprint mismatch is a hard error and is never
+hidden by graph-hybrid fallback.
+
+## Storage compatibility
+
+Core owns the v2 marker, lease, topic/vector/graph stores, standalone memory,
+checkpoints, archive validation, and the offline legacy migrator. One storage
+root has one writer. See the repository [architecture](../../ARCHITECTURE.md),
+[migration guide](../../MIGRATION.md), and
+[operations guide](../../docs/OPERATIONS.md).
 
 ---
 

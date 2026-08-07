@@ -51,7 +51,7 @@ describe("memory restart persistence E2E (C2 gate)", function () {
   it("memories survive restart → mutate → restart with zero loss", async function () {
     // ── Generation 1: store two memories ────────────────────────────
     harness = new StdioHarness(storageDir, workDir);
-    expect((await harness.initialize()).error).to.equal(undefined);
+    expect((await harness.discover()).error).to.equal(undefined);
 
     const store1 = await harness.callTool(2, "rag_memory", {
       action: "store",
@@ -74,7 +74,7 @@ describe("memory restart persistence E2E (C2 gate)", function () {
 
     // ── Generation 2: reload from disk, THEN mutate (the C2 trigger) ──
     harness = new StdioHarness(storageDir, workDir);
-    expect((await harness.initialize()).error).to.equal(undefined);
+    expect((await harness.discover()).error).to.equal(undefined);
 
     const list2 = payload(await harness.callTool(2, "rag_memory", { action: "list" }));
     expect(list2.count, `restart lost memories: ${JSON.stringify(list2)}`).to.equal(2);
@@ -96,7 +96,7 @@ describe("memory restart persistence E2E (C2 gate)", function () {
 
     // ── Generation 3: assert exact surviving set ─────────────────────
     harness = new StdioHarness(storageDir, workDir);
-    expect((await harness.initialize()).error).to.equal(undefined);
+    expect((await harness.discover()).error).to.equal(undefined);
 
     const list3 = payload(await harness.callTool(2, "rag_memory", { action: "list" }));
     const survivingIds = (list3.memories as Array<{ id: string }>).map((m) => m.id).sort();
@@ -111,6 +111,42 @@ describe("memory restart persistence E2E (C2 gate)", function () {
       texts.some((t) => t.includes("crimson lever")),
       JSON.stringify(texts),
     ).to.equal(true);
+
+    const stats = await harness.callTool(4, "rag_memory", { action: "stats" });
+    expect(stats.result?.isError, JSON.stringify(stats.result)).not.to.equal(true);
+    expect(payload(stats).totalMemories).to.equal(2);
+    const history = await harness.callTool(5, "rag_memory", { action: "history", id: keptId });
+    expect(history.result?.isError, JSON.stringify(history.result)).not.to.equal(true);
+
+    const branchStore = await harness.callTool(6, "rag_memory", {
+      action: "store",
+      content: "The qualification branch uses an indigo checksum marker.",
+      scope: "branch",
+      branch: "qualification",
+    });
+    expect(branchStore.result?.isError, JSON.stringify(branchStore.result)).not.to.equal(true);
+    const branchId = payload(branchStore).memory.id as string;
+    const promoted = await harness.callTool(7, "rag_memory", {
+      action: "promote",
+      branch: "qualification",
+      ids: [branchId],
+    });
+    expect(promoted.result?.isError, JSON.stringify(promoted.result)).not.to.equal(true);
+    const links = await harness.callTool(8, "rag_memory", { action: "links" });
+    expect(links.result?.isError, JSON.stringify(links.result)).not.to.equal(true);
+    const decay = await harness.callTool(9, "rag_memory", { action: "decay" });
+    expect(decay.result?.isError, JSON.stringify(decay.result)).not.to.equal(true);
+
+    for (const [id, args] of [
+      [10, { action: "store" }],
+      [11, { action: "recall" }],
+      [12, { action: "forget" }],
+      [13, { action: "history" }],
+      [14, { action: "promote" }],
+    ] as const) {
+      const invalid = await harness.callTool(id, "rag_memory", args);
+      expect(invalid.result?.isError, JSON.stringify(invalid.result)).to.equal(true);
+    }
 
     expect(harness.nonProtocolLines, "diagnostics leaked onto stdout").to.deep.equal([]);
     expect(await harness.close(), "generation 3 did not exit cleanly").to.equal(0);

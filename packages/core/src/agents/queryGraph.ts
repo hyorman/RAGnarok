@@ -194,6 +194,14 @@ function createRetrieveNode(deps: QueryGraphDeps) {
         retrievalStrategy: result.source,
         explanation: result.explanation,
         originalScore: result.originalScore,
+        originalScoreKind: result.originalScoreKind,
+        originalComponentScores: result.originalComponentScores,
+        scoreKind: result.scoreKind,
+        componentScores: result.componentScores,
+        matchedEntities: result.matchedEntities,
+        hopDepth: result.hopDepth,
+        degradedFrom: result.degradedFrom,
+        fallbackReason: result.fallbackReason,
       },
     }));
 

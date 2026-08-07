@@ -21,6 +21,7 @@ export class GithubDocumentLoader implements DocumentLoader {
     });
 
     try {
+      options.signal?.throwIfAborted();
       const urlObj = new URL(repoUrl);
       const baseUrl = `${urlObj.protocol}//${urlObj.host}`;
 
@@ -49,7 +50,11 @@ export class GithubDocumentLoader implements DocumentLoader {
         accessToken: options.accessToken || process.env.GITHUB_ACCESS_TOKEN,
         maxConcurrency: options.maxConcurrency || 10,
         processSubmodules: options.processSubmodules ?? false,
-        verbose: true,
+        // GithubRepoLoader implements verbose logging with console.log().
+        // stdout is the MCP stdio protocol stream, so dependency diagnostics
+        // must stay disabled. Progress is already emitted through our Logger,
+        // whose console implementation writes to stderr.
+        verbose: false,
       });
 
       const progressInterval = setInterval(() => {
@@ -60,7 +65,8 @@ export class GithubDocumentLoader implements DocumentLoader {
       }, 10000);
 
       try {
-        const documents = await loader.load();
+        const documents = await this.loadWithCancellation(loader, options.signal);
+        options.signal?.throwIfAborted();
         clearInterval(progressInterval);
 
         this.logger.info("GitHub repository loaded successfully", {
@@ -93,6 +99,27 @@ export class GithubDocumentLoader implements DocumentLoader {
         branch: options.branch,
       });
       throw error;
+    }
+  }
+
+  private async loadWithCancellation(loader: GithubRepoLoader, signal?: AbortSignal): Promise<LangChainDocument[]> {
+    if (!signal) {
+      return loader.load();
+    }
+    signal.throwIfAborted();
+    let onAbort: (() => void) | undefined;
+    try {
+      return await Promise.race([
+        loader.load(),
+        new Promise<never>((_resolve, reject) => {
+          onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+          signal.addEventListener("abort", onAbort, { once: true });
+        }),
+      ]);
+    } finally {
+      if (onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
     }
   }
 }

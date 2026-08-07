@@ -37,6 +37,12 @@ export class VscodeLmBackend implements EmbeddingBackend {
   private readonly logger: Logger;
   private dimension: number | null = null;
   private initialized = false;
+  private switchSnapshot: {
+    configuredModelId: string;
+    resolvedModelId: string;
+    dimension: number | null;
+    initialized: boolean;
+  } | null = null;
   private readonly modelIdResolver?: () => string | undefined | null;
 
   /** The LM API surface — defaults to `vscode.lm`, injectable for testing. */
@@ -104,13 +110,17 @@ export class VscodeLmBackend implements EmbeddingBackend {
   // ---------------------------------------------------------------------------
 
   async initialize(modelName?: string): Promise<void> {
-    if (modelName !== undefined) {
-      this.configuredModelId = modelName;
-    }
-
+    const previousConfigured = this.configuredModelId;
+    const previousResolved = this.resolvedModelId;
+    const previousInitialized = this.initialized;
     const requestedModelId = this.getRequestedModelId(modelName);
     const available = await this.isAvailableForModel(requestedModelId);
     if (!available) {
+      // Availability probing may auto-resolve a model. Restore the complete
+      // prior generation when a requested switch cannot be validated.
+      this.configuredModelId = previousConfigured;
+      this.resolvedModelId = previousResolved;
+      this.initialized = previousInitialized;
       let registeredModels: string[] = [];
       try {
         registeredModels = this.lmApi?.embeddingModels ?? [];
@@ -126,21 +136,50 @@ export class VscodeLmBackend implements EmbeddingBackend {
       );
     }
 
+    if (modelName !== undefined) {
+      this.configuredModelId = modelName;
+    }
     this.initialized = true;
     this.logger.info(`VS Code LM embedding backend initialized (model: ${this.getResolvedModelId()})`);
+  }
+
+  beginSwitchTransaction(): void {
+    this.switchSnapshot = {
+      configuredModelId: this.configuredModelId,
+      resolvedModelId: this.resolvedModelId,
+      dimension: this.dimension,
+      initialized: this.initialized,
+    };
+  }
+
+  commitSwitchTransaction(): void {
+    this.switchSnapshot = null;
+  }
+
+  rollbackSwitchTransaction(): void {
+    if (!this.switchSnapshot) {
+      return;
+    }
+    this.configuredModelId = this.switchSnapshot.configuredModelId;
+    this.resolvedModelId = this.switchSnapshot.resolvedModelId;
+    this.dimension = this.switchSnapshot.dimension;
+    this.initialized = this.switchSnapshot.initialized;
+    this.switchSnapshot = null;
   }
 
   // ---------------------------------------------------------------------------
   // Single embedding
   // ---------------------------------------------------------------------------
 
-  async embed(text: string): Promise<number[]> {
+  async embed(text: string, signal?: AbortSignal): Promise<number[]> {
+    signal?.throwIfAborted();
     if (!this.initialized) {
       await this.initialize();
     }
 
     try {
       const result: { values: number[] } = await this.lmApi.computeEmbeddings(this.getResolvedModelId(), text);
+      signal?.throwIfAborted();
 
       const values = result.values;
       if (!values || values.length === 0) {
@@ -150,6 +189,9 @@ export class VscodeLmBackend implements EmbeddingBackend {
       this.dimension = values.length;
       return values;
     } catch (error: any) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       this.logger.error(`VS Code LM embed failed: ${error?.message ?? error}`);
       throw new Error(`VS Code LM embedding failed: ${error?.message ?? error}`);
     }
@@ -166,7 +208,12 @@ export class VscodeLmBackend implements EmbeddingBackend {
   /** Delay between batch windows to avoid hammering the API. */
   private static readonly INTER_WINDOW_DELAY_MS = 200;
 
-  async embedBatch(texts: string[], progressCallback?: (progress: number) => void): Promise<number[][]> {
+  async embedBatch(
+    texts: string[],
+    progressCallback?: (progress: number) => void,
+    signal?: AbortSignal,
+  ): Promise<number[][]> {
+    signal?.throwIfAborted();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -189,6 +236,7 @@ export class VscodeLmBackend implements EmbeddingBackend {
 
       // Process batches with bounded concurrency
       for (let w = 0; w < batches.length; w += VscodeLmBackend.CONCURRENCY) {
+        signal?.throwIfAborted();
         const window = batches.slice(w, w + VscodeLmBackend.CONCURRENCY);
 
         if (texts.length > 100) {
@@ -198,8 +246,9 @@ export class VscodeLmBackend implements EmbeddingBackend {
         }
 
         const windowResults = await Promise.all(
-          window.map((batch) => this.embedBatchWithRetry(batch.texts, batch.startIdx)),
+          window.map((batch) => this.embedBatchWithRetry(batch.texts, batch.startIdx, signal)),
         );
+        signal?.throwIfAborted();
 
         for (const batchResults of windowResults) {
           for (const result of batchResults) {
@@ -213,6 +262,7 @@ export class VscodeLmBackend implements EmbeddingBackend {
         // Brief pause between windows to reduce rate-limit pressure
         if (w + VscodeLmBackend.CONCURRENCY < batches.length) {
           await new Promise((resolve) => setTimeout(resolve, VscodeLmBackend.INTER_WINDOW_DELAY_MS));
+          signal?.throwIfAborted();
         }
       }
 
@@ -230,10 +280,11 @@ export class VscodeLmBackend implements EmbeddingBackend {
       );
 
       for (let i = 0; i < texts.length; i++) {
+        signal?.throwIfAborted();
         if (allEmbeddings[i]) {
           continue; // Already embedded in the batch phase
         }
-        allEmbeddings[i] = await this.embedWithRetry(texts[i]);
+        allEmbeddings[i] = await this.embedWithRetry(texts[i], signal);
         completedCount++;
         progressCallback?.(completedCount / texts.length);
       }
@@ -248,14 +299,17 @@ export class VscodeLmBackend implements EmbeddingBackend {
   private async embedBatchWithRetry(
     batchTexts: string[],
     startIdx: number,
+    signal?: AbortSignal,
   ): Promise<Array<{ globalIdx: number; values: number[] }>> {
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
+      signal?.throwIfAborted();
       try {
         const results: Array<{ values: number[] }> = await this.lmApi.computeEmbeddings(
           this.getResolvedModelId(),
           batchTexts,
         );
+        signal?.throwIfAborted();
         return results.map((r, idx) => {
           if (!r.values || r.values.length === 0) {
             throw new Error(`Empty embedding at index ${startIdx + idx}`);
@@ -271,6 +325,7 @@ export class VscodeLmBackend implements EmbeddingBackend {
             `Rate limited on batch at ${startIdx} (attempt ${attempt + 1}/${VscodeLmBackend.MAX_RETRIES}), retrying in ${backoff}ms`,
           );
           await new Promise((resolve) => setTimeout(resolve, backoff));
+          signal?.throwIfAborted();
           continue;
         }
         throw error;
@@ -282,11 +337,12 @@ export class VscodeLmBackend implements EmbeddingBackend {
   /**
    * Embed a single text with exponential backoff for rate-limit (429) errors.
    */
-  private async embedWithRetry(text: string): Promise<number[]> {
+  private async embedWithRetry(text: string, signal?: AbortSignal): Promise<number[]> {
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
+      signal?.throwIfAborted();
       try {
-        return await this.embed(text);
+        return await this.embed(text, signal);
       } catch (error: any) {
         lastError = error;
         const msg = error?.message ?? String(error);
@@ -296,6 +352,7 @@ export class VscodeLmBackend implements EmbeddingBackend {
             `Rate limited (attempt ${attempt + 1}/${VscodeLmBackend.MAX_RETRIES}), retrying in ${backoff}ms`,
           );
           await new Promise((resolve) => setTimeout(resolve, backoff));
+          signal?.throwIfAborted();
           continue;
         }
         throw error;

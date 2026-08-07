@@ -49,6 +49,7 @@ export class DocumentLoaderFactory {
     this.logger.info("Loading document", { filePath });
 
     try {
+      options.signal?.throwIfAborted();
       // Detect file type first (before validation, as GitHub URLs don't need file validation)
       const fileType = options.fileType || this.detectFileType(filePath);
 
@@ -74,6 +75,7 @@ export class DocumentLoaderFactory {
         throw new Error(`Unsupported file type: ${fileType}`);
       }
       const documents = await loader.load(filePath, options);
+      options.signal?.throwIfAborted();
 
       // Add common metadata to all documents
       const enrichedDocuments = documents.map((doc) => {
@@ -129,6 +131,7 @@ export class DocumentLoaderFactory {
     const expandedPaths: LoaderOptions[] = [];
     for (const item of filePathsOrOptions) {
       const options = typeof item === "string" ? { filePath: item } : item;
+      options.signal?.throwIfAborted();
 
       // Check if path is a directory (skip for URLs)
       if (!DocumentLoaderFactory.isWebUrl(options.filePath)) {
@@ -173,6 +176,9 @@ export class DocumentLoaderFactory {
 
     for (let i = 0; i < expandedPaths.length; i += BATCH_SIZE) {
       const batch = expandedPaths.slice(i, i + BATCH_SIZE);
+      for (const options of batch) {
+        options.signal?.throwIfAborted();
+      }
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       const totalBatches = Math.ceil(expandedPaths.length / BATCH_SIZE);
 
@@ -183,6 +189,9 @@ export class DocumentLoaderFactory {
       });
 
       const results = await Promise.allSettled(batch.map((options) => this.loadDocument(options)));
+      for (const options of batch) {
+        options.signal?.throwIfAborted();
+      }
 
       // Separate successful and failed loads for this batch
       results.forEach((result, batchIndex) => {

@@ -12,7 +12,12 @@ import { Logger } from "../logger";
 
 export interface KeywordSearchResult {
   document: LangChainDocument;
-  score?: number; // BM25 doesn't return scores
+  /** Query-local BM25 score normalized into [0, 1]. */
+  score: number;
+  scoreKind: "bm25_normalized";
+  componentScores: { keyword: number };
+  /** Provider BM25 value retained for diagnostics, never used for cross-strategy fusion. */
+  rawScore: number;
 }
 
 /**
@@ -57,6 +62,9 @@ export class KeywordRetriever {
     if (!this.bm25Retriever) {
       throw new Error("KeywordRetriever not initialized. Call initialize() first.");
     }
+    if (!Number.isInteger(k) || k < 1) {
+      throw new Error("BM25 k must be a positive integer");
+    }
 
     const startTime = Date.now();
 
@@ -68,6 +76,13 @@ export class KeywordRetriever {
     try {
       const results = await this.bm25Retriever.invoke(query);
       const limitedResults = results.slice(0, k);
+      const rawScores = limitedResults.map((doc) => {
+        const value = Number(doc.metadata?.bm25Score);
+        return Number.isFinite(value) ? value : 0;
+      });
+      const minScore = rawScores.length > 0 ? Math.min(...rawScores) : 0;
+      const maxScore = rawScores.length > 0 ? Math.max(...rawScores) : 0;
+      const range = maxScore - minScore;
       const searchTime = Date.now() - startTime;
 
       this.logger.info("BM25 search complete", {
@@ -75,14 +90,21 @@ export class KeywordRetriever {
         searchTime,
       });
 
-      return limitedResults.map((doc: LangChainDocument) => {
-        const bm25Score = doc.metadata?.bm25Score as number | undefined;
+      return limitedResults.map((doc: LangChainDocument, index: number) => {
+        const rawScore = rawScores[index];
         // Strip bm25Score from metadata to avoid polluting downstream ID hashing
-        if (bm25Score !== undefined) {
+        if (doc.metadata?.bm25Score !== undefined) {
           const { bm25Score: _, ...cleanMeta } = doc.metadata;
           doc.metadata = cleanMeta;
         }
-        return { document: doc, score: bm25Score };
+        const score = range > 0 ? (rawScore - minScore) / range : maxScore > 0 ? 1 : 0;
+        return {
+          document: doc,
+          score,
+          scoreKind: "bm25_normalized",
+          componentScores: { keyword: score },
+          rawScore,
+        };
       });
     } catch (error) {
       this.logger.error("BM25 search failed", {

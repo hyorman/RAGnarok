@@ -37,7 +37,7 @@ import {
 } from "../src/index";
 import type { ScoredDocument } from "../src/index";
 import { RealVectorStore, mockConfig, mockNotifier } from "./helpers/realVectorStore";
-import { mean, stddev, ndcgAtK, mrrAtK, recallAtK } from "./helpers/metrics";
+import { mean, stddev, percentile, ndcgAtK, mrrAtK, recallAtK } from "./helpers/metrics";
 import { formatSampleSelection, parseBenchmarkSampleSize } from "./helpers/benchmarkSampling";
 import { FramesEntry } from "./helpers/framesLoader";
 import { prepareFramesBenchmarkCorpus } from "./helpers/framesBenchmarkCorpus";
@@ -286,6 +286,18 @@ describe("FRAMES Multi-Hop Reranking Benchmark", function (this: Mocha.Suite) {
       }
     }
     console.log("  └────────────────────┴──────────────┴──────────────┴──────────────┴──────────┘");
+    if (process.env.RAGNAROK_BENCHMARK_MODE === "release") {
+      const measured = results.get("HYBRID+rerank")!;
+      console.log(
+        `RAGNAROK_METRICS frames-rerank ${JSON.stringify({
+          ndcgAt5: mean(measured.ndcg5),
+          mrrAt10: mean(measured.mrr10),
+          recallAt5: mean(measured.recall5),
+          queryP50Ms: percentile(measured.timesMs, 0.5),
+          queryP95Ms: percentile(measured.timesMs, 0.95),
+        })}`,
+      );
+    }
 
     console.log("\n  Per-Query Win/Loss Analysis (NDCG@5):");
     for (const strategy of strategies) {

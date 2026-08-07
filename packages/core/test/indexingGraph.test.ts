@@ -5,17 +5,25 @@
 
 import { expect } from "chai";
 import sinon from "sinon";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
+  CONFIG,
   createIndexingGraph,
   type IndexingGraphDeps,
+  type IConfigProvider,
   type ILLMProvider,
   type ILLMModel,
+  type INotifier,
   TopicManager,
   DocumentLoaderFactory,
   SemanticChunker,
   EntityExtractor,
+  KnowledgeGraph,
 } from "../src/index";
+import type { EmbeddingService } from "../src/embeddings/embeddingService";
 
 // ── Mock Factories ───────────────────────────────────────────────────
 
@@ -42,7 +50,7 @@ function createMockLLMProvider(): ILLMProvider {
 }
 
 function createMockTopicManager() {
-  return {
+  const manager: any = {
     storeProcessedChunks: sinon.stub().resolves(),
     getVectorStore: sinon.stub().resolves({}),
     getKnowledgeGraph: sinon.stub().resolves(null),
@@ -50,9 +58,24 @@ function createMockTopicManager() {
     getEmbeddingService: sinon.stub().returns({
       embed: sinon.stub().resolves([0.1, 0.2, 0.3]),
       embedBatch: sinon.stub().resolves([[0.1, 0.2, 0.3]]),
+      getFingerprint: sinon.stub().resolves({
+        backendKind: "huggingface",
+        model: "test-model",
+        dimension: 3,
+        normalized: true,
+      }),
     }),
     resolveTopicByName: sinon.stub().resolves({ topic: { id: "t1" }, matchType: "exact" }),
-  } as unknown as TopicManager;
+  };
+  manager.mutateKnowledgeGraph = sinon
+    .stub()
+    .callsFake(async (topicId: string, mutation: (graph: KnowledgeGraph) => unknown) => {
+      const graph = new KnowledgeGraph(topicId);
+      const result = await mutation(graph);
+      await manager.getKnowledgeGraphStore()?.saveGraph(topicId, graph.toJSON());
+      return result;
+    });
+  return manager as TopicManager;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -210,6 +233,24 @@ describe("IndexingGraph", function () {
   });
 
   describe("Error handling", () => {
+    it("propagates cancellation and performs no durable store", async () => {
+      const controller = new AbortController();
+      controller.abort(new DOMException("cancelled", "AbortError"));
+      const tm = createMockTopicManager();
+      const graph = createIndexingGraph({ topicManager: tm, signal: controller.signal });
+      let caught: unknown;
+      try {
+        await graph.invoke({
+          filePaths: ["/test/doc.md"],
+          topicId: "test-topic",
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).to.equal(controller.signal.reason);
+      expect((tm.storeProcessedChunks as sinon.SinonStub).called).to.equal(false);
+    });
+
     it("should capture load errors and route around dependent stages", async () => {
       loadStub.restore();
       sinon.stub(DocumentLoaderFactory.prototype, "loadDocuments").rejects(new Error("File not found"));
@@ -247,8 +288,76 @@ describe("IndexingGraph", function () {
 
       expect(result.errors).to.be.an("array").with.length.greaterThan(0);
       expect(result.errors.some((e: string) => e.includes("embedAndStore failed"))).to.be.true;
+      const output = result.result as Record<string, unknown>;
+      expect(output.success).to.equal(false);
+      expect(output.completedStage).to.equal("chunked");
+      expect(output.stageOutcomes).to.deep.equal({ storage: "failed" });
       // Storage failure routes to buildResult — extraction never runs
       expect(extractStub.called).to.be.false;
+    });
+
+    it("should not let TopicManager advertise a document after graph storage fails", async () => {
+      const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "indexing-fail-closed-"));
+      try {
+        const config: IConfigProvider = {
+          get<T>(key: string, defaultValue: T): T {
+            return (key === CONFIG.LANGGRAPH_ENABLED ? true : defaultValue) as T;
+          },
+        };
+        const notifier: INotifier = {
+          showInfo: () => undefined,
+          showWarning: () => undefined,
+          showError: () => undefined,
+          withProgress: async <T>(
+            _title: string,
+            task: (report: (message: string) => void) => Promise<T>,
+          ): Promise<T> => task(() => undefined),
+        };
+        const embeddingService = {
+          getCurrentModel: () => "test-model",
+        } as unknown as EmbeddingService;
+        const Manager = TopicManager as unknown as new (options: {
+          storageDir: string;
+          config: IConfigProvider;
+          notifier: INotifier;
+          embeddingService: EmbeddingService;
+        }) => TopicManager;
+        const manager = new Manager({ storageDir, config, notifier, embeddingService });
+        const topic = {
+          id: "topic-1",
+          name: "Fail closed",
+          createdAt: 1,
+          updatedAt: 1,
+          documentCount: 0,
+        };
+        (manager as any).topicsIndex = {
+          topics: { [topic.id]: topic },
+          modelName: "test-model",
+          lastUpdated: 1,
+        };
+        (manager as any).topicDocuments = new Map([[topic.id, new Map()]]);
+        await fs.mkdir(path.join(storageDir, "database"), { recursive: true });
+        await fs.writeFile(
+          path.join(storageDir, "database", "topics.json"),
+          `${JSON.stringify((manager as any).topicsIndex, null, 2)}\n`,
+        );
+        sinon.stub(manager, "storeProcessedChunks").rejects(new Error("forced vector failure"));
+
+        const results = await manager.addDocuments(topic.id, ["/test/doc.md"]);
+
+        expect(results).to.deep.equal([]);
+        expect(manager.listDocuments(topic.id)).to.deep.equal([]);
+        expect(topic.documentCount).to.equal(0);
+        const persistedIndex = JSON.parse(await fs.readFile(path.join(storageDir, "database", "topics.json"), "utf8"));
+        expect(persistedIndex.topics[topic.id].documentCount).to.equal(0);
+        const journal = JSON.parse(
+          await fs.readFile(path.join(storageDir, "database", "ingestion-journal.json"), "utf8"),
+        );
+        expect(journal).to.have.lengthOf(1);
+        expect(journal[0].stage).to.equal("started");
+      } finally {
+        await fs.rm(storageDir, { recursive: true, force: true });
+      }
     });
   });
 

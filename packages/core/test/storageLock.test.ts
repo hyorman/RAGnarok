@@ -7,6 +7,8 @@
  */
 
 import { expect } from "chai";
+import { spawn } from "child_process";
+import * as crypto from "crypto";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -33,6 +35,119 @@ async function exists(filePath: string): Promise<boolean> {
     .catch(() => false);
 }
 
+async function runLockChild(
+  modulePath: string,
+  storageDir: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const script = `
+    const { acquireStorageLock } = require(process.argv[1]);
+    (async () => {
+      try {
+        const lock = await acquireStorageLock(process.argv[2], { staleMs: 5, heartbeatMs: 20 });
+        process.stdout.write("ACQUIRED\\n");
+        process.exit(0);
+      } catch (error) {
+        process.stdout.write("HELD\\n");
+      }
+    })().catch(error => { process.stderr.write(String(error)); process.exit(2); });
+  `;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["-e", script, modulePath, storageDir], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+interface LockContender {
+  ready: Promise<void>;
+  outcome: Promise<"ACQUIRED" | "HELD">;
+  completion: Promise<{ code: number | null; stderr: string }>;
+  start(): void;
+  release(): void;
+}
+
+function createLockContender(modulePath: string, storageDir: string): LockContender {
+  const script = `
+    const { acquireStorageLock } = require(process.argv[1]);
+    let heldLock;
+    let started = false;
+
+    process.on("message", async message => {
+      if (message === "START" && !started) {
+        started = true;
+        try {
+          heldLock = await acquireStorageLock(process.argv[2], { staleMs: 5, heartbeatMs: 20 });
+          process.send("ACQUIRED");
+        } catch (error) {
+          process.send("HELD", () => process.exit(0));
+        }
+      } else if (message === "RELEASE" && heldLock) {
+        await heldLock.release();
+        process.exit(0);
+      }
+    });
+
+    process.send("READY");
+  `;
+  const child = spawn(process.execPath, ["-e", script, modulePath, storageDir], {
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+  let stderr = "";
+  child.stderr!.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+
+  let rejectReady!: (error: Error) => void;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  let rejectOutcome!: (error: Error) => void;
+  let resolveOutcome!: (outcome: "ACQUIRED" | "HELD") => void;
+  const outcome = new Promise<"ACQUIRED" | "HELD">((resolve, reject) => {
+    resolveOutcome = resolve;
+    rejectOutcome = reject;
+  });
+
+  child.on("message", (message) => {
+    if (message === "READY") {
+      resolveReady();
+    } else if (message === "ACQUIRED" || message === "HELD") {
+      resolveOutcome(message);
+    }
+  });
+
+  const completion = new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+    child.once("error", (error) => {
+      rejectReady(error);
+      rejectOutcome(error);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (code !== 0) {
+        const error = new Error(`Lock contender exited ${code}: ${stderr}`);
+        rejectReady(error);
+        rejectOutcome(error);
+      }
+      resolve({ code, stderr });
+    });
+  });
+
+  return {
+    ready,
+    outcome,
+    completion,
+    start: () => child.send("START"),
+    release: () => child.send("RELEASE"),
+  };
+}
+
 /** A pid that cannot belong to a live process on macOS/Linux test hosts. */
 const DEAD_PID = 998877;
 
@@ -52,16 +167,25 @@ describe("acquireStorageLock", function () {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("creates the lock file on acquire and removes it on release", async function () {
+  it("creates the lock file on acquire and owner-marks it on release", async function () {
     const lock = await acquireStorageLock(tempDir);
     expect(await exists(lockPath)).to.equal(true);
 
     const written = JSON.parse(await fs.readFile(lockPath, "utf8"));
     expect(written.pid).to.equal(process.pid);
     expect(written.hostname).to.equal(os.hostname());
+    expect(written.ownerId).to.match(/^[0-9a-f-]{36}$/);
 
     await lock.release();
-    expect(await exists(lockPath)).to.equal(false);
+    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(released.ownerId).to.equal(written.ownerId);
+    expect(released.releasedAt).to.be.a("number");
+
+    // Released leases are reclaimed immediately by the next owner.
+    const next = await acquireStorageLock(tempDir);
+    const replacement = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(replacement.ownerId).to.not.equal(written.ownerId);
+    await next.release();
   });
 
   it("is refcounted within one process: the file survives until the last holder releases", async function () {
@@ -72,7 +196,8 @@ describe("acquireStorageLock", function () {
     expect(await exists(lockPath), "released too early — second holder still active").to.equal(true);
 
     await second.release();
-    expect(await exists(lockPath)).to.equal(false);
+    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(released.releasedAt).to.be.a("number");
   });
 
   it("release is idempotent per handle", async function () {
@@ -84,7 +209,8 @@ describe("acquireStorageLock", function () {
     expect(await exists(lockPath)).to.equal(true);
 
     await second.release();
-    expect(await exists(lockPath)).to.equal(false);
+    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(released.releasedAt).to.be.a("number");
   });
 
   it("fails fast naming the holder when a live same-host process owns the lock", async function () {
@@ -113,6 +239,31 @@ describe("acquireStorageLock", function () {
     const written = JSON.parse(await fs.readFile(lockPath, "utf8"));
     expect(written.pid).to.equal(process.pid);
     await lock.release();
+  });
+
+  it("never reclaims a live same-host pid solely because its heartbeat is old", async function () {
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 2,
+        ownerId: "live-owner",
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAt: Date.now() - 120_000,
+      }),
+      "utf8",
+    );
+    const past = new Date(Date.now() - 120_000);
+    await fs.utimes(lockPath, past, past);
+
+    let caught: unknown;
+    try {
+      await acquireStorageLock(tempDir, { staleMs: 10 });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.be.instanceOf(StorageLockHeldError);
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8")).ownerId).to.equal("live-owner");
   });
 
   it("reclaims a foreign-host lock with a stale heartbeat", async function () {
@@ -172,11 +323,154 @@ describe("acquireStorageLock", function () {
 
   it("release leaves a lock alone if another process reclaimed it meanwhile", async function () {
     const lock = await acquireStorageLock(tempDir);
-    // Simulate another process stealing after our staleness (e.g., long GC pause).
-    await fs.writeFile(lockPath, JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }), "utf8");
+    const displacedPath = `${lockPath}.displaced`;
+    await fs.rename(lockPath, displacedPath);
+    // Use the same pid/host to prove that identity is the random owner token,
+    // not a pid that could have been reused.
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 2,
+        ownerId: "replacement-owner",
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAt: Date.now(),
+      }),
+      "utf8",
+    );
+
+    let fenceError: Error | undefined;
+    try {
+      await lock.assertOwned();
+    } catch (error) {
+      fenceError = error as Error;
+    }
+    expect(fenceError?.message).to.include("ownership was lost");
 
     await lock.release();
-    expect(await exists(lockPath), "release must not remove a lock it no longer owns").to.equal(true);
+    const replacement = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(replacement.ownerId, "release must not alter a lock it no longer owns").to.equal("replacement-owner");
+    expect(replacement.releasedAt).to.equal(undefined);
+  });
+
+  it("heartbeat never touches a replacement lock pathname", async function () {
+    const lock = await acquireStorageLock(tempDir, { heartbeatMs: 10 });
+    await fs.rename(lockPath, `${lockPath}.displaced`);
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 2,
+        ownerId: "heartbeat-replacement",
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAt: Date.now(),
+      }),
+      "utf8",
+    );
+    const fixedTime = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, fixedTime, fixedTime);
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const stats = await fs.stat(lockPath);
+    expect(Math.abs(stats.mtimeMs - fixedTime.getTime())).to.be.lessThan(2);
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8")).ownerId).to.equal("heartbeat-replacement");
+    await lock.release();
+  });
+
+  it("allows only one contender to reclaim a stale lease", async function () {
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 2,
+        ownerId: "stale-owner",
+        pid: DEAD_PID,
+        hostname: os.hostname(),
+        acquiredAt: Date.now() - 60_000,
+      }),
+      "utf8",
+    );
+    const past = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, past, past);
+
+    const modulePath = path.resolve(__dirname, "../src/utils/storageLock.js");
+    const contenders = Array.from({ length: 6 }, () => createLockContender(modulePath, tempDir));
+
+    // Process startup is outside the contention window. No child attempts
+    // acquisition until all six have established their IPC channel.
+    await Promise.all(contenders.map((contender) => contender.ready));
+    contenders.forEach((contender) => contender.start());
+    const outcomes = await Promise.all(contenders.map((contender) => contender.outcome));
+
+    // Keep the winner locked until every loser has completed its attempt,
+    // then release it so all child processes can exit cleanly.
+    const winners = contenders.filter((_, index) => outcomes[index] === "ACQUIRED");
+    winners.forEach((winner) => winner.release());
+    const completions = await Promise.all(contenders.map((contender) => contender.completion));
+
+    expect(
+      completions.every((result) => result.code === 0),
+      completions.map((result) => result.stderr).join("\n"),
+    ).to.equal(true);
+    expect(outcomes.filter((outcome) => outcome === "ACQUIRED")).to.have.lengthOf(1);
+    expect(outcomes.filter((outcome) => outcome === "HELD")).to.have.lengthOf(5);
+  });
+
+  it("fails closed when a reclaimer crashes before publishing its replacement", async function () {
+    const staleInfo = {
+      version: 2,
+      ownerId: "interrupted-generation",
+      pid: DEAD_PID,
+      hostname: os.hostname(),
+      acquiredAt: Date.now() - 60_000,
+    };
+    await fs.writeFile(lockPath, JSON.stringify(staleInfo), "utf8");
+    const past = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, past, past);
+    const stats = await fs.stat(lockPath);
+    const identity = JSON.stringify({
+      dev: stats.dev,
+      ino: stats.ino,
+      ownerId: staleInfo.ownerId,
+      pid: staleInfo.pid,
+      hostname: staleInfo.hostname,
+      acquiredAt: staleInfo.acquiredAt,
+    });
+    const generation = crypto.createHash("sha256").update(identity).digest("hex").slice(0, 24);
+    const claimPath = `${lockPath}.reclaim-${generation}`;
+    await fs.writeFile(claimPath, JSON.stringify({ claimantOwnerId: "crashed-reclaimer", pid: DEAD_PID }), "utf8");
+
+    let caught: unknown;
+    try {
+      await acquireStorageLock(tempDir, { staleMs: 5 });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.be.instanceOf(Error);
+    expect((caught as Error).message).to.include("Unable to acquire storage lock");
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8")).ownerId).to.equal(staleInfo.ownerId);
+
+    // Explicit operator recovery of the orphaned generation claim restores
+    // acquisition without modifying the stale canonical lease.
+    await fs.unlink(claimPath);
+    const recovered = await acquireStorageLock(tempDir, { staleMs: 5 });
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8")).ownerId).to.not.equal(staleInfo.ownerId);
+    await recovered.release();
+  });
+
+  it("exit cleanup owner-marks the lease so the next process can acquire immediately", async function () {
+    const modulePath = path.resolve(__dirname, "../src/utils/storageLock.js");
+    const child = await runLockChild(modulePath, tempDir);
+    expect(child.code, child.stderr).to.equal(0);
+    expect(child.stdout).to.include("ACQUIRED");
+
+    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(released.ownerId).to.be.a("string");
+    expect(released.releasedAt).to.be.a("number");
+
+    const replacement = await acquireStorageLock(tempDir, { staleMs: 60_000 });
+    const current = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(current.ownerId).to.not.equal(released.ownerId);
+    await replacement.release();
   });
 });
 
@@ -208,7 +502,8 @@ describe("MemoryStore storage lock integration", function () {
     expect(await exists(lockPath)).to.equal(true);
 
     await store.dispose();
-    expect(await exists(lockPath)).to.equal(false);
+    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(released.releasedAt).to.be.a("number");
   });
 
   it("fails fast when another live process holds the storage dir", async function () {

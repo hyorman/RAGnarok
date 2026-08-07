@@ -34,8 +34,15 @@ describe("MCP Server", () => {
       "RAGNAROK_LLM_BASE_URL",
       "RAGNAROK_API_KEY",
       "RAGNAROK_WRITE_API_KEY",
+      "RAGNAROK_ADMIN_API_KEY",
+      "RAGNAROK_DEPLOYMENT_MODE",
+      "RAGNAROK_IGNORE_LOCK",
       "RAGNAROK_CORS_ORIGIN",
       "RAGNAROK_HTTP_HOST",
+      "RAGNAROK_ALLOWED_HOSTS",
+      "RAGNAROK_TLS_CERT_PATH",
+      "RAGNAROK_TLS_KEY_PATH",
+      "RAGNAROK_TRUSTED_PROXIES",
     ];
 
     const saved: Record<string, string | undefined> = {};
@@ -134,6 +141,35 @@ describe("MCP Server", () => {
     it("should reject an invalid RAGNAROK_LLM_PROVIDER at startup", () => {
       process.env.RAGNAROK_LLM_PROVIDER = "chatgpt";
       expect(() => loadConfig()).to.throw(/llmProvider/);
+    });
+
+    it("fails closed on an invalid deployment mode", () => {
+      process.env.RAGNAROK_DEPLOYMENT_MODE = "shraed";
+      expect(() => loadConfig()).to.throw(/RAGNAROK_DEPLOYMENT_MODE.*local.*shared/);
+    });
+
+    it("requires an explicit deployment mode for HTTP transport", () => {
+      process.argv.push("--http");
+      try {
+        expect(() => loadConfig()).to.throw(/RAGNAROK_DEPLOYMENT_MODE is required for HTTP/);
+        process.env.RAGNAROK_DEPLOYMENT_MODE = "local";
+        expect(loadConfig().deploymentMode).to.equal("local");
+      } finally {
+        process.argv.splice(process.argv.lastIndexOf("--http"), 1);
+      }
+    });
+
+    it("does not permit short shared tokens", () => {
+      process.env.RAGNAROK_DEPLOYMENT_MODE = "shared";
+      process.env.RAGNAROK_API_KEY = "short";
+      expect(() => loadConfig()).to.throw(/at least 32 bytes/);
+    });
+
+    it("forbids bypassing the storage lease in shared mode", () => {
+      process.env.RAGNAROK_DEPLOYMENT_MODE = "shared";
+      process.env.RAGNAROK_API_KEY = "reader-token-with-at-least-32-bytes";
+      process.env.RAGNAROK_IGNORE_LOCK = "true";
+      expect(() => loadConfig()).to.throw(/RAGNAROK_IGNORE_LOCK.*forbidden.*shared/);
     });
 
     it("should reject openai provider without an API key", () => {

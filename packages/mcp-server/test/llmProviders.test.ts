@@ -6,7 +6,13 @@
 import { expect } from "chai";
 import { PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "../src/config";
-import { createLLMProvider, OpenAILLMProvider, AnthropicLLMProvider, OllamaLLMProvider } from "../src/llmProviders";
+import {
+  createLLMProvider,
+  OpenAILLMProvider,
+  AnthropicLLMProvider,
+  OllamaLLMProvider,
+  normalizeOllamaBaseUrl,
+} from "../src/llmProviders";
 
 /** Helper to build a McpConfig with sensible defaults, overriding specific fields. */
 function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
@@ -35,13 +41,12 @@ function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     writeApiKey: "",
     corsOrigin: "*",
     httpHost: "127.0.0.1",
+    allowedHosts: [],
     rerankerModel: "Xenova/ms-marco-MiniLM-L-6-v2",
     rerankerEnabled: true,
     rerankerMaxCandidates: 20,
     rerankerCandidateMultiplier: 4,
     queryMemoryEnabled: false,
-    sessionIdleTtlMs: 30_000,
-    maxSessions: 20,
     rateLimitPerMinute: 1_000,
     exportDir: "/tmp/ragnarok-exports",
     githubHosts: ["github.com"],
@@ -197,6 +202,37 @@ describe("LLM Providers", function () {
   // ─── AnthropicLLMProvider ────────────────────────────────
 
   describe("AnthropicLLMProvider", function () {
+    it("combines system messages and propagates a deadline signal", async function () {
+      let captured: any;
+      const provider = new AnthropicLLMProvider("key", "claude-test", "https://anthropic.invalid", 5_000);
+      (provider as any).client = {
+        messages: {
+          stream: (params: any, options: any) => {
+            captured = { params, options };
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { type: "content_block_delta", delta: { type: "text_delta", text: "ok" } };
+              },
+            };
+          },
+        },
+      };
+      const model = await provider.selectModel();
+      const stream = await model!.sendRequest([
+        { role: "system", content: "first" },
+        { role: "system", content: "second" },
+        { role: "user", content: "question" },
+      ]);
+      const chunks: string[] = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      expect(captured.params.system).to.equal("first\n\nsecond");
+      expect(captured.params.messages).to.deep.equal([{ role: "user", content: "question" }]);
+      expect(captured.options.signal).to.be.instanceOf(AbortSignal);
+      expect(chunks).to.deep.equal(["ok"]);
+    });
+
     it("selectModel returns null when the SDK import fails", async function () {
       const provider = new AnthropicLLMProvider("sk-ant-bogus", "claude-sonnet-4-20250514");
       const model = await provider.selectModel();
@@ -213,6 +249,12 @@ describe("LLM Providers", function () {
   // ─── OllamaLLMProvider ──────────────────────────────────
 
   describe("OllamaLLMProvider", function () {
+    it("normalizes trailing slashes without duplicating /v1", function () {
+      expect(normalizeOllamaBaseUrl("http://localhost:11434/")).to.equal("http://localhost:11434/v1");
+      expect(normalizeOllamaBaseUrl("http://localhost:11434/v1")).to.equal("http://localhost:11434/v1");
+      expect(normalizeOllamaBaseUrl("http://localhost:11434/v1/")).to.equal("http://localhost:11434/v1");
+    });
+
     it("selectModel returns null when the SDK import fails", async function () {
       const provider = new OllamaLLMProvider("http://localhost:11434", "llama3");
       const model = await provider.selectModel();

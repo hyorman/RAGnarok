@@ -5,11 +5,19 @@
 
 import { expect } from "chai";
 import http from "http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startHttpTransport, HttpTransportHandle } from "../src/httpServer";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { McpServer } from "@modelcontextprotocol/server";
+import { Logger } from "@ragnarok/core";
+import * as sinon from "sinon";
+import { startHttpTransport, HttpTransportHandle, resolveForwardedClientIp, type AccessRole } from "../src/httpServer";
 import { McpConfig, loadConfig } from "../src/config";
+import { TransferManager } from "../src/transferManager";
+import { markMcpToolResult } from "../src/auditContext";
+import { z } from "zod";
 
 function createTestConfig(overrides: Partial<McpConfig> = {}): McpConfig {
   return {
@@ -35,15 +43,14 @@ function createTestConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     embeddingApiKey: "",
     apiKey: "",
     writeApiKey: "",
-    corsOrigin: "*",
+    corsOrigin: "loopback",
     httpHost: "127.0.0.1",
+    allowedHosts: ["localhost", "127.0.0.1", "::1"],
     rerankerModel: "Xenova/ms-marco-MiniLM-L-6-v2",
     rerankerEnabled: true,
     rerankerMaxCandidates: 20,
     rerankerCandidateMultiplier: 4,
     queryMemoryEnabled: false,
-    sessionIdleTtlMs: 30_000,
-    maxSessions: 20,
     rateLimitPerMinute: 1_000,
     exportDir: "/tmp/ragnarok-exports",
     githubHosts: ["github.com"],
@@ -58,24 +65,43 @@ function createTestConfig(overrides: Partial<McpConfig> = {}): McpConfig {
 function testServerFactory(): () => McpServer {
   return () => {
     const server = new McpServer({ name: "test-server", version: "0.0.1" });
-    server.tool("test_ping", "A test tool", {}, async () => ({
+    server.registerTool("test_ping", { description: "A test tool", inputSchema: z.object({}) }, async () => ({
       content: [{ type: "text", text: "pong" }],
     }));
     return server;
   };
 }
 
-function roleAwareServerFactory(): (role: "reader" | "writer") => McpServer {
+function roleAwareServerFactory(): (role: AccessRole) => McpServer {
   return (role) => {
     const server = new McpServer({ name: "role-test-server", version: "0.0.1" });
-    server.tool("read_ping", "A read tool", {}, async () => ({ content: [{ type: "text", text: "pong" }] }));
-    if (role === "writer") {
-      server.tool("write_ping", "A writer-only tool", {}, async () => ({
-        content: [{ type: "text", text: "written" }],
-      }));
+    server.registerTool("rag_list_topics", { description: "A read tool", inputSchema: z.object({}) }, async () => ({
+      content: [{ type: "text", text: "pong" }],
+    }));
+    if (role === "curator" || role === "admin") {
+      server.registerTool(
+        "rag_create_topic",
+        { description: "A curator tool", inputSchema: z.object({}) },
+        async () => ({
+          content: [{ type: "text", text: "written" }],
+        }),
+      );
+    }
+    if (role === "admin") {
+      server.registerTool(
+        "rag_export_topic",
+        { description: "An admin tool", inputSchema: z.object({}) },
+        async () => ({
+          content: [{ type: "text", text: "exported" }],
+        }),
+      );
     }
     return server;
   };
+}
+
+function modernClient(name: string): Client {
+  return new Client({ name, version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
 }
 
 function serverPort(handle: HttpTransportHandle): number {
@@ -85,7 +111,7 @@ function serverPort(handle: HttpTransportHandle): number {
 /** Make an HTTP request and return status + parsed JSON body */
 function httpRequest(
   url: string,
-  options: http.RequestOptions & { _body?: string } = {},
+  options: http.RequestOptions & { _body?: string | Buffer } = {},
 ): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const req = http.request(url, options, (res) => {
@@ -118,7 +144,7 @@ describe("HTTP Transport", function () {
   // ---------------------------------------------------------------------------
 
   describe("loadConfig() HTTP fields", () => {
-    const httpEnvVars = ["RAGNAROK_API_KEY", "RAGNAROK_CORS_ORIGIN", "RAGNAROK_HTTP_HOST"];
+    const httpEnvVars = ["RAGNAROK_API_KEY", "RAGNAROK_CORS_ORIGIN", "RAGNAROK_HTTP_HOST", "RAGNAROK_ALLOWED_HOSTS"];
     const saved: Record<string, string | undefined> = {};
 
     beforeEach(() => {
@@ -143,9 +169,9 @@ describe("HTTP Transport", function () {
       expect(config.apiKey).to.equal("");
     });
 
-    it("should default corsOrigin to '*'", () => {
+    it("should default corsOrigin to the loopback browser policy", () => {
       const config = loadConfig();
-      expect(config.corsOrigin).to.equal("*");
+      expect(config.corsOrigin).to.equal("loopback");
     });
 
     it("should default httpHost to '127.0.0.1'", () => {
@@ -172,6 +198,27 @@ describe("HTTP Transport", function () {
       const config = loadConfig();
       expect(config.httpHost).to.equal("0.0.0.0");
     });
+
+    it("parses exact allowed HTTP hosts without ports or wildcards", () => {
+      process.env.RAGNAROK_ALLOWED_HOSTS = "kb.example.test,127.0.0.1";
+      expect(loadConfig().allowedHosts).to.deep.equal(["kb.example.test", "127.0.0.1"]);
+      process.env.RAGNAROK_ALLOWED_HOSTS = "*.example.test";
+      expect(() => loadConfig()).to.throw(/ALLOWED_HOSTS.*exact DNS names/i);
+    });
+  });
+
+  describe("trusted proxy attribution", () => {
+    it("uses the closest untrusted forwarded hop instead of a spoofable leftmost value", () => {
+      const trusted = new Set(["127.0.0.1", "192.0.2.10"]);
+      expect(resolveForwardedClientIp("127.0.0.1", "198.51.100.99, 203.0.113.7", trusted)).to.equal("203.0.113.7");
+      expect(resolveForwardedClientIp("127.0.0.1", "203.0.113.7, 192.0.2.10", trusted)).to.equal("203.0.113.7");
+    });
+
+    it("ignores forwarded headers from an untrusted direct peer", () => {
+      expect(resolveForwardedClientIp("203.0.113.10", "198.51.100.99", new Set(["127.0.0.1"]))).to.equal(
+        "203.0.113.10",
+      );
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -184,6 +231,7 @@ describe("HTTP Transport", function () {
     afterEach(async () => {
       await handle?.shutdown();
       handle = undefined;
+      sinon.restore();
     });
 
     it("should start and expose a /health endpoint", async () => {
@@ -195,6 +243,275 @@ describe("HTTP Transport", function () {
       expect(body).to.have.property("status", "ok");
       expect(body).to.have.property("version");
       expect(body).to.have.property("uptime").that.is.a("number");
+    });
+
+    it("records an MCP tool isError response as a failed audit outcome", async () => {
+      const audit = sinon.spy(Logger.prototype, "info");
+      const client = modernClient("audit-client");
+      try {
+        handle = await startHttpTransport(() => {
+          const server = new McpServer({ name: "audit-server", version: "0.0.1" });
+          server.registerTool(
+            "fail_tool",
+            { description: "Return a tool failure", inputSchema: z.object({}) },
+            async () => {
+              const result = {
+                isError: true,
+                content: [{ type: "text" as const, text: JSON.stringify({ error: "expected" }) }],
+              };
+              markMcpToolResult(result);
+              return result;
+            },
+          );
+          return server;
+        }, createTestConfig());
+        await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`)));
+        const result = await client.callTool({ name: "fail_tool", arguments: {} });
+        expect(result.isError).to.equal(true);
+        const auditCalls = audit.getCalls().map((call) => call.args);
+        expect(
+          auditCalls.some(
+            ([message, record]) =>
+              message === "audit" &&
+              (record as { method?: string; name?: string; outcome?: string })?.method === "tools/call" &&
+              (record as { method?: string; name?: string; outcome?: string })?.name === "fail_tool" &&
+              (record as { method?: string; name?: string; outcome?: string })?.outcome === "failed",
+          ),
+          JSON.stringify(auditCalls),
+        ).to.equal(true);
+      } finally {
+        await client.close().catch(() => undefined);
+        audit.restore();
+      }
+    });
+
+    it("rejects forwarded HTTPS spoofing from a peer that is not explicitly trusted", async () => {
+      handle = await startHttpTransport(
+        testServerFactory(),
+        createTestConfig({
+          deploymentMode: "shared",
+          apiKey: "reader-token-for-shared-mode-32-bytes",
+          trustedProxies: ["192.0.2.10"],
+        }),
+      );
+      const { status, body } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/health`, {
+        headers: { "x-forwarded-proto": "https" },
+      });
+      expect(status).to.equal(400);
+      expect(body.error.code).to.equal("TLS_REQUIRED");
+    });
+
+    it("refuses shared HTTP startup without an explicit Host allowlist", async () => {
+      let failure: unknown;
+      try {
+        await startHttpTransport(
+          testServerFactory(),
+          createTestConfig({
+            deploymentMode: "shared",
+            apiKey: "reader-token-for-shared-mode-32-bytes",
+            trustedProxies: ["127.0.0.1"],
+            allowedHosts: [],
+          }),
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).to.be.instanceOf(Error);
+      expect((failure as Error).message).to.match(/requires at least one exact RAGNAROK_ALLOWED_HOSTS/);
+    });
+
+    it("accepts forwarded HTTPS only through the explicitly trusted direct proxy", async () => {
+      handle = await startHttpTransport(
+        testServerFactory(),
+        createTestConfig({
+          deploymentMode: "shared",
+          apiKey: "reader-token-for-shared-mode-32-bytes",
+          trustedProxies: ["127.0.0.1"],
+        }),
+      );
+      const url = `http://127.0.0.1:${serverPort(handle)}/health`;
+      expect((await httpRequest(url)).status).to.equal(400);
+      expect((await httpRequest(url, { headers: { "x-forwarded-proto": "https" } })).status).to.equal(200);
+    });
+
+    it("enforces the shared public Host allowlist and accepts forwarded Host only from a trusted proxy", async () => {
+      handle = await startHttpTransport(
+        testServerFactory(),
+        createTestConfig({
+          deploymentMode: "shared",
+          apiKey: "reader-token-for-shared-mode-32-bytes",
+          trustedProxies: ["127.0.0.1"],
+          allowedHosts: ["kb.example.test"],
+        }),
+      );
+      const url = `http://127.0.0.1:${serverPort(handle)}/health`;
+      expect(
+        (
+          await httpRequest(url, {
+            headers: { host: "kb.example.test", "x-forwarded-proto": "https" },
+          })
+        ).status,
+      ).to.equal(200);
+      expect(
+        (
+          await httpRequest(url, {
+            headers: { host: "evil.example.test", "x-forwarded-proto": "https" },
+          })
+        ).status,
+      ).to.equal(403);
+      expect(
+        (
+          await httpRequest(url, {
+            headers: {
+              host: "proxy.internal",
+              "x-forwarded-host": "untrusted.example.test, kb.example.test",
+              "x-forwarded-proto": "https",
+            },
+          })
+        ).status,
+      ).to.equal(200);
+    });
+
+    it("ignores X-Forwarded-Host from an untrusted direct peer", async () => {
+      handle = await startHttpTransport(
+        testServerFactory(),
+        createTestConfig({
+          allowedHosts: ["kb.example.test"],
+          trustedProxies: ["192.0.2.10"],
+        }),
+      );
+      const response = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/health`, {
+        headers: { host: "evil.example.test", "x-forwarded-host": "kb.example.test" },
+      });
+      expect(response.status).to.equal(403);
+      expect(response.body.error.code).to.equal("HOST_NOT_ALLOWED");
+    });
+
+    it("marks readiness unavailable after admission closes while health stays live", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+      handle.closeAdmission();
+      expect((await httpRequest(`http://127.0.0.1:${serverPort(handle)}/ready`)).status).to.equal(503);
+      expect((await httpRequest(`http://127.0.0.1:${serverPort(handle)}/health`)).status).to.equal(200);
+    });
+
+    it("streams an owned chunked upload and rejects curator archive creation", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-http-transfer-"));
+      const manager = new TransferManager(root, {
+        maxFileBytes: 1024 * 1024,
+        maxAggregateBytes: 2 * 1024 * 1024,
+        maxSessionsPerPrincipal: 2,
+        ttlMs: 5_000,
+      });
+      await manager.initialize();
+      const curatorToken = "curator-transfer-token";
+      const adminToken = "admin-transfer-token";
+      handle = await startHttpTransport(
+        testServerFactory(),
+        createTestConfig({ writeApiKey: curatorToken, adminApiKey: adminToken }),
+        { transferManager: manager },
+      );
+      const bytes = Buffer.from("# transferred");
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      const base = `http://127.0.0.1:${serverPort(handle)}`;
+      const create = await httpRequest(`${base}/transfer/uploads`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${curatorToken}` },
+        _body: JSON.stringify({
+          kind: "document",
+          filename: "notes.md",
+          contentType: "text/markdown",
+          size: bytes.length,
+          sha256,
+        }),
+      });
+      expect(create.status).to.equal(201);
+      expect(JSON.stringify(create.body)).to.not.include(root);
+      const put = await httpRequest(`${base}/${create.body.uploadEndpoint}`, {
+        method: "PUT",
+        headers: { "content-type": "text/markdown", authorization: `Bearer ${curatorToken}` },
+        _body: bytes,
+      });
+      expect(put.status).to.equal(200);
+      const principal = `curator:${createHash("sha256").update(curatorToken).digest("hex").slice(0, 16)}`;
+      const consumed = await manager.consumeUpload(principal, create.body.id, "document", (filePath) =>
+        fs.readFile(filePath),
+      );
+      expect(consumed).to.deep.equal(bytes);
+
+      for (const fixture of [
+        {
+          token: curatorToken,
+          principal,
+          kind: "document",
+          filename: "sample.pdf",
+          contentType: "application/pdf",
+          bytes: Buffer.from("%PDF-1.4\ntransfer fixture"),
+        },
+        {
+          token: adminToken,
+          principal: `admin:${createHash("sha256").update(adminToken).digest("hex").slice(0, 16)}`,
+          kind: "archive",
+          filename: "topic.rag",
+          contentType: "application/vnd.ragnarok.archive",
+          bytes: Buffer.from("PK\u0003\u0004archive fixture"),
+        },
+      ]) {
+        const fixtureDigest = createHash("sha256").update(fixture.bytes).digest("hex");
+        const fixtureCreate = await httpRequest(`${base}/transfer/uploads`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${fixture.token}` },
+          _body: JSON.stringify({
+            kind: fixture.kind,
+            filename: fixture.filename,
+            contentType: fixture.contentType,
+            size: fixture.bytes.length,
+            sha256: fixtureDigest,
+          }),
+        });
+        expect(fixtureCreate.status).to.equal(201);
+        expect(
+          (
+            await httpRequest(`${base}/${fixtureCreate.body.uploadEndpoint}`, {
+              method: "PUT",
+              headers: { "content-type": fixture.contentType, authorization: `Bearer ${fixture.token}` },
+              _body: fixture.bytes,
+            })
+          ).status,
+        ).to.equal(200);
+        const fixtureSize = await manager.consumeUpload(
+          fixture.principal,
+          fixtureCreate.body.id,
+          fixture.kind as "document" | "archive",
+          async (filePath) => (await fs.stat(filePath)).size,
+        );
+        expect(fixtureSize).to.equal(fixture.bytes.length);
+      }
+
+      const archive = await httpRequest(`${base}/transfer/uploads`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${curatorToken}` },
+        _body: JSON.stringify({
+          kind: "archive",
+          filename: "topic.rag",
+          contentType: "application/vnd.ragnarok.archive",
+          size: 1,
+          sha256: "0".repeat(64),
+        }),
+      });
+      expect(archive.status).to.equal(403);
+      await manager.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    });
+
+    it("enforces the configured MCP JSON byte limit for chunked bodies", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig({ maxRequestBytes: 1024 }));
+      const response = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        _body: JSON.stringify({ padding: "x".repeat(2_000) }),
+      });
+      expect(response.status).to.equal(413);
+      expect(response.body.error.code).to.equal("REQUEST_TOO_LARGE");
     });
 
     it("should allow /mcp requests when no API key is configured", async () => {
@@ -210,44 +527,89 @@ describe("HTTP Transport", function () {
       expect(status).to.not.equal(401);
     });
 
-    it("should reject non-initialize requests without a session ID", async () => {
-      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+    it("rejects an arbitrary browser Origin before creating a tokenless writer session", async () => {
+      let createdServers = 0;
+      handle = await startHttpTransport(
+        () => {
+          createdServers++;
+          return testServerFactory()();
+        },
+        createTestConfig({ apiKey: "", writeApiKey: "" }),
+      );
 
       const { status, body } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
         method: "POST",
         headers: {
+          Origin: "https://attacker.example",
           "Content-Type": "application/json",
           Accept: "application/json, text/event-stream",
         },
-        _body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        _body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "attacker", version: "1.0.0" },
+          },
+        }),
       });
 
-      expect(status).to.equal(400);
-      expect(body?.error?.message).to.include("session");
+      expect(status).to.equal(403);
+      expect(body).to.deep.equal({ error: "Origin not allowed" });
+      expect(createdServers).to.equal(0);
     });
 
-    it("should reject requests carrying an unknown session ID", async () => {
+    it("rejects an untrusted CORS preflight before session handling", async () => {
+      let createdServers = 0;
+      handle = await startHttpTransport(() => {
+        createdServers++;
+        return testServerFactory()();
+      }, createTestConfig());
+
+      const { status } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://attacker.example",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type",
+        },
+      });
+
+      expect(status).to.equal(403);
+      expect(createdServers).to.equal(0);
+    });
+
+    it("allows a loopback browser Origin under the safe default", async () => {
       handle = await startHttpTransport(testServerFactory(), createTestConfig());
 
       const { status } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
-        method: "POST",
+        method: "OPTIONS",
         headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          "mcp-session-id": "no-such-session",
+          Origin: "http://localhost:5173",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type",
         },
-        _body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
       });
 
-      expect(status).to.equal(400);
+      expect(status).to.equal(204);
+    });
+
+    it("allows non-browser clients without an Origin header", async () => {
+      handle = await startHttpTransport(testServerFactory(), createTestConfig());
+      const client = modernClient("cli-client");
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`)));
+      expect((await client.listTools()).tools.map((tool) => tool.name)).to.include("test_ping");
+      await client.close();
     });
   });
 
   // ---------------------------------------------------------------------------
-  // Multi-session support
+  // Concurrent stateless requests
   // ---------------------------------------------------------------------------
 
-  describe("multi-session support", () => {
+  describe("concurrent stateless clients", () => {
     let handle: HttpTransportHandle | undefined;
 
     afterEach(async () => {
@@ -255,17 +617,15 @@ describe("HTTP Transport", function () {
       handle = undefined;
     });
 
-    it("serves two concurrent client sessions independently", async () => {
+    it("serves two concurrent clients independently", async () => {
       handle = await startHttpTransport(testServerFactory(), createTestConfig());
       const url = new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`);
 
-      const clientA = new Client({ name: "client-a", version: "1.0.0" });
-      const clientB = new Client({ name: "client-b", version: "1.0.0" });
+      const clientA = modernClient("client-a");
+      const clientB = modernClient("client-b");
       const transportA = new StreamableHTTPClientTransport(url);
       const transportB = new StreamableHTTPClientTransport(url);
 
-      // A stateful transport serves ONE session; a second concurrent client
-      // must get its own session instead of hijacking or breaking the first.
       await clientA.connect(transportA);
       await clientB.connect(transportB);
 
@@ -283,38 +643,12 @@ describe("HTTP Transport", function () {
       await clientB.close();
     });
 
-    it("terminates a session via DELETE and rejects further use of its ID", async () => {
-      handle = await startHttpTransport(testServerFactory(), createTestConfig());
-      const url = new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`);
-
-      const client = new Client({ name: "client", version: "1.0.0" });
-      const transport = new StreamableHTTPClientTransport(url);
-      await client.connect(transport);
-
-      const sessionId = transport.sessionId;
-      expect(sessionId, "client transport received no session ID").to.be.a("string");
-
-      // DELETE /mcp with the session ID = explicit termination
-      await transport.terminateSession();
-
-      const { status } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          "mcp-session-id": sessionId!,
-        },
-        _body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/list" }),
-      });
-      expect(status).to.equal(400);
-    });
-
-    it("shutdown() closes active sessions and stops listening", async () => {
+    it("shutdown() closes modern exchanges and stops listening", async () => {
       handle = await startHttpTransport(testServerFactory(), createTestConfig());
       const port = serverPort(handle);
       const url = new URL(`http://127.0.0.1:${port}/mcp`);
 
-      const client = new Client({ name: "client", version: "1.0.0" });
+      const client = modernClient("client");
       await client.connect(new StreamableHTTPClientTransport(url));
 
       await handle.shutdown();
@@ -328,60 +662,109 @@ describe("HTTP Transport", function () {
       }
       expect(refused, "server still accepting connections after shutdown").to.equal(true);
     });
+
+    it("uses one absolute drain deadline and still closes active MCP handlers", async () => {
+      const drainBudgetMs = 120;
+      let handlerStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        handlerStarted = resolve;
+      });
+      let handlerClosed!: () => void;
+      const closed = new Promise<void>((resolve) => {
+        handlerClosed = resolve;
+      });
+      handle = await startHttpTransport(
+        () => {
+          const server = new McpServer({ name: "deadline-test", version: "0.0.1" });
+          server.server.onclose = handlerClosed;
+          server.registerTool(
+            "wait",
+            { description: "Wait until transport shutdown", inputSchema: z.object({}) },
+            async (_args, ctx) => {
+              handlerStarted();
+              await new Promise<void>((resolve, reject) => {
+                const onAbort = () => reject(ctx.mcpReq.signal.reason ?? new Error("transport closed"));
+                if (ctx.mcpReq.signal.aborted) {
+                  onAbort();
+                } else {
+                  ctx.mcpReq.signal.addEventListener("abort", onAbort, { once: true });
+                }
+              });
+              return { content: [{ type: "text", text: "unexpected" }] };
+            },
+          );
+          return server;
+        },
+        createTestConfig({ shutdownDrainMs: drainBudgetMs }),
+      );
+      const client = modernClient("deadline-client");
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`)));
+      const request = client.callTool({ name: "wait", arguments: {} }).catch(() => undefined);
+      await started;
+
+      const start = Date.now();
+      const deadline = start + drainBudgetMs;
+      await new Promise((resolve) => setTimeout(resolve, 90));
+      await (handle.shutdown as (absoluteDeadline?: number) => Promise<void>)(deadline);
+      const elapsed = Date.now() - start;
+      handle = undefined;
+
+      expect(elapsed).to.be.lessThan(190);
+      await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("MCP handler did not close")), 500)),
+      ]);
+      await request;
+      await client.close().catch(() => undefined);
+    });
   });
 
-  describe("session limits and cancellation", () => {
+  describe("request controls and cancellation", () => {
     let handle: HttpTransportHandle | undefined;
 
     afterEach(async () => {
       await handle?.shutdown();
       handle = undefined;
+      sinon.restore();
     });
 
-    it("enforces the configured maximum session count", async () => {
-      handle = await startHttpTransport(testServerFactory(), createTestConfig({ maxSessions: 1 }));
-      const url = new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`);
-      const first = new Client({ name: "first", version: "1.0.0" });
-      await first.connect(new StreamableHTTPClientTransport(url));
-
-      const second = new Client({ name: "second", version: "1.0.0" });
-      let rejected = false;
-      try {
-        await second.connect(new StreamableHTTPClientTransport(url));
-      } catch {
-        rejected = true;
-      }
-      expect(rejected).to.equal(true);
-      await first.close();
-    });
-
-    it("expires idle sessions", async () => {
-      handle = await startHttpTransport(testServerFactory(), createTestConfig({ sessionIdleTtlMs: 1000 }));
-      const url = new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`);
-      const client = new Client({ name: "idle", version: "1.0.0" });
-      const transport = new StreamableHTTPClientTransport(url);
-      await client.connect(transport);
-      const sessionId = transport.sessionId!;
-
-      await new Promise((resolve) => setTimeout(resolve, 2200));
-      const { status } = await httpRequest(url.toString(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          "mcp-session-id": sessionId,
-        },
-        _body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" }),
-      });
-      expect(status).to.equal(400);
-    });
-
-    it("applies the configured request rate limit", async () => {
+    it("applies one IP quota across changing routing headers and logs bounded diagnostics", async () => {
+      const warnings = sinon.spy(Logger.prototype, "warn");
       handle = await startHttpTransport(testServerFactory(), createTestConfig({ rateLimitPerMinute: 2 }));
-      const url = `http://127.0.0.1:${serverPort(handle)}/health`;
-      expect((await httpRequest(url)).status).to.equal(200);
-      expect((await httpRequest(url)).status).to.equal(200);
-      expect((await httpRequest(url)).status).to.equal(429);
+      const healthUrl = `http://127.0.0.1:${serverPort(handle)}/health`;
+      const mcpUrl = `http://127.0.0.1:${serverPort(handle)}/mcp`;
+      expect((await httpRequest(healthUrl)).status).to.equal(200);
+      expect((await httpRequest(healthUrl)).status).to.equal(200);
+      const modernMcpRequest = (method: string, name: string) => ({
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Mcp-Method": method, "Mcp-Name": name },
+        _body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+          params: {
+            _meta: {
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+              "io.modelcontextprotocol/clientInfo": { name: "rate-test", version: "1.0.0" },
+              "io.modelcontextprotocol/clientCapabilities": {},
+            },
+          },
+        }),
+      });
+      const firstMcpResponse = await httpRequest(mcpUrl, modernMcpRequest("tools/list", "first"));
+      expect(firstMcpResponse.status, JSON.stringify(firstMcpResponse.body)).to.equal(200);
+      expect((await httpRequest(mcpUrl, modernMcpRequest("tools/list", "second"))).status).to.equal(200);
+      const longMethod = "m".repeat(300);
+      const longName = "n".repeat(300);
+      expect((await httpRequest(mcpUrl, modernMcpRequest(longMethod, longName))).status).to.equal(429);
+      expect(
+        warnings.calledWith("MCP rate limit exceeded", {
+          clientIp: "127.0.0.1",
+          method: longMethod.slice(0, 256),
+          name: longName.slice(0, 256),
+        }),
+      ).to.equal(true);
+      warnings.restore();
     });
 
     it("propagates client cancellation to the active MCP handler", async () => {
@@ -396,28 +779,32 @@ describe("HTTP Transport", function () {
       });
       handle = await startHttpTransport(() => {
         const server = new McpServer({ name: "cancel-test", version: "0.0.1" });
-        server.tool("wait", "Wait until cancelled", {}, async (_args, extra) => {
-          handlerStarted();
-          await new Promise<void>((resolve, reject) => {
-            const onAbort = () => {
-              handlerAborted = true;
-              notifyHandlerAborted();
-              reject(extra.signal.reason ?? new Error("cancelled"));
-            };
-            if (extra.signal.aborted) {
-              onAbort();
-            } else {
-              extra.signal.addEventListener("abort", onAbort, { once: true });
-            }
-          });
-          return { content: [{ type: "text", text: "unexpected" }] };
-        });
+        server.registerTool(
+          "wait",
+          { description: "Wait until cancelled", inputSchema: z.object({}) },
+          async (_args, ctx) => {
+            handlerStarted();
+            await new Promise<void>((resolve, reject) => {
+              const onAbort = () => {
+                handlerAborted = true;
+                notifyHandlerAborted();
+                reject(ctx.mcpReq.signal.reason ?? new Error("cancelled"));
+              };
+              if (ctx.mcpReq.signal.aborted) {
+                onAbort();
+              } else {
+                ctx.mcpReq.signal.addEventListener("abort", onAbort, { once: true });
+              }
+            });
+            return { content: [{ type: "text", text: "unexpected" }] };
+          },
+        );
         return server;
       }, createTestConfig());
-      const client = new Client({ name: "cancel-client", version: "1.0.0" });
+      const client = modernClient("cancel-client");
       await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`)));
       const controller = new AbortController();
-      const request = client.callTool({ name: "wait", arguments: {} }, undefined, { signal: controller.signal });
+      const request = client.callTool({ name: "wait", arguments: {} }, { signal: controller.signal });
       await started;
       controller.abort();
       let rejected = false;
@@ -452,18 +839,21 @@ describe("HTTP Transport", function () {
     afterEach(async () => {
       await handle?.shutdown();
       handle = undefined;
+      sinon.restore();
     });
 
-    it("should return 401 when API key is configured but no Authorization header sent", async () => {
-      handle = await startHttpTransport(testServerFactory(), createTestConfig({ apiKey: TEST_API_KEY }));
+    it("should return a sanitized bearer challenge when authentication fails", async () => {
+      const config = createTestConfig({ apiKey: TEST_API_KEY });
+      handle = await startHttpTransport(testServerFactory(), config);
 
-      const { status, body } = await httpRequest(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
+      const response = await fetch(`http://127.0.0.1:${serverPort(handle)}/mcp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
 
-      expect(status).to.equal(401);
-      expect(body).to.have.property("error", "Unauthorized");
+      expect(response.status).to.equal(401);
+      expect(response.headers.get("www-authenticate")).to.equal('Bearer realm="ragnarok"');
+      expect(await response.text()).not.to.include(config.apiKey);
     });
 
     it("should return 401 when Authorization header has wrong key", async () => {
@@ -496,42 +886,97 @@ describe("HTTP Transport", function () {
       expect(status).to.not.equal(401);
     });
 
-    it("fixes reader and writer roles at initialization and rejects token switching", async () => {
+    it("isolates reader, curator, and admin facades per request, audits calls, and applies rotations immediately", async () => {
       const readToken = "reader-token-123";
-      const writeToken = "writer-token-456";
+      const curatorToken = "curator-token-456";
+      const adminToken = "admin-token-789";
+      const audit = sinon.spy(Logger.prototype, "info");
       handle = await startHttpTransport(
         roleAwareServerFactory(),
-        createTestConfig({ apiKey: readToken, writeApiKey: writeToken }),
+        createTestConfig({
+          deploymentMode: "shared",
+          apiKey: readToken,
+          writeApiKey: curatorToken,
+          adminApiKey: adminToken,
+          trustedProxies: ["127.0.0.1"],
+        }),
       );
       const url = new URL(`http://127.0.0.1:${serverPort(handle)}/mcp`);
-      const readerTransport = new StreamableHTTPClientTransport(url, {
-        requestInit: { headers: { Authorization: `Bearer ${readToken}` } },
-      });
-      const writerTransport = new StreamableHTTPClientTransport(url, {
-        requestInit: { headers: { Authorization: `Bearer ${writeToken}` } },
-      });
-      const reader = new Client({ name: "reader", version: "1.0.0" });
-      const writer = new Client({ name: "writer", version: "1.0.0" });
-      await reader.connect(readerTransport);
-      await writer.connect(writerTransport);
+      const requestHeaders = (token: string) => ({ Authorization: `Bearer ${token}`, "x-forwarded-proto": "https" });
+      const listTools = async (name: string, token: string): Promise<string[]> => {
+        const client = modernClient(name);
+        await client.connect(
+          new StreamableHTTPClientTransport(url, { requestInit: { headers: requestHeaders(token) } }),
+        );
+        try {
+          return (await client.listTools()).tools.map((tool) => tool.name);
+        } finally {
+          await client.close();
+        }
+      };
 
-      expect((await reader.listTools()).tools.map((tool) => tool.name)).to.deep.equal(["read_ping"]);
-      expect((await writer.listTools()).tools.map((tool) => tool.name)).to.include.members(["read_ping", "write_ping"]);
+      expect(await listTools("reader", readToken)).to.deep.equal(["rag_list_topics"]);
+      expect(await listTools("curator", curatorToken)).to.deep.equal(["rag_list_topics", "rag_create_topic"]);
+      expect(await listTools("admin", adminToken)).to.deep.equal([
+        "rag_list_topics",
+        "rag_create_topic",
+        "rag_export_topic",
+      ]);
+      expect(await listTools("reader-after-admin", readToken)).to.deep.equal(["rag_list_topics"]);
 
-      const { status } = await httpRequest(url.toString(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          Authorization: `Bearer ${writeToken}`,
-          "mcp-session-id": readerTransport.sessionId!,
-        },
-        _body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list" }),
-      });
-      expect(status).to.equal(401);
-
+      const reader = modernClient("audit-reader");
+      await reader.connect(
+        new StreamableHTTPClientTransport(url, { requestInit: { headers: requestHeaders(readToken) } }),
+      );
+      await reader.callTool({ name: "rag_list_topics", arguments: {} });
       await reader.close();
-      await writer.close();
+      const expectedPrincipal = `reader:${createHash("sha256").update(readToken).digest("hex").slice(0, 16)}`;
+      const record = audit
+        .getCalls()
+        .map((call) => call.args)
+        .find(
+          ([message, candidate]) =>
+            message === "audit" &&
+            (candidate as { method?: string; name?: string })?.method === "tools/call" &&
+            (candidate as { method?: string; name?: string })?.name === "rag_list_topics",
+        )?.[1] as Record<string, unknown> | undefined;
+      expect(record).to.include({
+        principal: expectedPrincipal,
+        role: "reader",
+        method: "tools/call",
+        name: "rag_list_topics",
+        outcome: "success",
+      });
+      expect(record?.correlationId).to.be.a("string").and.not.empty;
+
+      const nextReadToken = "reader-token-rotated";
+      await handle.rotateTokens({ reader: nextReadToken }, "reader");
+      const modernRequest = async (requestToken: string): Promise<Response> =>
+        fetch(url, {
+          method: "POST",
+          headers: {
+            ...requestHeaders(requestToken),
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/list",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/list",
+            params: {
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "rotation-test", version: "1.0.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            },
+          }),
+        });
+      expect((await modernRequest(readToken)).status).to.equal(401);
+      expect((await modernRequest(nextReadToken)).status).to.equal(200);
+      audit.restore();
     });
   });
 });

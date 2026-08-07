@@ -33,6 +33,19 @@ export interface PipelineOptions {
   /** Progress callback */
   onProgress?: (progress: PipelineProgress) => void;
   signal?: AbortSignal;
+  /** Internal durable-ingestion transaction identity persisted on every chunk. */
+  ingestionTransactionId?: string;
+}
+
+export interface PipelineSourceDocument {
+  documentId: string;
+  canonicalSource: string;
+  sourceType: string;
+  sourceRevision: string;
+  fileName: string;
+  filePath: string;
+  fileType: string;
+  chunkCount: number;
 }
 
 export interface PipelineProgress {
@@ -74,6 +87,7 @@ export interface PipelineResult {
     graphExtracted: boolean;
     partial: boolean;
     documentId?: string;
+    sourceDocuments?: PipelineSourceDocument[];
     warnings: Array<{ stage: string; message: string }>;
   };
 
@@ -339,6 +353,7 @@ export class DocumentPipeline {
             rateLimitMs,
             maxConsecutiveFailures,
             entityTypes,
+            signal: options.signal,
             onProgress: (p) => {
               const extractProgress =
                 chunkingResult.chunkCount > 0 ? 30 + (p.processedChunks / p.totalChunks) * 15 : 30;
@@ -354,7 +369,9 @@ export class DocumentPipeline {
           const entityEmbeddings = await this.entityExtractor.embedEntities(
             extractionResult.entities,
             this.embeddingService,
+            options.signal,
           );
+          options.signal?.throwIfAborted();
 
           const graphUpsert = upsertExtractedGraphData({
             knowledgeGraph: this.knowledgeGraph,
@@ -376,6 +393,9 @@ export class DocumentPipeline {
             time: result.metadata.stageTimings.extracting,
           });
         } catch (error) {
+          if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+            throw options.signal?.reason ?? error;
+          }
           // Entity extraction failure should NOT block the pipeline
           const errorMessage = `Entity extraction failed: ${error instanceof Error ? error.message : String(error)}`;
           this.logger.error(errorMessage);
@@ -407,6 +427,7 @@ export class DocumentPipeline {
       options.signal?.throwIfAborted();
       result.metadata.chunksStored = result.chunks.length;
       result.metadata.documentId = String(result.chunks[0]?.metadata.documentId ?? "") || undefined;
+      result.metadata.sourceDocuments = this.summarizeSourceDocuments(result.chunks);
       result.metadata.chunksEmbedded = result.chunks.length; // Embeddings generated during storage
       result.stages.embedding = true;
       result.stages.storing = true;
@@ -442,6 +463,9 @@ export class DocumentPipeline {
 
       return result;
     } catch (error) {
+      if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        throw options.signal?.reason ?? error;
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       errors.push(errorMessage);
 
@@ -523,6 +547,9 @@ export class DocumentPipeline {
         document.metadata.sourceDescriptor = JSON.stringify(descriptor);
         document.metadata.sourceRevision = revision;
         document.metadata.documentId = documentId;
+        if (options.ingestionTransactionId) {
+          document.metadata.ingestionTransactionId = options.ingestionTransactionId;
+        }
       }
     }
 
@@ -602,6 +629,7 @@ export class DocumentPipeline {
     const existingMetadata = await this.vectorStoreFactory.getStoreMetadata(topicId);
     const storedStats = await this.vectorStoreFactory.getStoredStats(topicId);
 
+    options.signal?.throwIfAborted();
     await this.vectorStoreFactory.saveStore(topicId, {
       documentCount: storedStats.documentCount,
       chunkCount: storedStats.chunkCount,
@@ -611,6 +639,33 @@ export class DocumentPipeline {
       embeddingFingerprint:
         existingMetadata?.embeddingFingerprint ?? (await this.embeddingService.getFingerprint(options.signal)),
     });
+    options.signal?.throwIfAborted();
+  }
+
+  private summarizeSourceDocuments(chunks: LangChainDocument[]): PipelineSourceDocument[] {
+    const summaries = new Map<string, PipelineSourceDocument>();
+    for (const chunk of chunks) {
+      const documentId = String(chunk.metadata.documentId ?? "");
+      if (!documentId) {
+        continue;
+      }
+      const current = summaries.get(documentId);
+      if (current) {
+        current.chunkCount += 1;
+        continue;
+      }
+      summaries.set(documentId, {
+        documentId,
+        canonicalSource: String(chunk.metadata.source ?? chunk.metadata.filePath ?? ""),
+        sourceType: String(chunk.metadata.sourceType ?? "file"),
+        sourceRevision: String(chunk.metadata.sourceRevision ?? ""),
+        fileName: String(chunk.metadata.fileName ?? path.basename(String(chunk.metadata.source ?? ""))),
+        filePath: String(chunk.metadata.filePath ?? chunk.metadata.source ?? ""),
+        fileType: String(chunk.metadata.fileType ?? "text"),
+        chunkCount: 1,
+      });
+    }
+    return [...summaries.values()];
   }
 
   /**

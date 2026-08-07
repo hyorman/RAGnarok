@@ -1,6 +1,7 @@
 /**
  * Knowledge Graph types for entity-relationship modeling
  */
+import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 /**
  * Entity type classification.
@@ -155,6 +156,8 @@ export interface KnowledgeGraphData {
     edgeCount: number;
     communityCount: number;
     embeddingModel: string;
+    embeddingDimension?: number;
+    embeddingFingerprint?: EmbeddingFingerprint;
   };
 }
 

@@ -88,11 +88,29 @@ function formatHeadingPath(raw: unknown): string | undefined {
   return String(raw);
 }
 
+function describeRetrievalFallback(reason: unknown): string | undefined {
+  switch (reason) {
+    case "no_graph_matches":
+      return "No graph entities met the relevance threshold; vector retrieval was used.";
+    case "no_graph_chunks":
+      return "Graph matches had no retrievable chunks; vector retrieval was used.";
+    case "graph_error":
+      return "Graph retrieval failed; vector retrieval was used.";
+    case "no_vector_matches":
+      return "Vector retrieval returned no matches; graph retrieval was used.";
+    case "vector_error":
+      return "Vector retrieval failed; graph retrieval was used.";
+    default:
+      return undefined;
+  }
+}
+
 export class RAGQueryService {
   private logger = new Logger("RAGQueryService");
   private ragAgents: Map<string, RAGAgent> = new Map();
   // undefined = not attempted yet, null = attempted but failed
   private cachedReranker: Reranker | null | undefined = undefined;
+  private rerankerExternallyManaged = false;
   // Compiled LangGraph query pipeline — compiled once and reused so the
   // per-topic RAGAgent cache inside its retrieve node survives across queries
   // (recompiling per query forced a full agent rebuild every time).
@@ -132,6 +150,7 @@ export class RAGQueryService {
    */
   public setReranker(reranker: Reranker): void {
     this.cachedReranker = reranker;
+    this.rerankerExternallyManaged = true;
     // Cached agents and the compiled graph hold the previous reranker.
     this.ragAgents.clear();
     this.compiledQueryGraph = null;
@@ -154,6 +173,9 @@ export class RAGQueryService {
     readOnly = false,
   ): Promise<RAGQueryResult> {
     this.logger.info(`RAG query: "${params.query}" for topic: "${params.topic}"`);
+    // Cached agents and the compiled graph share this instance, so reconcile
+    // config-driven model changes before either cache can serve the query.
+    await this.getOrCreateReranker();
 
     // ── LangGraph pipeline (opt-in) ──
     const langGraphEnabled = this.config.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false);
@@ -230,6 +252,9 @@ export class RAGQueryService {
     // 6. Format into RAGQueryResult
     const graphRequested = [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(retrievalStrategy);
     const graphUsed = ragResult.results.some((result) => String(result.source).includes("graph"));
+    const detailedFallback = ragResult.results
+      .map((result) => describeRetrievalFallback(result.fallbackReason ?? result.document.metadata.fallbackReason))
+      .find(Boolean);
     return {
       query: params.query,
       topicName: topicMatch.topic.name,
@@ -238,7 +263,11 @@ export class RAGQueryService {
       availableTopics: topicMatch.availableTopics,
       graphUsed,
       fallbackReason:
-        graphRequested && !graphUsed ? "No graph matches were available; vector retrieval was used." : undefined,
+        graphRequested && detailedFallback
+          ? detailedFallback
+          : graphRequested && !graphUsed
+            ? "No graph matches were available; vector retrieval was used."
+            : undefined,
       matchedEntities: [
         ...new Set(
           ragResult.results.flatMap((result) =>
@@ -270,6 +299,15 @@ export class RAGQueryService {
           position: formatPosition(result.document.metadata),
           headingPath: formatHeadingPath(result.document.metadata.headingPath),
           sectionTitle: result.document.metadata.sectionTitle,
+          scoreKind: result.scoreKind ?? result.document.metadata.scoreKind,
+          componentScores: result.componentScores ?? result.document.metadata.componentScores,
+          originalScore: result.originalScore,
+          originalScoreKind: result.originalScoreKind,
+          originalComponentScores: result.originalComponentScores,
+          matchedEntities: result.matchedEntities ?? result.document.metadata.matchedEntities,
+          hopDepth: result.hopDepth ?? result.document.metadata.hopDepth,
+          degradedFrom: result.degradedFrom ?? result.document.metadata.degradedFrom,
+          fallbackReason: result.fallbackReason ?? result.document.metadata.fallbackReason,
         },
       })),
     };
@@ -413,6 +451,9 @@ export class RAGQueryService {
     const requestedStrategy =
       params.retrievalStrategy ?? (this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "") as RetrievalStrategy);
     const graphUsed = results.some((result) => String(result.metadata?.retrievalStrategy ?? "").includes("graph"));
+    const detailedFallback = results
+      .map((result) => describeRetrievalFallback(result.metadata?.fallbackReason))
+      .find(Boolean);
 
     return {
       query: params.query,
@@ -422,9 +463,11 @@ export class RAGQueryService {
       availableTopics: topicMatch.availableTopics,
       graphUsed,
       fallbackReason:
-        [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(requestedStrategy) && !graphUsed
-          ? "No graph matches were available; vector retrieval was used."
-          : undefined,
+        [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(requestedStrategy) && detailedFallback
+          ? detailedFallback
+          : [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(requestedStrategy) && !graphUsed
+            ? "No graph matches were available; vector retrieval was used."
+            : undefined,
       matchedEntities: [
         ...new Set(
           results.flatMap((result) =>
@@ -456,6 +499,19 @@ export class RAGQueryService {
           position: formatPosition(r.metadata),
           headingPath: formatHeadingPath(r.metadata?.headingPath),
           sectionTitle: r.metadata?.sectionTitle as string | undefined,
+          scoreKind: r.metadata?.scoreKind as string | undefined,
+          componentScores: r.metadata?.componentScores as
+            | { vector?: number; keyword?: number; graph?: number }
+            | undefined,
+          originalScore: r.metadata?.originalScore as number | undefined,
+          originalScoreKind: r.metadata?.originalScoreKind as string | undefined,
+          originalComponentScores: r.metadata?.originalComponentScores as
+            | { vector?: number; keyword?: number; graph?: number }
+            | undefined,
+          matchedEntities: r.metadata?.matchedEntities as string[] | undefined,
+          hopDepth: r.metadata?.hopDepth as number | undefined,
+          degradedFrom: r.metadata?.degradedFrom as string | undefined,
+          fallbackReason: r.metadata?.fallbackReason as string | undefined,
         },
       })),
     };
@@ -507,6 +563,27 @@ export class RAGQueryService {
 
   private async getOrCreateReranker(): Promise<Reranker | null> {
     if (this.cachedReranker !== undefined) {
+      const desiredModel = this.config.get<string>(CONFIG.RERANKER_MODEL, "");
+      if (
+        this.cachedReranker &&
+        !this.rerankerExternallyManaged &&
+        desiredModel &&
+        this.cachedReranker.getCurrentModel &&
+        this.cachedReranker.switchModel &&
+        this.cachedReranker.getCurrentModel() !== desiredModel
+      ) {
+        try {
+          await this.cachedReranker.switchModel(desiredModel);
+          this.ragAgents.clear();
+          this.compiledQueryGraph = null;
+        } catch (error) {
+          this.logger.warn("Reranker model switch failed; retaining the previous generation", {
+            requestedModel: desiredModel,
+            activeModel: this.cachedReranker.getCurrentModel(),
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       return this.cachedReranker;
     }
     this.cachedReranker = await this.createReranker();

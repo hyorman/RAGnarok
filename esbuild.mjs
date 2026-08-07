@@ -3,14 +3,32 @@ import * as esbuild from "esbuild";
 const production = process.argv.includes("--production");
 const watch = process.argv.includes("--watch");
 
+// These pure-JavaScript dependencies are imported by bundled @ragnarok/core
+// code. Keep them in the extension bundle so the root entry point does not
+// depend on workspace-specific node_modules placement in a staged VSIX.
+const bundledGraphDependencies = [
+  "graphology",
+  "graphology-communities-louvain",
+  "graphology-indices",
+  "graphology-utils",
+  "mnemonist",
+  "obliterator",
+  "pandemonium",
+];
+
 /** @type {import('esbuild').Plugin} */
 const externalizeNonWorkspaceDeps = {
   name: "externalize-non-workspace-deps",
   setup(build) {
     // Externalize all bare-specifier imports except @ragnarok/* workspace packages
     build.onResolve({ filter: /^[^./]/ }, (args) => {
-      if (args.path.startsWith("@ragnarok/")) {
-        return undefined; // Let esbuild resolve and bundle workspace packages
+      if (
+        args.path.startsWith("@ragnarok/") ||
+        bundledGraphDependencies.some(
+          (dependency) => args.path === dependency || args.path.startsWith(`${dependency}/`),
+        )
+      ) {
+        return undefined; // Let esbuild resolve and bundle these dependencies.
       }
       return { path: args.path, external: true };
     });

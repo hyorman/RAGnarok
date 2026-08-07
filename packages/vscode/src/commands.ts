@@ -5,16 +5,46 @@
 
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
-import { TopicManager, EmbeddingService, Logger, sanitizeErrorMessage, Topic } from "@ragnarok/core";
+import { TopicManager, EmbeddingService, Logger, sanitizeErrorMessage, Topic, MemoryStore } from "@ragnarok/core";
 import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
 import { COMMANDS } from "./constants";
 import { GitHubTokenManager } from "./githubTokenManager";
+import { waitForAbortableUi, type ExtensionOperationRunner } from "./extensionLifecycle";
 
 const logger = new Logger("CommandHandler");
+
+export class NoDocumentsIngestedError extends Error {
+  constructor() {
+    super("No documents were ingested. Check the selected source and the extension logs for details.");
+    this.name = "NoDocumentsIngestedError";
+  }
+}
+
+/**
+ * Bridge extension lifecycle cancellation into the core ingestion pipeline.
+ * Once durable ingestion starts, shutdown aborts the supported core operation
+ * and waits for it to unwind.
+ */
+export async function addDocumentsWithLifecycleSignal(
+  topicManager: Pick<TopicManager, "addDocuments">,
+  topicId: string,
+  sources: string[],
+  signal: AbortSignal | undefined,
+  options: NonNullable<Parameters<TopicManager["addDocuments"]>[2]> = {},
+) {
+  signal?.throwIfAborted();
+  const results = await topicManager.addDocuments(topicId, sources, { ...options, signal });
+  signal?.throwIfAborted();
+  if (results.length === 0) {
+    throw new NoDocumentsIngestedError();
+  }
+  return results;
+}
 
 export class CommandHandler {
   private topicManager: TopicManager;
   private embeddingService: EmbeddingService;
+  private memoryStore: MemoryStore;
   private treeDataProvider: TopicTreeDataProvider;
   private configDataProvider: ConfigTreeDataProvider;
   private context: vscode.ExtensionContext;
@@ -24,12 +54,14 @@ export class CommandHandler {
     context: vscode.ExtensionContext,
     topicManager: TopicManager,
     embeddingService: EmbeddingService,
+    memoryStore: MemoryStore,
     treeDataProvider: TopicTreeDataProvider,
     configDataProvider: ConfigTreeDataProvider,
   ) {
     this.context = context;
     this.topicManager = topicManager;
     this.embeddingService = embeddingService;
+    this.memoryStore = memoryStore;
     this.treeDataProvider = treeDataProvider;
     this.configDataProvider = configDataProvider;
     this.tokenManager = GitHubTokenManager.getInstance();
@@ -42,42 +74,90 @@ export class CommandHandler {
     context: vscode.ExtensionContext,
     topicManager: TopicManager,
     embeddingService: EmbeddingService,
+    memoryStore: MemoryStore,
     treeDataProvider: TopicTreeDataProvider,
     configDataProvider: ConfigTreeDataProvider,
-  ): Promise<void> {
-    const handler = new CommandHandler(context, topicManager, embeddingService, treeDataProvider, configDataProvider);
+    operationRunner: ExtensionOperationRunner = async (_label, operation) => operation(new AbortController().signal),
+  ): Promise<vscode.Disposable> {
+    const handler = new CommandHandler(
+      context,
+      topicManager,
+      embeddingService,
+      memoryStore,
+      treeDataProvider,
+      configDataProvider,
+    );
+    const run = <T>(label: string, operation: (signal: AbortSignal) => Promise<T> | T): Promise<T> =>
+      operationRunner(label, async (signal) => operation(signal));
 
-    context.subscriptions.push(
-      vscode.commands.registerCommand(COMMANDS.CREATE_TOPIC, () => handler.createTopic()),
-      vscode.commands.registerCommand(COMMANDS.DELETE_TOPIC, (item?: any) => handler.deleteTopic(item)),
-      vscode.commands.registerCommand(COMMANDS.ADD_DOCUMENT, (item?: any) => handler.addDocument(item)),
-      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_REPO, (item?: any) => handler.addGithubRepo(item)),
-      vscode.commands.registerCommand(COMMANDS.ADD_WEB_URL, (item?: any) => handler.addWebUrl(item)),
-      vscode.commands.registerCommand(COMMANDS.REFRESH_TOPICS, () => handler.refreshTopics()),
-      vscode.commands.registerCommand(COMMANDS.CLEAR_MODEL_CACHE, () => handler.clearModelCache()),
-      vscode.commands.registerCommand(COMMANDS.SET_EMBEDDING_MODEL, (model) => handler.setEmbeddingModel(model)),
-      vscode.commands.registerCommand(COMMANDS.CLEAR_DATABASE, () => handler.clearDatabase()),
+    const registrations = [
+      vscode.commands.registerCommand(COMMANDS.CREATE_TOPIC, () =>
+        run(COMMANDS.CREATE_TOPIC, (signal) => handler.createTopic(signal)),
+      ),
+      vscode.commands.registerCommand(COMMANDS.DELETE_TOPIC, (item?: any) =>
+        run(COMMANDS.DELETE_TOPIC, () => handler.deleteTopic(item)),
+      ),
+      vscode.commands.registerCommand(COMMANDS.ADD_DOCUMENT, (item?: any) =>
+        run(COMMANDS.ADD_DOCUMENT, (signal) => handler.addDocument(item, signal)),
+      ),
+      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_REPO, (item?: any) =>
+        run(COMMANDS.ADD_GITHUB_REPO, (signal) => handler.addGithubRepo(item, signal)),
+      ),
+      vscode.commands.registerCommand(COMMANDS.ADD_WEB_URL, (item?: any) =>
+        run(COMMANDS.ADD_WEB_URL, (signal) => handler.addWebUrl(item, signal)),
+      ),
+      vscode.commands.registerCommand(COMMANDS.REFRESH_TOPICS, () =>
+        run(COMMANDS.REFRESH_TOPICS, () => handler.refreshTopics()),
+      ),
+      vscode.commands.registerCommand(COMMANDS.CLEAR_MODEL_CACHE, () =>
+        run(COMMANDS.CLEAR_MODEL_CACHE, () => handler.clearModelCache()),
+      ),
+      vscode.commands.registerCommand(COMMANDS.SET_EMBEDDING_MODEL, (model) =>
+        run(COMMANDS.SET_EMBEDDING_MODEL, () => handler.setEmbeddingModel(model)),
+      ),
+      vscode.commands.registerCommand(COMMANDS.CLEAR_DATABASE, () =>
+        run(COMMANDS.CLEAR_DATABASE, () => handler.clearDatabase()),
+      ),
       // Config tree view commands (delegated to ConfigTreeDataProvider)
       vscode.commands.registerCommand(COMMANDS.SELECT_VSCODE_EMBEDDING_MODEL, () =>
-        configDataProvider.selectVscodeEmbeddingModel(),
+        run(COMMANDS.SELECT_VSCODE_EMBEDDING_MODEL, () => configDataProvider.selectVscodeEmbeddingModel()),
       ),
       vscode.commands.registerCommand(COMMANDS.SELECT_HF_EMBEDDING_MODEL, () =>
-        configDataProvider.selectHfEmbeddingModel(),
+        run(COMMANDS.SELECT_HF_EMBEDDING_MODEL, () => configDataProvider.selectHfEmbeddingModel()),
       ),
-      vscode.commands.registerCommand(COMMANDS.SELECT_RERANKER_MODEL, () => configDataProvider.selectRerankerModel()),
-      vscode.commands.registerCommand(COMMANDS.SELECT_LLM_MODEL, () => configDataProvider.selectLLMModel()),
+      vscode.commands.registerCommand(COMMANDS.SELECT_RERANKER_MODEL, () =>
+        run(COMMANDS.SELECT_RERANKER_MODEL, () => configDataProvider.selectRerankerModel()),
+      ),
+      vscode.commands.registerCommand(COMMANDS.SELECT_LLM_MODEL, () =>
+        run(COMMANDS.SELECT_LLM_MODEL, () => configDataProvider.selectLLMModel()),
+      ),
       vscode.commands.registerCommand(COMMANDS.EDIT_CONFIG_ITEM, (configKey: string) =>
-        configDataProvider.editConfigItem(configKey),
+        run(COMMANDS.EDIT_CONFIG_ITEM, () => configDataProvider.editConfigItem(configKey)),
       ),
       // GitHub token management commands
-      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_TOKEN, () => handler.addGithubToken()),
-      vscode.commands.registerCommand(COMMANDS.LIST_GITHUB_TOKENS, () => handler.listGithubTokens()),
-      vscode.commands.registerCommand(COMMANDS.REMOVE_GITHUB_TOKEN, () => handler.removeGithubToken()),
+      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_TOKEN, () =>
+        run(COMMANDS.ADD_GITHUB_TOKEN, () => handler.addGithubToken()),
+      ),
+      vscode.commands.registerCommand(COMMANDS.LIST_GITHUB_TOKENS, () =>
+        run(COMMANDS.LIST_GITHUB_TOKENS, () => handler.listGithubTokens()),
+      ),
+      vscode.commands.registerCommand(COMMANDS.REMOVE_GITHUB_TOKEN, () =>
+        run(COMMANDS.REMOVE_GITHUB_TOKEN, () => handler.removeGithubToken()),
+      ),
       // Import/Export commands
-      vscode.commands.registerCommand(COMMANDS.EXPORT_TOPIC, (item?: any) => handler.exportTopic(item)),
-      vscode.commands.registerCommand(COMMANDS.IMPORT_TOPIC, () => handler.importTopic()),
-      vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: any) => handler.renameTopic(item)),
-    );
+      vscode.commands.registerCommand(COMMANDS.EXPORT_TOPIC, (item?: any) =>
+        run(COMMANDS.EXPORT_TOPIC, () => handler.exportTopic(item)),
+      ),
+      vscode.commands.registerCommand(COMMANDS.IMPORT_TOPIC, () =>
+        run(COMMANDS.IMPORT_TOPIC, () => handler.importTopic()),
+      ),
+      vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: any) =>
+        run(COMMANDS.RENAME_TOPIC, () => handler.renameTopic(item)),
+      ),
+    ];
+    const composite = vscode.Disposable.from(...registrations);
+    context.subscriptions.push(composite);
+    return composite;
   }
 
   /**
@@ -85,11 +165,19 @@ export class CommandHandler {
    */
   public async setEmbeddingModel(model: string): Promise<void> {
     try {
-      // Initialize the embedding model now
-      await this.embeddingService.initialize(model);
-
-      // Reinitialize topic manager vector stores
-      await this.topicManager.reinitializeWithNewModel();
+      if (typeof (this.embeddingService as any).runTransactionalSwitch === "function") {
+        await this.embeddingService.runTransactionalSwitch(
+          this.embeddingService.getActiveBackendType() || undefined,
+          model,
+          async () => {
+            await this.memoryStore.validateEmbeddingFingerprint();
+            await this.topicManager.reinitializeWithNewModel();
+          },
+        );
+      } else {
+        await this.embeddingService.initialize(model);
+        await this.topicManager.reinitializeWithNewModel();
+      }
 
       vscode.window.showInformationMessage(`Embedding model set to "${model}"`);
       this.treeDataProvider.refresh();
@@ -179,28 +267,35 @@ export class CommandHandler {
   /**
    * Create a new topic
    */
-  private async createTopic(): Promise<void> {
+  private async createTopic(signal?: AbortSignal): Promise<void> {
     try {
-      const name = await vscode.window.showInputBox({
-        prompt: "Enter topic name",
-        placeHolder: "e.g., React Documentation, Company Policies",
-        validateInput: (value) => {
-          if (!value || value.trim().length === 0) {
-            return "Topic name cannot be empty";
-          }
-          return null;
-        },
-      });
+      const name = await waitForAbortableUi(
+        signal,
+        vscode.window.showInputBox({
+          prompt: "Enter topic name",
+          placeHolder: "e.g., React Documentation, Company Policies",
+          validateInput: (value) => {
+            if (!value || value.trim().length === 0) {
+              return "Topic name cannot be empty";
+            }
+            return null;
+          },
+        }),
+      );
 
       if (!name) {
         return;
       }
 
-      const description = await vscode.window.showInputBox({
-        prompt: "Enter topic description (optional)",
-        placeHolder: "Brief description of this topic",
-      });
+      const description = await waitForAbortableUi(
+        signal,
+        vscode.window.showInputBox({
+          prompt: "Enter topic description (optional)",
+          placeHolder: "Brief description of this topic",
+        }),
+      );
 
+      signal?.throwIfAborted();
       logger.info(`Creating topic: ${name}`);
       const topic = await this.topicManager.createTopic({
         name: name.trim(),
@@ -211,6 +306,9 @@ export class CommandHandler {
       this.treeDataProvider.refresh();
       logger.info(`Topic created: ${topic.id}`);
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       logger.error(`Failed to create topic: ${error}`);
       vscode.window.showErrorMessage(`Failed to create topic: ${sanitizeErrorMessage(error)}`);
     }
@@ -284,8 +382,9 @@ export class CommandHandler {
   /**
    * Add a document to a topic
    */
-  private async addDocument(item?: any): Promise<void> {
+  private async addDocument(item?: any, signal?: AbortSignal): Promise<void> {
     try {
+      signal?.throwIfAborted();
       let selectedTopic: any;
 
       // If called from tree view with item
@@ -296,27 +395,30 @@ export class CommandHandler {
         const topics = await this.topicManager.getAllTopics();
 
         if (topics.length === 0) {
-          const create = await vscode.window.showInformationMessage(
-            "No topics available. Would you like to create one?",
-            "Create Topic",
+          const create = await waitForAbortableUi(
+            signal,
+            vscode.window.showInformationMessage("No topics available. Would you like to create one?", "Create Topic"),
           );
 
           if (create === "Create Topic") {
-            await this.createTopic();
-            return this.addDocument(); // Retry after creating topic
+            await this.createTopic(signal);
+            return this.addDocument(undefined, signal); // Retry after creating topic
           }
           return;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          topics.map((t: any) => ({
-            label: t.name,
-            description: `${t.documentCount} document(s)`,
-            topic: t,
-          })),
-          {
-            placeHolder: "Select a topic",
-          },
+        const selected = await waitForAbortableUi(
+          signal,
+          vscode.window.showQuickPick(
+            topics.map((t: any) => ({
+              label: t.name,
+              description: `${t.documentCount} document(s)`,
+              topic: t,
+            })),
+            {
+              placeHolder: "Select a topic",
+            },
+          ),
         );
 
         if (!selected) {
@@ -337,12 +439,15 @@ export class CommandHandler {
       // Ask whether the user wants to select files or folders.
       // Some platforms/OS dialogs don't handle mixed file+folder mode well,
       // so present a choice and open the dialog in the selected mode.
-      const selectionMode = await vscode.window.showQuickPick(
-        [
-          { label: "Files", description: "Select one or more files", value: "files" },
-          { label: "Folders", description: "Select one or more folders", value: "folders" },
-        ],
-        { placeHolder: "Add documents: choose Files or Folders" },
+      const selectionMode = await waitForAbortableUi(
+        signal,
+        vscode.window.showQuickPick(
+          [
+            { label: "Files", description: "Select one or more files", value: "files" },
+            { label: "Folders", description: "Select one or more folders", value: "folders" },
+          ],
+          { placeHolder: "Add documents: choose Files or Folders" },
+        ),
       );
 
       if (!selectionMode) {
@@ -353,28 +458,34 @@ export class CommandHandler {
 
       if (selectionMode.value === "files") {
         // File selection mode: include filters so users can narrow to document types
-        fileUris = await vscode.window.showOpenDialog({
-          canSelectFiles: true,
-          canSelectFolders: false,
-          canSelectMany: true,
-          filters: {
-            "All Files": ["*"],
-            "Supported Documents": ["pdf", "md", "markdown", "html", "htm", "txt"],
-            PDF: ["pdf"],
-            Markdown: ["md", "markdown"],
-            HTML: ["html", "htm"],
-            Text: ["txt"],
-          },
-          openLabel: "Add Document(s)",
-        });
+        fileUris = await waitForAbortableUi(
+          signal,
+          vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            canSelectFolders: false,
+            canSelectMany: true,
+            filters: {
+              "All Files": ["*"],
+              "Supported Documents": ["pdf", "md", "markdown", "html", "htm", "txt"],
+              PDF: ["pdf"],
+              Markdown: ["md", "markdown"],
+              HTML: ["html", "htm"],
+              Text: ["txt"],
+            },
+            openLabel: "Add Document(s)",
+          }),
+        );
       } else {
         // Folder selection mode: filters are ignored for folders, so omit them
-        fileUris = await vscode.window.showOpenDialog({
-          canSelectFiles: false,
-          canSelectFolders: true,
-          canSelectMany: true,
-          openLabel: "Add Folder(s)",
-        });
+        fileUris = await waitForAbortableUi(
+          signal,
+          vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: true,
+            openLabel: "Add Folder(s)",
+          }),
+        );
       }
 
       if (!fileUris || fileUris.length === 0) {
@@ -382,6 +493,7 @@ export class CommandHandler {
       }
 
       const filePaths = fileUris.map((uri) => uri.fsPath);
+      signal?.throwIfAborted();
 
       // Check if any selected paths are directories
       let hasDirectories = false;
@@ -400,14 +512,17 @@ export class CommandHandler {
       // Ask user about recursive loading if folders are selected
       let recursiveDirectory = false;
       if (hasDirectories) {
-        const choice = await vscode.window.showQuickPick(
-          [
-            { label: "Load recursively", description: "Include all files from subfolders", value: true },
-            { label: "Load only from selected folders", description: "Don't scan subfolders", value: false },
-          ],
-          {
-            placeHolder: "One or more folders selected. How would you like to load them?",
-          },
+        const choice = await waitForAbortableUi(
+          signal,
+          vscode.window.showQuickPick(
+            [
+              { label: "Load recursively", description: "Include all files from subfolders", value: true },
+              { label: "Load only from selected folders", description: "Don't scan subfolders", value: false },
+            ],
+            {
+              placeHolder: "One or more folders selected. How would you like to load them?",
+            },
+          ),
         );
 
         if (!choice) {
@@ -427,17 +542,23 @@ export class CommandHandler {
           cancellable: false,
         },
         async (progress) => {
-          const results = await this.topicManager.addDocuments(selectedTopic.id, filePaths, {
-            onProgress: (pipelineProgress) => {
-              progress.report({
-                message: pipelineProgress.message,
-                increment: pipelineProgress.progress / 100,
-              });
+          const results = await addDocumentsWithLifecycleSignal(
+            this.topicManager,
+            selectedTopic.id,
+            filePaths,
+            signal,
+            {
+              onProgress: (pipelineProgress) => {
+                progress.report({
+                  message: pipelineProgress.message,
+                  increment: pipelineProgress.progress / 100,
+                });
+              },
+              loaderOptions: {
+                recursiveDirectory,
+              },
             },
-            loaderOptions: {
-              recursiveDirectory,
-            },
-          });
+          );
 
           progress.report({ message: "Complete!" });
 
@@ -447,6 +568,7 @@ export class CommandHandler {
         },
       );
 
+      signal?.throwIfAborted();
       const stats = await this.topicManager.getTopicStats(selectedTopic.id);
       const actualFileCount = stats?.documentCount || 0;
       vscode.window.showInformationMessage(
@@ -454,6 +576,9 @@ export class CommandHandler {
       );
       this.treeDataProvider.refresh();
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       logger.error(`Failed to add document: ${error}`);
       vscode.window.showErrorMessage(`Failed to add document: ${sanitizeErrorMessage(error)}`);
     }
@@ -462,8 +587,9 @@ export class CommandHandler {
   /**
    * Add a GitHub repository to a topic
    */
-  private async addGithubRepo(item?: any): Promise<void> {
+  private async addGithubRepo(item?: any, signal?: AbortSignal): Promise<void> {
     try {
+      signal?.throwIfAborted();
       let selectedTopic: any;
 
       // If called from tree view with item
@@ -474,27 +600,30 @@ export class CommandHandler {
         const topics = await this.topicManager.getAllTopics();
 
         if (topics.length === 0) {
-          const create = await vscode.window.showInformationMessage(
-            "No topics available. Would you like to create one?",
-            "Create Topic",
+          const create = await waitForAbortableUi(
+            signal,
+            vscode.window.showInformationMessage("No topics available. Would you like to create one?", "Create Topic"),
           );
 
           if (create === "Create Topic") {
-            await this.createTopic();
-            return this.addGithubRepo(); // Retry after creating topic
+            await this.createTopic(signal);
+            return this.addGithubRepo(undefined, signal); // Retry after creating topic
           }
           return;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          topics.map((t: any) => ({
-            label: t.name,
-            description: `${t.documentCount} document(s)`,
-            topic: t,
-          })),
-          {
-            placeHolder: "Select a topic",
-          },
+        const selected = await waitForAbortableUi(
+          signal,
+          vscode.window.showQuickPick(
+            topics.map((t: any) => ({
+              label: t.name,
+              description: `${t.documentCount} document(s)`,
+              topic: t,
+            })),
+            {
+              placeHolder: "Select a topic",
+            },
+          ),
         );
 
         if (!selected) {
@@ -524,9 +653,12 @@ export class CommandHandler {
           },
         ];
 
-        const hostChoice = await vscode.window.showQuickPick(hostOptions, {
-          placeHolder: "Select GitHub host or enter custom URL",
-        });
+        const hostChoice = await waitForAbortableUi(
+          signal,
+          vscode.window.showQuickPick(hostOptions, {
+            placeHolder: "Select GitHub host or enter custom URL",
+          }),
+        );
 
         if (!hostChoice) {
           return;
@@ -544,20 +676,23 @@ export class CommandHandler {
 
       if (selectedHost) {
         // Simplified: just ask for owner/repo
-        const repoPath = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          prompt: `Enter repository (owner/repo) for ${selectedHost}`,
-          placeHolder: "facebook/react",
-          validateInput: (value) => {
-            if (!value || value.trim().length === 0) {
-              return "Repository path cannot be empty";
-            }
-            if (!/^[\w-]+\/[\w.-]+$/.test(value.trim())) {
-              return "Invalid format. Use: owner/repo";
-            }
-            return null;
-          },
-        });
+        const repoPath = await waitForAbortableUi(
+          signal,
+          vscode.window.showInputBox({
+            ignoreFocusOut: true,
+            prompt: `Enter repository (owner/repo) for ${selectedHost}`,
+            placeHolder: "facebook/react",
+            validateInput: (value) => {
+              if (!value || value.trim().length === 0) {
+                return "Repository path cannot be empty";
+              }
+              if (!/^[\w-]+\/[\w.-]+$/.test(value.trim())) {
+                return "Invalid format. Use: owner/repo";
+              }
+              return null;
+            },
+          }),
+        );
 
         if (!repoPath) {
           return;
@@ -567,20 +702,23 @@ export class CommandHandler {
       } else {
         // Full URL entry for custom hosts
         repoUrl =
-          (await vscode.window.showInputBox({
-            ignoreFocusOut: true,
-            prompt: "Enter full GitHub repository URL",
-            placeHolder: "https://github.com/owner/repo",
-            validateInput: (value) => {
-              if (!value || value.trim().length === 0) {
-                return "Repository URL cannot be empty";
-              }
-              if (!/^https?:\/\/[a-zA-Z0-9.-]+\/[\w-]+\/[\w.-]+/.test(value.trim())) {
-                return "Invalid GitHub URL. Format: https://host/owner/repo";
-              }
-              return null;
-            },
-          })) || "";
+          (await waitForAbortableUi(
+            signal,
+            vscode.window.showInputBox({
+              ignoreFocusOut: true,
+              prompt: "Enter full GitHub repository URL",
+              placeHolder: "https://github.com/owner/repo",
+              validateInput: (value) => {
+                if (!value || value.trim().length === 0) {
+                  return "Repository URL cannot be empty";
+                }
+                if (!/^https?:\/\/[a-zA-Z0-9.-]+\/[\w-]+\/[\w.-]+/.test(value.trim())) {
+                  return "Invalid GitHub URL. Format: https://host/owner/repo";
+                }
+                return null;
+              },
+            }),
+          )) || "";
 
         if (!repoUrl) {
           return;
@@ -594,35 +732,41 @@ export class CommandHandler {
             logger.info(`Found saved token for host: ${host}`);
           } else {
             // Prompt for token if not found
-            const needToken = await vscode.window.showQuickPick(
-              [
+            const needToken = await waitForAbortableUi(
+              signal,
+              vscode.window.showQuickPick(
+                [
+                  {
+                    label: "Enter Token",
+                    description: "For private repositories",
+                    value: true,
+                  },
+                  {
+                    label: "Continue Without Token",
+                    description: "Public repos only — 60 requests/hr limit (may fail for large repos)",
+                    value: false,
+                  },
+                ],
                 {
-                  label: "Enter Token",
-                  description: "For private repositories",
-                  value: true,
+                  placeHolder: `No saved token for ${host}`,
                 },
-                {
-                  label: "Continue Without Token",
-                  description: "Public repos only — 60 requests/hr limit (may fail for large repos)",
-                  value: false,
-                },
-              ],
-              {
-                placeHolder: `No saved token for ${host}`,
-              },
+              ),
             );
 
             if (needToken?.value) {
-              const tokenInput = await vscode.window.showInputBox({
-                prompt: "Enter GitHub access token",
-                placeHolder: "ghp_xxxxxxxxxxxxxxxxxxxx",
-                password: true,
-                ignoreFocusOut: true,
-              });
+              const tokenInput = await waitForAbortableUi(
+                signal,
+                vscode.window.showInputBox({
+                  prompt: "Enter GitHub access token",
+                  placeHolder: "ghp_xxxxxxxxxxxxxxxxxxxx",
+                  password: true,
+                  ignoreFocusOut: true,
+                }),
+              );
 
               if (tokenInput && tokenInput.trim().length > 0) {
                 accessToken = tokenInput.trim();
-                await this.tokenManager.promptToSaveToken(this.context, host, accessToken);
+                await this.tokenManager.promptToSaveToken(this.context, host, accessToken, signal);
               }
             }
           }
@@ -630,12 +774,15 @@ export class CommandHandler {
       }
 
       // Get branch
-      const branch = await vscode.window.showInputBox({
-        prompt: "Enter branch name",
-        placeHolder: "main",
-        value: "main",
-        ignoreFocusOut: true,
-      });
+      const branch = await waitForAbortableUi(
+        signal,
+        vscode.window.showInputBox({
+          prompt: "Enter branch name",
+          placeHolder: "main",
+          value: "main",
+          ignoreFocusOut: true,
+        }),
+      );
 
       if (!branch) {
         return;
@@ -643,12 +790,15 @@ export class CommandHandler {
 
       // Optional: ignore patterns
       const defaultIgnore = "*.github*, *makefile*, **/TEST/**, **/tst/**, *.test.*, node_modules/**";
-      const ignoreInput = await vscode.window.showInputBox({
-        prompt: "Enter ignore patterns (optional, comma-separated)",
-        placeHolder: `${defaultIgnore} (press Enter to accept default)`,
-        value: defaultIgnore,
-        ignoreFocusOut: true,
-      });
+      const ignoreInput = await waitForAbortableUi(
+        signal,
+        vscode.window.showInputBox({
+          prompt: "Enter ignore patterns (optional, comma-separated)",
+          placeHolder: `${defaultIgnore} (press Enter to accept default)`,
+          value: defaultIgnore,
+          ignoreFocusOut: true,
+        }),
+      );
 
       const ignorePaths =
         ignoreInput && ignoreInput.trim().length > 0
@@ -677,22 +827,28 @@ export class CommandHandler {
             increment: 10,
           });
 
-          const results = await this.topicManager.addDocuments(selectedTopic.id, [repoUrl], {
-            onProgress: (pipelineProgress) => {
-              progress.report({
-                message: pipelineProgress.message,
-                increment: (pipelineProgress.progress / 100) * 90,
-              });
+          const results = await addDocumentsWithLifecycleSignal(
+            this.topicManager,
+            selectedTopic.id,
+            [repoUrl],
+            signal,
+            {
+              onProgress: (pipelineProgress) => {
+                progress.report({
+                  message: pipelineProgress.message,
+                  increment: (pipelineProgress.progress / 100) * 90,
+                });
+              },
+              loaderOptions: {
+                fileType: "github",
+                branch,
+                recursive: true,
+                ignorePaths,
+                accessToken,
+                maxConcurrency: 10, // Increase concurrency for faster loading
+              },
             },
-            loaderOptions: {
-              fileType: "github",
-              branch,
-              recursive: true,
-              ignorePaths,
-              accessToken,
-              maxConcurrency: 10, // Increase concurrency for faster loading
-            },
-          });
+          );
 
           progress.report({ message: "Complete!", increment: 100 });
 
@@ -701,12 +857,16 @@ export class CommandHandler {
         },
       );
 
+      signal?.throwIfAborted();
       const stats = await this.topicManager.getTopicStats(selectedTopic.id);
       vscode.window.showInformationMessage(
         `GitHub repository added to "${selectedTopic.name}" successfully! Total: ${stats?.documentCount} documents, ${stats?.chunkCount} chunks.`,
       );
       this.treeDataProvider.refresh();
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       logger.error(`Failed to add GitHub repository: ${error}`);
       vscode.window.showErrorMessage(`Failed to add GitHub repository: ${sanitizeErrorMessage(error)}`);
     }
@@ -716,8 +876,9 @@ export class CommandHandler {
    * Add a web URL to a topic.
    * If the URL points to a GitHub repository, routes to addGithubRepo instead.
    */
-  private async addWebUrl(item?: any): Promise<void> {
+  private async addWebUrl(item?: any, signal?: AbortSignal): Promise<void> {
     try {
+      signal?.throwIfAborted();
       let selectedTopic: any;
 
       // If called from tree view with item
@@ -728,27 +889,30 @@ export class CommandHandler {
         const topics = await this.topicManager.getAllTopics();
 
         if (topics.length === 0) {
-          const create = await vscode.window.showInformationMessage(
-            "No topics available. Would you like to create one?",
-            "Create Topic",
+          const create = await waitForAbortableUi(
+            signal,
+            vscode.window.showInformationMessage("No topics available. Would you like to create one?", "Create Topic"),
           );
 
           if (create === "Create Topic") {
-            await this.createTopic();
-            return this.addWebUrl(); // Retry after creating topic
+            await this.createTopic(signal);
+            return this.addWebUrl(undefined, signal); // Retry after creating topic
           }
           return;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          topics.map((t: any) => ({
-            label: t.name,
-            description: `${t.documentCount} document(s)`,
-            topic: t,
-          })),
-          {
-            placeHolder: "Select a topic",
-          },
+        const selected = await waitForAbortableUi(
+          signal,
+          vscode.window.showQuickPick(
+            topics.map((t: any) => ({
+              label: t.name,
+              description: `${t.documentCount} document(s)`,
+              topic: t,
+            })),
+            {
+              placeHolder: "Select a topic",
+            },
+          ),
         );
 
         if (!selected) {
@@ -766,25 +930,28 @@ export class CommandHandler {
         return;
       }
 
-      const url = await vscode.window.showInputBox({
-        prompt: "Enter web page URL to ingest",
-        placeHolder: "https://example.com/docs/page",
-        ignoreFocusOut: true,
-        validateInput: (value) => {
-          if (!value || value.trim().length === 0) {
-            return "URL cannot be empty";
-          }
-          try {
-            const parsed = new URL(value.trim());
-            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-              return "URL must start with http:// or https://";
+      const url = await waitForAbortableUi(
+        signal,
+        vscode.window.showInputBox({
+          prompt: "Enter web page URL to ingest",
+          placeHolder: "https://example.com/docs/page",
+          ignoreFocusOut: true,
+          validateInput: (value) => {
+            if (!value || value.trim().length === 0) {
+              return "URL cannot be empty";
             }
-          } catch {
-            return "Invalid URL format";
-          }
-          return null;
-        },
-      });
+            try {
+              const parsed = new URL(value.trim());
+              if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                return "URL must start with http:// or https://";
+              }
+            } catch {
+              return "Invalid URL format";
+            }
+            return null;
+          },
+        }),
+      );
 
       if (!url) {
         return;
@@ -800,13 +967,16 @@ export class CommandHandler {
       const hasToken = await this.tokenManager.getToken(host);
 
       if ((isGitHubHost || hasToken) && hasRepoPath) {
-        const useGithub = await vscode.window.showInformationMessage(
-          "This looks like a GitHub repository. Use GitHub repository ingestion for better results?",
-          "Yes, use GitHub ingestion",
-          "No, load as web page",
+        const useGithub = await waitForAbortableUi(
+          signal,
+          vscode.window.showInformationMessage(
+            "This looks like a GitHub repository. Use GitHub repository ingestion for better results?",
+            "Yes, use GitHub ingestion",
+            "No, load as web page",
+          ),
         );
         if (useGithub === "Yes, use GitHub ingestion") {
-          return this.addGithubRepo(item);
+          return this.addGithubRepo(item, signal);
         }
       }
 
@@ -820,17 +990,23 @@ export class CommandHandler {
           cancellable: false,
         },
         async (progress) => {
-          const results = await this.topicManager.addDocuments(selectedTopic.id, [trimmedUrl], {
-            onProgress: (pipelineProgress) => {
-              progress.report({
-                message: pipelineProgress.message,
-                increment: pipelineProgress.progress / 100,
-              });
+          const results = await addDocumentsWithLifecycleSignal(
+            this.topicManager,
+            selectedTopic.id,
+            [trimmedUrl],
+            signal,
+            {
+              onProgress: (pipelineProgress) => {
+                progress.report({
+                  message: pipelineProgress.message,
+                  increment: pipelineProgress.progress / 100,
+                });
+              },
+              loaderOptions: {
+                fileType: "web",
+              },
             },
-            loaderOptions: {
-              fileType: "web",
-            },
-          });
+          );
 
           progress.report({ message: "Complete!" });
 
@@ -839,12 +1015,16 @@ export class CommandHandler {
         },
       );
 
+      signal?.throwIfAborted();
       const stats = await this.topicManager.getTopicStats(selectedTopic.id);
       vscode.window.showInformationMessage(
         `Web page added to "${selectedTopic.name}" successfully! Total: ${stats?.documentCount} documents, ${stats?.chunkCount} chunks.`,
       );
       this.treeDataProvider.refresh();
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       logger.error(`Failed to add web URL: ${error}`);
       vscode.window.showErrorMessage(`Failed to add web URL: ${sanitizeErrorMessage(error)}`);
     }

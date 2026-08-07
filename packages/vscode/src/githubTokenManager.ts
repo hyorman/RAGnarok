@@ -5,6 +5,7 @@
 
 import * as vscode from "vscode";
 import { Logger } from "@ragnarok/core";
+import { waitForAbortableUi } from "./extensionLifecycle";
 
 const logger = new Logger("GitHubTokenManager");
 
@@ -148,14 +149,23 @@ export class GitHubTokenManager {
   /**
    * Prompt user to save token for a host
    */
-  public async promptToSaveToken(context: vscode.ExtensionContext, host: string, token: string): Promise<boolean> {
-    const save = await vscode.window.showInformationMessage(
-      `Would you like to save the access token for "${host}" for future use?`,
-      "Save Token",
-      "Don't Save",
+  public async promptToSaveToken(
+    context: vscode.ExtensionContext,
+    host: string,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const save = await waitForAbortableUi(
+      signal,
+      vscode.window.showInformationMessage(
+        `Would you like to save the access token for "${host}" for future use?`,
+        "Save Token",
+        "Don't Save",
+      ),
     );
 
     if (save === "Save Token") {
+      signal?.throwIfAborted();
       await this.setToken(host, token);
       await this.addHostToList(context, host);
       logger.info(`User saved token for host: ${host}`);

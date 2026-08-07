@@ -36,6 +36,12 @@ export class HuggingFaceBackend implements EmbeddingBackend {
   private logger: Logger;
   private transformers: TransformersModule | null = null;
   private dimension: number | null = null;
+  private switchSnapshot: {
+    pipeline: FeatureExtractionPipeline | null;
+    currentModel: string;
+    lastSuccessfulModel: string | null;
+    dimension: number | null;
+  } | null = null;
 
   /** Callback fired when the model changes (used by EmbeddingService for event emission). */
   public onModelChanged?: (newModel: string) => void;
@@ -86,6 +92,44 @@ export class HuggingFaceBackend implements EmbeddingBackend {
     }
   }
 
+  beginSwitchTransaction(): void {
+    if (this.switchSnapshot) {
+      throw new Error("A HuggingFace model switch transaction is already active");
+    }
+    this.switchSnapshot = {
+      pipeline: this.pipeline,
+      currentModel: this.currentModel,
+      lastSuccessfulModel: this.lastSuccessfulModel,
+      dimension: this.dimension,
+    };
+  }
+
+  async commitSwitchTransaction(): Promise<void> {
+    const snapshot = this.switchSnapshot;
+    this.switchSnapshot = null;
+    if (snapshot?.pipeline && snapshot.pipeline !== this.pipeline && typeof snapshot.pipeline.dispose === "function") {
+      await snapshot.pipeline.dispose();
+    }
+  }
+
+  async rollbackSwitchTransaction(): Promise<void> {
+    const snapshot = this.switchSnapshot;
+    this.switchSnapshot = null;
+    if (!snapshot) {
+      return;
+    }
+    const candidate = this.pipeline;
+    this.pipeline = snapshot.pipeline;
+    this.currentModel = snapshot.currentModel;
+    this.lastSuccessfulModel = snapshot.lastSuccessfulModel;
+    this.dimension = snapshot.dimension;
+    this.initError = null;
+    this.initErrorModel = null;
+    if (candidate && candidate !== snapshot.pipeline && typeof candidate.dispose === "function") {
+      await candidate.dispose();
+    }
+  }
+
   async embed(text: string, signal?: AbortSignal): Promise<number[]> {
     signal?.throwIfAborted();
     if (!this.pipeline) {
@@ -109,6 +153,9 @@ export class HuggingFaceBackend implements EmbeddingBackend {
       this.logger.debug(`Generated embedding with dimension: ${embedding.length}`);
       return embedding;
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       this.logger.error("Failed to generate embedding", error);
       throw new Error(`Failed to generate embedding: ${error}`);
     }
@@ -189,6 +236,9 @@ export class HuggingFaceBackend implements EmbeddingBackend {
       this.logger.debug(`Successfully generated ${embeddings.length} embeddings`);
       return embeddings;
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       this.logger.error("Failed to generate batch embeddings", error);
       throw new Error(`Failed to generate batch embeddings: ${error}`);
     }
@@ -334,6 +384,7 @@ export class HuggingFaceBackend implements EmbeddingBackend {
         if (
           previousPipeline &&
           previousPipeline !== candidatePipeline &&
+          previousPipeline !== this.switchSnapshot?.pipeline &&
           typeof previousPipeline.dispose === "function"
         ) {
           await previousPipeline.dispose();

@@ -7,12 +7,12 @@
  * by rank position.
  */
 
-import { createHash } from "crypto";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { VectorRetriever } from "./vectorRetriever";
 import { KeywordRetriever } from "./keywordRetriever";
 import { Logger } from "../logger";
 import { extractKeywords } from "../utils/keywords";
+import { getDocumentIdentity } from "../utils/retrievalIdentity";
 
 export interface EnsembleSearchOptions {
   /** Number of results to return */
@@ -33,7 +33,11 @@ export const DEFAULT_ENSEMBLE_OPTIONS = {
 
 export interface EnsembleSearchResult {
   document: LangChainDocument;
-  score?: number; // Note: EnsembleRetriever doesn't return scores
+  /** Weighted reciprocal-rank-fusion score. */
+  score: number;
+  scoreKind: "rrf";
+  /** Per-arm RRF contributions; these sum exactly to score. */
+  componentScores: { vector: number; keyword: number };
 }
 
 /**
@@ -47,6 +51,9 @@ export class EnsembleRetrieverWrapper {
   private readonly RRF_CONSTANT: number;
 
   constructor(vectorRetriever: VectorRetriever, keywordRetriever: KeywordRetriever, rrfK = 60) {
+    if (!Number.isFinite(rrfK) || rrfK <= 0) {
+      throw new Error("RRF constant must be a finite positive number");
+    }
     this.logger = new Logger("EnsembleRetriever");
     this.vectorRetriever = vectorRetriever;
     this.keywordRetriever = keywordRetriever;
@@ -58,6 +65,7 @@ export class EnsembleRetrieverWrapper {
    * Perform ensemble search using manual RRF
    */
   public async search(query: string, options: EnsembleSearchOptions): Promise<EnsembleSearchResult[]> {
+    this.validateOptions(options);
     if (!this.keywordRetriever.isInitialized()) {
       throw new Error("EnsembleRetriever not initialized. KeywordRetriever must be initialized first.");
     }
@@ -120,16 +128,31 @@ export class EnsembleRetrieverWrapper {
       });
 
       // Convert to our result format
-      return limitedResults.map((doc: LangChainDocument) => ({
-        document: doc,
-        // Note: RRF doesn't provide meaningful scores
-      }));
+      return limitedResults;
     } catch (error) {
       this.logger.error("Ensemble search failed", {
         error: error instanceof Error ? error.message : String(error),
         query: query.substring(0, 100),
       });
       throw error;
+    }
+  }
+
+  private validateOptions(options: EnsembleSearchOptions): void {
+    if (!Number.isInteger(options.k) || options.k <= 0) {
+      throw new Error("k must be a positive integer");
+    }
+    if (!Number.isFinite(options.vectorWeight) || !Number.isFinite(options.bm25Weight)) {
+      throw new Error("Weights must be finite");
+    }
+    if (options.vectorWeight < 0 || options.bm25Weight < 0) {
+      throw new Error("Weights must be non-negative");
+    }
+    if (options.vectorWeight + options.bm25Weight <= 0) {
+      throw new Error("At least one retrieval weight must be positive");
+    }
+    if (options.rrfK !== undefined && (!Number.isFinite(options.rrfK) || options.rrfK <= 0)) {
+      throw new Error("RRF constant must be a finite positive number");
     }
   }
 
@@ -145,16 +168,19 @@ export class EnsembleRetrieverWrapper {
     vectorWeight: number,
     bm25Weight: number,
     rrfK: number,
-  ): LangChainDocument[] {
-    const scoreMap = new Map<string, { doc: LangChainDocument; score: number }>();
+  ): EnsembleSearchResult[] {
+    const scoreMap = new Map<
+      string,
+      { doc: LangChainDocument; vectorContribution: number; keywordContribution: number }
+    >();
 
     vectorResults.forEach((doc, index) => {
       const docId = this.getDocumentId(doc);
       const rrf = vectorWeight / (rrfK + index + 1);
       if (scoreMap.has(docId)) {
-        scoreMap.get(docId)!.score += rrf;
+        scoreMap.get(docId)!.vectorContribution += rrf;
       } else {
-        scoreMap.set(docId, { doc, score: rrf });
+        scoreMap.set(docId, { doc, vectorContribution: rrf, keywordContribution: 0 });
       }
     });
 
@@ -162,28 +188,30 @@ export class EnsembleRetrieverWrapper {
       const docId = this.getDocumentId(doc);
       const rrf = bm25Weight / (rrfK + index + 1);
       if (scoreMap.has(docId)) {
-        scoreMap.get(docId)!.score += rrf;
+        scoreMap.get(docId)!.keywordContribution += rrf;
       } else {
-        scoreMap.set(docId, { doc, score: rrf });
+        scoreMap.set(docId, { doc, vectorContribution: 0, keywordContribution: rrf });
       }
     });
 
     return Array.from(scoreMap.values())
-      .sort((a, b) => b.score - a.score)
-      .map((item) => item.doc);
+      .map((item) => ({
+        document: item.doc,
+        score: item.vectorContribution + item.keywordContribution,
+        scoreKind: "rrf" as const,
+        componentScores: {
+          vector: item.vectorContribution,
+          keyword: item.keywordContribution,
+        },
+      }))
+      .sort((a, b) => b.score - a.score);
   }
 
   /**
    * Get a unique ID for a document
    */
   private getDocumentId(doc: LangChainDocument): string {
-    if (doc.metadata?.chunkId) {
-      return String(doc.metadata.chunkId);
-    }
-    const hash = createHash("sha256");
-    hash.update(doc.pageContent);
-    hash.update(JSON.stringify(doc.metadata || {}));
-    return hash.digest("hex");
+    return getDocumentIdentity(doc);
   }
 
   /**

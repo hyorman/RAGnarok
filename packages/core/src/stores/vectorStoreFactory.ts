@@ -40,9 +40,49 @@ export interface VectorStoreMetadata {
   embeddingModel: string;
   /** Backend type used to create these embeddings (may be absent for legacy data). */
   embeddingBackend?: string;
-  embeddingFingerprint: EmbeddingFingerprint;
+  embeddingFingerprint?: EmbeddingFingerprint;
+  /**
+   * Legacy vectors whose complete semantic-space identity could not be
+   * reconstructed during migration. Reads remain available for recovery, but
+   * every vector mutation must be refused until the topic is fully reindexed.
+   */
+  migrationRequiresFingerprintOnReindex?: boolean;
   createdAt: number;
   updatedAt: number;
+}
+
+export class EmbeddingReindexRequiredError extends Error {
+  constructor(public readonly topicId: string) {
+    super(
+      `Topic ${topicId} contains migrated vectors without a verifiable embedding fingerprint. ` +
+        "Reindex the complete topic (or delete and recreate it) before adding or replacing documents.",
+    );
+    this.name = "EmbeddingReindexRequiredError";
+  }
+}
+
+export class VectorStoreMetadataCorruptionError extends Error {
+  constructor(
+    public readonly topicId: string,
+    public readonly reason: string,
+    public readonly cause?: unknown,
+  ) {
+    super(
+      `Vector-store metadata for topic ${topicId} is ${reason}. ` +
+        "Refusing to mutate the existing table because its embedding space cannot be verified.",
+    );
+    this.name = "VectorStoreMetadataCorruptionError";
+  }
+}
+
+export class EmbeddingFingerprintMismatchError extends Error {
+  constructor(
+    public readonly topicId: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EmbeddingFingerprintMismatchError";
+  }
 }
 
 export class VectorStoreFactory {
@@ -107,6 +147,7 @@ export class VectorStoreFactory {
     initialDocuments?: LangChainDocument[],
     signal?: AbortSignal,
   ): Promise<void> {
+    signal?.throwIfAborted();
     this.logger.info("Creating vector store", {
       topicId: config.topicId,
       documentCount: initialDocuments?.length || 0,
@@ -115,11 +156,14 @@ export class VectorStoreFactory {
     try {
       // Connect to LanceDB
       const db = await this.getConnection(this.lanceDbUri);
+      signal?.throwIfAborted();
 
       // Check if table exists and drop it to start fresh
       const tableNames = await db.tableNames();
+      signal?.throwIfAborted();
       if (tableNames.includes(config.topicId)) {
         await db.dropTable(config.topicId);
+        signal?.throwIfAborted();
         this.logger.debug("Dropped existing table", { topicId: config.topicId });
       }
 
@@ -128,11 +172,28 @@ export class VectorStoreFactory {
       signal?.throwIfAborted();
       const fingerprint = await this.embeddingService.getFingerprint(signal);
       const table = await db.createEmptyTable(config.topicId, this.createDocumentSchema(fingerprint.dimension));
+      signal?.throwIfAborted();
       this.tables.add(table);
       const store = new LanceDB(this.createEmbeddings(this.embeddingModel), { table });
+      // A freshly-created table is the only case where missing metadata is
+      // expected. Establish its semantic-space identity before the first
+      // vector write so every public mutation path can fail closed.
+      await this.writeStoreMetadata(config.topicId, {
+        schemaVersion: STORAGE_FORMAT_VERSION,
+        topicId: config.topicId,
+        documentCount: 0,
+        chunkCount: 0,
+        embeddingModel: this.embeddingModel,
+        embeddingBackend: fingerprint.backendKind,
+        embeddingFingerprint: fingerprint,
+        migrationRequiresFingerprintOnReindex: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
       if (normalizedDocs.length > 0) {
         await this.reconcileDocuments(config.topicId, normalizedDocs, signal);
       }
+      signal?.throwIfAborted();
 
       if (this.storeCache.size >= VectorStoreFactory.MAX_CACHE_SIZE) {
         const firstKey = this.storeCache.keys().next().value;
@@ -234,22 +295,27 @@ export class VectorStoreFactory {
   }
 
   public async getStoreMetadata(topicId: string, customStorageDir?: string): Promise<VectorStoreMetadata | null> {
+    const metadataPath = this.getMetadataPath(topicId, customStorageDir);
     try {
-      const metadataPath = this.getMetadataPath(topicId, customStorageDir);
-      try {
-        await fs.access(metadataPath);
-      } catch {
-        return null;
-      }
       const metadataJson = await fs.readFile(metadataPath, "utf-8");
-      const metadata: VectorStoreMetadata = JSON.parse(metadataJson);
+      const metadata = JSON.parse(metadataJson) as unknown;
+      if (!this.isVectorStoreMetadata(metadata, topicId)) {
+        throw new VectorStoreMetadataCorruptionError(topicId, "malformed or incomplete");
+      }
       return metadata;
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      const integrityError =
+        error instanceof VectorStoreMetadataCorruptionError
+          ? error
+          : new VectorStoreMetadataCorruptionError(topicId, "unreadable or malformed", error);
       this.logger.error("Failed to read store metadata", {
-        error: error instanceof Error ? error.message : String(error),
+        error: integrityError.message,
         topicId,
       });
-      return null;
+      throw integrityError;
     }
   }
 
@@ -261,7 +327,8 @@ export class VectorStoreFactory {
     if (metadata.embeddingFingerprint) {
       const current = await this.embeddingService.getFingerprint();
       if (JSON.stringify(metadata.embeddingFingerprint) !== JSON.stringify(current)) {
-        throw new Error(
+        throw new EmbeddingFingerprintMismatchError(
+          topicId,
           `Embedding model mismatch (fingerprint mismatch) for topic ${topicId}. Existing vectors use ` +
             `${metadata.embeddingFingerprint.backendKind}/${metadata.embeddingFingerprint.model}; current is ` +
             `${current.backendKind}/${current.model}. Recreate the topic or restore the original embedding configuration.`,
@@ -269,7 +336,8 @@ export class VectorStoreFactory {
       }
     }
     if (metadata.embeddingModel && metadata.embeddingModel !== this.embeddingModel) {
-      const error = new Error(
+      const error = new EmbeddingFingerprintMismatchError(
+        topicId,
         `Embedding model mismatch for topic ${topicId}.\n` +
           `Existing embeddings use: "${metadata.embeddingModel}"\n` +
           `Current model is: "${this.embeddingModel}"\n\n` +
@@ -293,6 +361,17 @@ export class VectorStoreFactory {
     try {
       const metadataPath = this.getMetadataPath(topicId);
       await fs.mkdir(path.dirname(metadataPath), { recursive: true });
+      const previousMetadata = await this.getStoreMetadata(topicId);
+      if (!previousMetadata && (await this.hasTable(topicId))) {
+        throw new VectorStoreMetadataCorruptionError(topicId, "missing");
+      }
+      const migrationRequiresFingerprintOnReindex =
+        metadata.migrationRequiresFingerprintOnReindex ??
+        previousMetadata?.migrationRequiresFingerprintOnReindex ??
+        false;
+      const embeddingFingerprint = migrationRequiresFingerprintOnReindex
+        ? metadata.embeddingFingerprint
+        : (metadata.embeddingFingerprint ?? (await this.embeddingService.getFingerprint()));
       const fullMetadata: VectorStoreMetadata = {
         schemaVersion: STORAGE_FORMAT_VERSION,
         topicId,
@@ -300,11 +379,12 @@ export class VectorStoreFactory {
         chunkCount: metadata.chunkCount || 0,
         embeddingModel: metadata.embeddingModel || this.embeddingModel,
         embeddingBackend: metadata.embeddingBackend || "",
-        embeddingFingerprint: metadata.embeddingFingerprint ?? (await this.embeddingService.getFingerprint()),
+        embeddingFingerprint,
+        migrationRequiresFingerprintOnReindex,
         createdAt: metadata.createdAt || Date.now(),
         updatedAt: Date.now(),
       };
-      await atomicWriteJson(metadataPath, fullMetadata);
+      await this.writeStoreMetadata(topicId, fullMetadata);
       this.logger.info("Vector store metadata saved successfully", { topicId });
     } catch (error) {
       this.logger.error("Failed to save vector store metadata", {
@@ -379,6 +459,7 @@ export class VectorStoreFactory {
     if (documents.length === 0) {
       return;
     }
+    await this.assertMutationAllowed(topicId);
     const normalized = this.normalizeDocumentMetadata(documents);
     const db = await this.getConnection(this.lanceDbUri);
     const table = await db.openTable(topicId);
@@ -413,6 +494,7 @@ export class VectorStoreFactory {
         .whenNotMatchedInsertAll()
         .whenNotMatchedBySourceDelete({ where: `document_id = '${escaped}'` })
         .execute(sourceRows);
+      signal?.throwIfAborted();
     }
   }
 
@@ -454,6 +536,65 @@ export class VectorStoreFactory {
       await table.delete(`document_id = '${escaped}'`);
     }
     return rows.map((row) => String(row.chunkId));
+  }
+
+  /** Defense-in-depth for every in-place vector write/upsert entry point. */
+  private async assertMutationAllowed(topicId: string): Promise<void> {
+    const metadata = await this.getStoreMetadata(topicId);
+    if (!metadata) {
+      if (await this.hasTable(topicId)) {
+        throw new VectorStoreMetadataCorruptionError(topicId, "missing");
+      }
+      throw new Error(`Vector store table not found for topic ${topicId}`);
+    }
+    this.assertMetadataAllowsMutation(topicId, metadata);
+  }
+
+  private assertMetadataAllowsMutation(topicId: string, metadata: VectorStoreMetadata): void {
+    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
+      throw new EmbeddingReindexRequiredError(topicId);
+    }
+  }
+
+  private async hasTable(topicId: string): Promise<boolean> {
+    const db = await this.getConnection(this.lanceDbUri);
+    return (await db.tableNames()).includes(topicId);
+  }
+
+  private async writeStoreMetadata(topicId: string, metadata: VectorStoreMetadata): Promise<void> {
+    const metadataPath = this.getMetadataPath(topicId);
+    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
+    await atomicWriteJson(metadataPath, metadata);
+  }
+
+  private isVectorStoreMetadata(value: unknown, topicId: string): value is VectorStoreMetadata {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const metadata = value as Partial<VectorStoreMetadata>;
+    const fingerprint = metadata.embeddingFingerprint;
+    const fingerprintValid =
+      fingerprint === undefined ||
+      (typeof fingerprint.backendKind === "string" &&
+        typeof fingerprint.providerFormat === "string" &&
+        typeof fingerprint.model === "string" &&
+        typeof fingerprint.revision === "string" &&
+        Number.isInteger(fingerprint.dimension) &&
+        fingerprint.dimension > 0 &&
+        typeof fingerprint.endpointHash === "string");
+    return (
+      metadata.schemaVersion === STORAGE_FORMAT_VERSION &&
+      metadata.topicId === topicId &&
+      Number.isFinite(metadata.documentCount) &&
+      Number.isFinite(metadata.chunkCount) &&
+      typeof metadata.embeddingModel === "string" &&
+      (metadata.embeddingBackend === undefined || typeof metadata.embeddingBackend === "string") &&
+      (metadata.migrationRequiresFingerprintOnReindex === undefined ||
+        typeof metadata.migrationRequiresFingerprintOnReindex === "boolean") &&
+      Number.isFinite(metadata.createdAt) &&
+      Number.isFinite(metadata.updatedAt) &&
+      fingerprintValid
+    );
   }
 
   /**
@@ -556,6 +697,7 @@ export class VectorStoreFactory {
         "sourceType",
         "sourceDescriptor",
         "sourceRevision",
+        "ingestionTransactionId",
         "documentId",
         "fileName",
         "filePath",
@@ -582,6 +724,7 @@ export class VectorStoreFactory {
         sourceType: "file",
         sourceDescriptor: "{}",
         sourceRevision: "",
+        ingestionTransactionId: "",
         documentId: "",
         chunkId: "",
         fileName: "",
@@ -658,6 +801,7 @@ export class VectorStoreFactory {
       "sourceType",
       "sourceDescriptor",
       "sourceRevision",
+      "ingestionTransactionId",
       "documentId",
       "document_id",
       "chunkId",

@@ -49,6 +49,8 @@ export const COMMANDS = {
   EXPORT_TOPIC: "ragnarok.exportTopic",
   IMPORT_TOPIC: "ragnarok.importTopic",
   RENAME_TOPIC: "ragnarok.renameTopic",
+  /** Release harness hook; intentionally not contributed to the Command Palette. */
+  INSTALLED_SMOKE: "ragnarok._runInstalledSmoke",
 } as const;
 
 /**

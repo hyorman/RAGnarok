@@ -17,6 +17,90 @@ export interface JsonRpcMessage {
   error?: any;
 }
 
+interface ClosableHarness {
+  close(): Promise<number | null>;
+  forceClose(): Promise<number | null>;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export class StdioHarnessLifecycleError extends Error {
+  constructor(
+    label: string,
+    readonly operationError: unknown,
+    readonly cleanupError: unknown,
+    readonly forceCloseError?: unknown,
+  ) {
+    super(
+      `${label} operation and cleanup failed: operation=${errorMessage(operationError)}; ` +
+        `cleanup=${errorMessage(cleanupError)}` +
+        (forceCloseError === undefined ? "" : `; forceClose=${errorMessage(forceCloseError)}`),
+    );
+    this.name = "StdioHarnessLifecycleError";
+  }
+}
+
+export async function withStdioHarness<Harness extends ClosableHarness, Result>(
+  create: () => Harness,
+  operation: (harness: Harness) => Promise<Result>,
+  label: string,
+): Promise<Result> {
+  const harness = create();
+  let result!: Result;
+  let operationFailed = false;
+  let operationError: unknown;
+  try {
+    result = await operation(harness);
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+
+  let cleanupFailed = false;
+  let closeError: unknown;
+  try {
+    const exitCode = await harness.close();
+    if (exitCode !== 0) {
+      throw new Error(`${label} exited with code ${String(exitCode)}`);
+    }
+  } catch (error) {
+    cleanupFailed = true;
+    closeError = error;
+  }
+
+  let forceCloseFailed = false;
+  let forceCloseError: unknown;
+  if (cleanupFailed) {
+    try {
+      await harness.forceClose();
+    } catch (error) {
+      forceCloseFailed = true;
+      forceCloseError = error;
+    }
+  }
+
+  if (operationFailed && cleanupFailed) {
+    throw new StdioHarnessLifecycleError(
+      label,
+      operationError,
+      closeError,
+      forceCloseFailed ? forceCloseError : undefined,
+    );
+  }
+  if (forceCloseFailed) {
+    throw new StdioHarnessLifecycleError(label, undefined, closeError, forceCloseError);
+  }
+  if (operationFailed) {
+    throw operationError;
+  }
+  if (cleanupFailed) {
+    throw closeError;
+  }
+  return result;
+}
+
 export class StdioHarness {
   proc: ChildProcess;
   private buffer = "";
@@ -24,6 +108,11 @@ export class StdioHarness {
   readonly nonProtocolLines: string[] = [];
   stderrText = "";
   private waiters: Array<{ predicate: (m: JsonRpcMessage) => boolean; resolve: (m: JsonRpcMessage) => void }> = [];
+  private readonly envelope = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientInfo": { name: "e2e-harness", version: "1.0.0" },
+    "io.modelcontextprotocol/clientCapabilities": {},
+  };
 
   constructor(
     storageDir: string,
@@ -99,39 +188,46 @@ export class StdioHarness {
     });
   }
 
-  /** initialize → wait for response → notifications/initialized. */
-  async initialize(id = 1): Promise<JsonRpcMessage> {
+  async discover(id = 1): Promise<JsonRpcMessage> {
     this.send({
       jsonrpc: "2.0",
       id,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "e2e-harness", version: "1.0.0" },
-      },
+      method: "server/discover",
+      params: { _meta: this.envelope },
     });
-    const response = await this.waitFor((m) => m.id === id, 30000);
-    this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
-    return response;
+    return this.waitFor((message) => message.id === id, 30_000);
   }
 
-  async callTool(id: number, name: string, args: Record<string, unknown>, timeoutMs = 30000): Promise<JsonRpcMessage> {
-    this.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+  async listTools(id: number): Promise<JsonRpcMessage> {
+    this.send({ jsonrpc: "2.0", id, method: "tools/list", params: { _meta: this.envelope } });
+    return this.waitFor((message) => message.id === id, 30_000);
+  }
+
+  async callTool(id: number, name: string, args: Record<string, unknown>, timeoutMs = 30_000) {
+    this.send({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name, arguments: args, _meta: this.envelope },
+    });
     return this.waitFor((message) => message.id === id, timeoutMs);
   }
 
   /** Wait for a process that terminates on its own (no stdin close). */
   waitForExit(timeoutMs: number): Promise<number | null> {
-    if (this.proc.exitCode !== null) {
+    if (this.proc.exitCode !== null || this.proc.signalCode !== null) {
       return Promise.resolve(this.proc.exitCode);
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Timed out waiting for process exit")), timeoutMs);
-      this.proc.once("exit", (code) => {
+      const onExit = (code: number | null) => {
         clearTimeout(timer);
         resolve(code);
-      });
+      };
+      const timer = setTimeout(() => {
+        this.proc.off("exit", onExit);
+        reject(new Error("Timed out waiting for process exit"));
+      }, timeoutMs);
+      this.proc.once("exit", onExit);
     });
   }
 
@@ -140,19 +236,39 @@ export class StdioHarness {
   }
 
   async close(): Promise<number | null> {
-    if (this.proc.exitCode !== null) {
+    if (this.proc.exitCode !== null || this.proc.signalCode !== null) {
       return this.proc.exitCode;
     }
     return new Promise((resolve, reject) => {
+      const onExit = (code: number | null) => {
+        clearTimeout(timer);
+        resolve(code);
+      };
       const timer = setTimeout(() => {
+        this.proc.off("exit", onExit);
         this.proc.kill();
         reject(new Error("Timed out waiting for the stdio server to shut down"));
       }, 15000);
-      this.proc.once("exit", (code) => {
+      this.proc.once("exit", onExit);
+      this.proc.stdin?.end();
+    });
+  }
+
+  forceClose(timeoutMs = 5000): Promise<number | null> {
+    if (this.proc.exitCode !== null || this.proc.signalCode !== null) {
+      return Promise.resolve(this.proc.exitCode);
+    }
+    return new Promise((resolve, reject) => {
+      const onExit = (code: number | null) => {
         clearTimeout(timer);
         resolve(code);
-      });
-      this.proc.stdin?.end();
+      };
+      const timer = setTimeout(() => {
+        this.proc.off("exit", onExit);
+        reject(new Error("Timed out waiting for forced stdio server termination"));
+      }, timeoutMs);
+      this.proc.once("exit", onExit);
+      this.proc.kill("SIGKILL");
     });
   }
 }

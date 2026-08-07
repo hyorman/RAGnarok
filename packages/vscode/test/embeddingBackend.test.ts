@@ -128,6 +128,30 @@ describe("EmbeddingBackend Abstraction", function () {
   // VscodeLmBackend — embed single
   // ---------------------------------------------------------------------------
   describe("VscodeLmBackend.embed()", () => {
+    it("keeps the previous model when a requested switch is unavailable", async () => {
+      const backend = createBackend("model-a", { models: ["model-a"] });
+      await backend.initialize();
+      try {
+        await backend.initialize("missing-model");
+        expect.fail("expected unavailable model");
+      } catch (error) {
+        expect((error as Error).message).to.include("not available");
+      }
+      expect(backend.getModelId()).to.equal("model-a");
+    });
+
+    it("propagates caller cancellation after provider inference", async () => {
+      const backend = createBackend("test-model-001");
+      const controller = new AbortController();
+      controller.abort(new Error("embedding cancelled"));
+      try {
+        await backend.embed("test", controller.signal);
+        expect.fail("expected cancellation");
+      } catch (error) {
+        expect((error as Error).message).to.equal("embedding cancelled");
+      }
+    });
+
     it("should return a number[] embedding", async () => {
       const backend = createBackend("test-model-001");
       const embedding = await backend.embed("hello world");

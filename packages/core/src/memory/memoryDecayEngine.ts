@@ -47,6 +47,14 @@ export class MemoryDecayEngine {
     return Math.max(0, Math.min(1, decayed));
   }
 
+  /** Whether an entry is eligible to surface in recall/export right now. */
+  isRecallable(entry: MemoryEntry, graph: MemoryGraph, now: number = Date.now()): boolean {
+    if (entry.isLatest === false || (!!entry.expiresAt && entry.expiresAt <= now)) {
+      return false;
+    }
+    return this.isFactEntry(entry, graph) || this.effectiveConfidence(entry, graph, now) >= this.minConfidence;
+  }
+
   /**
    * Run one decay cycle across provided entries: a pure evaluation of
    * effective confidence against the expiry thresholds. Nothing is mutated or
@@ -131,11 +139,18 @@ export class MemoryDecayEngine {
     };
   }
 
-  /** Check if entry has associated entities of type "fact" */
+  /**
+   * Fact immunity is intentionally narrow: every referenced entity must be a
+   * fact. A mixed memory mentioning one fact and one preference/convention
+   * must still decay.
+   */
   private isFactEntry(entry: MemoryEntry, graph: MemoryGraph): boolean {
-    return entry.entityIds.some((id) => {
-      const entity = graph.getEntity(id);
-      return entity?.type === "fact";
-    });
+    return (
+      entry.entityIds.length > 0 &&
+      entry.entityIds.every((id) => {
+        const entity = graph.getEntity(id);
+        return entity?.type === "fact";
+      })
+    );
   }
 }

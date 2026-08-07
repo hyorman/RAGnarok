@@ -157,6 +157,21 @@ describe("MemoryDecayEngine", function () {
       expect(status.expiredCount).to.equal(0);
     });
 
+    it("does not grant fact immunity to a mixed fact and preference memory", function () {
+      const factEntity = makeFactEntity("fact", ["mixed"]);
+      const preferenceEntity = { ...makeFactEntity("preference", ["mixed"]), type: "preference" as const };
+      graph.addEntity(factEntity);
+      graph.addEntity(preferenceEntity);
+      const mixed = makeEntry({
+        id: "mixed",
+        entityIds: [factEntity.id, preferenceEntity.id],
+        lastAccessedAt: Date.now() - 100 * DAY_MS,
+      });
+
+      expect(engine.isRecallable(mixed, graph)).to.equal(false);
+      expect(engine.effectiveConfidence(mixed, graph)).to.be.lessThan(MIN_CONFIDENCE_THRESHOLD);
+    });
+
     it("should count TTL-expired entries", function () {
       const entries = [
         makeEntry({

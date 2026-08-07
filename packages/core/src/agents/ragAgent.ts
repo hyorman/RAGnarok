@@ -19,13 +19,20 @@ import {
   EnsembleSearchResult,
   DEFAULT_ENSEMBLE_OPTIONS,
 } from "../retrievers/ensembleRetriever";
-import { GraphRetriever, GraphSearchResult, DEFAULT_GRAPH_OPTIONS, getChunkId } from "../retrievers/graphRetriever";
+import {
+  GraphRetriever,
+  GraphSearchResult,
+  DEFAULT_GRAPH_OPTIONS,
+  getChunkId,
+  GraphRetrievalLimitError,
+} from "../retrievers/graphRetriever";
 import {
   GraphHybridRetriever,
   GraphHybridSearchResult,
   DEFAULT_GRAPH_HYBRID_OPTIONS,
 } from "../retrievers/graphHybridRetriever";
-import { KnowledgeGraph } from "../stores/knowledgeGraph";
+import { KnowledgeGraph, KnowledgeGraphEmbeddingMismatchError } from "../stores/knowledgeGraph";
+import { KnowledgeGraphCorruptionError, KnowledgeGraphLimitError } from "../stores/knowledgeGraphStore";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
 import { CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS } from "../constants";
@@ -40,7 +47,7 @@ const DEFAULT_GAP_SCORE_THRESHOLD = 0.4;
  *  BM25 scores are unbounded; vector/hybrid/ensemble are in [0,1].
  *  RRF scores are small fractions (typically < 0.05). */
 const STRATEGY_GAP_THRESHOLDS: Partial<Record<RetrievalStrategy, number>> = {
-  [RetrievalStrategy.BM25]: 2.0, // BM25 scores are typically > 1 for relevant docs
+  [RetrievalStrategy.BM25]: 0.1, // Public BM25 scores are query-locally normalized.
   [RetrievalStrategy.ENSEMBLE]: 0.01, // RRF scores are very small fractions
 };
 
@@ -67,7 +74,13 @@ export interface RAGAgentOptions {
 export interface RetrievalResult {
   document: LangChainDocument;
   score: number;
+  scoreKind?: string;
+  componentScores?: { vector?: number; keyword?: number; graph?: number };
   source: RetrievalStrategy | "keyword";
+  degradedFrom?: string;
+  fallbackReason?: string;
+  matchedEntities?: string[];
+  hopDepth?: number;
   subQuery?: string;
   /** Original sub-query from the initial plan that this result is intended to fill.
    *  Set on follow-up iterations so gap analysis can attribute results correctly. */
@@ -75,6 +88,10 @@ export interface RetrievalResult {
   explanation?: string;
   /** Original first-stage retrieval score (set when reranking is applied) */
   originalScore?: number;
+  /** Semantics of the original first-stage score. */
+  originalScoreKind?: string;
+  /** Original first-stage retrieval-arm contributions. */
+  originalComponentScores?: { vector?: number; keyword?: number; graph?: number };
 }
 
 export interface SubQueryGap {
@@ -497,9 +514,11 @@ export class RAGAgent {
     } else if (strategy === RetrievalStrategy.VECTOR && this.vectorRetriever) {
       const results = await this.vectorRetriever.search(query, topK);
       return {
-        results: results.map(({ document, score }) => ({
+        results: results.map(({ document, score, scoreKind, componentScores }) => ({
           document,
           score,
+          scoreKind,
+          componentScores,
           vectorScore: score,
           keywordScore: 0,
         })),
@@ -554,6 +573,14 @@ export class RAGAgent {
         error: error instanceof Error ? error.message : String(error),
         subQuery: subQuery.query,
       });
+      if (
+        error instanceof KnowledgeGraphEmbeddingMismatchError ||
+        error instanceof KnowledgeGraphCorruptionError ||
+        error instanceof KnowledgeGraphLimitError ||
+        error instanceof GraphRetrievalLimitError
+      ) {
+        throw error;
+      }
       return [];
     }
   }
@@ -562,17 +589,58 @@ export class RAGAgent {
    * Map raw search results to RetrievalResult[]
    */
   private mapSearchResults(
-    results: Array<{ document: LangChainDocument; score?: number; explanation?: string }>,
+    results: Array<{
+      document: LangChainDocument;
+      score?: number;
+      explanation?: string;
+      scoreKind?: string;
+      componentScores?: { vector?: number; keyword?: number; graph?: number };
+      vectorScore?: number;
+      keywordScore?: number;
+      graphScore?: number;
+      matchedEntities?: string[];
+      hopDepth?: number;
+      degradedFrom?: string;
+      fallbackReason?: string;
+      effectiveStrategy?: string;
+    }>,
     strategy: RetrievalStrategy,
     sourceQuery?: string,
   ): RetrievalResult[] {
-    return results.map((result) => ({
-      document: result.document,
-      score: result.score || 0,
-      source: strategy,
-      subQuery: sourceQuery,
-      explanation: result.explanation,
-    }));
+    return results.map((result) => {
+      const componentScores = result.componentScores ?? {
+        ...(result.vectorScore !== undefined ? { vector: result.vectorScore } : {}),
+        ...(result.keywordScore !== undefined ? { keyword: result.keywordScore } : {}),
+        ...(result.graphScore !== undefined ? { graph: result.graphScore } : {}),
+      };
+      const effectiveStrategy = (result.effectiveStrategy as RetrievalStrategy | undefined) ?? strategy;
+      const metadata = {
+        ...result.document.metadata,
+        scoreKind: result.scoreKind,
+        componentScores,
+        matchedEntities: result.matchedEntities,
+        hopDepth: result.hopDepth,
+        degradedFrom: result.degradedFrom,
+        fallbackReason: result.fallbackReason,
+      };
+
+      return {
+        document: new LangChainDocument({
+          pageContent: result.document.pageContent,
+          metadata,
+        }),
+        score: result.score ?? 0,
+        scoreKind: result.scoreKind,
+        componentScores,
+        source: effectiveStrategy,
+        degradedFrom: result.degradedFrom,
+        fallbackReason: result.fallbackReason,
+        matchedEntities: result.matchedEntities,
+        hopDepth: result.hopDepth,
+        subQuery: sourceQuery,
+        explanation: result.explanation,
+      };
+    });
   }
 
   /**
@@ -1230,29 +1298,42 @@ Respond with JSON:
     const candidates = results.map((r) => ({
       document: r.document,
       score: r.score,
+      scoreKind: r.scoreKind,
+      componentScores: r.componentScores,
     }));
 
     const reranked = await this.reranker.rerank(query, candidates, topK, signal);
 
     // Map back to RetrievalResult, preserving source metadata
-    const docToResult = new Map<string, RetrievalResult>();
+    // Cross-encoders return the exact candidate document object. Map by object
+    // identity so two chunks with identical text do not inherit each other's
+    // source, chunk id, or other retrieval metadata.
+    const docToResult = new Map<LangChainDocument, RetrievalResult>();
     for (const r of results) {
-      const key = r.document.pageContent;
-      if (!docToResult.has(key)) {
-        docToResult.set(key, r);
-      }
+      docToResult.set(r.document, r);
     }
 
     return reranked.map((scored) => {
-      const original = docToResult.get(scored.document.pageContent);
+      const original = docToResult.get(scored.document);
+      const rerankingApplied =
+        scored.originalScore !== undefined ||
+        scored.originalScoreKind !== undefined ||
+        scored.originalComponentScores !== undefined ||
+        scored.scoreKind === "cross_encoder_probability";
       return {
+        ...original,
         document: scored.document,
         score: scored.score,
+        scoreKind: scored.scoreKind ?? (rerankingApplied ? "reranker_score" : original?.scoreKind),
+        componentScores: rerankingApplied
+          ? scored.componentScores
+          : (scored.componentScores ?? original?.componentScores),
         source: original?.source ?? ("vector" as RetrievalStrategy),
-        subQuery: original?.subQuery,
-        originalSubQuery: original?.originalSubQuery,
-        explanation: original?.explanation,
         originalScore: scored.originalScore ?? original?.score,
+        originalScoreKind: rerankingApplied ? (scored.originalScoreKind ?? original?.scoreKind) : undefined,
+        originalComponentScores: rerankingApplied
+          ? (scored.originalComponentScores ?? original?.componentScores)
+          : undefined,
       };
     });
   }

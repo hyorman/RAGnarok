@@ -23,6 +23,7 @@ import {
   HuggingFaceBackend,
   IConfigProvider,
   INotifier,
+  VectorStoreMetadataCorruptionError,
 } from "../src/index";
 
 const mockConfig: IConfigProvider = {
@@ -102,4 +103,66 @@ describe("VectorStoreFactory metadata persistence", function () {
 
     expect(md.sectionTitle).to.equal("Malloc");
   });
+
+  it("refuses to write or stamp an existing table whose metadata is missing", async function () {
+    const missingTopic = "metadata-missing";
+    await factory.createStore({ topicId: missingTopic, storageDir }, [
+      new LangChainDocument({
+        pageContent: "original semantic space",
+        metadata: { documentId: "original", chunkId: "original-0" },
+      }),
+    ]);
+    const metadataPath = path.join(storageDir, `vector-${missingTopic}-metadata.json`);
+    await fs.unlink(metadataPath);
+
+    let reconcileError: unknown;
+    try {
+      await factory.reconcileDocuments(missingTopic, [
+        new LangChainDocument({
+          pageContent: "must never be embedded into the unidentified table",
+          metadata: { documentId: "new", chunkId: "new-0" },
+        }),
+      ]);
+    } catch (error) {
+      reconcileError = error;
+    }
+    expect(reconcileError).to.be.instanceOf(VectorStoreMetadataCorruptionError);
+    expect(await factory.getDocumentChunkCount(missingTopic, "original")).to.equal(1);
+    expect(await factory.getDocumentChunkCount(missingTopic, "new")).to.equal(0);
+
+    let saveError: unknown;
+    try {
+      await factory.saveStore(missingTopic, { documentCount: 2, chunkCount: 2 });
+    } catch (error) {
+      saveError = error;
+    }
+    expect(saveError).to.be.instanceOf(VectorStoreMetadataCorruptionError);
+    await expectFileMissing(metadataPath);
+  });
+
+  it("fails closed on malformed metadata without replacing it", async function () {
+    const corruptTopic = "metadata-corrupt";
+    await factory.createStore({ topicId: corruptTopic, storageDir });
+    const metadataPath = path.join(storageDir, `vector-${corruptTopic}-metadata.json`);
+    const corruptBytes = '{"schemaVersion":2,"topicId":';
+    await fs.writeFile(metadataPath, corruptBytes);
+
+    let error: unknown;
+    try {
+      await factory.saveStore(corruptTopic, { documentCount: 0, chunkCount: 0 });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).to.be.instanceOf(VectorStoreMetadataCorruptionError);
+    expect(await fs.readFile(metadataPath, "utf8")).to.equal(corruptBytes);
+  });
 });
+
+async function expectFileMissing(filePath: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+    expect.fail(`Expected ${filePath} not to exist`);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).to.equal("ENOENT");
+  }
+}

@@ -9,6 +9,7 @@
     "declaration": false,
     "declarationMap": false,
     "sourceMap": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "types": ["mocha", "node", "chai"]
   },
   "include": ["src/**/*", "test/**/*"],

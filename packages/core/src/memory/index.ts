@@ -23,6 +23,7 @@ export type {
   ForgetOptions,
   MemoryStats,
   MemoryGraphData,
+  MemoryGraphSnapshot,
   DecayStatus,
   ScopeLink,
 } from "./types";

@@ -4,6 +4,16 @@ VS Code extension for RAGnarōk. Wires `@ragnarok/core` to VS Code APIs via
 thin adapter classes, providing a full RAG-powered Copilot tool, sidebar UI,
 and command palette integration.
 
+The extension requires VS Code 1.105 or newer. The optional
+`vscode.lm.computeEmbeddings` integration is a proposed API and additionally
+requires a compatible VS Code build, explicit proposed-API enablement, and a
+registered provider. The local HuggingFace backend remains the supported
+fallback.
+
+Release VSIX files are built for Linux, macOS, and Windows on x64 and arm64.
+Each exact VSIX must pass install/activation/native-load smoke testing on its
+target; see the repository [release procedure](../../docs/RELEASE.md).
+
 ---
 
 ## Architecture

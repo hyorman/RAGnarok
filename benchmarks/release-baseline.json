@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "ac9ebb1859cb65b8481fd820b66cc122ea3585aa",
+  "corpusManifestSha256": "f2aaa6ee72da1fae61b11ad9d994a6a3a19313678dd80457d28c3bfdc5f57f5c",
+  "rankingContract": "squared-l2-unit-cosine-v1",
+  "environment": {
+    "node": "20-or-22",
+    "platform": "linux-x64",
+    "seed": 1729,
+    "model": "Xenova/all-MiniLM-L6-v2@751bff37182d3f1213fa05d7196b954e230abad9"
+  },
+  "minimums": {
+    "vector": { "recallAt5": 0.7, "mrrAt10": 0.6, "ndcgAt5": 0.6 },
+    "hybrid": { "recallAt5": 0.65, "mrrAt10": 0.6, "ndcgAt5": 0.6 },
+    "ensemble": { "recallAt5": 0.65, "mrrAt10": 0.55, "ndcgAt5": 0.55 },
+    "bm25": { "recallAt5": 0.55, "mrrAt10": 0.35, "ndcgAt5": 0.4 },
+    "graph": {
+      "entityRecallAt5": 0.8,
+      "chunkRecallAt5": 0.6,
+      "fallbackAccuracy": 1,
+      "explanationCoverage": 1
+    },
+    "graph_hybrid": {
+      "entityRecallAt5": 0.8,
+      "chunkRecallAt5": 0.7,
+      "fallbackAccuracy": 1,
+      "explanationCoverage": 1
+    },
+    "rerank": { "recallAt5": 0.5, "mrrAt10": 0.5, "ndcgAt10": 0.52 }
+  },
+  "maximums": {
+    "queryP50Ms": 1500,
+    "queryP95Ms": 5000,
+    "childPeakRssBytes": 805306368,
+    "indexTimeMs": 120000,
+    "coreTarballBytes": 104857600,
+    "mcpTarballBytes": 5242880
+  },
+  "allowedRegression": {
+    "absoluteQuality": 0.03,
+    "relativeLatency": 0.2,
+    "relativeMemory": 0.15,
+    "packageGrowthBytes": 0
+  }
+}

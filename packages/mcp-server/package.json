@@ -1,6 +1,6 @@
 {
   "name": "@ragnarok/mcp-server",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "MCP server exposing RAGnarōk tools to any MCP-compatible agent",
   "main": "dist/index.js",
   "bin": {
@@ -8,24 +8,30 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "NOTICE",
+    "THIRD_PARTY_MODELS.md",
+    "bom.cdx.json",
+    "bom.spdx.json"
   ],
   "scripts": {
-    "build": "tsc -p ./",
+    "build": "npm run build:ui && tsc -p ./",
+    "typecheck:ui": "tsc -p src/ui/graphApp/tsconfig.json",
+    "build:ui": "npm run typecheck:ui && node src/ui/graphApp/build.mjs",
     "lint": "eslint src test",
     "lint:fix": "eslint --fix src test",
     "clean": "rimraf dist dist-test tsconfig.tsbuildinfo",
     "clean:all": "rimraf dist dist-test node_modules tsconfig.tsbuildinfo",
     "clean:tests": "rimraf dist-test",
     "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
-    "pretest": "npm run compile:tests",
+    "pretest": "npm run build && npm run compile:tests",
     "test": "mocha",
     "start": "node dist/index.js",
     "start:http": "node dist/index.js --http",
-    "prepack": "npm run clean && npm run build",
-    "release": "npm publish --access public",
+    "prepack": "node ../../scripts/prepare-package-metadata.mjs && npm run clean && npm run build",
+    "release": "npm --prefix ../.. run publish:npm",
     "docker:build": "docker build -f Dockerfile -t ragnarok-mcp ../../",
-    "docker:push": "docker tag ragnarok-mcp hyorman/ragnarok-mcp:latest && docker push hyorman/ragnarok-mcp:latest"
+    "docker:push": "npm --prefix ../.. run publish:docker"
   },
   "license": "MIT",
   "engines": {
@@ -33,21 +39,32 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.39.0",
-    "@modelcontextprotocol/sdk": "1.28.0",
-    "@ragnarok/core": "0.4.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@ragnarok/core": "0.5.0",
     "cors": "2.8.6",
     "express": "5.2.1",
     "express-rate-limit": "8.5.2",
     "openai": "4.104.0",
-    "zod": "3.25.76"
+    "zod": "^4.2.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@types/chai": "^5.2.3",
     "@types/cors": "^2.8.17",
+    "@types/d3-selection": "^3.0.11",
+    "@types/d3-zoom": "^3.0.8",
     "@types/express": "^5.0.0",
+    "@types/jsdom": "21.1.7",
     "@types/mocha": "^10.0.10",
     "@types/sinon": "^21.0.0",
     "chai": "^5.1.2",
+    "d3-selection": "^3.0.0",
+    "d3-zoom": "^3.0.0",
+    "esbuild": "^0.25.0",
+    "jsdom": "26.1.0",
     "mocha": "^11.0.1",
     "rimraf": "^6.0.1",
     "sinon": "^21.0.2",

@@ -27,6 +27,7 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
   private format: RemoteEmbeddingFormat;
   private modelName: string | null;
   private dimension: number | null = null;
+  private switchSnapshot: { modelName: string | null; dimension: number | null } | null = null;
   private logger: Logger;
 
   constructor(options: { baseUrl: string; apiKey?: string; format: RemoteEmbeddingFormat; modelName?: string }) {
@@ -42,15 +43,31 @@ export class RemoteEmbeddingBackend implements EmbeddingBackend {
   // ---------------------------------------------------------------------------
 
   async initialize(modelName?: string): Promise<void> {
-    if (modelName) {
-      this.modelName = modelName;
-    }
-
-    if (!this.modelName) {
+    const candidateModel = modelName ?? this.modelName;
+    if (!candidateModel) {
       throw new Error("Remote embedding backend requires a model name — set it via constructor or initialize()");
     }
 
-    this.logger.info(`Using remote model "${this.modelName}"`);
+    // Publish only after all synchronous validation succeeds. A rejected
+    // switch must not overwrite the last usable model identifier.
+    this.modelName = candidateModel;
+    this.logger.info(`Using remote model "${candidateModel}"`);
+  }
+
+  beginSwitchTransaction(): void {
+    this.switchSnapshot = { modelName: this.modelName, dimension: this.dimension };
+  }
+
+  commitSwitchTransaction(): void {
+    this.switchSnapshot = null;
+  }
+
+  rollbackSwitchTransaction(): void {
+    if (this.switchSnapshot) {
+      this.modelName = this.switchSnapshot.modelName;
+      this.dimension = this.switchSnapshot.dimension;
+      this.switchSnapshot = null;
+    }
   }
 
   async isAvailable(): Promise<boolean> {

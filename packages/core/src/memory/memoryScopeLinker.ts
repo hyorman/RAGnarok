@@ -107,7 +107,7 @@ export class MemoryScopeLinker {
     // Merge the referenced slice of the branch graph into the workspace graph.
     // Yields a branch-entity-ID → workspace-entity-ID remap for the entries.
     const promotedIds = new Set(toPromote.map((e) => e.id));
-    const entityIdRemap = await this.mergeGraphForPromotion(
+    const { remap: entityIdRemap, graph: mergedGraph } = await this.mergeGraphForPromotion(
       branch,
       toPromote.flatMap((e) => e.entityIds),
       promotedIds,
@@ -132,7 +132,7 @@ export class MemoryScopeLinker {
       vector: Array.from(e.vector),
     }));
     const merged = [...normalized, ...promoted];
-    await this.vectorStore.saveEntries(merged, "workspace");
+    await this.vectorStore.saveScopeAtomic(merged, mergedGraph, "workspace");
 
     this.logger.debug(`Promoted ${promoted.length} entries from branch "${branch}" to workspace`);
     return promoted.length;
@@ -153,29 +153,27 @@ export class MemoryScopeLinker {
     branch: string,
     referencedEntityIds: string[],
     promotedEntryIds: Set<string>,
-  ): Promise<Map<string, string>> {
+  ): Promise<{ remap: Map<string, string>; graph: MemoryGraphData }> {
     const remap = new Map<string, string>();
     const referenced = new Set(referencedEntityIds);
-    if (referenced.size === 0) {
-      return remap;
-    }
-
-    const branchGraph = await this.vectorStore.loadGraph("branch", branch);
-    if (!branchGraph) {
-      return remap;
-    }
-
     const workspaceGraph: MemoryGraphData = (await this.vectorStore.loadGraph("workspace")) ?? {
       entities: [],
       relationships: [],
     };
+    if (referenced.size === 0) {
+      return { remap, graph: workspaceGraph };
+    }
+
+    const branchGraph = await this.vectorStore.loadGraph("branch", branch);
+    if (!branchGraph) {
+      return { remap, graph: workspaceGraph };
+    }
 
     const workspaceByKey = new Map<string, MemoryEntity>();
     for (const entity of workspaceGraph.entities) {
       workspaceByKey.set(`${entity.name.toLowerCase()}|${entity.type}`, entity);
     }
 
-    let graphChanged = false;
     for (const entity of branchGraph.entities) {
       if (!referenced.has(entity.id)) {
         continue;
@@ -189,7 +187,6 @@ export class MemoryScopeLinker {
         if (mergedSources.size !== existing.sourceMemoryIds.length) {
           existing.sourceMemoryIds = [...mergedSources];
           existing.updatedAt = Date.now();
-          graphChanged = true;
         }
       } else {
         const copied: MemoryEntity = {
@@ -203,7 +200,6 @@ export class MemoryScopeLinker {
         workspaceGraph.entities.push(copied);
         workspaceByKey.set(key, copied);
         remap.set(entity.id, copied.id);
-        graphChanged = true;
       }
     }
 
@@ -229,19 +225,17 @@ export class MemoryScopeLinker {
       };
       workspaceGraph.relationships.push(copied);
       existingRelKeys.add(relKey);
-      graphChanged = true;
     }
 
-    if (graphChanged) {
-      // Normalize vectors to plain arrays before persisting
-      const toSave: MemoryGraphData = {
+    // Normalize vectors to plain arrays. The caller commits this graph and
+    // the promoted entries in one scope transaction.
+    return {
+      remap,
+      graph: {
         entities: workspaceGraph.entities.map((e) => ({ ...e, vector: Array.from(e.vector) })),
         relationships: workspaceGraph.relationships,
-      };
-      await this.vectorStore.saveGraph(toSave, "workspace");
-    }
-
-    return remap;
+      },
+    };
   }
 
   private workspaceEntityId(graph: MemoryGraphData, id: string): string | undefined {
