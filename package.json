@@ -488,6 +488,7 @@
     "test:shutdown-soak": "node scripts/shutdown-soak.mjs",
     "verify:models": "node scripts/verify-model-manifest.mjs",
     "sbom:generate": "node scripts/generate-sbom.mjs",
+    "audit:policy": "node scripts/audit-gate.mjs",
     "release:assets": "node scripts/check-release-assets.mjs",
     "release:verify": "node scripts/release-manifest.mjs verify",
     "bench:beir": "npm run bench:beir --workspace=packages/core",

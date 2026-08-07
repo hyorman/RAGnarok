@@ -40,13 +40,21 @@ The workflow in `.github/workflows/release.yml` is the executable source for
 the supported matrix. A failed, cancelled, skipped, or missing required job is
 a release blocker.
 
-The clean-consumer `npm audit` gate rejects every moderate-or-higher advisory
-except exact, unexpired entries in `release-policy.json`. It fails closed on
-unknown findings, changed package names or ranges, malformed audit output,
-malformed policy, and expired entries. `npm run test:pack` prints every accepted
-finding with its advisory, dependency, range, and reachability rationale before
-continuing to packed core and MCP runtime checks; an accepted finding is never
-silent.
+The `npm audit` gates reject every moderate-or-higher advisory except
+exact, unexpired entries in `release-policy.json`. They fail closed on unknown
+findings, changed package names or ranges, malformed audit output, malformed
+policy, and expired entries. Both evaluate the same policy through
+`scripts/audit-policy.mjs`, so neither can pass a finding the other blocks:
+
+- `npm run audit:policy` (`scripts/audit-gate.mjs`) audits the workspace's
+  production dependencies. The `supply-chain` job runs it instead of a bare
+  `npm audit --audit-level=moderate`, which has no way to express an approved
+  advisory and so would fail on findings the policy has already accepted.
+- `npm run test:pack` audits the clean consumer installed from the packed
+  tarballs, then continues to packed core and MCP runtime checks.
+
+Each gate prints every accepted finding with its advisory, dependency, and
+range before continuing; an accepted finding is never silent.
 
 ## Artifact identity and budgets
 
