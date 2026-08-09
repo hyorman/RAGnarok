@@ -131,12 +131,6 @@
           "maximum": 10,
           "order": 8
         },
-        "ragnarok.langGraphEnabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "**LangGraph execution** (experimental): Run RAG queries and document indexing through the LangGraph state-machine pipeline with checkpointing and entity extraction, instead of the legacy agent loop.\n\n⚠️ Experimental — behavior and performance characteristics may change.",
-          "order": 8.5
-        },
         "ragnarok.confidenceThreshold": {
           "type": "number",
           "default": 0.7,
@@ -180,14 +174,6 @@
           "default": false,
           "markdownDescription": "Opt in to automatic storage of high-confidence query insights. Disabled by default.",
           "order": 16
-        },
-        "ragnarok.checkpointRetentionMs": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "maximum": 604800000,
-          "markdownDescription": "Retain successful LangGraph query and ingestion checkpoints for debugging (milliseconds). `0` deletes them immediately.",
-          "order": 16.5
         },
         "ragnarok.memoryIncludeAuto": {
           "type": "boolean",
@@ -529,8 +515,6 @@
     "@lancedb/lancedb": "^0.19.1",
     "@langchain/community": "1.1.29",
     "@langchain/core": "1.2.2",
-    "@langchain/langgraph": "1.4.7",
-    "@langchain/langgraph-checkpoint": "1.1.3",
     "@langchain/textsplitters": "1.0.1",
     "@napi-rs/canvas": "0.1.80",
     "adm-zip": "0.6.0",

@@ -637,43 +637,4 @@ describe("stdio transport E2E", function () {
     expect(await harness.close(), "restarted stdio server did not exit cleanly").to.equal(0);
     harness = undefined;
   });
-
-  it("runs ingestion and query through the opt-in LangGraph pipeline", async function () {
-    const sourcePath = path.join(sourceDir, "langgraph-facts.txt");
-    fs.writeFileSync(sourcePath, "The Borealis workflow confirms delivery with an amber sextant.\n", "utf8");
-    harness = new StdioHarness(storageDir, sourceDir, { RAGNAROK_LANGGRAPH_ENABLED: "true" });
-    expect((await harness.discover(100)).error).to.equal(undefined);
-
-    const create = await harness.callTool(101, "rag_create_topic", { name: "langgraph-flow" });
-    expect(create.result?.isError, JSON.stringify(create.result)).not.to.equal(true);
-    const ingest = await harness.callTool(
-      102,
-      "rag_add_documents",
-      { topic: "langgraph-flow", filePaths: [sourcePath] },
-      60000,
-    );
-    expect(ingest.result?.isError, JSON.stringify(ingest.result)).not.to.equal(true);
-
-    const strategies = ["vector", "hybrid", "bm25"];
-    for (const [index, retrievalStrategy] of strategies.entries()) {
-      const query = await harness.callTool(
-        103 + index,
-        "rag_query",
-        {
-          topic: "langgraph-flow",
-          query: "How does Borealis confirm delivery?",
-          topK: 3,
-          retrievalStrategy,
-        },
-        60000,
-      );
-      expect(query.result?.isError, `${retrievalStrategy}: ${JSON.stringify(query.result)}`).not.to.equal(true);
-      const payload = JSON.parse(query.result?.content?.[0]?.text ?? "{}");
-      expect(JSON.stringify(payload).toLowerCase(), retrievalStrategy).to.include("amber sextant");
-      expect(payload.agenticMetadata, retrievalStrategy).to.be.an("object");
-    }
-    expect(harness.nonProtocolLines, "LangGraph diagnostics leaked onto stdout").to.deep.equal([]);
-    expect(await harness.close(), "LangGraph stdio server did not exit cleanly").to.equal(0);
-    harness = undefined;
-  });
 });

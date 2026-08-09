@@ -404,7 +404,6 @@ describe("RAGQueryService", () => {
       };
       (service as any).cachedReranker = reranker;
       (service as any).ragAgents.set("cached", {});
-      (service as any).compiledQueryGraph = {};
       config.get = (<T>(key: string, defaultValue: T): T =>
         (key === "rerankerModel" ? "org/new" : defaultValue) as T) as IConfigProvider["get"];
 
@@ -412,7 +411,6 @@ describe("RAGQueryService", () => {
 
       expect(switchModel.calledOnceWithExactly("org/new")).to.equal(true);
       expect((service as any).ragAgents.size).to.equal(0);
-      expect((service as any).compiledQueryGraph).to.equal(null);
     });
 
     it("should pass the same reranker instance to agents for different topics", async () => {
@@ -501,31 +499,31 @@ describe("RAGQueryService", () => {
   });
 
   describe("retrieval explanation mapping", () => {
-    it("exposes score components and reranking provenance in public results", () => {
-      const result = (service as any).mapGraphResult(
-        {
-          results: [
-            {
-              content: "Hybrid evidence",
-              source: "doc.md",
-              score: 0.7,
-              metadata: {
-                chunkIndex: 1,
-                retrievalStrategy: "hybrid",
-                scoreKind: "vector_similarity",
-                componentScores: { vector: 0.7 },
-                originalScore: 0.03,
-                originalScoreKind: "rrf",
-                originalComponentScores: { vector: 0.02, keyword: 0.01 },
-              },
+    it("exposes score components and reranking provenance in public results", async () => {
+      queryStub.resolves({
+        ...fakeRagResult,
+        results: [
+          {
+            document: {
+              pageContent: "Hybrid evidence",
+              metadata: { source: "doc.md", chunkIndex: 1 },
             },
-          ],
-          confidence: 0.7,
-          iterations: 1,
-        },
-        { topic: "Docs", query: "query", retrievalStrategy: "hybrid" },
-        { topic: { name: "Docs" }, matchType: "exact" },
-      );
+            score: 0.7,
+            source: "hybrid" as const,
+            scoreKind: "vector_similarity",
+            componentScores: { vector: 0.7 },
+            originalScore: 0.03,
+            originalScoreKind: "rrf",
+            originalComponentScores: { vector: 0.02, keyword: 0.01 },
+          },
+        ],
+      });
+
+      const result = await service.executeQuery({
+        topic: "Docs",
+        query: "query",
+        retrievalStrategy: RetrievalStrategy.HYBRID,
+      });
 
       expect(result.results[0].retrievalStrategy).to.equal("hybrid");
       expect(result.results[0].metadata.scoreKind).to.equal("vector_similarity");

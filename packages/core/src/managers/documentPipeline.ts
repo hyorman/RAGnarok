@@ -488,8 +488,8 @@ export class DocumentPipeline {
   /**
    * Embed and persist already-chunked documents, skipping the load/chunk
    * stages. Storage path (validation, store creation, metadata save) is
-   * identical to processDocuments(). Used by the LangGraph indexing pipeline,
-   * which loads and chunks exactly once in its own stages.
+   * identical to processDocuments(). The caller loads and chunks exactly once
+   * in its own stages.
    */
   public async storeProcessedChunks(
     chunks: LangChainDocument[],

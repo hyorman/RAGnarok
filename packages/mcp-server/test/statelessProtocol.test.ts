@@ -50,7 +50,6 @@ function testConfig(): McpConfig {
     retrievalStrategy: "hybrid",
     maxIterations: 3,
     confidenceThreshold: 0.7,
-    langGraphEnabled: false,
     logLevel: "error",
     port: 0,
     llmProvider: "none",
@@ -74,7 +73,6 @@ function testConfig(): McpConfig {
     exportDir: "/tmp/ragnarok-stateless-exports",
     githubHosts: ["github.com"],
     githubToken: "",
-    checkpointRetentionMs: 0,
     resetStorage: false,
   };
 }

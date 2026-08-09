@@ -24,7 +24,6 @@ import {
   DocumentSource,
 } from "../utils/types";
 import { DocumentPipeline, PipelineOptions, PipelineResult, type PipelineSourceDocument } from "./documentPipeline";
-import { executeIndexingGraph } from "../agents/indexingGraph";
 import {
   EmbeddingFingerprintMismatchError,
   EmbeddingReindexRequiredError,
@@ -54,7 +53,6 @@ import {
   type StorageTransactionOperation,
 } from "../utils/storageTransactionCoordinator";
 import { createHash, randomUUID } from "crypto";
-import { LanceDBCheckpointSaver } from "../stores/lanceDBCheckpointer";
 import { Mutex } from "async-mutex";
 import {
   TOPIC_ARCHIVE_FORMAT_VERSION,
@@ -69,13 +67,12 @@ export interface TopicManagerOptions {
   notifier: INotifier;
   embeddingService: EmbeddingService;
   /**
-   * LLM provider for entity extraction during LangGraph indexing.
-   * Optional — without it the graph pipeline skips extraction.
+   * LLM provider for entity extraction during indexing.
+   * Optional — without it extraction is skipped.
    */
   llmProvider?: ILLMProvider;
   /** Explicitly back up existing managed data and initialize storage format v2. */
   resetStorage?: boolean;
-  checkpointer?: LanceDBCheckpointSaver;
 }
 
 export interface CreateTopicOptions {
@@ -109,24 +106,15 @@ interface IngestionJournalEntry {
   updatedAt: number;
 }
 
-type PostCommitCleanupEntry =
-  | {
-      version: 1;
-      id: string;
-      kind: "document";
-      topicId: string;
-      documents: TopicDocument[];
-      legacyContainer: boolean;
-      updatedAt: number;
-    }
-  | {
-      version: 1;
-      id: string;
-      kind: "topic";
-      topicId: string;
-      checkpointPrefix: string;
-      updatedAt: number;
-    };
+interface PostCommitCleanupEntry {
+  version: 1;
+  id: string;
+  kind: "document";
+  topicId: string;
+  documents: TopicDocument[];
+  legacyContainer: boolean;
+  updatedAt: number;
+}
 
 interface ArchiveSourceFile {
   sourcePath: string;
@@ -408,7 +396,6 @@ export class TopicManager {
           cleanupFailures.push(cleanupError);
         }
       };
-      await close(() => this.options.checkpointer?.dispose());
       await close(() => this.documentPipeline.dispose());
       if (this.vectorStoreFactory) {
         const factory = this.vectorStoreFactory;
@@ -549,15 +536,6 @@ export class TopicManager {
       const topicName = this.topicsIndex.topics[topicId].name;
       await this.assertStorageOwnership();
       const coordinator = await this.ensureTransactionCoordinator();
-      const cleanupEntry: PostCommitCleanupEntry = {
-        version: 1,
-        id: `topic:${topicId}`,
-        kind: "topic",
-        topicId,
-        checkpointPrefix: `ingest:${topicId}:`,
-        updatedAt: Date.now(),
-      };
-      await this.upsertPostCommitCleanup(cleanupEntry);
 
       // The topics index is the visibility boundary and is published first.
       // Once it no longer advertises the topic, remaining table directories
@@ -608,15 +586,6 @@ export class TopicManager {
       this.topicDocuments.delete(topicId);
       this.topicMutationMutexes.delete(topicId);
       this.graphMutationMutexes.delete(topicId);
-      try {
-        await this.completePostCommitCleanup(cleanupEntry);
-        await this.removePostCommitCleanup(cleanupEntry.id);
-      } catch (cleanupError) {
-        this.logger.warn("Topic deletion committed; checkpoint cleanup is deferred and will retry on startup", {
-          topicId,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-        });
-      }
 
       this.notifyAgentCacheCleanup(topicId);
 
@@ -1059,7 +1028,6 @@ export class TopicManager {
       }
 
       const results: AddDocumentResult[] = [];
-      const useLangGraph = this.config.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false);
 
       for (const filePath of filePaths) {
         options?.signal?.throwIfAborted();
@@ -1105,9 +1073,7 @@ export class TopicManager {
             ...options,
             ingestionTransactionId: transactionId,
           };
-          const pipelineResult = useLangGraph
-            ? await this.processDocumentViaGraph(filePath, topicId, pipelineOptions)
-            : await this.documentPipeline.processDocument(filePath, topicId, pipelineOptions);
+          const pipelineResult = await this.documentPipeline.processDocument(filePath, topicId, pipelineOptions);
 
           // The standard pipeline can return a failure after a native vector
           // merge partially committed. Always reconcile graph provenance
@@ -1427,7 +1393,7 @@ export class TopicManager {
 
   /**
    * Embed and persist already-chunked documents (store-only path).
-   * Used by the LangGraph indexing pipeline, which owns loading/chunking.
+   * The caller owns loading/chunking.
    */
   public async storeProcessedChunks(topicId: string, chunks: LangChainDocument[], signal?: AbortSignal): Promise<void> {
     return this.runManagedOperation(() => this.storeProcessedChunksUnlocked(topicId, chunks, signal));
@@ -1484,88 +1450,6 @@ export class TopicManager {
       },
       signal,
     );
-  }
-
-  /**
-   * Run one document through the LangGraph indexing pipeline and adapt the
-   * graph result to the PipelineResult shape addDocuments() bookkeeping uses.
-   */
-  private async processDocumentViaGraph(
-    filePath: string,
-    topicId: string,
-    options?: PipelineOptions,
-  ): Promise<PipelineResult> {
-    const startTime = Date.now();
-    const checkpointRetentionMs = this.config.get<number>(CONFIG.CHECKPOINT_RETENTION_MS, 0);
-    if (checkpointRetentionMs > 0) {
-      await this.options.checkpointer?.deleteOlderThan(Date.now() - checkpointRetentionMs, "ingest:");
-    }
-    const threadId = `ingest:${topicId}:${createHash("sha256").update(this.documentIdForSource(filePath)).digest("hex")}`;
-    const graphResult = await executeIndexingGraph(
-      {
-        topicManager: this,
-        llmProvider: this.llmProvider,
-        config: this.config,
-        checkpointer: this.options.checkpointer,
-        loaderOptions: { ...options?.loaderOptions, signal: options?.signal },
-        signal: options?.signal,
-        ingestionTransactionId: options?.ingestionTransactionId,
-      },
-      [filePath],
-      topicId,
-      threadId,
-    );
-
-    const success = graphResult.success === true;
-    if (success) {
-      if (checkpointRetentionMs > 0) {
-        this.options.checkpointer?.deleteThreadAfter(threadId, checkpointRetentionMs);
-      } else {
-        await this.options.checkpointer?.deleteThread(threadId);
-      }
-    }
-    const documentCount = (graphResult.documentCount as number) ?? 0;
-    const chunkCount = (graphResult.chunkCount as number) ?? 0;
-    const entityCount = (graphResult.entityCount as number) ?? 0;
-    const relationshipCount = (graphResult.relationshipCount as number) ?? 0;
-    const errors = (graphResult.errors as string[] | undefined) ?? [];
-    const warnings = (graphResult.warnings as Array<{ stage: string; message: string }> | undefined) ?? [];
-    const sourceDocuments = (graphResult.sourceDocuments as PipelineSourceDocument[] | undefined) ?? [];
-    const completedStage = (graphResult.completedStage as string) ?? "";
-
-    const stageReached = (stage: string): boolean => {
-      const order = ["loaded", "chunked", "stored", "extracted", "entities_stored"];
-      return order.indexOf(completedStage) >= order.indexOf(stage);
-    };
-
-    const totalTime = Date.now() - startTime;
-    return {
-      success,
-      stages: {
-        loading: stageReached("loaded"),
-        chunking: stageReached("chunked"),
-        extracting: stageReached("extracted"),
-        embedding: stageReached("stored"),
-        storing: stageReached("stored"),
-      },
-      metadata: {
-        originalDocuments: documentCount,
-        chunksCreated: chunkCount,
-        chunksEmbedded: success ? chunkCount : 0,
-        chunksStored: success ? chunkCount : 0,
-        entitiesExtracted: entityCount,
-        relationshipsExtracted: relationshipCount,
-        totalTime,
-        stageTimings: { loading: 0, chunking: 0, extracting: 0, embedding: 0, storing: 0 },
-        graphExtracted: graphResult.graphExtracted === true,
-        partial: graphResult.partial === true,
-        documentId: this.documentIdForSource(filePath),
-        sourceDocuments,
-        warnings,
-      },
-      chunks: [],
-      errors: errors.length > 0 ? errors : undefined,
-    };
   }
 
   /**
@@ -1854,7 +1738,6 @@ export class TopicManager {
       }
     };
 
-    await close(() => this.options.checkpointer?.dispose());
     await close(() => this.documentPipeline.dispose());
     if (this.vectorStoreFactory) {
       const factory = this.vectorStoreFactory;
@@ -2722,15 +2605,11 @@ export class TopicManager {
         typeof entry.id !== "string" ||
         typeof entry.topicId !== "string" ||
         !isFiniteNumber(entry.updatedAt) ||
-        (entry.kind !== "document" && entry.kind !== "topic")
+        entry.kind !== "document"
       ) {
         throw new Error("Post-commit cleanup journal contains an invalid entry");
       }
-      if (
-        (entry.kind === "document" &&
-          (!Array.isArray(entry.documents) || typeof entry.legacyContainer !== "boolean")) ||
-        (entry.kind === "topic" && typeof entry.checkpointPrefix !== "string")
-      ) {
+      if (!Array.isArray(entry.documents) || typeof entry.legacyContainer !== "boolean") {
         throw new Error("Post-commit cleanup journal contains invalid cleanup details");
       }
     }
@@ -2758,10 +2637,6 @@ export class TopicManager {
   }
 
   private async completePostCommitCleanup(entry: PostCommitCleanupEntry): Promise<string[]> {
-    if (entry.kind === "topic") {
-      await this.options.checkpointer?.deleteOlderThan(Number.POSITIVE_INFINITY, entry.checkpointPrefix);
-      return [];
-    }
     if (!this.vectorStoreFactory) {
       throw new Error("Vector store is not initialized");
     }
@@ -2787,23 +2662,16 @@ export class TopicManager {
   private async recoverPostCommitCleanupJournal(): Promise<void> {
     const entries = await this.readPostCommitCleanupJournal();
     for (const entry of entries) {
-      if (entry.kind === "topic") {
-        if (this.topicsIndex?.topics[entry.topicId]) {
-          await this.removePostCommitCleanup(entry.id);
-          continue;
-        }
-      } else {
-        const documents = this.topicDocuments.get(entry.topicId);
-        if (!this.topicsIndex?.topics[entry.topicId]) {
-          await this.removePostCommitCleanup(entry.id);
-          continue;
-        }
-        // If any selected document is still advertised, coordinator recovery
-        // rolled metadata publication back. Physical rows remain live.
-        if (entry.documents.some((document) => documents?.has(document.id))) {
-          await this.removePostCommitCleanup(entry.id);
-          continue;
-        }
+      const documents = this.topicDocuments.get(entry.topicId);
+      if (!this.topicsIndex?.topics[entry.topicId]) {
+        await this.removePostCommitCleanup(entry.id);
+        continue;
+      }
+      // If any selected document is still advertised, coordinator recovery
+      // rolled metadata publication back. Physical rows remain live.
+      if (entry.documents.some((document) => documents?.has(document.id))) {
+        await this.removePostCommitCleanup(entry.id);
+        continue;
       }
       await this.completePostCommitCleanup(entry);
       await this.removePostCommitCleanup(entry.id);

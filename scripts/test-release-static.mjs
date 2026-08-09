@@ -837,7 +837,7 @@ for (const obsoleteDependency of ["archiver", "glob"]) {
 }
 assert.equal(pkg.devDependencies.glob, "10.5.0", "Root test Glob dependency must use the audited exact version");
 assert.equal(pkg.devDependencies["@types/glob"], undefined, "Glob's bundled types must be used directly");
-for (const runtimeDependency of ["binary-extensions", "@langchain/langgraph", "@langchain/langgraph-checkpoint"]) {
+for (const runtimeDependency of ["binary-extensions"]) {
   assert.ok(
     pkg.dependencies[runtimeDependency],
     `Externalized VSIX runtime dependency must be declared: ${runtimeDependency}`,

@@ -147,21 +147,6 @@ export type {
 // Runtime constant — a type-only re-export would erase it from the built API
 export { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "./agents/entityExtractorTypes";
 
-// LangGraph Pipelines
-export { createQueryGraph, executeQueryGraph } from "./agents/queryGraph";
-export type { QueryGraphDeps, ExecuteQueryGraphOptions } from "./agents/queryGraph";
-export { createIndexingGraph, executeIndexingGraph } from "./agents/indexingGraph";
-export type { IndexingGraphDeps } from "./agents/indexingGraph";
-export { LLMProviderChatModel } from "./agents/llmAdapter";
-export { LanceDBCheckpointSaver } from "./stores/lanceDBCheckpointer";
-export { QueryPipelineState, IndexingPipelineState } from "./agents/graphState";
-export type {
-  QueryPipelineStateType,
-  IndexingPipelineStateType,
-  RetrievalResultEntry,
-  QueryPlanRef,
-} from "./agents/graphState";
-
 // Managers
 export { TopicManager } from "./managers/topicManager";
 export type { TopicManagerOptions, CreateTopicOptions, TopicStats, AddDocumentResult } from "./managers/topicManager";

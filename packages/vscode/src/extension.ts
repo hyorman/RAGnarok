@@ -14,7 +14,6 @@ import {
   HuggingFaceBackend,
   ModelRegistry,
   MemoryStore,
-  LanceDBCheckpointSaver,
   RetrievalStrategy,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
@@ -52,14 +51,12 @@ export interface ActivationServiceFactory {
   createEmbeddingService(options: ConstructorParameters<typeof EmbeddingService>[0]): EmbeddingService;
   createTopicManager(options: Parameters<typeof TopicManager.create>[0]): Promise<TopicManager>;
   createMemoryStore(options: ConstructorParameters<typeof MemoryStore>[0]): MemoryStore;
-  createCheckpointer(storagePath: string): LanceDBCheckpointSaver;
 }
 
 const defaultServiceFactory: ActivationServiceFactory = {
   createEmbeddingService: (options) => new EmbeddingService(options),
   createTopicManager: (options) => TopicManager.create(options),
   createMemoryStore: (options) => new MemoryStore(options),
-  createCheckpointer: (storagePath) => new LanceDBCheckpointSaver(storagePath),
 };
 
 let activeLifecycle: ExtensionLifecycle | undefined;
@@ -105,10 +102,6 @@ export async function activateWithServiceFactory(
     embeddingService.registerBackend(hfBackend);
 
     // Initialize TopicManager with VS Code storage path
-    const checkpointer = configProvider.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false)
-      ? serviceFactory.createCheckpointer(vscode.Uri.joinPath(context.globalStorageUri, "checkpoints-lancedb").fsPath)
-      : undefined;
-    lifecycle.setResources({ checkpointer });
     const createTopicManager = () =>
       serviceFactory.createTopicManager({
         storageDir,
@@ -116,7 +109,6 @@ export async function activateWithServiceFactory(
         notifier,
         embeddingService,
         llmProvider,
-        checkpointer,
       });
     const topicManager = await openTopicManagerWithMigration(storageDir, createDefaultMigrationUx(createTopicManager));
     lifecycle.setResources({ topicManager });
@@ -218,15 +210,7 @@ export async function activateWithServiceFactory(
             }
           });
       } else {
-        ragToolRegistration = RAGTool.register(
-          context,
-          topicManager,
-          embeddingService,
-          configProvider,
-          llmProvider,
-          memoryStore,
-          checkpointer,
-        );
+        ragToolRegistration = RAGTool.register(context, topicManager, embeddingService, configProvider, llmProvider);
         lifecycle.setResources({ ragTool: ragToolRegistration });
         lifecycle.addDisposable(ragToolRegistration);
         logger.info("RAG query tool registered successfully");

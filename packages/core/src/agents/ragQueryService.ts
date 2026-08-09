@@ -13,21 +13,14 @@
  * MCP uses it directly with no extra layers.
  */
 
-import { IConfigProvider, ILLMProvider, INotifier } from "../interfaces";
+import { IConfigProvider, ILLMProvider } from "../interfaces";
 import { TopicManager } from "../managers/topicManager";
 import { RAGAgent } from "./ragAgent";
 import type { RAGAgentOptions } from "./ragAgent";
-import { createQueryGraph, executeQueryGraph } from "./queryGraph";
-import type { QueryGraphDeps } from "./queryGraph";
-import type { RetrievalResultEntry } from "./graphState";
-import type { MemoryStore } from "../memory/memoryStore";
-import type { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
 import { CONFIG, DEFAULTS } from "../constants";
 import { RAGQueryParams, RAGQueryResult, RetrievalStrategy } from "../utils/types";
 import type { Reranker } from "../rerankers/reranker";
-import { LanceDBCheckpointSaver } from "../stores/lanceDBCheckpointer";
-import { randomUUID } from "crypto";
 
 /**
  * Thrown when a topic exists but contains no documents.
@@ -94,36 +87,12 @@ export class RAGQueryService {
   // undefined = not attempted yet, null = attempted but failed
   private cachedReranker: Reranker | null | undefined = undefined;
   private rerankerExternallyManaged = false;
-  // Compiled LangGraph query pipeline — compiled once and reused so the
-  // per-topic RAGAgent cache inside its retrieve node survives across queries
-  // (recompiling per query forced a full agent rebuild every time).
-  private compiledQueryGraph: ReturnType<typeof createQueryGraph> | null = null;
-
-  private memoryStore?: MemoryStore;
-  private notifier?: INotifier;
-  private embeddingService?: EmbeddingService;
-  private checkpointer?: LanceDBCheckpointSaver;
 
   constructor(
     private readonly topicManager: TopicManager,
     private readonly config: IConfigProvider,
     private readonly llmProvider: ILLMProvider,
   ) {}
-
-  /** Set optional dependencies for LangGraph pipeline. */
-  public setGraphDeps(deps: {
-    memoryStore?: MemoryStore;
-    notifier?: INotifier;
-    embeddingService?: EmbeddingService;
-    checkpointer?: LanceDBCheckpointSaver;
-  }): void {
-    this.memoryStore = deps.memoryStore;
-    this.notifier = deps.notifier;
-    this.embeddingService = deps.embeddingService;
-    this.checkpointer = deps.checkpointer;
-    // Dependencies feeding the compiled graph changed — recompile lazily.
-    this.compiledQueryGraph = null;
-  }
 
   /**
    * Inject a shared reranker instance so the SAME object serves queries and
@@ -134,9 +103,8 @@ export class RAGQueryService {
   public setReranker(reranker: Reranker): void {
     this.cachedReranker = reranker;
     this.rerankerExternallyManaged = true;
-    // Cached agents and the compiled graph hold the previous reranker.
+    // Cached agents hold the previous reranker.
     this.ragAgents.clear();
-    this.compiledQueryGraph = null;
   }
 
   /**
@@ -153,31 +121,12 @@ export class RAGQueryService {
     params: RAGQueryParams,
     workspaceContext?: string,
     signal?: AbortSignal,
-    readOnly = false,
   ): Promise<RAGQueryResult> {
     this.logger.info(`RAG query: "${params.query}" for topic: "${params.topic}"`);
-    // Cached agents and the compiled graph share this instance, so reconcile
-    // config-driven model changes before either cache can serve the query.
+    // Cached agents share this instance, so reconcile config-driven model
+    // changes before the cache can serve the query.
     await this.getOrCreateReranker();
 
-    // ── LangGraph pipeline (opt-in) ──
-    const langGraphEnabled = this.config.get<boolean>(CONFIG.LANGGRAPH_ENABLED, false);
-    if (langGraphEnabled) {
-      return this.executeViaGraph(params, workspaceContext, signal, readOnly);
-    }
-
-    return this.executeQueryLegacy(params, workspaceContext, signal);
-  }
-
-  /**
-   * Existing procedural query flow (RAGAgent-based).
-   * Extracted so the LangGraph fallback can invoke it without recursion.
-   */
-  private async executeQueryLegacy(
-    params: RAGQueryParams,
-    workspaceContext?: string,
-    signal?: AbortSignal,
-  ): Promise<RAGQueryResult> {
     // 1. Resolve topic
     const topicMatch = await this.topicManager.resolveTopicByName(params.topic);
 
@@ -280,9 +229,6 @@ export class RAGQueryService {
     if (removed) {
       this.logger.debug(`Cleared agent cache for topic: ${topicId}`);
     }
-    // The compiled query graph holds its own per-topic agents; drop it so
-    // the next graph query rebuilds against the topic's fresh state.
-    this.compiledQueryGraph = null;
   }
 
   /**
@@ -294,160 +240,12 @@ export class RAGQueryService {
       this.cachedReranker = undefined;
     }
     this.ragAgents.clear();
-    this.compiledQueryGraph = null;
     this.logger.info("RAGQueryService disposed");
   }
 
   // ---------------------------------------------------------------------------
   // Private
   // ---------------------------------------------------------------------------
-
-  /**
-   * Execute query via the LangGraph pipeline, mapping the result back to
-   * the standard RAGQueryResult format. Falls back to the existing flow
-   * on unrecoverable errors so callers see consistent behaviour.
-   */
-  private async executeViaGraph(
-    params: RAGQueryParams,
-    workspaceContext?: string,
-    signal?: AbortSignal,
-    readOnly = false,
-  ): Promise<RAGQueryResult> {
-    // Resolve topic first (same as existing flow)
-    const topicMatch = await this.topicManager.resolveTopicByName(params.topic);
-
-    const stats = await this.topicManager.getTopicStats(topicMatch.topic.id);
-    if (!stats || stats.documentCount === 0) {
-      throw new TopicEmptyError(topicMatch.topic.name);
-    }
-
-    // Build a no-op notifier when the caller hasn't provided one
-    const notifier: INotifier = this.notifier ?? {
-      showInfo: () => {},
-      showWarning: () => {},
-      showError: () => {},
-      withProgress: async <T>(_title: string, task: (report: (msg: string) => void) => Promise<T>) => task(() => {}),
-    };
-
-    const embeddingService = this.embeddingService ?? this.topicManager.getEmbeddingService();
-    const reranker = await this.getOrCreateReranker();
-
-    const deps: QueryGraphDeps = {
-      llmProvider: this.llmProvider,
-      config: this.config,
-      notifier,
-      embeddingService,
-      topicManager: this.topicManager,
-      memoryStore: this.memoryStore,
-      reranker: reranker ?? undefined,
-      checkpointer: readOnly ? undefined : this.checkpointer,
-    };
-
-    try {
-      // Reader-token runs use an uncheckpointed graph so a read causes zero
-      // durable writes. Writer/local runs retain the long-lived graph cache.
-      if (!readOnly) {
-        this.compiledQueryGraph ??= createQueryGraph(deps);
-      }
-      const compiledGraph = readOnly ? createQueryGraph(deps) : this.compiledQueryGraph!;
-
-      const threadId = `query:${randomUUID()}`;
-      const checkpointRetentionMs = this.config.get<number>(CONFIG.CHECKPOINT_RETENTION_MS, 0);
-      if (!readOnly && checkpointRetentionMs > 0) {
-        await this.checkpointer?.deleteOlderThan(Date.now() - checkpointRetentionMs, "query:");
-      }
-      const graphResult = await executeQueryGraph(
-        deps,
-        params.query,
-        topicMatch.topic.id,
-        {
-          retrievalStrategy: params.retrievalStrategy ?? this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, ""),
-          topK: params.topK ?? this.config.get<number>(CONFIG.TOP_K, 5),
-          modelFamily: this.config.get<string>(CONFIG.LLM_MODEL, ""),
-          maxIterations: this.config.get<number>(CONFIG.MAX_ITERATIONS, 3),
-          confidenceThreshold: this.config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7),
-          signal,
-          allowMemoryWrites: !readOnly,
-          compiledGraph,
-        },
-        threadId,
-      );
-      if (!readOnly && checkpointRetentionMs > 0) {
-        this.checkpointer?.deleteThreadAfter(threadId, checkpointRetentionMs);
-      } else if (!readOnly) {
-        await this.checkpointer?.deleteThread(threadId);
-      }
-
-      return this.mapGraphResult(graphResult, params, topicMatch);
-    } catch (error) {
-      // A cancelled query must stay cancelled — never fall back to a fresh run.
-      if (signal?.aborted) {
-        throw error;
-      }
-      this.logger.warn("LangGraph query pipeline failed, falling back to existing flow", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Fall back: run through the standard procedural path (bypass flag)
-      return this.executeQueryLegacy(params, workspaceContext, signal);
-    }
-  }
-
-  /**
-   * Map the raw graph result record to the standard RAGQueryResult shape.
-   */
-  private mapGraphResult(
-    graphResult: Record<string, unknown>,
-    params: RAGQueryParams,
-    topicMatch: { topic: { name: string }; matchType: "exact" | "similar" | "fallback"; availableTopics?: string[] },
-  ): RAGQueryResult {
-    const results = (graphResult.results ?? []) as RetrievalResultEntry[];
-    const plan = graphResult.plan as
-      | { subQueries: { query: string; reasoning: string }[]; complexity: string }
-      | undefined;
-    const confidence = (graphResult.confidence as number) ?? 0;
-    const iterations = (graphResult.iterations as number) ?? 1;
-    const subQueryCounts = (graphResult.subQueryCounts ?? {}) as Record<string, number>;
-
-    return {
-      query: params.query,
-      topicName: topicMatch.topic.name,
-      topicMatched: topicMatch.matchType,
-      requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
-      availableTopics: topicMatch.availableTopics,
-      agenticMetadata: {
-        mode: "agentic",
-        steps: plan?.subQueries.map((sq, idx) => ({
-          stepNumber: idx + 1,
-          query: sq.query,
-          resultsCount: subQueryCounts[sq.query] ?? 0,
-          confidence,
-          reasoning: sq.reasoning,
-        })),
-        totalIterations: iterations,
-        queryComplexity: (plan?.complexity as "simple" | "moderate" | "complex") ?? "simple",
-        confidence,
-      },
-      results: results.map((r) => ({
-        text: r.content,
-        documentName: r.source || "Unknown",
-        similarity: Math.round(r.score * 100) / 100,
-        retrievalStrategy: (r.metadata?.retrievalStrategy as string) || "vector",
-        metadata: {
-          chunkIndex: (r.metadata?.chunkIndex as number) || 0,
-          position: formatPosition(r.metadata),
-          headingPath: formatHeadingPath(r.metadata?.headingPath),
-          sectionTitle: r.metadata?.sectionTitle as string | undefined,
-          scoreKind: r.metadata?.scoreKind as string | undefined,
-          componentScores: r.metadata?.componentScores as { vector?: number; keyword?: number } | undefined,
-          originalScore: r.metadata?.originalScore as number | undefined,
-          originalScoreKind: r.metadata?.originalScoreKind as string | undefined,
-          originalComponentScores: r.metadata?.originalComponentScores as
-            | { vector?: number; keyword?: number }
-            | undefined,
-        },
-      })),
-    };
-  }
 
   private async getOrCreateAgent(topicId: string): Promise<RAGAgent> {
     if (this.ragAgents.has(topicId)) {
@@ -502,7 +300,6 @@ export class RAGQueryService {
         try {
           await this.cachedReranker.switchModel(desiredModel);
           this.ragAgents.clear();
-          this.compiledQueryGraph = null;
         } catch (error) {
           this.logger.warn("Reranker model switch failed; retaining the previous generation", {
             requestedModel: desiredModel,

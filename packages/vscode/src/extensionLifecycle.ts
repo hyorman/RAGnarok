@@ -56,7 +56,6 @@ interface AsyncToolRegistration extends AwaitableDisposable {
 
 export interface ExtensionLifecycleResources {
   memoryStore?: AwaitableDisposable;
-  checkpointer?: AwaitableDisposable;
   topicManager?: AwaitableDisposable;
   embeddingService?: AwaitableDisposable;
   ragTool?: AsyncToolRegistration;
@@ -191,7 +190,6 @@ export class ExtensionLifecycle {
       }
     }
     await close(this.resources.memoryStore);
-    await close(this.resources.checkpointer);
     await close(this.resources.topicManager);
     if (this.resources.topicManager) {
       try {

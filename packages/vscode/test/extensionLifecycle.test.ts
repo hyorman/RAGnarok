@@ -48,11 +48,6 @@ describe("extension lifecycle", function () {
           order.push("memory");
         },
       },
-      checkpointer: {
-        dispose: async () => {
-          order.push("checkpointer");
-        },
-      },
       topicManager: {
         dispose: async () => {
           order.push("topic");
@@ -72,7 +67,7 @@ describe("extension lifecycle", function () {
     await lifecycle.dispose();
     await active;
     expect(operationAborted).to.equal(true);
-    expect(order).to.deep.equal(["operation", "listener", "tool", "memory", "checkpointer", "topic", "embedding"]);
+    expect(order).to.deep.equal(["operation", "listener", "tool", "memory", "topic", "embedding"]);
     expect(lifecycle.activeOperationCount).to.equal(0);
     try {
       await lifecycle.run("late", async () => undefined);

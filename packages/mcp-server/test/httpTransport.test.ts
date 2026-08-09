@@ -31,7 +31,6 @@ function createTestConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     retrievalStrategy: "hybrid",
     maxIterations: 3,
     confidenceThreshold: 0.7,
-    langGraphEnabled: false,
     logLevel: "error",
     port: 0, // let OS assign a free port
     llmProvider: "none",
@@ -55,7 +54,6 @@ function createTestConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     exportDir: "/tmp/ragnarok-exports",
     githubHosts: ["github.com"],
     githubToken: "",
-    checkpointRetentionMs: 0,
     resetStorage: false,
     ...overrides,
   };

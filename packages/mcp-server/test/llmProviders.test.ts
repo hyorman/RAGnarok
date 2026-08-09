@@ -27,7 +27,6 @@ function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     retrievalStrategy: "hybrid",
     maxIterations: 3,
     confidenceThreshold: 0.7,
-    langGraphEnabled: false,
     logLevel: "info",
     port: 3000,
     llmProvider: "none",
@@ -51,7 +50,6 @@ function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     exportDir: "/tmp/ragnarok-exports",
     githubHosts: ["github.com"],
     githubToken: "",
-    checkpointRetentionMs: 0,
     resetStorage: false,
     ...overrides,
   };

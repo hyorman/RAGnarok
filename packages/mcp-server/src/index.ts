@@ -18,7 +18,6 @@
  *   RAGNAROK_LLM_API_KEY      — API key for OpenAI or Anthropic
  *   RAGNAROK_LLM_MODEL        — LLM model name (default: gpt-4o-mini)
  *   RAGNAROK_LLM_BASE_URL     — LLM API base URL override (Ollama defaults to http://localhost:11434; OpenAI/Anthropic use their official endpoints unless set)
- *   RAGNAROK_LANGGRAPH_ENABLED — Run queries/indexing through the LangGraph pipeline (default: false, experimental)
  *   RAGNAROK_PORT             — HTTP server port (default: 3000)
  *   RAGNAROK_EMBEDDING_PROVIDER   — Embedding provider: huggingface, openai, ollama (default: huggingface)
  *   RAGNAROK_EMBEDDING_BASE_URL   — Remote embedding API base URL (required for openai/ollama)
@@ -41,7 +40,6 @@ import {
   RAGQueryService,
   MemoryStore,
   CrossEncoderReranker,
-  LanceDBCheckpointSaver,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion } from "./config";
@@ -102,10 +100,6 @@ async function main(): Promise<void> {
     logger.info(`Registered remote embedding backend (${config.embeddingProvider}) at ${config.embeddingBaseUrl}`);
   }
 
-  const checkpointer = config.langGraphEnabled
-    ? new LanceDBCheckpointSaver(path.join(config.storageDir, "checkpoints-lancedb"))
-    : undefined;
-
   // Create topic manager
   const topicManager = await TopicManager.create({
     storageDir: config.storageDir,
@@ -114,7 +108,6 @@ async function main(): Promise<void> {
     embeddingService,
     llmProvider,
     resetStorage: config.resetStorage,
-    checkpointer,
   });
 
   logger.info(`Loaded ${topicManager.getAllTopics().length} topic(s) from ${config.storageDir}`);
@@ -162,8 +155,6 @@ async function main(): Promise<void> {
   if (sharedDeployment) {
     logger.info("Shared deployment (auth tokens configured): personal memory tools are disabled");
   }
-
-  ragQueryService.setGraphDeps({ memoryStore, notifier, embeddingService, checkpointer });
 
   // Create reranker (always-on — gracefully degrades if ONNX model unavailable)
   const reranker = config.rerankerEnabled
@@ -337,7 +328,6 @@ async function main(): Promise<void> {
       await ragQueryService.dispose();
       await topicManager.dispose();
       await embeddingService.dispose();
-      await Promise.resolve(checkpointer?.dispose());
       await transferManager?.dispose();
       logger.info("Shutdown complete");
       clearTimeout(hardExit);

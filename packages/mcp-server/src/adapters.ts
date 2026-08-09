@@ -20,7 +20,6 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.RETRIEVAL_STRATEGY]: this.mcpConfig.retrievalStrategy,
       [CONFIG.MAX_ITERATIONS]: this.mcpConfig.maxIterations,
       [CONFIG.CONFIDENCE_THRESHOLD]: this.mcpConfig.confidenceThreshold,
-      [CONFIG.LANGGRAPH_ENABLED]: this.mcpConfig.langGraphEnabled,
       [CONFIG.LOG_LEVEL]: this.mcpConfig.logLevel,
       [CONFIG.EMBEDDING_BACKEND]: this.mcpConfig.embeddingProvider !== "huggingface" ? "remote" : "huggingface",
       [CONFIG.LOCAL_MODEL_PATH]: "",
@@ -32,7 +31,6 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.RERANKER_MAX_CANDIDATES]: this.mcpConfig.rerankerMaxCandidates,
       [CONFIG.RERANKER_CANDIDATE_MULTIPLIER]: this.mcpConfig.rerankerCandidateMultiplier,
       [CONFIG.QUERY_MEMORY_ENABLED]: this.mcpConfig.queryMemoryEnabled,
-      [CONFIG.CHECKPOINT_RETENTION_MS]: this.mcpConfig.checkpointRetentionMs,
     };
 
     if (key in mapping) {

@@ -29,13 +29,11 @@ export const CONFIG = {
   GAP_SCORE_THRESHOLD: "gapScoreThreshold",
   COMMON_DATABASE_PATH: "commonDatabasePath",
   MEMORY_CONFIDENCE_THRESHOLD: "memoryConfidenceThreshold",
-  LANGGRAPH_ENABLED: "langGraphEnabled",
   RERANKER_MODEL: "rerankerModel",
   RERANKER_ENABLED: "rerankerEnabled",
   RERANKER_MAX_CANDIDATES: "rerankerMaxCandidates",
   RERANKER_CANDIDATE_MULTIPLIER: "rerankerCandidateMultiplier",
   QUERY_MEMORY_ENABLED: "queryMemoryEnabled",
-  CHECKPOINT_RETENTION_MS: "checkpointRetentionMs",
 } as const;
 
 /**

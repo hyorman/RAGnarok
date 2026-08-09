@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:8cd03398-8d54-4c87-a0fb-139f644eb4ca",
+  "serialNumber": "urn:uuid:bc6fc3af-7f6a-47ad-a23d-6a4b2c7da57c",
   "version": 1,
   "metadata": {
     "component": { "type": "application", "name": "ragnarok", "version": "0.5.0" },
@@ -1978,17 +1978,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40hono%2Fnode-server",
       "name": "@hono/node-server",
-      "version": "1.19.14",
-      "purl": "pkg:npm/%40hono/node-server@1.19.14",
+      "version": "1.19.17",
+      "purl": "pkg:npm/%40hono/node-server@1.19.17",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "1b0b6f82d5f19d6b2e717bdb41791182a92c887d9079ddfb1fdc47668704e6c03737c3bc3bcffc140dee725417c5757373d5c166e10e30aefeaf4d85992a47b7"
+          "content": "7529de4b9aa189ab995860c278ae28ebde5777d9d4363be249908c42b8f5d1e7adafc5259f5b9c9fa6dba6138ce94ca700c32d348cd9352a4bf6f9c0489c2b3d"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@hono/node-server/-/node-server-1.19.14.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/@hono/node-server/-/node-server-1.19.17.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@hono/node-server" }
@@ -3196,73 +3196,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph-checkpoint",
-      "name": "@langchain/langgraph-checkpoint",
-      "version": "1.1.3",
-      "purl": "pkg:npm/%40langchain/langgraph-checkpoint@1.1.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c20cdd40d784b1dc357bee25be58f4b5dabf45847f935bcf8a7d74834ca61a87a16430e077d9ef2259465d25cde1316017db1fe6a40ffca4e439c2df7ac78884"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@langchain/langgraph-checkpoint/-/langgraph-checkpoint-1.1.3.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/langgraph-checkpoint" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2F%40langchain%2Flanggraph-sdk",
-      "name": "@langchain/langgraph-sdk",
-      "version": "1.9.28",
-      "purl": "pkg:npm/%40langchain/langgraph-sdk@1.9.28",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e23dd7b8cd0fbed9806cbf263df052f7d7b3dfecad45f81b3a9011fe739e69e8d3445dd0f5d370d909da18b1a783cc0b3ed18ba128fe498814395c72f41bfdbe"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@langchain/langgraph-sdk/-/langgraph-sdk-1.9.28.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@langchain/langgraph/node_modules/@langchain/langgraph-sdk"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph",
-      "name": "@langchain/langgraph",
-      "version": "1.4.7",
-      "purl": "pkg:npm/%40langchain/langgraph@1.4.7",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "dad7327f74060bbbfcf64a92c4c0ad46fce0ff72ffe321ed39a582e3d03c2a2782722589b3b2c66b11e83c1e904715f2520c91f9983d435b2cfd724813e26e49"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@langchain/langgraph/-/langgraph-1.4.7.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/langgraph" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2F%40langchain%2Fopenai",
       "name": "@langchain/openai",
       "version": "1.5.5",
@@ -3281,29 +3214,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@langchain/community/node_modules/@langchain/openai"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2F%40langchain%2Fprotocol",
-      "name": "@langchain/protocol",
-      "version": "0.0.18",
-      "purl": "pkg:npm/%40langchain/protocol@0.0.18",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "5d6d5e810b4f7ec188e35c3600c64d159ad42301524074e354c66cd0e693a4202f86dfd02e868f37c15072ccac315ca93a1ba91b6f09dbdc8ea2badcef4a2d05"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@langchain/protocol/-/protocol-0.0.18.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@langchain/langgraph/node_modules/@langchain/protocol"
         }
       ]
     },
@@ -4457,29 +4367,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2F%40standard-schema%2Fspec",
-      "name": "@standard-schema/spec",
-      "version": "1.1.0",
-      "purl": "pkg:npm/%40standard-schema/spec@1.1.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "976685cb98c02e19e21b91e0aab0fa8d72e2feb516acabea37fa89c7aca826c80a85b95577e8aaa94e110976af9bf8cf8adc83a394c2bca327a632a73ab8b2d3"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@standard-schema/spec/-/spec-1.1.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@langchain/langgraph/node_modules/@standard-schema/spec"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40standard-schema%2Fspec",
       "name": "@standard-schema/spec",
       "version": "1.1.0",
@@ -5017,29 +4904,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@types/jsdom" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2F%40types%2Fjson-schema",
-      "name": "@types/json-schema",
-      "version": "7.0.15",
-      "purl": "pkg:npm/%40types/json-schema@7.0.15",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e7e7cff0ff0c14d0be0326420f1ac1da991914f1b3a90594ce949ebae54bbe6f1531ca2b3586af06aa057312bc6d0cf842c6e7e2850411e9b8c032df732b061c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@types/json-schema/-/json-schema-7.0.15.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@langchain/langgraph/node_modules/@types/json-schema"
-        }
       ]
     },
     {
@@ -7740,17 +7604,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fbody-parser",
       "name": "body-parser",
-      "version": "2.2.2",
-      "purl": "pkg:npm/body-parser@2.2.2",
+      "version": "2.3.0",
+      "purl": "pkg:npm/body-parser@2.3.0",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "a0fe559004ca94dc1c82fc62d2f334a7f0f79f60b7111798557f83358b394e36459ffa10b768fee2c549b5232bd7ca5d46bf308d370197a2e857e154c333e634"
+          "content": "d9c1a626ea5a36083e414c152c0b9c0ee5aea0c67a117f621c346cc19e65b0d6049b03da4649cc3c22d9cf4ef24f356affcde9e28ff0cdb0d96c1ad3bc619323"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/body-parser/-/body-parser-2.2.2.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/body-parser/-/body-parser-2.3.0.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/body-parser" }
@@ -7823,17 +7687,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "1.1.13",
-      "purl": "pkg:npm/brace-expansion@1.1.13",
+      "version": "1.1.18",
+      "purl": "pkg:npm/brace-expansion@1.1.18",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f592e9ad64ba1043668443a98c2616d9cf159263af72420965f92beeb056e9d39b99f809fcbd46a52616e47a68f650f3e03d7e9f40a4cfcad4ec5c070d0886ff"
+          "content": "11d7a9fd7f5f1aa54d9b328156c0d820eb43fb3d6db9ecd5ef42c18dd0acb7d4eabbbea5b27bd1899ea84e27359fefc12305fa4031803bde0f3783764800efb7"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.13.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.18.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/brace-expansion" }
@@ -7843,17 +7707,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "1.1.13",
-      "purl": "pkg:npm/brace-expansion@1.1.13",
+      "version": "1.1.18",
+      "purl": "pkg:npm/brace-expansion@1.1.18",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f592e9ad64ba1043668443a98c2616d9cf159263af72420965f92beeb056e9d39b99f809fcbd46a52616e47a68f650f3e03d7e9f40a4cfcad4ec5c070d0886ff"
+          "content": "11d7a9fd7f5f1aa54d9b328156c0d820eb43fb3d6db9ecd5ef42c18dd0acb7d4eabbbea5b27bd1899ea84e27359fefc12305fa4031803bde0f3783764800efb7"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.13.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.18.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/brace-expansion" }
@@ -7863,17 +7727,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "2.0.3",
-      "purl": "pkg:npm/brace-expansion@2.0.3",
+      "version": "2.1.4",
+      "purl": "pkg:npm/brace-expansion@2.1.4",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "30257f7d82446eac7af1a139f24bf6700fe48a4cb51bcbeec77391ebf8db4be8c831effa7c959ad034f3254eddaa28ce598c078b5b76f4595f608f6ecadaa5a4"
+          "content": "8467d5ccfc6d85b7f7fb6ca383f441b3ad1c074161a814bfcef755ff8c27e3f0663746cd30c1cf73857f05b1627aa7f54ca0061801e76387928da8c29747f65e"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.0.3.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.4.tgz" }
       ],
       "properties": [
         {
@@ -7886,17 +7750,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fglob%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "2.0.3",
-      "purl": "pkg:npm/brace-expansion@2.0.3",
+      "version": "2.1.4",
+      "purl": "pkg:npm/brace-expansion@2.1.4",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "30257f7d82446eac7af1a139f24bf6700fe48a4cb51bcbeec77391ebf8db4be8c831effa7c959ad034f3254eddaa28ce598c078b5b76f4595f608f6ecadaa5a4"
+          "content": "8467d5ccfc6d85b7f7fb6ca383f441b3ad1c074161a814bfcef755ff8c27e3f0663746cd30c1cf73857f05b1627aa7f54ca0061801e76387928da8c29747f65e"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.0.3.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.4.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/brace-expansion" }
@@ -7906,17 +7770,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "2.0.3",
-      "purl": "pkg:npm/brace-expansion@2.0.3",
+      "version": "2.1.4",
+      "purl": "pkg:npm/brace-expansion@2.1.4",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "30257f7d82446eac7af1a139f24bf6700fe48a4cb51bcbeec77391ebf8db4be8c831effa7c959ad034f3254eddaa28ce598c078b5b76f4595f608f6ecadaa5a4"
+          "content": "8467d5ccfc6d85b7f7fb6ca383f441b3ad1c074161a814bfcef755ff8c27e3f0663746cd30c1cf73857f05b1627aa7f54ca0061801e76387928da8c29747f65e"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.0.3.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.4.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/brace-expansion" }
@@ -7926,17 +7790,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40typescript-eslint%2Feslint-plugin%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "5.0.7",
-      "purl": "pkg:npm/brace-expansion@5.0.7",
+      "version": "5.0.9",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ee8172ef4dddc5f637fcd2f10b57e1d925024341fdae6018fb91290d57d78d44d3b3e1c4c11da761aa8bbfe196713b2e9b0c4f7e2cfa0b308d9305f0054c2a08"
+          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.7.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz" }
       ],
       "properties": [
         {
@@ -7949,17 +7813,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40typescript-eslint%2Fparser%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "5.0.7",
-      "purl": "pkg:npm/brace-expansion@5.0.7",
+      "version": "5.0.9",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ee8172ef4dddc5f637fcd2f10b57e1d925024341fdae6018fb91290d57d78d44d3b3e1c4c11da761aa8bbfe196713b2e9b0c4f7e2cfa0b308d9305f0054c2a08"
+          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.7.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz" }
       ],
       "properties": [
         {
@@ -7972,17 +7836,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ftest-exclude%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "5.0.7",
-      "purl": "pkg:npm/brace-expansion@5.0.7",
+      "version": "5.0.9",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ee8172ef4dddc5f637fcd2f10b57e1d925024341fdae6018fb91290d57d78d44d3b3e1c4c11da761aa8bbfe196713b2e9b0c4f7e2cfa0b308d9305f0054c2a08"
+          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.7.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz" }
       ],
       "properties": [
         {
@@ -7995,17 +7859,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fglob%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "5.0.7",
-      "purl": "pkg:npm/brace-expansion@5.0.7",
+      "version": "5.0.9",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ee8172ef4dddc5f637fcd2f10b57e1d925024341fdae6018fb91290d57d78d44d3b3e1c4c11da761aa8bbfe196713b2e9b0c4f7e2cfa0b308d9305f0054c2a08"
+          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.7.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz" }
       ],
       "properties": [
         {
@@ -8018,17 +7882,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Frimraf%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "5.0.7",
-      "purl": "pkg:npm/brace-expansion@5.0.7",
+      "version": "5.0.9",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ee8172ef4dddc5f637fcd2f10b57e1d925024341fdae6018fb91290d57d78d44d3b3e1c4c11da761aa8bbfe196713b2e9b0c4f7e2cfa0b308d9305f0054c2a08"
+          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.7.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/rimraf/node_modules/brace-expansion" }
@@ -8038,17 +7902,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Ftypescript-eslint%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
-      "version": "5.0.7",
-      "purl": "pkg:npm/brace-expansion@5.0.7",
+      "version": "5.0.9",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ee8172ef4dddc5f637fcd2f10b57e1d925024341fdae6018fb91290d57d78d44d3b3e1c4c11da761aa8bbfe196713b2e9b0c4f7e2cfa0b308d9305f0054c2a08"
+          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.7.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz" }
       ],
       "properties": [
         {
@@ -9236,6 +9100,52 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/content-type" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fbody-parser%2Fnode_modules%2Fcontent-type",
+      "name": "content-type",
+      "version": "2.0.0",
+      "purl": "pkg:npm/content-type@2.0.0",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "8ff3bf77b19c642c8d97bfe1c1901beb4eabcea932bda0dcb4b99c91bc4bcc7bc50734c91ee1847687404dc3f7c884680eb2c790801326ebf36c5969fe48b671"
+        }
+      ],
+      "externalReferences": [
+        { "type": "distribution", "url": "https://registry.npmjs.org/content-type/-/content-type-2.0.0.tgz" }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "packages/mcp-server/node_modules/body-parser/node_modules/content-type"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftype-is%2Fnode_modules%2Fcontent-type",
+      "name": "content-type",
+      "version": "2.0.0",
+      "purl": "pkg:npm/content-type@2.0.0",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "8ff3bf77b19c642c8d97bfe1c1901beb4eabcea932bda0dcb4b99c91bc4bcc7bc50734c91ee1847687404dc3f7c884680eb2c790801326ebf36c5969fe48b671"
+        }
+      ],
+      "externalReferences": [
+        { "type": "distribution", "url": "https://registry.npmjs.org/content-type/-/content-type-2.0.0.tgz" }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "packages/mcp-server/node_modules/type-is/node_modules/content-type"
+        }
       ]
     },
     {
@@ -11780,29 +11690,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2Feventemitter3",
-      "name": "eventemitter3",
-      "version": "5.0.4",
-      "purl": "pkg:npm/eventemitter3@5.0.4",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9a5b1347219a3c18cf79d93a06fc3e6aa6ec5c3b680320339b930eec9814fb2551c8c4393bc6c3e0a71c8bb052f397fddef79e81e08f90bf11e062c29678cb17"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/eventemitter3/-/eventemitter3-5.0.4.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@langchain/langgraph/node_modules/eventemitter3"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fcore%2Fnode_modules%2Fevents",
       "name": "events",
       "version": "3.3.0",
@@ -12100,17 +11987,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Ffast-uri",
       "name": "fast-uri",
-      "version": "3.1.3",
-      "purl": "pkg:npm/fast-uri@3.1.3",
+      "version": "3.1.5",
+      "purl": "pkg:npm/fast-uri@3.1.5",
       "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "8bbd0bc0659476e5eace270a5d6b21a28abeb162f52b7594539aca64d1bfd22ddad4e4a85f71ea847e566d6c139aa59fa2be2ead46a418f89141c95e4594f03a"
+          "content": "807c00d4ef4b0c870aba730a84e6d2fc78a6c2d7a13b59cf50408a02ee53a4a81a3b5f5f716125e1b96259ed635b1545bc85f3b498e34382fc5d0d4453d7fb27"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.3.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.5.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/fast-uri" }
@@ -12120,17 +12007,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ffast-uri",
       "name": "fast-uri",
-      "version": "3.1.3",
-      "purl": "pkg:npm/fast-uri@3.1.3",
+      "version": "3.1.5",
+      "purl": "pkg:npm/fast-uri@3.1.5",
       "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "8bbd0bc0659476e5eace270a5d6b21a28abeb162f52b7594539aca64d1bfd22ddad4e4a85f71ea847e566d6c139aa59fa2be2ead46a418f89141c95e4594f03a"
+          "content": "807c00d4ef4b0c870aba730a84e6d2fc78a6c2d7a13b59cf50408a02ee53a4a81a3b5f5f716125e1b96259ed635b1545bc85f3b498e34382fc5d0d4453d7fb27"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.3.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.5.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/fast-uri" }]
     },
@@ -13433,29 +13320,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fcore%2Fnode_modules%2Fgraphology-traversal",
-      "name": "graphology-traversal",
-      "version": "0.3.1",
-      "purl": "pkg:npm/graphology-traversal@0.3.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9462eb2ca1032ad36000a80756155fb4a7f771bfe7b96c2e54f4191d746737dd095a7d114a3728fecf8d0760114a531aa443256e73e0bfa8fefb8dbbc939d4dd"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/graphology-traversal/-/graphology-traversal-0.3.1.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/core/node_modules/graphology-traversal" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fcore%2Fnode_modules%2Fgraphology-types",
       "name": "graphology-types",
       "version": "0.24.8",
@@ -13888,16 +13752,16 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fhono",
       "name": "hono",
-      "version": "4.12.29",
-      "purl": "pkg:npm/hono@4.12.29",
+      "version": "4.13.1",
+      "purl": "pkg:npm/hono@4.13.1",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d613624636b062b2eaff89b70d04233c6160d156649384634090df7ff7b1708e839bd0622fbe6ac46addeff73a60ec4f76ae80b1c3f72e25e143a7ca142d566b"
+          "content": "91d268155bf6c666b2c3a718d3d1fb01b30932df099f98dd944757b0fec0181745d83229b5594a94e2ca5cfe35c8f8a9e3f6b7c903eff6055c25823c618d3877"
         }
       ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/hono/-/hono-4.12.29.tgz" }],
+      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/hono/-/hono-4.13.1.tgz" }],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/hono" }]
     },
     {
@@ -14479,17 +14343,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fip-address",
       "name": "ip-address",
-      "version": "10.2.0",
-      "purl": "pkg:npm/ip-address@10.2.0",
+      "version": "10.4.0",
+      "purl": "pkg:npm/ip-address@10.4.0",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ffe4ba8f813d007bd6f5258c48463d5dfcbae8ee4f5af544274f0ed32e491b210a429a236f42b418aa73fefe4727f1b4be2dc3dac8c62bbf35d7da1765e134a8"
+          "content": "a122bde86ae6dda3fa3ab4b6eb7c55c5b3431952fbaf306d61da46aa50c6f2241da1e9c3a13b3f9e4922f837e561b00413c5e5ea8e58c61c65acabc8de7a8a5d"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/ip-address/-/ip-address-10.2.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/ip-address/-/ip-address-10.4.0.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/ip-address" }
@@ -14820,29 +14684,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@vscode/test-electron/node_modules/is-interactive"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2Fis-network-error",
-      "name": "is-network-error",
-      "version": "1.3.2",
-      "purl": "pkg:npm/is-network-error@1.3.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3e1058f3acdac4d654b963fa875dd5bb9a057b45d8ebf5252b342760510bcc6547ca03f73319af4df6121bb18ddda21a6ff896b9d48c8234a71bd0eafa71eb80"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/is-network-error/-/is-network-error-1.3.2.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@langchain/langgraph/node_modules/is-network-error"
         }
       ]
     },
@@ -15450,17 +15291,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.0",
-      "purl": "pkg:npm/js-yaml@4.3.0",
+      "version": "4.3.1",
+      "purl": "pkg:npm/js-yaml@4.3.1",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d6d77bf3c6809e7679aaced5d90211975a308ed6296cab7be3d637c5abaa420c0820617fc575b3d70313101c793b72cade55cb56ea973dd3f18f6068147696f5"
+          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/community/node_modules/js-yaml" }
@@ -15470,17 +15311,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.0",
-      "purl": "pkg:npm/js-yaml@4.3.0",
+      "version": "4.3.1",
+      "purl": "pkg:npm/js-yaml@4.3.1",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d6d77bf3c6809e7679aaced5d90211975a308ed6296cab7be3d637c5abaa420c0820617fc575b3d70313101c793b72cade55cb56ea973dd3f18f6068147696f5"
+          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/js-yaml" }
@@ -15490,17 +15331,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.0",
-      "purl": "pkg:npm/js-yaml@4.3.0",
+      "version": "4.3.1",
+      "purl": "pkg:npm/js-yaml@4.3.1",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d6d77bf3c6809e7679aaced5d90211975a308ed6296cab7be3d637c5abaa420c0820617fc575b3d70313101c793b72cade55cb56ea973dd3f18f6068147696f5"
+          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/js-yaml" }]
     },
@@ -15508,17 +15349,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.0",
-      "purl": "pkg:npm/js-yaml@4.3.0",
+      "version": "4.3.1",
+      "purl": "pkg:npm/js-yaml@4.3.1",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d6d77bf3c6809e7679aaced5d90211975a308ed6296cab7be3d637c5abaa420c0820617fc575b3d70313101c793b72cade55cb56ea973dd3f18f6068147696f5"
+          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/js-yaml" }]
     },
@@ -15526,17 +15367,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2F%40langchain%2Fclassic%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "5.2.1",
-      "purl": "pkg:npm/js-yaml@5.2.1",
+      "version": "5.2.3",
+      "purl": "pkg:npm/js-yaml@5.2.3",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cdf2ed35f42ac55aaadee693a92921e31e21670dca1e86c6500d1f2548f8c1ac16f1bb102d356aa47757488ce2761ee8fb89445b7ead00db8019d685c7a6609f"
+          "content": "9fe994572517e5b56fec6fc6db3c881ce85dc5fb94d5d63634e1734d051688c51b16cb3c6f9ecd16580209a82053bf304b0e4a552f5c965cde2f2cf247e9f99f"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-5.2.1.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-5.2.3.tgz" }
       ],
       "properties": [
         {
@@ -18575,46 +18416,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2Fp-queue",
-      "name": "p-queue",
-      "version": "9.3.3",
-      "purl": "pkg:npm/p-queue@9.3.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "35700e76711ee45b1925f4f8a0af38944d58e5c145756951b8ea39b70c3c0f234cc72457c27dfd7c8914b4d2caa6970f0be51853f6d7ba33425060efd35cbb08"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/p-queue/-/p-queue-9.3.3.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/langgraph/node_modules/p-queue" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2Fp-retry",
-      "name": "p-retry",
-      "version": "7.1.1",
-      "purl": "pkg:npm/p-retry@7.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "279029ce3c919247fad351e911eca4a220afcc74235b13c01e1ca315c1143f6496ab4fb7e4d2a1f132e1a4bc3e0e4ab94d9045bd433a52281d13d8485584e5e7"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/p-retry/-/p-retry-7.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/langgraph/node_modules/p-retry" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2Fp-timeout",
       "name": "p-timeout",
       "version": "3.2.0",
@@ -18654,29 +18455,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/core/node_modules/p-timeout" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Flanggraph%2Fnode_modules%2Fp-timeout",
-      "name": "p-timeout",
-      "version": "7.0.1",
-      "purl": "pkg:npm/p-timeout@7.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0314ccdb00c63911c61243c2b7ccaac4e4cc8297db107a85e757ffe5f2429b0142dc2ff335c193eb74b2987dadb4e01a888c2cdb3560e3e8b34028eb6a47301e"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/p-timeout/-/p-timeout-7.0.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@langchain/langgraph/node_modules/p-timeout"
-        }
       ]
     },
     {
@@ -22360,16 +22138,16 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Ftar",
       "name": "tar",
-      "version": "7.5.20",
-      "purl": "pkg:npm/tar@7.5.20",
+      "version": "7.5.22",
+      "purl": "pkg:npm/tar@7.5.22",
       "licenses": [{ "license": { "id": "BlueOak-1.0.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f457322b83c0ebe59bce54ccf568509babc1e56edc3fb75488fb2fd60ed80f01109d0d421a92b730694a93f213556324d3990766e061995862bfc2d9a32fcf15"
+          "content": "3053bf433bed00e9896e484e6824ef6c670537d2fd6fe26e9c8b03c1a2a58d239d70b31e6b7349d64f54b33feb8dd7d25d3ab875fcdf792ed6e29e1838000778"
         }
       ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/tar/-/tar-7.5.20.tgz" }],
+      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/tar/-/tar-7.5.22.tgz" }],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@huggingface/transformers/node_modules/tar" }
       ]
@@ -23023,17 +22801,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftype-is",
       "name": "type-is",
-      "version": "2.0.1",
-      "purl": "pkg:npm/type-is@2.0.1",
+      "version": "2.1.0",
+      "purl": "pkg:npm/type-is@2.1.0",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "399b3a82c8c5e2f329df6aab09b8954a4ac5997b46fc0661637b7488032b30188067257da002ed5cef21b2b1db31717dc7a2f782b945bb05b6a00cfb71abfe1b"
+          "content": "7da607c346a705b73f916177cc54c49f14853801945fd1856ce06d86f0dd2ec22512858e14eb52d3380289063022c90bf6219764bde40170fc3a86781a63004c"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/type-is/-/type-is-2.0.1.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/type-is/-/type-is-2.1.0.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/type-is" }]
     },
@@ -23286,17 +23064,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fcheerio%2Fnode_modules%2Fundici",
       "name": "undici",
-      "version": "7.28.0",
-      "purl": "pkg:npm/undici@7.28.0",
+      "version": "7.29.0",
+      "purl": "pkg:npm/undici@7.29.0",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "711658ad30f05b39e59d188f8e08001b16576a7b72e8cf115757dff169b82d65c1a7bfc81bcbf90e73a6ef80ed501a7d38e3692bbe5894f9c88d0a97d1d043b4"
+          "content": "203c5f95e2e699b4ac91f5925004e23759df9f6ac3baf9cc3aa6f909647dda221fa2303451dfae94e000110e7b2cfafdad69acade5327f9970c9aa3eec634d57"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/undici/-/undici-7.28.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/undici/-/undici-7.29.0.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/cheerio/node_modules/undici" }]
     },

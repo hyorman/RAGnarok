@@ -421,7 +421,6 @@ export function registerTools(
           },
           undefined,
           context.mcpReq.signal,
-          normalizedRole === "reader",
         );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],

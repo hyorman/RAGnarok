@@ -268,7 +268,6 @@ export class RAGAgent {
 
   /**
    * Execute retrieval for an already-prepared query plan.
-   * Used by the LangGraph query pipeline so strategy dispatch stays consistent.
    */
   public async retrieveWithPlan(params: {
     query: string;

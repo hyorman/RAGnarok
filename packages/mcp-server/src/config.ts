@@ -46,7 +46,6 @@ export interface McpConfig {
   retrievalStrategy: string;
   maxIterations: number;
   confidenceThreshold: number;
-  langGraphEnabled: boolean;
   logLevel: string;
   port: number;
   llmProvider: string;
@@ -83,7 +82,6 @@ export interface McpConfig {
   exportDir: string;
   githubHosts: string[];
   githubToken: string;
-  checkpointRetentionMs: number;
   resetStorage: boolean;
 }
 
@@ -105,7 +103,6 @@ const configSchema = z
     retrievalStrategy: z.enum(["vector", "hybrid", "bm25"]),
     maxIterations: z.number().int().min(1).max(10),
     confidenceThreshold: z.number().min(0).max(1),
-    langGraphEnabled: z.boolean(),
     logLevel: z.enum(["debug", "info", "warn", "error"]),
     port: z.number().int().min(1).max(65535),
     llmProvider: z.enum(["none", "openai", "anthropic", "ollama"]),
@@ -129,7 +126,6 @@ const configSchema = z
     exportDir: z.string().min(1),
     githubHosts: z.array(z.string().min(1)).min(1),
     githubToken: z.string(),
-    checkpointRetentionMs: z.number().int().min(0).max(604_800_000),
     resetStorage: z.boolean(),
     deploymentMode: z.enum(["local", "shared"]),
     deploymentModeExplicit: z.boolean(),
@@ -337,8 +333,6 @@ export function loadConfig(): McpConfig {
     retrievalStrategy: process.env.RAGNAROK_RETRIEVAL_STRATEGY || "hybrid",
     maxIterations: parseInt(process.env.RAGNAROK_MAX_ITERATIONS || "3", 10),
     confidenceThreshold: parseFloat(process.env.RAGNAROK_CONFIDENCE_THRESHOLD || "0.7"),
-    langGraphEnabled:
-      process.env.RAGNAROK_LANGGRAPH_ENABLED === "true" || process.env.RAGNAROK_LANGGRAPH_ENABLED === "1",
     logLevel: process.env.RAGNAROK_LOG_LEVEL || "info",
     port: parseInt(process.env.RAGNAROK_PORT || "3000", 10),
     llmProvider: process.env.RAGNAROK_LLM_PROVIDER || "none",
@@ -396,7 +390,6 @@ export function loadConfig(): McpConfig {
       .map((host) => host.trim().toLowerCase())
       .filter(Boolean),
     githubToken: process.env.RAGNAROK_GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || "",
-    checkpointRetentionMs: parseInt(process.env.RAGNAROK_CHECKPOINT_RETENTION_MS || "0", 10),
     resetStorage:
       process.argv.includes("--reset-storage") ||
       process.env.RAGNAROK_RESET_STORAGE === "1" ||
