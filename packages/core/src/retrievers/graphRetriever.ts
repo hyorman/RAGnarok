@@ -23,6 +23,13 @@ const MIN_NAME_COVERAGE = 0.5;
 const EXACT_NAME_SCORE = 1;
 /** Ceiling for a partial (token-coverage) name match. */
 const MAX_PARTIAL_NAME_SCORE = 0.85;
+/**
+ * Share of a graph chunk's score retained when the query has no vector
+ * similarity for it. Graph traversal exists to surface chunks the vector index
+ * ranks poorly, so relevance may modulate the structural score but must not
+ * zero it.
+ */
+const RELEVANCE_FLOOR = 0.35;
 
 /**
  * Split text into comparable whole tokens.
@@ -191,12 +198,39 @@ export class GraphRetriever {
       names: matchedEntities.slice(0, 5).map((m) => m.entity.name),
     });
 
+    // Vector results are fetched before scoring, not after, because the graph
+    // score alone carries no query-to-chunk relevance signal: every chunk
+    // reachable from one entity at one depth scores identically, so a hub
+    // entity spanning much of the corpus hands all of its chunks the same
+    // value and ranking among them degenerates to insertion order.
+    let vectorResults: readonly VectorSearchResult[] = options.precomputedVectorResults ?? [];
+    if (!options.precomputedVectorResults) {
+      try {
+        vectorResults = await this.vectorRetriever.search(query, options.k * 3);
+      } catch (error) {
+        this.logger.warn("Vector search failed during graph search; using graph-only results when available", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const relevanceByChunk = new Map<string, number>();
+    for (const vr of vectorResults) {
+      const chunkId = getChunkId(vr.document.metadata);
+      if (chunkId && Number.isFinite(vr.score)) {
+        relevanceByChunk.set(chunkId, Math.max(0, Math.min(1, vr.score)));
+      }
+    }
+
+    // Entity specificity. An entity mentioned across most of the corpus
+    // discriminates nothing, so weight each by inverse chunk frequency.
+    const entityIdf = this.computeEntityIdf(this.knowledgeGraph.getAllEntities());
+
     // Step 2: BFS traverse neighborhoods and score by hop distance
     const chunkScores = new Map<string, { score: number; entities: Set<string>; hopDepth: number }>();
 
     for (const match of matchedEntities) {
       // Collect source chunks from the matched entity itself
-      this.addChunkScores(chunkScores, match.entity, match.score, 0);
+      this.addChunkScores(chunkScores, match.entity, match.score, 0, entityIdf);
 
       // Traverse neighbors via BFS
       this.knowledgeGraph.traverseBFS(
@@ -206,10 +240,19 @@ export class GraphRetriever {
             return;
           } // Skip self (already handled)
           const neighborScore = match.score * Math.pow(hopDecay, depth);
-          this.addChunkScores(chunkScores, neighbor, neighborScore, depth);
+          this.addChunkScores(chunkScores, neighbor, neighborScore, depth, entityIdf);
         },
         maxHopDepth,
       );
+    }
+
+    // Blend query relevance into the structural score. The floor keeps
+    // graph-only discoveries alive — chunks outside the vector top-N are
+    // exactly what graph traversal exists to surface — while letting query
+    // similarity break the ties a hub entity would otherwise create.
+    for (const [chunkId, data] of chunkScores) {
+      const relevance = relevanceByChunk.get(chunkId) ?? 0;
+      data.score = data.score * (RELEVANCE_FLOOR + (1 - RELEVANCE_FLOOR) * relevance);
     }
 
     // Step 3: Collect unique chunk IDs, sorted by score
@@ -228,17 +271,6 @@ export class GraphRetriever {
     const resultsByKey = new Map<string, GraphSearchResult>();
 
     await this.hydrateGraphChunkResults(rankedChunkIds, chunkScores, resultsByKey);
-
-    let vectorResults: readonly VectorSearchResult[] = options.precomputedVectorResults ?? [];
-    if (!options.precomputedVectorResults) {
-      try {
-        vectorResults = await this.vectorRetriever.search(query, options.k * 3);
-      } catch (error) {
-        this.logger.warn("Vector search failed during graph search; using graph-only results when available", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
 
     const vectorFallbacks: GraphSearchResult[] = [];
 
@@ -364,12 +396,40 @@ export class GraphRetriever {
   /**
    * Add chunk scores from an entity, merging with existing scores.
    */
+  /**
+   * Inverse chunk frequency per entity, over the chunk universe the graph
+   * itself references. An entity covering most chunks (measured: "RAGnarok"
+   * spanned 37 of 222) adds almost no evidence that a particular chunk answers
+   * the query, so it is damped relative to a specific entity.
+   */
+  private computeEntityIdf(entities: readonly GraphEntity[]): Map<string, number> {
+    const universe = new Set<string>();
+    for (const entity of entities) {
+      for (const chunkId of entity.sourceChunkIds) {
+        universe.add(chunkId);
+      }
+    }
+    const total = universe.size;
+    const idf = new Map<string, number>();
+    if (total === 0) {
+      return idf;
+    }
+    const maxIdf = Math.log(1 + total);
+    for (const entity of entities) {
+      const raw = Math.log(1 + total / (1 + entity.sourceChunkIds.length));
+      idf.set(entity.id, maxIdf > 0 ? Math.max(0, Math.min(1, raw / maxIdf)) : 1);
+    }
+    return idf;
+  }
+
   private addChunkScores(
     chunkScores: Map<string, { score: number; entities: Set<string>; hopDepth: number }>,
     entity: GraphEntity,
-    score: number,
+    rawScore: number,
     depth: number,
+    entityIdf?: ReadonlyMap<string, number>,
   ): void {
+    const score = rawScore * (entityIdf?.get(entity.id) ?? 1);
     for (const chunkId of entity.sourceChunkIds) {
       const existing = chunkScores.get(chunkId);
       if (existing) {
