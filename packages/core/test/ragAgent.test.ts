@@ -688,6 +688,69 @@ describe("RAGAgent", function () {
       expect(result[1].matchedEntities).to.deep.equal(["A"]);
     });
 
+    it("preserves score, scoreKind, and component scores through result mapping", function () {
+      const explicit = new LangChainDocument({
+        pageContent: "hybrid evidence",
+        metadata: { chunkId: "hybrid-1", source: "a.md" },
+      });
+      const synthesized = new LangChainDocument({
+        pageContent: "fused evidence",
+        metadata: { chunkId: "hybrid-2", source: "b.md" },
+      });
+
+      const [fromExplicit, fromSynthesis] = (agent as any).mapSearchResults(
+        [
+          {
+            document: explicit,
+            score: 0.73,
+            scoreKind: "weighted_fusion",
+            componentScores: { vector: 0.8, keyword: 0.7 },
+          },
+          {
+            document: synthesized,
+            score: 0.41,
+            scoreKind: "weighted_fusion",
+            vectorScore: 0.5,
+            keywordScore: 0.25,
+          },
+        ],
+        RetrievalStrategy.HYBRID,
+        "query",
+      );
+
+      // Explicit componentScores pass through untouched and are mirrored into metadata.
+      expect(fromExplicit.score).to.equal(0.73);
+      expect(fromExplicit.scoreKind).to.equal("weighted_fusion");
+      expect(fromExplicit.componentScores).to.deep.equal({ vector: 0.8, keyword: 0.7 });
+      expect(fromExplicit.document.metadata.scoreKind).to.equal("weighted_fusion");
+      expect(fromExplicit.document.metadata.componentScores).to.deep.equal({ vector: 0.8, keyword: 0.7 });
+      expect(fromExplicit.document.metadata.chunkId).to.equal("hybrid-1");
+      expect(fromExplicit.source).to.equal(RetrievalStrategy.HYBRID);
+      expect(fromExplicit.subQuery).to.equal("query");
+
+      // Bare vectorScore/keywordScore are synthesized into componentScores.
+      expect(fromSynthesis.score).to.equal(0.41);
+      expect(fromSynthesis.componentScores).to.deep.equal({ vector: 0.5, keyword: 0.25 });
+      expect(fromSynthesis.document.metadata.componentScores).to.deep.equal({ vector: 0.5, keyword: 0.25 });
+      expect(fromSynthesis.source).to.equal(RetrievalStrategy.HYBRID);
+    });
+
+    it("defaults a missing score to zero and synthesizes only the provided components", function () {
+      const document = new LangChainDocument({ pageContent: "keyword evidence", metadata: { chunkId: "bm25-1" } });
+
+      const [mapped] = (agent as any).mapSearchResults(
+        [{ document, scoreKind: "bm25_score", keywordScore: 1.9 }],
+        RetrievalStrategy.BM25,
+      );
+
+      expect(mapped.score).to.equal(0);
+      expect(mapped.scoreKind).to.equal("bm25_score");
+      expect(mapped.componentScores).to.deep.equal({ keyword: 1.9 });
+      expect(mapped.document.metadata.componentScores).to.deep.equal({ keyword: 1.9 });
+      expect(mapped.source).to.equal(RetrievalStrategy.BM25);
+      expect(mapped.subQuery).to.equal(undefined);
+    });
+
     it("should include document in results", async function () {
       const result = await agent.query("test", defaultQueryOptions());
 
