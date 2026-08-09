@@ -110,22 +110,16 @@
         "ragnarok.retrievalStrategy": {
           "type": "string",
           "default": "hybrid",
-          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): 90% semantic + 10% keyword\n- **vector**: Pure semantic similarity\n- **ensemble**: Advanced RRF fusion of vector + BM25 (slower, more accurate)\n- **bm25**: Pure keyword search with BM25 (no embeddings, fast exact matching)\n- **graph**: Entity-relationship traversal (requires a knowledge graph)\n- **graph_hybrid**: Graph traversal fused with vector similarity (requires a knowledge graph)\n\n💡 _Can be overridden per query via LM tool parameter_",
+          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): semantic + keyword\n- **vector**: pure semantic similarity\n- **bm25**: pure keyword search with Okapi BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
           "enum": [
             "vector",
             "hybrid",
-            "ensemble",
-            "bm25",
-            "graph",
-            "graph_hybrid"
+            "bm25"
           ],
           "enumDescriptions": [
             "Pure semantic search using embeddings only",
             "Hybrid: Combines semantic + keyword matching (recommended)",
-            "Ensemble: Uses Reciprocal Rank Fusion with BM25 (most accurate, higher memory)",
-            "BM25: Pure keyword search (Okapi BM25 algorithm, no embeddings needed)",
-            "Graph: Entity-relationship traversal (requires a knowledge graph)",
-            "Graph hybrid: Fuses graph traversal with vector similarity (requires a knowledge graph)"
+            "BM25: Pure keyword search (Okapi BM25 algorithm, no embeddings needed)"
           ],
           "order": 7
         },
@@ -424,14 +418,11 @@
             },
             "retrievalStrategy": {
               "type": "string",
-              "description": "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), 'ensemble' (RRF fusion), 'bm25' (keyword only), 'graph' (entity traversal), or 'graph_hybrid' (graph + vector fusion). Graph strategies require an indexed knowledge graph. Optional - uses configured value if not provided.",
+              "description": "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). Optional - uses configured value if not provided.",
               "enum": [
                 "vector",
                 "hybrid",
-                "ensemble",
-                "bm25",
-                "graph",
-                "graph_hybrid"
+                "bm25"
               ]
             }
           },

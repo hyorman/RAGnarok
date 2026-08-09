@@ -8,10 +8,7 @@
 export enum RetrievalStrategy {
   VECTOR = "vector",
   HYBRID = "hybrid",
-  ENSEMBLE = "ensemble",
   BM25 = "bm25",
-  GRAPH = "graph",
-  GRAPH_HYBRID = "graph_hybrid",
 }
 
 /**

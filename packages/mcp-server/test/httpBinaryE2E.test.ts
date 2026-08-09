@@ -475,7 +475,7 @@ describe("shared-mode HTTP E2E (real binary)", function () {
       });
       expect(replay.isError, "upload handles must be single-use").to.equal(true);
 
-      for (const retrievalStrategy of ["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid"]) {
+      for (const retrievalStrategy of ["vector", "hybrid", "bm25"]) {
         const queried = await reader.client.callTool({
           name: "rag_query",
           arguments: {

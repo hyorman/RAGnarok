@@ -14,23 +14,9 @@ import { QueryPlannerAgent, QueryPlan, SubQuery } from "./queryPlannerAgent";
 import { VectorRetriever } from "../retrievers/vectorRetriever";
 import { KeywordRetriever, KeywordSearchResult } from "../retrievers/keywordRetriever";
 import { HybridRetriever, HybridSearchResult, DEFAULT_HYBRID_OPTIONS } from "../retrievers/hybridRetriever";
-import {
-  EnsembleRetrieverWrapper,
-  EnsembleSearchResult,
-  DEFAULT_ENSEMBLE_OPTIONS,
-} from "../retrievers/ensembleRetriever";
-import {
-  GraphRetriever,
-  GraphSearchResult,
-  DEFAULT_GRAPH_OPTIONS,
-  getChunkId,
-  GraphRetrievalLimitError,
-} from "../retrievers/graphRetriever";
-import {
-  GraphHybridRetriever,
-  GraphHybridSearchResult,
-  DEFAULT_GRAPH_HYBRID_OPTIONS,
-} from "../retrievers/graphHybridRetriever";
+import { EnsembleRetrieverWrapper, EnsembleSearchResult } from "../retrievers/ensembleRetriever";
+import { GraphRetriever, GraphSearchResult, getChunkId, GraphRetrievalLimitError } from "../retrievers/graphRetriever";
+import { GraphHybridRetriever, GraphHybridSearchResult } from "../retrievers/graphHybridRetriever";
 import { KnowledgeGraph, KnowledgeGraphEmbeddingMismatchError } from "../stores/knowledgeGraph";
 import { KnowledgeGraphCorruptionError, KnowledgeGraphLimitError } from "../stores/knowledgeGraphStore";
 import { EmbeddingService } from "../embeddings/embeddingService";
@@ -44,11 +30,9 @@ import type { Reranker } from "../rerankers/reranker";
 const DEFAULT_GAP_SCORE_THRESHOLD = 0.4;
 
 /** Strategy-specific gap score thresholds.
- *  BM25 scores are unbounded; vector/hybrid/ensemble are in [0,1].
- *  RRF scores are small fractions (typically < 0.05). */
+ *  BM25 scores are unbounded; vector/hybrid are in [0,1]. */
 const STRATEGY_GAP_THRESHOLDS: Partial<Record<RetrievalStrategy, number>> = {
   [RetrievalStrategy.BM25]: 0.1, // Public BM25 scores are query-locally normalized.
-  [RetrievalStrategy.ENSEMBLE]: 0.01, // RRF scores are very small fractions
 };
 
 /** Default timeout for LLM gap-analysis requests */
@@ -57,7 +41,7 @@ const GAP_LLM_TIMEOUT_MS = 10_000;
 /** Maximum combined query length (chars) for heuristic follow-ups */
 const MAX_FOLLOW_UP_QUERY_LENGTH = 200;
 
-/** Maximum documents to fetch for BM25/Ensemble initialization */
+/** Maximum documents to fetch for BM25 initialization */
 const MAX_DOCS_FOR_BM25 = 50000;
 
 export interface RAGAgentOptions {
@@ -370,10 +354,7 @@ export class RAGAgent {
     }
 
     // Determine if this strategy needs keyword support
-    const needsKeywords =
-      strategy === RetrievalStrategy.HYBRID ||
-      strategy === RetrievalStrategy.ENSEMBLE ||
-      strategy === RetrievalStrategy.BM25;
+    const needsKeywords = strategy === RetrievalStrategy.HYBRID || strategy === RetrievalStrategy.BM25;
 
     if (needsKeywords && !this.keywordRetriever) {
       // Guard against concurrent initialization from parallel sub-queries
@@ -392,26 +373,6 @@ export class RAGAgent {
     // Create composite retrievers on-demand
     if (strategy === RetrievalStrategy.HYBRID && !this.hybridRetriever && this.keywordRetriever) {
       this.hybridRetriever = new HybridRetriever(this.vectorRetriever, this.keywordRetriever);
-    }
-
-    if (strategy === RetrievalStrategy.ENSEMBLE && !this.ensembleRetriever && this.keywordRetriever) {
-      this.ensembleRetriever = new EnsembleRetrieverWrapper(this.vectorRetriever, this.keywordRetriever);
-    }
-
-    // Create graph retrievers on-demand (require KnowledgeGraph + EmbeddingService)
-    const needsGraph = strategy === RetrievalStrategy.GRAPH || strategy === RetrievalStrategy.GRAPH_HYBRID;
-
-    if (needsGraph && !this.graphRetriever && this.knowledgeGraph && this.embeddingService) {
-      this.graphRetriever = new GraphRetriever(
-        this.knowledgeGraph,
-        this.vectorRetriever,
-        this.embeddingService,
-        this.documentFetcher ?? undefined,
-      );
-    }
-
-    if (strategy === RetrievalStrategy.GRAPH_HYBRID && !this.graphHybridRetriever && this.graphRetriever) {
-      this.graphHybridRetriever = new GraphHybridRetriever(this.graphRetriever, this.vectorRetriever);
     }
   }
 
@@ -457,10 +418,8 @@ export class RAGAgent {
 
   /**
    * Shared retrieval dispatch: initializes the correct retriever and runs the search.
-   * Returns the strategy actually used alongside the results — when a graph
-   * strategy falls back to VECTOR (no knowledge graph available), the caller
-   * must label results with the effective strategy, not the requested one,
-   * or downstream `graphUsed`/`fallbackReason` reporting silently lies.
+   * Returns the strategy actually used alongside the results so the caller labels
+   * results with the effective strategy rather than the requested one.
    */
   private async dispatchSearch(
     query: string,
@@ -472,43 +431,13 @@ export class RAGAgent {
     >;
     effectiveStrategy: RetrievalStrategy;
   }> {
-    // Graph strategies fall back to VECTOR when KG is unavailable
-    if (
-      (strategy === RetrievalStrategy.GRAPH || strategy === RetrievalStrategy.GRAPH_HYBRID) &&
-      (!this.knowledgeGraph || !this.embeddingService)
-    ) {
-      this.logger.warn("Knowledge graph not available, falling back to vector strategy", {
-        requestedStrategy: strategy,
-      });
-      strategy = RetrievalStrategy.VECTOR;
-    }
-
     await this.initializeRetrieversForStrategy(strategy);
 
     if (strategy === RetrievalStrategy.BM25 && this.keywordRetriever) {
       return { results: await this.keywordRetriever.search(query, topK), effectiveStrategy: strategy };
-    } else if (strategy === RetrievalStrategy.ENSEMBLE && this.ensembleRetriever) {
-      return {
-        results: await this.ensembleRetriever.search(query, { k: topK, ...DEFAULT_ENSEMBLE_OPTIONS }),
-        effectiveStrategy: strategy,
-      };
     } else if (strategy === RetrievalStrategy.HYBRID && this.hybridRetriever) {
       return {
         results: await this.hybridRetriever.search(query, { k: topK, ...DEFAULT_HYBRID_OPTIONS }),
-        effectiveStrategy: strategy,
-      };
-    } else if (strategy === RetrievalStrategy.GRAPH && this.graphRetriever) {
-      return {
-        results: await this.graphRetriever.search(query, { k: topK, ...DEFAULT_GRAPH_OPTIONS }),
-        effectiveStrategy: strategy,
-      };
-    } else if (strategy === RetrievalStrategy.GRAPH_HYBRID && this.graphHybridRetriever) {
-      return {
-        results: await this.graphHybridRetriever.search(query, {
-          k: topK,
-          ...DEFAULT_GRAPH_HYBRID_OPTIONS,
-          graphOptions: { k: topK, ...DEFAULT_GRAPH_OPTIONS },
-        }),
         effectiveStrategy: strategy,
       };
     } else if (strategy === RetrievalStrategy.VECTOR && this.vectorRetriever) {

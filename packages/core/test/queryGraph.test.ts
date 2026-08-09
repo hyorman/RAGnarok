@@ -229,54 +229,6 @@ describe("QueryGraph", function () {
       expect(tm.getVectorStore.calledOnce).to.be.true;
     });
 
-    it("should use graph retrieval when strategy is graph and a knowledge graph is available", async () => {
-      planStub.resolves({
-        originalQuery: "TypeScript",
-        complexity: "simple" as const,
-        subQueries: [{ query: "TypeScript", reasoning: "direct entity match", topK: 5 }],
-        explanation: "Graph entity query",
-      });
-      const vectorStore = createMockVectorStore([]);
-      const knowledgeGraph = new KnowledgeGraph("t1");
-      knowledgeGraph.addEntity({
-        id: "ent-typescript",
-        name: "TypeScript",
-        type: "technology",
-        description: "A typed superset of JavaScript",
-        vector: [1, 0, 0],
-        sourceChunkIds: ["chunk-graph-1"],
-        confidence: 1,
-        strength: 0.8,
-        lastAccessedAt: Date.now(),
-        metadata: {},
-      });
-
-      const graphDoc = new LangChainDocument({
-        pageContent: "TypeScript adds static typing to JavaScript.",
-        metadata: { source: "graph-doc.md", chunkId: "chunk-graph-1", chunkIndex: 0 },
-      });
-
-      const tm = createMockTopicManager(vectorStore, {
-        knowledgeGraph,
-        documents: [graphDoc],
-      });
-      const deps = buildDeps({ topicManager: tm });
-      const graph = createQueryGraph(deps);
-
-      const result = await graph.invoke({
-        query: "TypeScript",
-        topicId: "t1",
-        options: { retrievalStrategy: "graph", topK: 5, modelFamily: "test", allowMemoryWrites: true },
-        maxIterations: 1,
-        confidenceThreshold: 0,
-      });
-
-      expect((tm.getKnowledgeGraph as sinon.SinonStub).calledOnce).to.be.true;
-      expect(result.retrievalResults).to.be.an("array").with.length.greaterThan(0);
-      expect(result.retrievalResults[0].metadata?.retrievalStrategy).to.equal("graph");
-      expect(result.retrievalResults[0].metadata?.chunkId).to.equal("chunk-graph-1");
-    });
-
     it("should include results in formatted output", async () => {
       const deps = buildDeps();
       const graph = createQueryGraph(deps);

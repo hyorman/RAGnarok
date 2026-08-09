@@ -403,10 +403,10 @@ export function registerTools(
       query: z.string().trim().min(1).max(MCP_LIMITS.query).describe("The search query or question"),
       topK: z.number().int().min(1).max(20).optional().describe("Number of top results to return (default: 10)"),
       retrievalStrategy: z
-        .enum(["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid"])
+        .enum(["vector", "hybrid", "bm25"])
         .optional()
         .describe(
-          "Retrieval strategy: vector, hybrid, ensemble, bm25, graph (entity relationship traversal), or graph_hybrid (graph + semantic)",
+          "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). Optional - uses configured value if not provided.",
         ),
     }),
     readOnlyAnnotations,

@@ -250,7 +250,6 @@ export class RAGQueryService {
     );
 
     // 6. Format into RAGQueryResult
-    const graphRequested = [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(retrievalStrategy);
     const graphUsed = ragResult.results.some((result) => String(result.source).includes("graph"));
     const detailedFallback = ragResult.results
       .map((result) => describeRetrievalFallback(result.fallbackReason ?? result.document.metadata.fallbackReason))
@@ -262,12 +261,7 @@ export class RAGQueryService {
       requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
       availableTopics: topicMatch.availableTopics,
       graphUsed,
-      fallbackReason:
-        graphRequested && detailedFallback
-          ? detailedFallback
-          : graphRequested && !graphUsed
-            ? "No graph matches were available; vector retrieval was used."
-            : undefined,
+      fallbackReason: detailedFallback,
       matchedEntities: [
         ...new Set(
           ragResult.results.flatMap((result) =>
@@ -448,8 +442,6 @@ export class RAGQueryService {
     const confidence = (graphResult.confidence as number) ?? 0;
     const iterations = (graphResult.iterations as number) ?? 1;
     const subQueryCounts = (graphResult.subQueryCounts ?? {}) as Record<string, number>;
-    const requestedStrategy =
-      params.retrievalStrategy ?? (this.config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "") as RetrievalStrategy);
     const graphUsed = results.some((result) => String(result.metadata?.retrievalStrategy ?? "").includes("graph"));
     const detailedFallback = results
       .map((result) => describeRetrievalFallback(result.metadata?.fallbackReason))
@@ -462,12 +454,7 @@ export class RAGQueryService {
       requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
       availableTopics: topicMatch.availableTopics,
       graphUsed,
-      fallbackReason:
-        [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(requestedStrategy) && detailedFallback
-          ? detailedFallback
-          : [RetrievalStrategy.GRAPH, RetrievalStrategy.GRAPH_HYBRID].includes(requestedStrategy) && !graphUsed
-            ? "No graph matches were available; vector retrieval was used."
-            : undefined,
+      fallbackReason: detailedFallback,
       matchedEntities: [
         ...new Set(
           results.flatMap((result) =>

@@ -174,15 +174,9 @@ export class TopicTreeItem extends vscode.TreeItem {
             ? "🔀 Hybrid"
             : value === RetrievalStrategy.VECTOR
               ? "🎯 Vector"
-              : value === RetrievalStrategy.ENSEMBLE
-                ? "🎭 Ensemble"
-                : value === RetrievalStrategy.BM25
-                  ? "🔍 BM25"
-                  : value === RetrievalStrategy.GRAPH
-                    ? "🔗 Graph"
-                    : value === RetrievalStrategy.GRAPH_HYBRID
-                      ? "🔗🎯 Graph+Vector"
-                      : "❓ Unknown"
+              : value === RetrievalStrategy.BM25
+                ? "🔍 BM25"
+                : "❓ Unknown"
         }`;
       case TREE_CONFIG_KEY.EMBEDDING_MODEL:
         return `🤖 Embedding Model: ${value}`;
@@ -888,14 +882,11 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
       [TREE_CONFIG_KEY.RETRIEVAL_STRATEGY]: {
         settingKey: CONFIG.RETRIEVAL_STRATEGY,
         type: "enum",
-        options: ["hybrid", "vector", "ensemble", "bm25", "graph", "graph_hybrid"],
+        options: ["hybrid", "vector", "bm25"],
         optionLabels: {
-          hybrid: "Hybrid — 90% semantic + 10% keyword (recommended)",
+          hybrid: "Hybrid — semantic + keyword (recommended)",
           vector: "Vector — pure semantic similarity",
-          ensemble: "Ensemble — RRF fusion (slower, more accurate)",
           bm25: "BM25 — pure keyword search (no embeddings)",
-          graph: "Graph — entity relationship traversal (requires knowledge graph)",
-          graph_hybrid: "Graph+Vector — 30% graph + 70% semantic (requires knowledge graph)",
         },
         label: "Retrieval Strategy",
       },

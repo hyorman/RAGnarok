@@ -3,6 +3,7 @@ import sinon from "sinon";
 import {
   RAGQueryService,
   RAGAgent,
+  RetrievalStrategy,
   TopicEmptyError,
   type IConfigProvider,
   type ILLMProvider,
@@ -540,5 +541,11 @@ describe("RAGQueryService", () => {
       expect(result.results[0].metadata.degradedFrom).to.equal("graph_hybrid");
       expect(result.results[0].metadata.fallbackReason).to.equal("no_graph_matches");
     });
+  });
+});
+
+describe("RetrievalStrategy surface", () => {
+  it("exposes exactly vector, hybrid, and bm25", () => {
+    expect(Object.values(RetrievalStrategy).sort()).to.deep.equal(["bm25", "hybrid", "vector"]);
   });
 });

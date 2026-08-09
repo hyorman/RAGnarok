@@ -486,7 +486,7 @@ describe("stdio transport E2E", function () {
     expect(restartQuery.result?.isError, JSON.stringify(restartQuery.result)).not.to.equal(true);
     expect((restartQuery.result?.content?.[0]?.text ?? "").toLowerCase()).to.include("violet compass");
 
-    const strategies = ["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid"];
+    const strategies = ["vector", "hybrid", "bm25"];
     for (const [index, retrievalStrategy] of strategies.entries()) {
       const strategyQuery = await harness.callTool(
         30 + index,
@@ -654,7 +654,7 @@ describe("stdio transport E2E", function () {
     );
     expect(ingest.result?.isError, JSON.stringify(ingest.result)).not.to.equal(true);
 
-    const strategies = ["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid"];
+    const strategies = ["vector", "hybrid", "bm25"];
     for (const [index, retrievalStrategy] of strategies.entries()) {
       const query = await harness.callTool(
         103 + index,

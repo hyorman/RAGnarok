@@ -102,7 +102,7 @@ const configSchema = z
     chunkSize: z.number().int().min(50).max(20000),
     chunkOverlap: z.number().int().min(0).max(10000),
     topK: z.number().int().min(1).max(50),
-    retrievalStrategy: z.enum(["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid"]),
+    retrievalStrategy: z.enum(["vector", "hybrid", "bm25"]),
     maxIterations: z.number().int().min(1).max(10),
     confidenceThreshold: z.number().min(0).max(1),
     langGraphEnabled: z.boolean(),

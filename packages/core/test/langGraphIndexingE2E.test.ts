@@ -170,7 +170,7 @@ describe("LangGraph ingestion E2E", function () {
       }
     }
 
-    // ── Graph-strategy retrieval returns a graph-derived hit ──
+    // ── Vector retrieval over the reloaded topic returns the indexed content ──
     const vectorStore = await reloaded.getVectorStore(topic.id);
     expect(vectorStore).to.not.be.null;
 
@@ -183,10 +183,10 @@ describe("LangGraph ingestion E2E", function () {
 
     const queryResult = await agent.query(
       "What database does RAGnarok use?",
-      defaultQueryOptions({ retrievalStrategy: RetrievalStrategy.GRAPH, topK: 3 }),
+      defaultQueryOptions({ retrievalStrategy: RetrievalStrategy.VECTOR, topK: 3 }),
     );
 
-    expect(queryResult.results.length, "graph strategy returned no results").to.be.greaterThan(0);
+    expect(queryResult.results.length, "vector strategy returned no results").to.be.greaterThan(0);
     const combined = queryResult.results.map((r) => r.document.pageContent).join(" ");
     expect(combined).to.include("LanceDB");
   });

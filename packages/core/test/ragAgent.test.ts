@@ -620,34 +620,6 @@ describe("RAGAgent", function () {
     });
   });
 
-  describe("Graph strategy fallback labeling", function () {
-    // Regression test: dispatchSearch used to fall back to VECTOR internally
-    // when no knowledge graph was available, but mapSearchResults still
-    // labeled results with the originally *requested* strategy (GRAPH /
-    // GRAPH_HYBRID). That mislabeling made graphUsed/fallbackReason lie —
-    // callers saw source: "graph" even though pure vector retrieval ran.
-    it("should label results as vector (not graph) when falling back due to missing knowledge graph", async function () {
-      const result = await agent.query("Python", defaultQueryOptions({ retrievalStrategy: RetrievalStrategy.GRAPH }));
-
-      expect(result.results.length).to.be.greaterThan(0);
-      result.results.forEach((r) => {
-        expect(r.source).to.equal(RetrievalStrategy.VECTOR);
-      });
-    });
-
-    it("should label results as vector (not graph_hybrid) when falling back due to missing knowledge graph", async function () {
-      const result = await agent.query(
-        "Python",
-        defaultQueryOptions({ retrievalStrategy: RetrievalStrategy.GRAPH_HYBRID }),
-      );
-
-      expect(result.results.length).to.be.greaterThan(0);
-      result.results.forEach((r) => {
-        expect(r.source).to.equal(RetrievalStrategy.VECTOR);
-      });
-    });
-  });
-
   describe("Result Structure", function () {
     it("preserves distinct metadata for duplicate document text after reranking", async function () {
       const duplicateA = new LangChainDocument({
@@ -696,9 +668,9 @@ describe("RAGAgent", function () {
         {
           document: duplicateB,
           score: 0.6,
-          scoreKind: "graph_similarity",
-          componentScores: { graph: 0.6 },
-          source: RetrievalStrategy.GRAPH,
+          scoreKind: "bm25_score",
+          componentScores: { keyword: 0.6 },
+          source: RetrievalStrategy.BM25,
           matchedEntities: ["B"],
         },
       ];
@@ -706,44 +678,14 @@ describe("RAGAgent", function () {
       const result = await (agent as any).rerankResults("query", input, 2);
 
       expect(result[0].document.metadata.chunkId).to.equal("chunk-b");
-      expect(result[0].source).to.equal(RetrievalStrategy.GRAPH);
+      expect(result[0].source).to.equal(RetrievalStrategy.BM25);
       expect(result[0].matchedEntities).to.deep.equal(["B"]);
       expect(result[0].scoreKind).to.equal("cross_encoder_probability");
       expect(result[0].componentScores).to.equal(undefined);
-      expect(result[0].originalScoreKind).to.equal("graph_similarity");
-      expect(result[0].originalComponentScores).to.deep.equal({ graph: 0.6 });
+      expect(result[0].originalScoreKind).to.equal("bm25_score");
+      expect(result[0].originalComponentScores).to.deep.equal({ keyword: 0.6 });
       expect(result[1].document.metadata.chunkId).to.equal("chunk-a");
       expect(result[1].matchedEntities).to.deep.equal(["A"]);
-    });
-
-    it("preserves score, graph, and fallback metadata through result mapping", function () {
-      const document = new LangChainDocument({ pageContent: "graph evidence", metadata: { chunkId: "graph-1" } });
-      const [mapped] = (agent as any).mapSearchResults(
-        [
-          {
-            document,
-            score: 0.73,
-            scoreKind: "weighted_fusion",
-            componentScores: { graph: 0.8, vector: 0.7 },
-            matchedEntities: ["TypeScript"],
-            hopDepth: 1,
-            degradedFrom: "graph_hybrid",
-            fallbackReason: "vector_error",
-            effectiveStrategy: RetrievalStrategy.GRAPH,
-          },
-        ],
-        RetrievalStrategy.GRAPH_HYBRID,
-        "query",
-      );
-
-      expect(mapped.score).to.equal(0.73);
-      expect(mapped.source).to.equal(RetrievalStrategy.GRAPH);
-      expect(mapped.scoreKind).to.equal("weighted_fusion");
-      expect(mapped.componentScores).to.deep.equal({ graph: 0.8, vector: 0.7 });
-      expect(mapped.document.metadata.matchedEntities).to.deep.equal(["TypeScript"]);
-      expect(mapped.document.metadata.hopDepth).to.equal(1);
-      expect(mapped.document.metadata.degradedFrom).to.equal("graph_hybrid");
-      expect(mapped.document.metadata.fallbackReason).to.equal("vector_error");
     });
 
     it("should include document in results", async function () {

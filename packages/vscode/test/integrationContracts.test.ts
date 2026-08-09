@@ -48,7 +48,7 @@ function migrationDependencies(overrides: Partial<MigrationUxDependencies> = {})
 }
 
 describe("VS Code contribution and tree contracts", function () {
-  it("declares the same six retrieval strategies in settings, LM tool schema, and tree labels", async function () {
+  it("declares the same three retrieval strategies in settings, LM tool schema, and tree labels", async function () {
     const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
     const expected = Object.values(RetrievalStrategy);
     const setting = manifest.contributes.configuration.properties["ragnarok.retrievalStrategy"];
@@ -57,19 +57,16 @@ describe("VS Code contribution and tree contracts", function () {
     expect(setting.enum).to.have.members(expected);
     expect(tool.inputSchema.properties.retrievalStrategy.enum).to.have.members(expected);
     expect(setting.enumDescriptions).to.have.length(expected.length);
-    expect(setting.markdownDescription).to.include("graph_hybrid");
-    expect(tool.inputSchema.properties.retrievalStrategy.description).to.include("graph_hybrid");
+    expect(setting.markdownDescription).to.include("bm25");
+    expect(tool.inputSchema.properties.retrievalStrategy.description).to.include("bm25");
 
-    const graph = new TopicTreeItem(
-      { key: "retrieval-strategy", value: RetrievalStrategy.GRAPH } as any,
+    const bm25 = new TopicTreeItem({ key: "retrieval-strategy", value: RetrievalStrategy.BM25 } as any, "config-item");
+    const vector = new TopicTreeItem(
+      { key: "retrieval-strategy", value: RetrievalStrategy.VECTOR } as any,
       "config-item",
     );
-    const graphHybrid = new TopicTreeItem(
-      { key: "retrieval-strategy", value: RetrievalStrategy.GRAPH_HYBRID } as any,
-      "config-item",
-    );
-    expect(String(graph.label)).to.include("Graph");
-    expect(String(graphHybrid.label)).to.include("Graph+Vector");
+    expect(String(bm25.label)).to.include("BM25");
+    expect(String(vector.label)).to.include("Vector");
   });
 
   it("keeps topic labels and read-only descriptions stable", function () {
