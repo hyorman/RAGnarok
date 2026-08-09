@@ -13,8 +13,68 @@ import { EmbeddingService } from "../embeddings/embeddingService";
 import { GraphEntity } from "../utils/graphTypes";
 import { Logger } from "../logger";
 import { getChunkId, getDocumentIdentity } from "../utils/retrievalIdentity";
+import { BASE_STOP_WORDS } from "../utils/keywords";
 
 export { getChunkId, getDocumentIdentity } from "../utils/retrievalIdentity";
+
+/** Minimum share of an entity's name tokens that must appear in the query. */
+const MIN_NAME_COVERAGE = 0.5;
+/** Score awarded when the whole normalized entity name equals the query text. */
+const EXACT_NAME_SCORE = 1;
+/** Ceiling for a partial (token-coverage) name match. */
+const MAX_PARTIAL_NAME_SCORE = 0.85;
+
+/**
+ * Split text into comparable whole tokens.
+ *
+ * Technical corpora carry identifiers like `ragnarok.graph.visualization.v1`,
+ * `@ragnarok/mcp-server`, and `snake_case`, so punctuation and camelCase are
+ * treated as token boundaries. Stop words are dropped so that common filler in
+ * a natural-language question cannot match an entity on its own.
+ */
+export function tokenizeForEntityMatch(text: string): string[] {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 1 && !BASE_STOP_WORDS.has(token));
+}
+
+/**
+ * Grade how well an entity name is covered by the query's tokens.
+ *
+ * Returns null when coverage is below `MIN_NAME_COVERAGE`, so a single shared
+ * token cannot drag a many-worded entity into the seed set. Grading matters as
+ * much as filtering: seeds enter BFS at this score, so a flat value would make
+ * every depth-0 chunk score identically and destroy ranking.
+ */
+export function scoreNameMatch(entityName: string, queryTokens: ReadonlySet<string>): number | null {
+  const nameTokens = tokenizeForEntityMatch(entityName);
+  if (nameTokens.length === 0) {
+    return null;
+  }
+  const distinct = new Set(nameTokens);
+  let matched = 0;
+  for (const token of distinct) {
+    if (queryTokens.has(token)) {
+      matched++;
+    }
+  }
+  if (matched === 0) {
+    return null;
+  }
+  const coverage = matched / distinct.size;
+  if (coverage < MIN_NAME_COVERAGE) {
+    return null;
+  }
+  // Full-name match is the strongest signal; partial matches scale with
+  // coverage and are additionally damped when the name is a single token, so a
+  // one-word entity cannot outrank a fully matched multi-word entity.
+  if (coverage === 1) {
+    return distinct.size > 1 ? EXACT_NAME_SCORE : MAX_PARTIAL_NAME_SCORE;
+  }
+  return Math.min(MAX_PARTIAL_NAME_SCORE, coverage * MAX_PARTIAL_NAME_SCORE);
+}
 
 export interface GraphSearchOptions {
   /** Number of results to return */
@@ -246,19 +306,25 @@ export class GraphRetriever {
   ): Promise<Array<{ entity: GraphEntity; score: number }>> {
     const matchMap = new Map<string, { entity: GraphEntity; score: number }>();
 
-    // Method 1: Name matching — tokenize query and check against entity names
-    const queryTokens = query
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((t) => t.length > 2);
+    // Method 1: Name matching over whole tokens.
+    //
+    // Substring containment was previously used here and matched far too
+    // eagerly: the query token "port" matched the entity "exports", and short
+    // entity names matched any token that happened to contain them. Because
+    // every hit also scored a flat 0.8, unrelated entities seeded traversal at
+    // the same weight as exact matches, and every depth-0 chunk then landed on
+    // an identical score — ranking within that tier was arbitrary. Matching on
+    // whole tokens and grading by name coverage fixes both.
+    const queryTokens = new Set(tokenizeForEntityMatch(query));
     const allEntities = this.knowledgeGraph.getAllEntities();
 
-    for (const entity of allEntities) {
-      const entityNameLower = entity.name.toLowerCase();
-      // Check if any query token matches the entity name
-      if (queryTokens.some((token) => entityNameLower.includes(token) || token.includes(entityNameLower))) {
+    if (queryTokens.size > 0) {
+      for (const entity of allEntities) {
+        const nameScore = scoreNameMatch(entity.name, queryTokens);
+        if (nameScore === null) {
+          continue;
+        }
         const existing = matchMap.get(entity.id);
-        const nameScore = 0.8; // High score for name match
         if (!existing || existing.score < nameScore) {
           matchMap.set(entity.id, { entity, score: nameScore });
         }
