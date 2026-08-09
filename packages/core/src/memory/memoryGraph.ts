@@ -4,12 +4,14 @@
  */
 
 import Graph from "graphology";
+import louvain from "graphology-communities-louvain";
 import { Logger } from "../logger";
 import { cosineSimilarity } from "../utils/vectorMath";
-import { MemoryEntity, MemoryRelationship, MemoryGraphData, MemoryEntityType } from "./types";
+import { MemoryEntity, MemoryRelationship, MemoryGraphData, MemoryEntityType, MemoryCommunity } from "./types";
 
 export class MemoryGraph {
   private graph: Graph;
+  private communities: MemoryCommunity[] = [];
   private logger = new Logger("MemoryGraph");
 
   constructor() {
@@ -175,6 +177,47 @@ export class MemoryGraph {
     // Return all visited except the start node
     visited.delete(entityId);
     return Array.from(visited).map((id) => this.graph.getNodeAttributes(id) as MemoryEntity);
+  }
+
+  // ── Community detection ────────────────────────────────────────────
+
+  /**
+   * Group entities into communities with Louvain modularity optimisation.
+   *
+   * Ported from the deleted document KnowledgeGraph, where it was implemented
+   * and tested but never called. Communities are what let memory recall answer
+   * holistic questions ("what do you know about X overall") instead of only
+   * nearest-neighbour lookups.
+   */
+  detectCommunities(options?: { resolution?: number }): Map<number, string[]> {
+    const communityMap = new Map<number, string[]>();
+    if (this.graph.order === 0) {
+      this.communities = [];
+      return communityMap;
+    }
+
+    louvain.assign(this.graph, { resolution: options?.resolution ?? 1.0 });
+
+    this.graph.forEachNode((node, attrs) => {
+      const communityId = attrs.community as number;
+      if (!communityMap.has(communityId)) {
+        communityMap.set(communityId, []);
+      }
+      communityMap.get(communityId)!.push(node);
+    });
+
+    this.communities = Array.from(communityMap.entries()).map(([id, entityIds]) => ({
+      id,
+      entityIds,
+      level: 0,
+    }));
+
+    this.logger.debug(`Detected ${this.communities.length} memory communities`);
+    return communityMap;
+  }
+
+  getCommunities(): MemoryCommunity[] {
+    return this.communities;
   }
 
   // ── Serialization ──────────────────────────────────────────────────

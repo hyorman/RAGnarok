@@ -24,6 +24,7 @@ export type {
   MemoryStats,
   MemoryGraphData,
   MemoryGraphSnapshot,
+  MemoryCommunity,
   DecayStatus,
   ScopeLink,
 } from "./types";

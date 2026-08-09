@@ -185,6 +185,12 @@ export interface MemoryGraphData {
   relationships: MemoryRelationship[];
 }
 
+export interface MemoryCommunity {
+  id: number;
+  entityIds: string[];
+  level: number;
+}
+
 export interface MemoryGraphSnapshot {
   entities: Array<Omit<MemoryEntity, "vector">>;
   relationships: MemoryRelationship[];

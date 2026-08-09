@@ -249,6 +249,7 @@ export type {
   MemoryStats as StandaloneMemoryStats,
   MemoryGraphData,
   MemoryGraphSnapshot,
+  MemoryCommunity,
   DecayStatus,
   ScopeLink,
   ExtractedMemoryEntity,

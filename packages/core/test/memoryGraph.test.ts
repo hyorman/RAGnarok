@@ -416,6 +416,39 @@ describe("MemoryGraph", function () {
     });
   });
 
+  describe("detectCommunities", function () {
+    it("returns an empty map for an empty graph", function () {
+      expect(graph.detectCommunities().size).to.equal(0);
+      expect(graph.getCommunities()).to.deep.equal([]);
+    });
+
+    it("groups densely connected entities into communities", function () {
+      // Two triangles joined by nothing: expect two communities.
+      for (const id of ["a1", "a2", "a3", "b1", "b2", "b3"]) {
+        graph.addEntity(createTestEntity({ id, name: id }));
+      }
+      const edges: Array<[string, string, string]> = [
+        ["r1", "a1", "a2"],
+        ["r2", "a2", "a3"],
+        ["r3", "a3", "a1"],
+        ["r4", "b1", "b2"],
+        ["r5", "b2", "b3"],
+        ["r6", "b3", "b1"],
+      ];
+      for (const [id, sourceId, targetId] of edges) {
+        graph.addRelationship(createTestRelationship({ id, sourceId, targetId, weight: 1 }));
+      }
+
+      const communities = graph.detectCommunities();
+
+      expect(communities.size).to.equal(2);
+      const members = [...communities.values()].map((ids) => ids.slice().sort().join(","));
+      expect(members).to.have.members(["a1,a2,a3", "b1,b2,b3"]);
+      expect(graph.getCommunities()).to.have.length(2);
+      expect(graph.getCommunities()[0].level).to.equal(0);
+    });
+  });
+
   describe("Stats", function () {
     it("should report correct entity count", function () {
       expect(graph.entityCount).to.equal(0);
