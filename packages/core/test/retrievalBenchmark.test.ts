@@ -1,24 +1,21 @@
 /**
  * BEIR-Style Retrieval Benchmark
  *
- * Comprehensive benchmark comparing HYBRID and ENSEMBLE retrieval strategies
- * with multiple BM25 input variants. Uses graded relevance judgments (BEIR qrels)
+ * Comprehensive benchmark comparing HYBRID, VECTOR, and BM25 retrieval
+ * strategies with multiple BM25 input variants. Uses graded relevance judgments (BEIR qrels)
  * across 34 queries in 7 categories to compute NDCG, MAP, Recall, Precision, and MRR.
  *
  * Uses REAL transformer embeddings (all-MiniLM-L6-v2, 384-dim) for the vector
  * retrieval arm.
  */
 
-import { createHash } from "crypto";
 import { expect } from "chai";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   VectorRetriever,
   KeywordRetriever,
   HybridRetriever,
-  EnsembleRetrieverWrapper,
   DEFAULT_HYBRID_OPTIONS,
-  DEFAULT_ENSEMBLE_OPTIONS,
   EmbeddingService,
   HuggingFaceBackend,
   ModelRegistry,
@@ -207,14 +204,7 @@ const ALL_CATEGORIES: QueryCategory[] = [
 // §4  Strategy Configurations
 // ═══════════════════════════════════════════════════════════════════════
 
-type ConfigName =
-  | "HYBRID-default"
-  | "HYBRID-kw-bm25"
-  | "ENSEMBLE-default"
-  | "ENSEMBLE-raw-bm25"
-  | "VECTOR-only"
-  | "BM25-raw"
-  | "BM25-keyword";
+type ConfigName = "HYBRID-default" | "HYBRID-kw-bm25" | "VECTOR-only" | "BM25-raw" | "BM25-keyword";
 
 // ═══════════════════════════════════════════════════════════════════════
 // §5  Per-Query Result Type
@@ -243,30 +233,9 @@ describe("BEIR-Style Retrieval Benchmark", function (this: Mocha.Suite) {
   let vectorRetriever: VectorRetriever;
   let keywordRetriever: KeywordRetriever;
   let hybridRetriever: HybridRetriever;
-  let ensembleRetriever: EnsembleRetrieverWrapper;
 
   const allResults: QueryResult[] = [];
-  const ALL_CONFIGS: ConfigName[] = [
-    "HYBRID-default",
-    "HYBRID-kw-bm25",
-    "ENSEMBLE-default",
-    "ENSEMBLE-raw-bm25",
-    "VECTOR-only",
-    "BM25-raw",
-    "BM25-keyword",
-  ];
-
-  // ─── getDocumentId — matches EnsembleRetrieverWrapper.getDocumentId ───
-
-  function getDocumentId(doc: LangChainDocument): string {
-    if (doc.metadata?.chunkId) {
-      return String(doc.metadata.chunkId);
-    }
-    const hash = createHash("sha256");
-    hash.update(doc.pageContent);
-    hash.update(JSON.stringify(doc.metadata || {}));
-    return hash.digest("hex");
-  }
+  const ALL_CONFIGS: ConfigName[] = ["HYBRID-default", "HYBRID-kw-bm25", "VECTOR-only", "BM25-raw", "BM25-keyword"];
 
   // ─── runConfig — execute a single strategy on a single query ──────
 
@@ -325,45 +294,6 @@ describe("BEIR-Style Retrieval Benchmark", function (this: Mocha.Suite) {
         }
         scored.sort((a, b) => b.score - a.score);
         return scored.slice(0, MAX_K).map((s) => s.id);
-      }
-
-      // ── ENSEMBLE-default ──
-      case "ENSEMBLE-default": {
-        const results = await ensembleRetriever.search(query, { k: MAX_K, ...DEFAULT_ENSEMBLE_OPTIONS });
-        return results.map((r) => docId(r.document));
-      }
-
-      // ── ENSEMBLE-raw-bm25: manual RRF with raw NL to BM25 ──
-      case "ENSEMBLE-raw-bm25": {
-        const vectorDocs = await vectorRetriever.getDocuments(query, 30);
-        const bm25Results = await keywordRetriever.search(query, 30);
-
-        const scoreMap = new Map<string, { doc: LangChainDocument; score: number }>();
-
-        vectorDocs.forEach((doc, index) => {
-          const id = getDocumentId(doc);
-          const rrf = 0.7 / (60 + index + 1);
-          if (scoreMap.has(id)) {
-            scoreMap.get(id)!.score += rrf;
-          } else {
-            scoreMap.set(id, { doc, score: rrf });
-          }
-        });
-
-        bm25Results.forEach(({ document: doc }, index) => {
-          const id = getDocumentId(doc);
-          const rrf = 0.3 / (60 + index + 1);
-          if (scoreMap.has(id)) {
-            scoreMap.get(id)!.score += rrf;
-          } else {
-            scoreMap.set(id, { doc, score: rrf });
-          }
-        });
-
-        const ranked = Array.from(scoreMap.values())
-          .sort((a, b) => b.score - a.score)
-          .slice(0, MAX_K);
-        return ranked.map((r) => docId(r.doc));
       }
 
       // ── VECTOR-only ──
@@ -427,7 +357,6 @@ describe("BEIR-Style Retrieval Benchmark", function (this: Mocha.Suite) {
     keywordRetriever = new KeywordRetriever();
     await keywordRetriever.initialize(docs);
     hybridRetriever = new HybridRetriever(vectorRetriever, keywordRetriever);
-    ensembleRetriever = new EnsembleRetrieverWrapper(vectorRetriever, keywordRetriever);
   });
 
   // ═══════════════════════════════════════════════════════════════════
@@ -515,13 +444,8 @@ describe("BEIR-Style Retrieval Benchmark", function (this: Mocha.Suite) {
       );
     }
 
-    // Assertions: HYBRID and ENSEMBLE configs should have reasonable NDCG@5
-    for (const config of [
-      "HYBRID-default",
-      "HYBRID-kw-bm25",
-      "ENSEMBLE-default",
-      "ENSEMBLE-raw-bm25",
-    ] as ConfigName[]) {
+    // Assertions: HYBRID configs should have reasonable NDCG@5
+    for (const config of ["HYBRID-default", "HYBRID-kw-bm25"] as ConfigName[]) {
       const configResults = allResults.filter((r) => r.config === config);
       const ndcg5 = mean(configResults.map((r) => ndcgAtK(r.retrieved, r.qrels, 5)));
       expect(ndcg5, `${config} mean NDCG@5`).to.be.greaterThan(0.2);
@@ -622,50 +546,6 @@ describe("BEIR-Style Retrieval Benchmark", function (this: Mocha.Suite) {
       }
       const delta =
         mean(kw.map((r) => ndcgAtK(r.retrieved, r.qrels, 5))) - mean(def.map((r) => ndcgAtK(r.retrieved, r.qrels, 5)));
-      const sign = delta >= 0 ? "+" : "";
-      console.log(`    ${category.padEnd(18)} ${sign}${delta.toFixed(4)}`);
-    }
-
-    // ── ENSEMBLE ablation: raw-bm25 vs default ──
-    console.log("\n  ── ENSEMBLE: raw-bm25 − default (positive = raw NL better) ──");
-
-    const ensHeader = `  k     | Δ NDCG  | Δ MAP   | Δ Recall | Δ MRR  `;
-    console.log(ensHeader);
-    console.log("  " + "─".repeat(ensHeader.length - 2));
-
-    for (const k of K_VALUES) {
-      const rawResults = allResults.filter((r) => r.config === "ENSEMBLE-raw-bm25");
-      const defResults = allResults.filter((r) => r.config === "ENSEMBLE-default");
-
-      const dNdcg =
-        mean(rawResults.map((r) => ndcgAtK(r.retrieved, r.qrels, k))) -
-        mean(defResults.map((r) => ndcgAtK(r.retrieved, r.qrels, k)));
-      const dMap =
-        mean(rawResults.map((r) => mapAtK(r.retrieved, r.qrels, k))) -
-        mean(defResults.map((r) => mapAtK(r.retrieved, r.qrels, k)));
-      const dRecall =
-        mean(rawResults.map((r) => recallAtK(r.retrieved, r.qrels, k))) -
-        mean(defResults.map((r) => recallAtK(r.retrieved, r.qrels, k)));
-      const dMrr =
-        mean(rawResults.map((r) => mrrAtK(r.retrieved, r.qrels, k))) -
-        mean(defResults.map((r) => mrrAtK(r.retrieved, r.qrels, k)));
-
-      const sign = (v: number) => (v >= 0 ? "+" : "") + v.toFixed(4);
-      console.log(
-        `  k=${String(k).padEnd(4)}|${sign(dNdcg).padStart(8)} |${sign(dMap).padStart(8)} |${sign(dRecall).padStart(9)} |${sign(dMrr).padStart(7)}`,
-      );
-    }
-
-    // Per-category delta at k=5
-    console.log("\n  Per-category ΔNDCG@5 (ENSEMBLE raw-bm25 − default):");
-    for (const category of ALL_CATEGORIES) {
-      const raw = allResults.filter((r) => r.config === "ENSEMBLE-raw-bm25" && r.category === category);
-      const def = allResults.filter((r) => r.config === "ENSEMBLE-default" && r.category === category);
-      if (raw.length === 0) {
-        continue;
-      }
-      const delta =
-        mean(raw.map((r) => ndcgAtK(r.retrieved, r.qrels, 5))) - mean(def.map((r) => ndcgAtK(r.retrieved, r.qrels, 5)));
       const sign = delta >= 0 ? "+" : "";
       console.log(`    ${category.padEnd(18)} ${sign}${delta.toFixed(4)}`);
     }

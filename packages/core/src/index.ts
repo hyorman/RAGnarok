@@ -122,8 +122,6 @@ export { lanceDistanceToSimilarity, unitCosineToLanceDistance } from "./utils/ve
 export { KeywordRetriever } from "./retrievers/keywordRetriever";
 export { HybridRetriever, DEFAULT_HYBRID_OPTIONS } from "./retrievers/hybridRetriever";
 export type { HybridSearchOptions } from "./retrievers/hybridRetriever";
-export { EnsembleRetrieverWrapper, DEFAULT_ENSEMBLE_OPTIONS } from "./retrievers/ensembleRetriever";
-export type { EnsembleSearchOptions } from "./retrievers/ensembleRetriever";
 export { getChunkId, getDocumentIdentity } from "./utils/retrievalIdentity";
 
 // Rerankers

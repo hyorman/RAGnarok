@@ -438,13 +438,11 @@ export class RAGQueryService {
           headingPath: formatHeadingPath(r.metadata?.headingPath),
           sectionTitle: r.metadata?.sectionTitle as string | undefined,
           scoreKind: r.metadata?.scoreKind as string | undefined,
-          componentScores: r.metadata?.componentScores as
-            | { vector?: number; keyword?: number; graph?: number }
-            | undefined,
+          componentScores: r.metadata?.componentScores as { vector?: number; keyword?: number } | undefined,
           originalScore: r.metadata?.originalScore as number | undefined,
           originalScoreKind: r.metadata?.originalScoreKind as string | undefined,
           originalComponentScores: r.metadata?.originalComponentScores as
-            | { vector?: number; keyword?: number; graph?: number }
+            | { vector?: number; keyword?: number }
             | undefined,
         },
       })),

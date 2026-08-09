@@ -2,7 +2,7 @@
  * BEIR Cross-Encoder Reranking Benchmark
  *
  * Measures the impact of cross-encoder reranking on retrieval quality.
- * Compares 4 base strategies (VECTOR, HYBRID, ENSEMBLE, BM25)
+ * Compares 3 base strategies (VECTOR, HYBRID, BM25)
  * with and without cross-encoder reranking, plus a candidate-pool sweep.
  *
  * Gated behind BEIR_RERANK_BENCHMARK=1 environment variable.
@@ -22,9 +22,7 @@ import {
   VectorRetriever,
   KeywordRetriever,
   HybridRetriever,
-  EnsembleRetrieverWrapper,
   DEFAULT_HYBRID_OPTIONS,
-  DEFAULT_ENSEMBLE_OPTIONS,
   EmbeddingService,
   HuggingFaceBackend,
   ModelRegistry,
@@ -48,9 +46,9 @@ const MAX_K = 10;
 const CANDIDATE_K = 30;
 const QUERY_SAMPLE_SIZE = parseBenchmarkSampleSize(process.env.BEIR_RERANK_SAMPLE_SIZE);
 
-type StrategyName = "VECTOR" | "HYBRID" | "ENSEMBLE" | "BM25";
+type StrategyName = "VECTOR" | "HYBRID" | "BM25";
 
-const ALL_STRATEGIES: StrategyName[] = ["VECTOR", "HYBRID", "ENSEMBLE", "BM25"];
+const ALL_STRATEGIES: StrategyName[] = ["VECTOR", "HYBRID", "BM25"];
 
 // ═══════════════════════════════════════════════════════════════════════
 // §2  Types
@@ -75,7 +73,6 @@ describe("BEIR Reranking Benchmark", function (this: Mocha.Suite) {
   let vectorRetriever: VectorRetriever;
   let keywordRetriever: KeywordRetriever;
   let hybridRetriever: HybridRetriever;
-  let ensembleRetriever: EnsembleRetrieverWrapper;
   let reranker: CrossEncoderReranker;
 
   let testQueries: { id: string; text: string; qrels: Map<string, number> }[] = [];
@@ -111,13 +108,6 @@ describe("BEIR Reranking Benchmark", function (this: Mocha.Suite) {
         const results = await hybridRetriever.search(query, {
           k,
           ...DEFAULT_HYBRID_OPTIONS,
-        });
-        return results.map((r) => ({ document: r.document, score: r.score ?? 0 }));
-      }
-      case "ENSEMBLE": {
-        const results = await ensembleRetriever.search(query, {
-          k,
-          ...DEFAULT_ENSEMBLE_OPTIONS,
         });
         return results.map((r) => ({ document: r.document, score: r.score ?? 0 }));
       }
@@ -185,7 +175,6 @@ describe("BEIR Reranking Benchmark", function (this: Mocha.Suite) {
     keywordRetriever = new KeywordRetriever();
     await keywordRetriever.initialize(docs);
     hybridRetriever = new HybridRetriever(vectorRetriever, keywordRetriever);
-    ensembleRetriever = new EnsembleRetrieverWrapper(vectorRetriever, keywordRetriever);
 
     // 7. Initialize cross-encoder reranker
     reranker = new CrossEncoderReranker(RERANKER_MODEL, {

@@ -14,7 +14,6 @@ import { QueryPlannerAgent, QueryPlan, SubQuery } from "./queryPlannerAgent";
 import { VectorRetriever } from "../retrievers/vectorRetriever";
 import { KeywordRetriever, KeywordSearchResult } from "../retrievers/keywordRetriever";
 import { HybridRetriever, HybridSearchResult, DEFAULT_HYBRID_OPTIONS } from "../retrievers/hybridRetriever";
-import { EnsembleRetrieverWrapper, EnsembleSearchResult } from "../retrievers/ensembleRetriever";
 import { getChunkId } from "../utils/retrievalIdentity";
 import { Logger } from "../logger";
 import { CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS } from "../constants";
@@ -55,7 +54,7 @@ export interface RetrievalResult {
   document: LangChainDocument;
   score: number;
   scoreKind?: string;
-  componentScores?: { vector?: number; keyword?: number; graph?: number };
+  componentScores?: { vector?: number; keyword?: number };
   source: RetrievalStrategy | "keyword";
   subQuery?: string;
   /** Original sub-query from the initial plan that this result is intended to fill.
@@ -67,7 +66,7 @@ export interface RetrievalResult {
   /** Semantics of the original first-stage score. */
   originalScoreKind?: string;
   /** Original first-stage retrieval-arm contributions. */
-  originalComponentScores?: { vector?: number; keyword?: number; graph?: number };
+  originalComponentScores?: { vector?: number; keyword?: number };
 }
 
 export interface SubQueryGap {
@@ -123,7 +122,6 @@ export class RAGAgent {
   private vectorRetriever: VectorRetriever | null = null;
   private keywordRetriever: KeywordRetriever | null = null;
   private hybridRetriever: HybridRetriever | null = null;
-  private ensembleRetriever: EnsembleRetrieverWrapper | null = null;
   private vectorStore: VectorStore | null = null;
   private documentFetcher: ((limit: number) => Promise<LangChainDocument[]>) | null = null;
   private keywordInitPromise: Promise<void> | null = null;
@@ -323,7 +321,7 @@ export class RAGAgent {
    * Initialize retrievers on-demand based on strategy.
    * VectorRetriever is created immediately.
    * KeywordRetriever is lazily initialized (requires document fetch) and shared by
-   * HYBRID, ENSEMBLE, and BM25 strategies.
+   * HYBRID and BM25 strategies.
    * Uses a promise lock to prevent parallel sub-queries from racing to initialize.
    */
   private async initializeRetrieversForStrategy(strategy: RetrievalStrategy): Promise<void> {
@@ -409,7 +407,7 @@ export class RAGAgent {
     topK: number,
     strategy: RetrievalStrategy,
   ): Promise<{
-    results: Array<HybridSearchResult | EnsembleSearchResult | KeywordSearchResult>;
+    results: Array<HybridSearchResult | KeywordSearchResult>;
     effectiveStrategy: RetrievalStrategy;
   }> {
     await this.initializeRetrieversForStrategy(strategy);
@@ -496,7 +494,7 @@ export class RAGAgent {
       score?: number;
       explanation?: string;
       scoreKind?: string;
-      componentScores?: { vector?: number; keyword?: number; graph?: number };
+      componentScores?: { vector?: number; keyword?: number };
       vectorScore?: number;
       keywordScore?: number;
       effectiveStrategy?: string;
@@ -1253,7 +1251,6 @@ Respond with JSON:
     this.vectorRetriever = null;
     this.keywordRetriever = null;
     this.hybridRetriever = null;
-    this.ensembleRetriever = null;
     this.logger.debug("Vector store updated, retrievers cleared");
   }
 }

@@ -2,8 +2,8 @@
  * KeywordRetriever - Unified keyword-based search module
  *
  * Combines BM25 retrieval (via LangChain) with custom TF-based keyword scoring.
- * Used as a building block by HybridRetriever and EnsembleRetriever,
- * and directly for the pure BM25 retrieval strategy.
+ * Used as a building block by HybridRetriever, and directly for the pure
+ * BM25 retrieval strategy.
  */
 
 import { Document as LangChainDocument } from "@langchain/core/documents";

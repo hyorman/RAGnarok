@@ -774,7 +774,7 @@ describe("RAGAgent", function () {
       const result = await agent.query("test", defaultQueryOptions());
 
       result.results.forEach((r) => {
-        expect(r.source).to.be.oneOf(["vector", "hybrid", "keyword", "ensemble", "bm25"]);
+        expect(r.source).to.be.oneOf(["vector", "hybrid", "keyword", "bm25"]);
       });
     });
   });

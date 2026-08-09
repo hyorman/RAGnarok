@@ -14,13 +14,13 @@ export interface ScoredDocument {
   /** Semantics of the current score. */
   scoreKind?: string;
   /** Retrieval-arm components for the current score. */
-  componentScores?: { vector?: number; keyword?: number; graph?: number };
+  componentScores?: { vector?: number; keyword?: number };
   /** Original first-stage retrieval score (preserved through reranking) */
   originalScore?: number;
   /** Semantics of the preserved first-stage score. */
   originalScoreKind?: string;
   /** Preserved first-stage retrieval-arm components. */
-  originalComponentScores?: { vector?: number; keyword?: number; graph?: number };
+  originalComponentScores?: { vector?: number; keyword?: number };
 }
 
 /** Options for reranking */

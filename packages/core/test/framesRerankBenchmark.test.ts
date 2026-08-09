@@ -5,7 +5,7 @@
  * Wikipedia articles) to measure the impact of cross-encoder reranking on
  * multi-hop retrieval quality.
  *
- * Compares 4 base retrieval strategies (VECTOR, HYBRID, ENSEMBLE, BM25-keyword)
+ * Compares 3 base retrieval strategies (VECTOR, HYBRID, BM25-keyword)
  * with and without reranking, plus a candidate-pool sweep for HYBRID.
  *
  * Gated behind FRAMES_RERANK_BENCHMARK=1 environment variable.
@@ -26,9 +26,7 @@ import {
   VectorRetriever,
   KeywordRetriever,
   HybridRetriever,
-  EnsembleRetrieverWrapper,
   DEFAULT_HYBRID_OPTIONS,
-  DEFAULT_ENSEMBLE_OPTIONS,
   EmbeddingService,
   HuggingFaceBackend,
   ModelRegistry,
@@ -51,7 +49,7 @@ const ARTICLE_CACHE_DIR = path.join(CACHE_DIR, "articles");
 const MAX_K = 10;
 const CANDIDATE_K = 30;
 
-type StrategyName = "VECTOR" | "HYBRID" | "ENSEMBLE" | "BM25-keyword";
+type StrategyName = "VECTOR" | "HYBRID" | "BM25-keyword";
 
 interface StrategyResult {
   strategy: StrategyName;
@@ -68,7 +66,6 @@ describe("FRAMES Multi-Hop Reranking Benchmark", function (this: Mocha.Suite) {
   let vectorRetriever: VectorRetriever;
   let keywordRetriever: KeywordRetriever;
   let hybridRetriever: HybridRetriever;
-  let ensembleRetriever: EnsembleRetrieverWrapper;
   let reranker: CrossEncoderReranker;
 
   let sampledEntries: FramesEntry[] = [];
@@ -101,13 +98,6 @@ describe("FRAMES Multi-Hop Reranking Benchmark", function (this: Mocha.Suite) {
         const results = await hybridRetriever.search(query, {
           k,
           ...DEFAULT_HYBRID_OPTIONS,
-        });
-        return results.map((r) => ({ document: r.document, score: r.score ?? 0 }));
-      }
-      case "ENSEMBLE": {
-        const results = await ensembleRetriever.search(query, {
-          k,
-          ...DEFAULT_ENSEMBLE_OPTIONS,
         });
         return results.map((r) => ({ document: r.document, score: r.score ?? 0 }));
       }
@@ -152,7 +142,6 @@ describe("FRAMES Multi-Hop Reranking Benchmark", function (this: Mocha.Suite) {
     keywordRetriever = new KeywordRetriever();
     await keywordRetriever.initialize(prepared.docs);
     hybridRetriever = new HybridRetriever(vectorRetriever, keywordRetriever);
-    ensembleRetriever = new EnsembleRetrieverWrapper(vectorRetriever, keywordRetriever);
 
     reranker = new CrossEncoderReranker(RERANKER_MODEL, {
       maxCandidates: CANDIDATE_K,
@@ -177,7 +166,7 @@ describe("FRAMES Multi-Hop Reranking Benchmark", function (this: Mocha.Suite) {
   it("should measure reranking impact across all strategies", async function (this: Mocha.Context) {
     this.timeout(1800000);
 
-    const strategies: StrategyName[] = ["VECTOR", "HYBRID", "ENSEMBLE", "BM25-keyword"];
+    const strategies: StrategyName[] = ["VECTOR", "HYBRID", "BM25-keyword"];
     const results: Map<string, StrategyResult> = new Map();
     for (const strategy of strategies) {
       for (const reranked of [false, true]) {

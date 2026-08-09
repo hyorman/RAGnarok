@@ -3,7 +3,7 @@
  *
  * Wraps a LangChain VectorStore and normalizes LanceDB squared-L2 distances
  * to [0,1] similarity scores.
- * Used as a building block by HybridRetriever and EnsembleRetriever.
+ * Used as a building block by HybridRetriever.
  */
 
 import { VectorStore } from "@langchain/core/vectorstores";

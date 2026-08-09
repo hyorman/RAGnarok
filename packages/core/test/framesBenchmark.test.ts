@@ -24,9 +24,7 @@ import {
   VectorRetriever,
   KeywordRetriever,
   HybridRetriever,
-  EnsembleRetrieverWrapper,
   DEFAULT_HYBRID_OPTIONS,
-  DEFAULT_ENSEMBLE_OPTIONS,
   EmbeddingService,
   HuggingFaceBackend,
   ModelRegistry,
@@ -51,9 +49,9 @@ const ARTICLE_CACHE_DIR = path.join(CACHE_DIR, "articles");
 const _K_VALUES = [1, 3, 5, 10];
 const MAX_K = 10;
 
-type ConfigName = "HYBRID-default" | "ENSEMBLE-default" | "VECTOR-only" | "BM25-keyword";
+type ConfigName = "HYBRID-default" | "VECTOR-only" | "BM25-keyword";
 
-const ALL_CONFIGS: ConfigName[] = ["HYBRID-default", "ENSEMBLE-default", "VECTOR-only", "BM25-keyword"];
+const ALL_CONFIGS: ConfigName[] = ["HYBRID-default", "VECTOR-only", "BM25-keyword"];
 
 // ═══════════════════════════════════════════════════════════════════════
 // §2  Per-Query Result Type
@@ -78,7 +76,6 @@ describe("FRAMES Multi-Hop Retrieval Benchmark", function (this: Mocha.Suite) {
   let vectorRetriever: VectorRetriever;
   let keywordRetriever: KeywordRetriever;
   let hybridRetriever: HybridRetriever;
-  let ensembleRetriever: EnsembleRetrieverWrapper;
 
   let sampledEntries: FramesEntry[] = [];
   let entryQrels: Map<number, Map<string, number>> = new Map();
@@ -96,10 +93,6 @@ describe("FRAMES Multi-Hop Retrieval Benchmark", function (this: Mocha.Suite) {
     switch (config) {
       case "HYBRID-default": {
         const results = await hybridRetriever.search(query, { k: MAX_K, ...DEFAULT_HYBRID_OPTIONS });
-        return results.map((r) => r.document.metadata?.id ?? "unknown");
-      }
-      case "ENSEMBLE-default": {
-        const results = await ensembleRetriever.search(query, { k: MAX_K, ...DEFAULT_ENSEMBLE_OPTIONS });
         return results.map((r) => r.document.metadata?.id ?? "unknown");
       }
       case "VECTOR-only": {
@@ -161,7 +154,6 @@ describe("FRAMES Multi-Hop Retrieval Benchmark", function (this: Mocha.Suite) {
     keywordRetriever = new KeywordRetriever();
     await keywordRetriever.initialize(docs);
     hybridRetriever = new HybridRetriever(vectorRetriever, keywordRetriever);
-    ensembleRetriever = new EnsembleRetrieverWrapper(vectorRetriever, keywordRetriever);
 
     console.log(`FRAMES: ${docs.length} docs indexed, ${sampledEntries.length} queries ready`);
   });

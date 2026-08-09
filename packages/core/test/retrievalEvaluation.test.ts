@@ -1,7 +1,7 @@
 /**
  * Retrieval Evaluation Test
  *
- * Runs all 4 retrieval strategies (VECTOR, HYBRID, ENSEMBLE, BM25) against a
+ * Runs all 3 retrieval strategies (VECTOR, HYBRID, BM25) against a
  * known corpus with ground-truth relevance judgments, then computes standard
  * IR metrics: Precision@k, Recall@k, MRR, and nDCG.
  *
@@ -14,14 +14,7 @@ import { expect } from "chai";
 import { Embeddings } from "@langchain/core/embeddings";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
-import {
-  VectorRetriever,
-  KeywordRetriever,
-  HybridRetriever,
-  EnsembleRetrieverWrapper,
-  DEFAULT_HYBRID_OPTIONS,
-  DEFAULT_ENSEMBLE_OPTIONS,
-} from "../src/index";
+import { VectorRetriever, KeywordRetriever, HybridRetriever, DEFAULT_HYBRID_OPTIONS } from "../src/index";
 import { extractKeywords, QUERY_INTENT_WORDS } from "../src/utils/keywords";
 import { ndcgAtK } from "./helpers/metrics";
 import { EVAL_CORPUS as CORPUS } from "./helpers/evalCorpus";
@@ -296,7 +289,7 @@ function docId(doc: LangChainDocument): string {
   return doc.metadata?.id ?? doc.metadata?.chunkId ?? "unknown";
 }
 
-type StrategyName = "VECTOR" | "HYBRID" | "ENSEMBLE" | "BM25";
+type StrategyName = "VECTOR" | "HYBRID" | "BM25";
 
 interface StrategyMetrics {
   strategy: StrategyName;
@@ -315,7 +308,6 @@ describe("Retrieval Evaluation", function () {
   let vectorRetriever: VectorRetriever;
   let keywordRetriever: KeywordRetriever;
   let hybridRetriever: HybridRetriever;
-  let ensembleRetriever: EnsembleRetrieverWrapper;
 
   let langchainDocs: LangChainDocument[];
 
@@ -335,7 +327,6 @@ describe("Retrieval Evaluation", function () {
     await keywordRetriever.initialize(langchainDocs);
 
     hybridRetriever = new HybridRetriever(vectorRetriever, keywordRetriever);
-    ensembleRetriever = new EnsembleRetrieverWrapper(vectorRetriever, keywordRetriever);
   });
 
   // ─── Per-query tests ────────────────────────────────────────────
@@ -368,18 +359,7 @@ describe("Retrieval Evaluation", function () {
           ndcg: ndcg(hybridIds, evalQuery.relevant, K),
         });
 
-        // 3. ENSEMBLE
-        const ensembleResults = await ensembleRetriever.search(evalQuery.query, { k: K, ...DEFAULT_ENSEMBLE_OPTIONS });
-        const ensembleIds = ensembleResults.map((r) => docId(r.document));
-        queryMetrics.push({
-          strategy: "ENSEMBLE",
-          precision: precisionAtK(ensembleIds, relevantSet, K),
-          recall: recallAtK(ensembleIds, relevantSet, K),
-          mrr: mrr(ensembleIds, relevantSet),
-          ndcg: ndcg(ensembleIds, evalQuery.relevant, K),
-        });
-
-        // 4. BM25
+        // 3. BM25
         const bm25Results = await keywordRetriever.search(evalQuery.query, K);
         const bm25Ids = bm25Results.map((r) => docId(r.document));
         queryMetrics.push({
@@ -405,7 +385,6 @@ describe("Retrieval Evaluation", function () {
         // Print retrieved document IDs for inspection
         console.log(`  VECTOR:   [${vectorIds.join(", ")}]`);
         console.log(`  HYBRID:   [${hybridIds.join(", ")}]`);
-        console.log(`  ENSEMBLE: [${ensembleIds.join(", ")}]`);
         console.log(`  BM25:     [${bm25Ids.join(", ")}]`);
 
         // At least one strategy should find a relevant doc for each query
@@ -420,7 +399,7 @@ describe("Retrieval Evaluation", function () {
   describe("Aggregate Metrics", function () {
     it("should compute mean metrics across all queries", async function () {
       const aggregates = new Map<StrategyName, { p: number[]; r: number[]; mrr: number[]; ndcg: number[] }>();
-      for (const s of ["VECTOR", "HYBRID", "ENSEMBLE", "BM25"] as StrategyName[]) {
+      for (const s of ["VECTOR", "HYBRID", "BM25"] as StrategyName[]) {
         aggregates.set(s, { p: [], r: [], mrr: [], ndcg: [] });
       }
 
@@ -443,14 +422,6 @@ describe("Retrieval Evaluation", function () {
         aggregates.get("HYBRID")!.mrr.push(mrr(hIds, relevantSet));
         aggregates.get("HYBRID")!.ndcg.push(ndcg(hIds, evalQuery.relevant, K));
 
-        // ENSEMBLE
-        const eRes = await ensembleRetriever.search(evalQuery.query, { k: K, ...DEFAULT_ENSEMBLE_OPTIONS });
-        const eIds = eRes.map((r) => docId(r.document));
-        aggregates.get("ENSEMBLE")!.p.push(precisionAtK(eIds, relevantSet, K));
-        aggregates.get("ENSEMBLE")!.r.push(recallAtK(eIds, relevantSet, K));
-        aggregates.get("ENSEMBLE")!.mrr.push(mrr(eIds, relevantSet));
-        aggregates.get("ENSEMBLE")!.ndcg.push(ndcg(eIds, evalQuery.relevant, K));
-
         // BM25
         const bRes = await keywordRetriever.search(evalQuery.query, K);
         const bIds = bRes.map((r) => docId(r.document));
@@ -468,7 +439,7 @@ describe("Retrieval Evaluation", function () {
       console.log("  ┌────────────┬───────────┬────────┬───────┬───────┐");
       console.log("  │ Strategy   │ Mean P@5  │ Mean R │ MRR   │ nDCG  │");
       console.log("  ├────────────┼───────────┼────────┼───────┼───────┤");
-      for (const s of ["VECTOR", "HYBRID", "ENSEMBLE", "BM25"] as StrategyName[]) {
+      for (const s of ["VECTOR", "HYBRID", "BM25"] as StrategyName[]) {
         const a = aggregates.get(s)!;
         console.log(
           `  │ ${s.padEnd(10)} │ ${mean(a.p).toFixed(3).padStart(9)} │ ${mean(a.r).toFixed(3).padStart(6)} │ ${mean(a.mrr).toFixed(3).padStart(5)} │ ${mean(a.ndcg).toFixed(3).padStart(5)} │`,
@@ -477,7 +448,7 @@ describe("Retrieval Evaluation", function () {
       console.log("  └────────────┴───────────┴────────┴───────┴───────┘");
 
       // All strategies should have mean MRR > 0 (at least finds 1 relevant doc first)
-      for (const s of ["VECTOR", "HYBRID", "ENSEMBLE", "BM25"] as StrategyName[]) {
+      for (const s of ["VECTOR", "HYBRID", "BM25"] as StrategyName[]) {
         const a = aggregates.get(s)!;
         expect(mean(a.mrr), `${s} mean MRR > 0`).to.be.greaterThan(0);
       }
@@ -486,13 +457,13 @@ describe("Retrieval Evaluation", function () {
 
   // ─── Keyword-adapted evaluation ─────────────────────────────────
   // In production, QueryPlannerAgent converts natural language queries
-  // to keyword form for BM25/ENSEMBLE. This section compares raw vs
-  // keyword-adapted queries for those strategies.
+  // to keyword form for BM25. This section compares raw vs keyword-adapted
+  // queries for that strategy.
 
-  describe("Keyword-Adapted Queries (BM25 + ENSEMBLE)", function () {
-    it("should improve BM25/ENSEMBLE when using keyword-adapted queries", async function () {
-      const rawMetrics = { bm25: [] as number[], ensemble: [] as number[] };
-      const kwMetrics = { bm25: [] as number[], ensemble: [] as number[] };
+  describe("Keyword-Adapted Queries (BM25)", function () {
+    it("should improve BM25 when using keyword-adapted queries", async function () {
+      const rawMetrics = { bm25: [] as number[] };
+      const kwMetrics = { bm25: [] as number[] };
 
       for (const eq of EVAL_QUERIES) {
         const relevantSet = new Set(eq.relevant);
@@ -506,28 +477,11 @@ describe("Retrieval Evaluation", function () {
             K,
           ),
         );
-        const rawEns = await ensembleRetriever.search(eq.query, { k: K, ...DEFAULT_ENSEMBLE_OPTIONS });
-        rawMetrics.ensemble.push(
-          recallAtK(
-            rawEns.map((r) => docId(r.document)),
-            relevantSet,
-            K,
-          ),
-        );
-
         // Keyword-adapted query
         const kwBm25 = await keywordRetriever.search(eq.keywordQuery, K);
         kwMetrics.bm25.push(
           recallAtK(
             kwBm25.map((r) => docId(r.document)),
-            relevantSet,
-            K,
-          ),
-        );
-        const kwEns = await ensembleRetriever.search(eq.keywordQuery, { k: K, ...DEFAULT_ENSEMBLE_OPTIONS });
-        kwMetrics.ensemble.push(
-          recallAtK(
-            kwEns.map((r) => docId(r.document)),
             relevantSet,
             K,
           ),
@@ -542,7 +496,7 @@ describe("Retrieval Evaluation", function () {
       console.log("  ┌────────────┬──────────┬──────────┬────────┐");
       console.log("  │ Strategy   │ Raw      │ Keyword  │ Delta  │");
       console.log("  ├────────────┼──────────┼──────────┼────────┤");
-      for (const s of ["bm25", "ensemble"] as const) {
+      for (const s of ["bm25"] as const) {
         const rawM = mean(rawMetrics[s]);
         const kwM = mean(kwMetrics[s]);
         const delta = kwM - rawM;
@@ -555,7 +509,6 @@ describe("Retrieval Evaluation", function () {
 
       // Keyword queries should not be worse than raw queries on average
       expect(mean(kwMetrics.bm25)).to.be.at.least(mean(rawMetrics.bm25) - 0.1);
-      expect(mean(kwMetrics.ensemble)).to.be.at.least(mean(rawMetrics.ensemble) - 0.1);
     });
   });
 
@@ -582,18 +535,13 @@ describe("Retrieval Evaluation", function () {
             (await hybridRetriever.search(q, { k: K, ...DEFAULT_HYBRID_OPTIONS })).map((r) => docId(r.document)),
         },
         {
-          name: "ENSEMBLE",
-          run: async (q) =>
-            (await ensembleRetriever.search(q, { k: K, ...DEFAULT_ENSEMBLE_OPTIONS })).map((r) => docId(r.document)),
-        },
-        {
           name: "BM25",
           run: async (q) => (await keywordRetriever.search(q, K)).map((r) => docId(r.document)),
         },
       ];
 
-      const singleRecalls: Record<StrategyName, number[]> = { VECTOR: [], HYBRID: [], ENSEMBLE: [], BM25: [] };
-      const decompRecalls: Record<StrategyName, number[]> = { VECTOR: [], HYBRID: [], ENSEMBLE: [], BM25: [] };
+      const singleRecalls: Record<StrategyName, number[]> = { VECTOR: [], HYBRID: [], BM25: [] };
+      const decompRecalls: Record<StrategyName, number[]> = { VECTOR: [], HYBRID: [], BM25: [] };
 
       for (const eq of queriesWithSubs) {
         const relevantSet = new Set(eq.relevant);
@@ -622,7 +570,7 @@ describe("Retrieval Evaluation", function () {
       console.log("  ┌────────────┬──────────┬──────────┬────────┐");
       console.log("  │ Strategy   │ Single   │ Decomp   │ Delta  │");
       console.log("  ├────────────┼──────────┼──────────┼────────┤");
-      for (const s of ["VECTOR", "HYBRID", "ENSEMBLE", "BM25"] as StrategyName[]) {
+      for (const s of ["VECTOR", "HYBRID", "BM25"] as StrategyName[]) {
         const sM = mean(singleRecalls[s]);
         const dM = mean(decompRecalls[s]);
         const delta = dM - sM;

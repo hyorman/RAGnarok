@@ -106,16 +106,16 @@ export interface RAGQueryResult {
       position: string;
       headingPath?: string; // e.g., "Memory Allocation → Malloc"
       sectionTitle?: string;
-      /** Semantics of similarity (for example vector_similarity, rrf, or weighted_fusion). */
+      /** Semantics of similarity (for example vector_similarity, bm25_normalized, or weighted_fusion). */
       scoreKind?: string;
       /** Individual retrieval-arm contributions to the returned score. */
-      componentScores?: { vector?: number; keyword?: number; graph?: number };
+      componentScores?: { vector?: number; keyword?: number };
       /** First-stage score retained when a reranker replaces similarity. */
       originalScore?: number;
       /** Semantics of the retained first-stage score. */
       originalScoreKind?: string;
       /** Retained first-stage retrieval-arm contributions. */
-      originalComponentScores?: { vector?: number; keyword?: number; graph?: number };
+      originalComponentScores?: { vector?: number; keyword?: number };
     };
   }>;
   query: string;
