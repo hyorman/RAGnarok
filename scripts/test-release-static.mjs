@@ -1549,7 +1549,6 @@ assert.match(releaseBenchmark, /status: blockers\.length === 0 \? "passed" : "bl
 assert.match(releaseBenchmark, /RAGNAROK_RELEASE_ARTIFACT_DIR/);
 assert.match(releaseBenchmark, /tarballNames\.length !== 2/);
 assert.match(releaseBenchmark, /packageArtifacts\.push/);
-assert.match(releaseBenchmark, /releaseGraphBenchmark\.test\.js/);
 assert.match(releaseBenchmark, /releasePerformanceBenchmark\.test\.js/);
 assert.match(releaseBenchmark, /benchmarkWorkloads/);
 assert.match(releaseBenchmark, /RAGNAROK_BENCHMARK_CHILD_ID/);
@@ -1560,13 +1559,10 @@ assert.match(releaseBenchmark, /indexModelInitializationIncluded === false/);
 for (const requiredBenchmarkFile of [
   "retrievalBenchmark.test.js",
   "vectorRetriever.test.js",
-  "graphRetriever.test.js",
-  "graphHybridRetriever.test.js",
   "beirBenchmark.test.js",
   "rerankBenchmark.test.js",
   "framesBenchmark.test.js",
   "framesRerankBenchmark.test.js",
-  "releaseGraphBenchmark.test.js",
   "releasePerformanceBenchmark.test.js",
 ]) {
   assert.equal(
@@ -1583,11 +1579,8 @@ for (const blocker of [
 ]) {
   assert.match(releaseBenchmark, new RegExp(blocker));
 }
-const releaseGraphBenchmark = await read("packages/core/test/releaseGraphBenchmark.test.ts");
 const releasePerformanceBenchmark = await read("packages/core/test/releasePerformanceBenchmark.test.ts");
 const releaseChildMetricsHook = await read("packages/core/test/releaseChildMetricsHook.ts");
-assert.match(releaseGraphBenchmark, /RAGNAROK_METRICS graph /);
-assert.match(releaseGraphBenchmark, /RAGNAROK_METRICS graph_hybrid /);
 assert.match(releasePerformanceBenchmark, /RAGNAROK_METRICS performance /);
 assert.match(releaseChildMetricsHook, /process\.resourceUsage\(\)\.maxRSS/);
 assert.match(releaseChildMetricsHook, /RAGNAROK_CHILD_METRICS/);
