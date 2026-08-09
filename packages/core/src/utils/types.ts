@@ -116,10 +116,6 @@ export interface RAGQueryResult {
       originalScoreKind?: string;
       /** Retained first-stage retrieval-arm contributions. */
       originalComponentScores?: { vector?: number; keyword?: number; graph?: number };
-      matchedEntities?: string[];
-      hopDepth?: number;
-      degradedFrom?: string;
-      fallbackReason?: string;
     };
   }>;
   query: string;
@@ -127,10 +123,6 @@ export interface RAGQueryResult {
   topicMatched: "exact" | "similar" | "fallback";
   requestedTopic?: string;
   availableTopics?: string[];
-  graphUsed?: boolean;
-  fallbackReason?: string;
-  matchedEntities?: string[];
-  hopDepth?: number;
   // Agentic RAG results
   agenticMetadata?: {
     mode: "simple" | "agentic";

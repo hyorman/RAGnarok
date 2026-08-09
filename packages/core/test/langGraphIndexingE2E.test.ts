@@ -177,8 +177,6 @@ describe("LangGraph ingestion E2E", function () {
     const agent = new RAGAgent(langGraphConfig, mockLLMProvider);
     await agent.initialize(vectorStore!, {
       documentFetcher: (limit) => reloaded.getAllDocuments(topic.id, limit),
-      knowledgeGraph: kg!,
-      embeddingService,
     });
 
     const queryResult = await agent.query(

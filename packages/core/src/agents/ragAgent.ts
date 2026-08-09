@@ -15,11 +15,7 @@ import { VectorRetriever } from "../retrievers/vectorRetriever";
 import { KeywordRetriever, KeywordSearchResult } from "../retrievers/keywordRetriever";
 import { HybridRetriever, HybridSearchResult, DEFAULT_HYBRID_OPTIONS } from "../retrievers/hybridRetriever";
 import { EnsembleRetrieverWrapper, EnsembleSearchResult } from "../retrievers/ensembleRetriever";
-import { GraphRetriever, GraphSearchResult, getChunkId, GraphRetrievalLimitError } from "../retrievers/graphRetriever";
-import { GraphHybridRetriever, GraphHybridSearchResult } from "../retrievers/graphHybridRetriever";
-import { KnowledgeGraph, KnowledgeGraphEmbeddingMismatchError } from "../stores/knowledgeGraph";
-import { KnowledgeGraphCorruptionError, KnowledgeGraphLimitError } from "../stores/knowledgeGraphStore";
-import { EmbeddingService } from "../embeddings/embeddingService";
+import { getChunkId } from "../utils/retrievalIdentity";
 import { Logger } from "../logger";
 import { CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS } from "../constants";
 import { RetrievalStrategy } from "../utils/types";
@@ -61,10 +57,6 @@ export interface RetrievalResult {
   scoreKind?: string;
   componentScores?: { vector?: number; keyword?: number; graph?: number };
   source: RetrievalStrategy | "keyword";
-  degradedFrom?: string;
-  fallbackReason?: string;
-  matchedEntities?: string[];
-  hopDepth?: number;
   subQuery?: string;
   /** Original sub-query from the initial plan that this result is intended to fill.
    *  Set on follow-up iterations so gap analysis can attribute results correctly. */
@@ -132,11 +124,7 @@ export class RAGAgent {
   private keywordRetriever: KeywordRetriever | null = null;
   private hybridRetriever: HybridRetriever | null = null;
   private ensembleRetriever: EnsembleRetrieverWrapper | null = null;
-  private graphRetriever: GraphRetriever | null = null;
-  private graphHybridRetriever: GraphHybridRetriever | null = null;
   private vectorStore: VectorStore | null = null;
-  private knowledgeGraph: KnowledgeGraph | null = null;
-  private embeddingService: EmbeddingService | null = null;
   private documentFetcher: ((limit: number) => Promise<LangChainDocument[]>) | null = null;
   private keywordInitPromise: Promise<void> | null = null;
   private reranker: Reranker | null = null;
@@ -167,8 +155,6 @@ export class RAGAgent {
     vectorStore: VectorStore,
     options?: {
       documentFetcher?: (limit: number) => Promise<LangChainDocument[]>;
-      knowledgeGraph?: KnowledgeGraph;
-      embeddingService?: EmbeddingService;
       reranker?: Reranker;
     },
   ): Promise<void> {
@@ -176,12 +162,9 @@ export class RAGAgent {
 
     this.vectorStore = vectorStore;
     this.documentFetcher = options?.documentFetcher ?? null;
-    this.knowledgeGraph = options?.knowledgeGraph ?? null;
-    this.embeddingService = options?.embeddingService ?? null;
     this.reranker = options?.reranker ?? null;
 
     this.logger.info("RAGAgent initialized successfully", {
-      hasKnowledgeGraph: !!this.knowledgeGraph,
       hasReranker: !!this.reranker,
     });
   }
@@ -426,9 +409,7 @@ export class RAGAgent {
     topK: number,
     strategy: RetrievalStrategy,
   ): Promise<{
-    results: Array<
-      HybridSearchResult | EnsembleSearchResult | KeywordSearchResult | GraphSearchResult | GraphHybridSearchResult
-    >;
+    results: Array<HybridSearchResult | EnsembleSearchResult | KeywordSearchResult>;
     effectiveStrategy: RetrievalStrategy;
   }> {
     await this.initializeRetrieversForStrategy(strategy);
@@ -502,14 +483,6 @@ export class RAGAgent {
         error: error instanceof Error ? error.message : String(error),
         subQuery: subQuery.query,
       });
-      if (
-        error instanceof KnowledgeGraphEmbeddingMismatchError ||
-        error instanceof KnowledgeGraphCorruptionError ||
-        error instanceof KnowledgeGraphLimitError ||
-        error instanceof GraphRetrievalLimitError
-      ) {
-        throw error;
-      }
       return [];
     }
   }
@@ -526,11 +499,6 @@ export class RAGAgent {
       componentScores?: { vector?: number; keyword?: number; graph?: number };
       vectorScore?: number;
       keywordScore?: number;
-      graphScore?: number;
-      matchedEntities?: string[];
-      hopDepth?: number;
-      degradedFrom?: string;
-      fallbackReason?: string;
       effectiveStrategy?: string;
     }>,
     strategy: RetrievalStrategy,
@@ -540,17 +508,12 @@ export class RAGAgent {
       const componentScores = result.componentScores ?? {
         ...(result.vectorScore !== undefined ? { vector: result.vectorScore } : {}),
         ...(result.keywordScore !== undefined ? { keyword: result.keywordScore } : {}),
-        ...(result.graphScore !== undefined ? { graph: result.graphScore } : {}),
       };
       const effectiveStrategy = (result.effectiveStrategy as RetrievalStrategy | undefined) ?? strategy;
       const metadata = {
         ...result.document.metadata,
         scoreKind: result.scoreKind,
         componentScores,
-        matchedEntities: result.matchedEntities,
-        hopDepth: result.hopDepth,
-        degradedFrom: result.degradedFrom,
-        fallbackReason: result.fallbackReason,
       };
 
       return {
@@ -562,10 +525,6 @@ export class RAGAgent {
         scoreKind: result.scoreKind,
         componentScores,
         source: effectiveStrategy,
-        degradedFrom: result.degradedFrom,
-        fallbackReason: result.fallbackReason,
-        matchedEntities: result.matchedEntities,
-        hopDepth: result.hopDepth,
         subQuery: sourceQuery,
         explanation: result.explanation,
       };
@@ -1295,8 +1254,6 @@ Respond with JSON:
     this.keywordRetriever = null;
     this.hybridRetriever = null;
     this.ensembleRetriever = null;
-    this.graphRetriever = null;
-    this.graphHybridRetriever = null;
     this.logger.debug("Vector store updated, retrievers cleared");
   }
 }

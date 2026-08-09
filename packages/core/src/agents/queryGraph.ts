@@ -31,7 +31,7 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { QueryPlan } from "./queryPlannerAgent";
 import type { RetrievalResult } from "./ragAgent";
-import { getChunkId } from "../retrievers/graphRetriever";
+import { getChunkId } from "../utils/retrievalIdentity";
 
 // ── Dependencies ─────────────────────────────────────────────────────
 
@@ -160,14 +160,11 @@ function createRetrieveNode(deps: QueryGraphDeps) {
         };
       }
 
-      const knowledgeGraph = await deps.topicManager.getKnowledgeGraph(state.topicId);
       const documentFetcher = (limit: number) => deps.topicManager.getAllDocuments(state.topicId, limit);
 
       agent = new RAGAgent(deps.config, deps.llmProvider);
       await agent.initialize(vectorStore, {
         documentFetcher,
-        knowledgeGraph: knowledgeGraph ?? undefined,
-        embeddingService: knowledgeGraph ? deps.embeddingService : undefined,
         reranker: deps.reranker,
       });
       agentCache.set(state.topicId, agent);
@@ -198,10 +195,6 @@ function createRetrieveNode(deps: QueryGraphDeps) {
         originalComponentScores: result.originalComponentScores,
         scoreKind: result.scoreKind,
         componentScores: result.componentScores,
-        matchedEntities: result.matchedEntities,
-        hopDepth: result.hopDepth,
-        degradedFrom: result.degradedFrom,
-        fallbackReason: result.fallbackReason,
       },
     }));
 

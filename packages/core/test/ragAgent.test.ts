@@ -663,7 +663,7 @@ describe("RAGAgent", function () {
           scoreKind: "vector_similarity",
           componentScores: { vector: 0.7 },
           source: RetrievalStrategy.VECTOR,
-          matchedEntities: ["A"],
+          subQuery: "sub-query A",
         },
         {
           document: duplicateB,
@@ -671,7 +671,7 @@ describe("RAGAgent", function () {
           scoreKind: "bm25_score",
           componentScores: { keyword: 0.6 },
           source: RetrievalStrategy.BM25,
-          matchedEntities: ["B"],
+          subQuery: "sub-query B",
         },
       ];
 
@@ -679,13 +679,13 @@ describe("RAGAgent", function () {
 
       expect(result[0].document.metadata.chunkId).to.equal("chunk-b");
       expect(result[0].source).to.equal(RetrievalStrategy.BM25);
-      expect(result[0].matchedEntities).to.deep.equal(["B"]);
+      expect(result[0].subQuery).to.equal("sub-query B");
       expect(result[0].scoreKind).to.equal("cross_encoder_probability");
       expect(result[0].componentScores).to.equal(undefined);
       expect(result[0].originalScoreKind).to.equal("bm25_score");
       expect(result[0].originalComponentScores).to.deep.equal({ keyword: 0.6 });
       expect(result[1].document.metadata.chunkId).to.equal("chunk-a");
-      expect(result[1].matchedEntities).to.deep.equal(["A"]);
+      expect(result[1].subQuery).to.equal("sub-query A");
     });
 
     it("preserves score, scoreKind, and component scores through result mapping", function () {

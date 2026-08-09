@@ -88,23 +88,6 @@ function formatHeadingPath(raw: unknown): string | undefined {
   return String(raw);
 }
 
-function describeRetrievalFallback(reason: unknown): string | undefined {
-  switch (reason) {
-    case "no_graph_matches":
-      return "No graph entities met the relevance threshold; vector retrieval was used.";
-    case "no_graph_chunks":
-      return "Graph matches had no retrievable chunks; vector retrieval was used.";
-    case "graph_error":
-      return "Graph retrieval failed; vector retrieval was used.";
-    case "no_vector_matches":
-      return "Vector retrieval returned no matches; graph retrieval was used.";
-    case "vector_error":
-      return "Vector retrieval failed; graph retrieval was used.";
-    default:
-      return undefined;
-  }
-}
-
 export class RAGQueryService {
   private logger = new Logger("RAGQueryService");
   private ragAgents: Map<string, RAGAgent> = new Map();
@@ -250,26 +233,12 @@ export class RAGQueryService {
     );
 
     // 6. Format into RAGQueryResult
-    const graphUsed = ragResult.results.some((result) => String(result.source).includes("graph"));
-    const detailedFallback = ragResult.results
-      .map((result) => describeRetrievalFallback(result.fallbackReason ?? result.document.metadata.fallbackReason))
-      .find(Boolean);
     return {
       query: params.query,
       topicName: topicMatch.topic.name,
       topicMatched: topicMatch.matchType,
       requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
       availableTopics: topicMatch.availableTopics,
-      graphUsed,
-      fallbackReason: detailedFallback,
-      matchedEntities: [
-        ...new Set(
-          ragResult.results.flatMap((result) =>
-            Array.isArray(result.document.metadata.matchedEntities) ? result.document.metadata.matchedEntities : [],
-          ),
-        ),
-      ] as string[],
-      hopDepth: Math.max(0, ...ragResult.results.map((result) => Number(result.document.metadata.hopDepth ?? 0))),
       agenticMetadata: {
         mode: "agentic",
         steps: ragResult.plan.subQueries.map((sq, idx) => ({
@@ -298,10 +267,6 @@ export class RAGQueryService {
           originalScore: result.originalScore,
           originalScoreKind: result.originalScoreKind,
           originalComponentScores: result.originalComponentScores,
-          matchedEntities: result.matchedEntities ?? result.document.metadata.matchedEntities,
-          hopDepth: result.hopDepth ?? result.document.metadata.hopDepth,
-          degradedFrom: result.degradedFrom ?? result.document.metadata.degradedFrom,
-          fallbackReason: result.fallbackReason ?? result.document.metadata.fallbackReason,
         },
       })),
     };
@@ -442,10 +407,6 @@ export class RAGQueryService {
     const confidence = (graphResult.confidence as number) ?? 0;
     const iterations = (graphResult.iterations as number) ?? 1;
     const subQueryCounts = (graphResult.subQueryCounts ?? {}) as Record<string, number>;
-    const graphUsed = results.some((result) => String(result.metadata?.retrievalStrategy ?? "").includes("graph"));
-    const detailedFallback = results
-      .map((result) => describeRetrievalFallback(result.metadata?.fallbackReason))
-      .find(Boolean);
 
     return {
       query: params.query,
@@ -453,16 +414,6 @@ export class RAGQueryService {
       topicMatched: topicMatch.matchType,
       requestedTopic: topicMatch.matchType !== "exact" ? params.topic : undefined,
       availableTopics: topicMatch.availableTopics,
-      graphUsed,
-      fallbackReason: detailedFallback,
-      matchedEntities: [
-        ...new Set(
-          results.flatMap((result) =>
-            Array.isArray(result.metadata?.matchedEntities) ? result.metadata.matchedEntities : [],
-          ),
-        ),
-      ] as string[],
-      hopDepth: Math.max(0, ...results.map((result) => Number(result.metadata?.hopDepth ?? 0))),
       agenticMetadata: {
         mode: "agentic",
         steps: plan?.subQueries.map((sq, idx) => ({
@@ -495,10 +446,6 @@ export class RAGQueryService {
           originalComponentScores: r.metadata?.originalComponentScores as
             | { vector?: number; keyword?: number; graph?: number }
             | undefined,
-          matchedEntities: r.metadata?.matchedEntities as string[] | undefined,
-          hopDepth: r.metadata?.hopDepth as number | undefined,
-          degradedFrom: r.metadata?.degradedFrom as string | undefined,
-          fallbackReason: r.metadata?.fallbackReason as string | undefined,
         },
       })),
     };
@@ -523,16 +470,11 @@ export class RAGQueryService {
 
     const documentFetcher = (limit: number) => this.topicManager.getAllDocuments(topicId, limit);
 
-    // Load knowledge graph if available (for GRAPH/GRAPH_HYBRID strategies)
-    const knowledgeGraph = await this.topicManager.getKnowledgeGraph(topicId);
-
     // Create reranker (shared across agents)
     const reranker = await this.getOrCreateReranker();
 
     await agent.initialize(vectorStore, {
       documentFetcher,
-      knowledgeGraph: knowledgeGraph ?? undefined,
-      embeddingService: knowledgeGraph ? this.topicManager.getEmbeddingService() : undefined,
       reranker: reranker ?? undefined,
     });
 

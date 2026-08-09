@@ -214,8 +214,6 @@ Guidelines:
 - Simple queries (single concept): Use ONE sub-query
 - Moderate queries (2-3 concepts): Break into 2-3 focused sub-queries
 - Complex queries (comparisons, multi-part): Break into multiple (3-5) specific sub-queries
-If the query asks about relationships between entities, dependencies, or connections, the 'graph' strategy would be effective.
-If the query needs both relationship context and semantic similarity, 'graph_hybrid' combines both approaches.
 
 Response Format: Provide an improved JSON object with this exact structure:
 {

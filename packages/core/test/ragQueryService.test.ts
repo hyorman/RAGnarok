@@ -501,45 +501,53 @@ describe("RAGQueryService", () => {
   });
 
   describe("retrieval explanation mapping", () => {
-    it("exposes score components, graph evidence, and fallback metadata in public results", () => {
+    it("exposes score components and reranking provenance in public results", () => {
       const result = (service as any).mapGraphResult(
         {
           results: [
             {
-              content: "Graph evidence",
+              content: "Hybrid evidence",
               source: "doc.md",
               score: 0.7,
               metadata: {
                 chunkIndex: 1,
-                retrievalStrategy: "vector",
+                retrievalStrategy: "hybrid",
                 scoreKind: "vector_similarity",
                 componentScores: { vector: 0.7 },
                 originalScore: 0.03,
                 originalScoreKind: "rrf",
                 originalComponentScores: { vector: 0.02, keyword: 0.01 },
-                matchedEntities: [],
-                hopDepth: -1,
-                degradedFrom: "graph_hybrid",
-                fallbackReason: "no_graph_matches",
               },
             },
           ],
           confidence: 0.7,
           iterations: 1,
         },
-        { topic: "Docs", query: "query", retrievalStrategy: "graph_hybrid" },
+        { topic: "Docs", query: "query", retrievalStrategy: "hybrid" },
         { topic: { name: "Docs" }, matchType: "exact" },
       );
 
-      expect(result.graphUsed).to.equal(false);
-      expect(result.fallbackReason).to.include("relevance threshold");
+      expect(result.results[0].retrievalStrategy).to.equal("hybrid");
       expect(result.results[0].metadata.scoreKind).to.equal("vector_similarity");
       expect(result.results[0].metadata.componentScores).to.deep.equal({ vector: 0.7 });
       expect(result.results[0].metadata.originalScore).to.equal(0.03);
       expect(result.results[0].metadata.originalScoreKind).to.equal("rrf");
       expect(result.results[0].metadata.originalComponentScores).to.deep.equal({ vector: 0.02, keyword: 0.01 });
-      expect(result.results[0].metadata.degradedFrom).to.equal("graph_hybrid");
-      expect(result.results[0].metadata.fallbackReason).to.equal("no_graph_matches");
+    });
+  });
+
+  describe("RAGQueryResult shape", () => {
+    it("omits graph-specific fields from the result and each result's metadata", async () => {
+      const result = await service.executeQuery({ topic: "Docs", query: "anything" });
+
+      for (const field of ["graphUsed", "fallbackReason", "matchedEntities", "hopDepth"]) {
+        expect(result, `top-level ${field} must be gone`).to.not.have.property(field);
+      }
+      for (const entry of result.results) {
+        for (const field of ["degradedFrom", "fallbackReason", "matchedEntities", "hopDepth"]) {
+          expect(entry.metadata, `metadata.${field} must be gone`).to.not.have.property(field);
+        }
+      }
     });
   });
 });
