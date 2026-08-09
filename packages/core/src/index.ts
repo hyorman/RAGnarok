@@ -134,18 +134,8 @@ export type { AvailableRerankerModel } from "./models/rerankerModelRegistry.js";
 export { RAGAgent } from "./agents/ragAgent";
 export { QueryPlannerAgent } from "./agents/queryPlannerAgent";
 export { RAGQueryService, TopicEmptyError } from "./agents/ragQueryService";
-export { EntityExtractor } from "./agents/entityExtractor";
 export type { RAGAgentOptions, RetrievalResult } from "./agents/ragAgent";
 export type { QueryPlannerOptions, QueryPlan, SubQuery } from "./agents/queryPlannerAgent";
-export type {
-  ExtractedEntity,
-  ExtractedRelationship,
-  ExtractionResult,
-  ExtractionProgress,
-  EntityExtractorOptions,
-} from "./agents/entityExtractorTypes";
-// Runtime constant — a type-only re-export would erase it from the built API
-export { DEFAULT_ENTITY_EXTRACTOR_OPTIONS } from "./agents/entityExtractorTypes";
 
 // Managers
 export { TopicManager } from "./managers/topicManager";
