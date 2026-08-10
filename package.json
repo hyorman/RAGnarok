@@ -110,7 +110,7 @@
         "ragnarok.retrievalStrategy": {
           "type": "string",
           "default": "hybrid",
-          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): semantic + keyword\n- **vector**: pure semantic similarity\n- **bm25**: pure keyword search with Okapi BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
+          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): semantic + keyword\n- **vector**: pure semantic similarity\n- **bm25**: BM25-like keyword scoring (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
           "enum": [
             "vector",
             "hybrid",
@@ -119,7 +119,7 @@
           "enumDescriptions": [
             "Pure semantic search using embeddings only",
             "Hybrid: Combines semantic + keyword matching (recommended)",
-            "BM25: Pure keyword search (Okapi BM25 algorithm, no embeddings needed)"
+            "BM25: BM25-like keyword scoring (no embeddings needed)"
           ],
           "order": 7
         },
