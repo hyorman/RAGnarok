@@ -169,12 +169,6 @@
           "markdownDescription": "Enable bundled cross-encoder reranking. Querying degrades to first-stage ranking if model initialization fails.",
           "order": 12.5
         },
-        "ragnarok.queryMemoryEnabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Opt in to automatic storage of high-confidence query insights. Disabled by default.",
-          "order": 16
-        },
         "ragnarok.memoryIncludeAuto": {
           "type": "boolean",
           "default": false,

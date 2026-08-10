@@ -182,6 +182,5 @@ most 10,000 edges, and oversized records return `GRAPH_VISUALIZATION_RECORD_TOO_
 - The offline migrator still emits a `graphRebuildRequired` flag and a "rebuild is required" warning
   for legacy `kg-*` tables. Both are vestigial: there is nothing to rebuild and no strategy that
   would consume the result.
-- `queryMemoryEnabled` (VS Code setting `ragnarok.queryMemoryEnabled`, env
-  `RAGNAROK_QUERY_MEMORY_ENABLED`) is still parsed and forwarded by the MCP server but has no
-  reader in core. It is dead configuration.
+- `ragnarok.commonDatabasePath` is contributed as a VS Code setting but `adapters.ts` hard-codes it
+  to `""` for the MCP server, so shared/common read-only topics are a VS Code-only capability.

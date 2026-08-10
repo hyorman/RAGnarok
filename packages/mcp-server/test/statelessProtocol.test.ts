@@ -68,7 +68,6 @@ function testConfig(): McpConfig {
     rerankerEnabled: false,
     rerankerMaxCandidates: 20,
     rerankerCandidateMultiplier: 4,
-    queryMemoryEnabled: false,
     rateLimitPerMinute: 1_000,
     exportDir: "/tmp/ragnarok-stateless-exports",
     githubHosts: ["github.com"],

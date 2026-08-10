@@ -30,7 +30,6 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.RERANKER_ENABLED]: this.mcpConfig.rerankerEnabled,
       [CONFIG.RERANKER_MAX_CANDIDATES]: this.mcpConfig.rerankerMaxCandidates,
       [CONFIG.RERANKER_CANDIDATE_MULTIPLIER]: this.mcpConfig.rerankerCandidateMultiplier,
-      [CONFIG.QUERY_MEMORY_ENABLED]: this.mcpConfig.queryMemoryEnabled,
     };
 
     if (key in mapping) {

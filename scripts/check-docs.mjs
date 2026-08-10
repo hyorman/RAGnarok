@@ -76,6 +76,5 @@ for (const relative of staleReports) {
       if (error?.code !== "ENOENT") throw error;
     });
 }
-await access(path.join(root, "DELIVERY-REMEDIATION-PLAN.md"));
 
 console.log("Canonical documentation contracts passed.");

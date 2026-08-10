@@ -33,7 +33,6 @@ export const CONFIG = {
   RERANKER_ENABLED: "rerankerEnabled",
   RERANKER_MAX_CANDIDATES: "rerankerMaxCandidates",
   RERANKER_CANDIDATE_MULTIPLIER: "rerankerCandidateMultiplier",
-  QUERY_MEMORY_ENABLED: "queryMemoryEnabled",
 } as const;
 
 /**

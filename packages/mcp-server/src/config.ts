@@ -77,7 +77,6 @@ export interface McpConfig {
   rerankerEnabled: boolean;
   rerankerMaxCandidates: number;
   rerankerCandidateMultiplier: number;
-  queryMemoryEnabled: boolean;
   rateLimitPerMinute: number;
   exportDir: string;
   githubHosts: string[];
@@ -121,7 +120,6 @@ const configSchema = z
     rerankerEnabled: z.boolean(),
     rerankerMaxCandidates: z.number().int().min(1).max(200),
     rerankerCandidateMultiplier: z.number().int().min(1).max(20),
-    queryMemoryEnabled: z.boolean(),
     rateLimitPerMinute: z.number().int().min(1).max(100_000),
     exportDir: z.string().min(1),
     githubHosts: z.array(z.string().min(1)).min(1),
@@ -379,8 +377,6 @@ export function loadConfig(): McpConfig {
     rerankerEnabled: process.env.RAGNAROK_RERANKER_ENABLED !== "0" && process.env.RAGNAROK_RERANKER_ENABLED !== "false",
     rerankerMaxCandidates: parseInt(process.env.RAGNAROK_RERANKER_MAX_CANDIDATES || "20", 10),
     rerankerCandidateMultiplier: parseInt(process.env.RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER || "4", 10),
-    queryMemoryEnabled:
-      process.env.RAGNAROK_QUERY_MEMORY_ENABLED === "1" || process.env.RAGNAROK_QUERY_MEMORY_ENABLED === "true",
     rateLimitPerMinute: parseInt(process.env.RAGNAROK_RATE_LIMIT_PER_MINUTE || "100", 10),
     exportDir:
       process.env.RAGNAROK_EXPORT_DIR ||

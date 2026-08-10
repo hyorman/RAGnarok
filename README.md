@@ -156,7 +156,7 @@ vectors. MCP Apps hosts load the self-contained `ui://ragnarok/graph` resource
 as `text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. The app
 provides loading, empty, error, keyboard, screen-reader, touch, detail-panel,
 and viewport reset behavior. The VS Code extension webview remains deferred. See
-the [MCP server graph contract](packages/mcp-server/README.md#graph-visualization).
+the [MCP server graph contract](packages/mcp-server/README.md#memory-graph-visualization).
 
 ---
 
