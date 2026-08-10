@@ -526,4 +526,77 @@ describe("stdio transport E2E", function () {
     expect(await harness.close(), "restarted stdio server did not exit cleanly").to.equal(0);
     harness = undefined;
   });
+
+  /**
+   * Catalog determinism, restored from the deleted HTTP statelessProtocol suite.
+   * The claim is transport-independent: a client that reconnects — or a second
+   * client on a freshly spawned server — must observe a byte-identical catalog,
+   * and that catalog must already be sorted on the wire (guaranteed by the
+   * name-sort before registerTool in tools.ts). Each server gets its own storage
+   * directory, so this also proves the catalog is a function of registration
+   * alone and never leaks per-install state into descriptions or schemas.
+   */
+  it("serializes sorted catalogs identically across requests and fresh servers", async function () {
+    const snapshots: Array<[string, string]> = [];
+
+    for (let serverIndex = 0; serverIndex < 2; serverIndex += 1) {
+      const catalogStorageDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-stdio-catalog-store-"));
+      const catalogSourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-stdio-catalog-src-"));
+      try {
+        await withStdioHarness(
+          () => new StdioHarness(catalogStorageDir, catalogSourceDir, { RAGNAROK_RERANKER_ENABLED: "false" }),
+          async (catalogHarness) => {
+            const baseId = 700 + serverIndex * 20;
+            expect((await catalogHarness.discover(baseId)).error, "server/discover returned an error").to.equal(
+              undefined,
+            );
+
+            for (let requestIndex = 0; requestIndex < 2; requestIndex += 1) {
+              const toolsId = baseId + 1 + requestIndex * 2;
+              const resourcesId = toolsId + 1;
+
+              const toolsResponse = await catalogHarness.listTools(toolsId);
+              expect(toolsResponse.error, "tools/list returned an error").to.equal(undefined);
+
+              catalogHarness.send({
+                jsonrpc: "2.0",
+                id: resourcesId,
+                method: "resources/list",
+                params: { _meta: MODERN_ENVELOPE },
+              });
+              const resourcesResponse = await catalogHarness.waitFor((message) => message.id === resourcesId, 30_000);
+              expect(resourcesResponse.error, "resources/list returned an error").to.equal(undefined);
+
+              const tools = toolsResponse.result?.tools as Array<{ name: string }>;
+              const resources = resourcesResponse.result?.resources as Array<{ uri: string }>;
+              // Guard against a vacuous pass: two empty catalogs are trivially equal.
+              expect(tools, "tools catalog must be non-empty").to.be.an("array").with.length.greaterThan(0);
+              expect(resources, "resources catalog must be non-empty").to.be.an("array").with.length.greaterThan(0);
+
+              // Sorted ON THE WIRE — not merely sortable. Comparing a sorted copy
+              // to another sorted copy would pass under any ordering at all.
+              const toolNames = tools.map(({ name }) => name);
+              expect(toolNames, "tools/list must return a name-sorted catalog").to.deep.equal([...toolNames].sort());
+
+              snapshots.push([JSON.stringify(tools), JSON.stringify(resources)]);
+            }
+          },
+          `catalog stdio server ${serverIndex}`,
+        );
+      } finally {
+        fs.rmSync(catalogStorageDir, { recursive: true, force: true });
+        fs.rmSync(catalogSourceDir, { recursive: true, force: true });
+      }
+    }
+
+    // 2 fresh servers x 2 successive requests.
+    expect(snapshots, "expected four catalog snapshots").to.have.length(4);
+    const catalogLabels = ["tools", "resources"];
+    for (let catalogIndex = 0; catalogIndex < catalogLabels.length; catalogIndex += 1) {
+      expect(
+        snapshots.map((snapshot) => snapshot[catalogIndex]),
+        `${catalogLabels[catalogIndex]} catalog serialization drifted across requests or fresh servers`,
+      ).to.deep.equal(Array(snapshots.length).fill(snapshots[0][catalogIndex]));
+    }
+  });
 });
