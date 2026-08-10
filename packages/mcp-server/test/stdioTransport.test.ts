@@ -200,7 +200,7 @@ describe("stdio transport E2E", function () {
     expect(resourcesResponse.result?.resources).to.deep.include({
       name: "ragnarok-graph",
       uri: "ui://ragnarok/graph",
-      description: "Interactive graph visualization for RAGnarōk knowledge and memory graphs.",
+      description: "Interactive graph visualization for RAGnarōk memory graphs.",
       mimeType: "text/html;profile=mcp-app",
       annotations: { audience: ["user"], priority: 1 },
     });
@@ -289,17 +289,15 @@ describe("stdio transport E2E", function () {
     expect(statsPayload.documentCount).to.equal(1);
     expect(statsPayload.chunkCount).to.equal(1);
 
-    // The knowledge source was removed with the document graph; the tool must
-    // reject it over the wire rather than silently serving a memory graph.
+    // The knowledge source was removed with the document graph; the narrowed
+    // schema must reject it over the wire rather than serving a memory graph.
     const removedKnowledgeGraph = await harness.callTool(70, "rag_graph_visualize", {
       source: "knowledge",
       topic: "stdio-populated",
     });
     expect(removedKnowledgeGraph.error, "rag_graph_visualize returned a protocol error").to.equal(undefined);
     expect(removedKnowledgeGraph.result?.isError, JSON.stringify(removedKnowledgeGraph.result)).to.equal(true);
-    expect(JSON.parse(removedKnowledgeGraph.result?.content?.[0]?.text ?? "{}").error.code).to.equal(
-      "GRAPH_VISUALIZATION_FAILED",
-    );
+    expect(removedKnowledgeGraph.result?.content?.[0]?.text).to.match(/^Input validation error: /);
 
     for (const memoryCase of [
       { arguments: { source: "memory", memoryScope: "workspace" }, scope: "workspace" },

@@ -1,7 +1,4 @@
-import { MultiUndirectedGraph } from "graphology";
-import louvain from "graphology-communities-louvain";
 import type { MemoryEntity, MemoryRelationship } from "../memory/types";
-import type { GraphEntity, GraphRelationship } from "../utils/graphTypes";
 
 const DEFAULT_MAX_NODES = 500;
 const MAX_NODES = 2_000;
@@ -54,7 +51,6 @@ function jsonPropertyOrder(left: string, right: string): number {
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export type GraphVisualizationSource =
-  | { kind: "knowledge"; topicId: string; topicName: string }
   | { kind: "memory"; scope: "workspace" }
   | { kind: "memory"; scope: "branch"; branch: string };
 
@@ -156,7 +152,7 @@ function toJsonValue(value: unknown, ancestors = new Set<object>(), key?: string
         }
       }
       const result = value.map((item) => toJsonValue(item, ancestors));
-      if (key === "sourceChunkIds" || key === "sourceMemoryIds") {
+      if (key === "sourceMemoryIds") {
         result.sort((left, right) => ordinal(String(left), String(right)));
       }
       return result;
@@ -183,16 +179,6 @@ function toJsonRecord(value: Record<string, unknown>): Record<string, JsonValue>
   return toJsonValue(value) as Record<string, JsonValue>;
 }
 
-function createXorshift32(): () => number {
-  let state = 0x9e3779b9;
-  return () => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    return (state >>> 0) / 0x1_0000_0000;
-  };
-}
-
 function normalizeGroups(communities: Map<string | number, string[]>): Map<string, number> {
   const ordered = [...communities.values()]
     .map((members) => members.sort(ordinal))
@@ -204,29 +190,6 @@ function normalizeGroups(communities: Map<string | number, string[]>): Map<strin
     }
   });
   return groupByNode;
-}
-
-function knowledgeGroups(nodeIds: readonly string[], edges: readonly ProjectedRelationship[]): Map<string, number> {
-  const graph = new MultiUndirectedGraph();
-  for (const nodeId of [...nodeIds].sort(ordinal)) {
-    graph.addNode(nodeId);
-  }
-  for (const edge of [...edges].sort((left, right) => ordinal(left.id, right.id))) {
-    graph.addEdgeWithKey(edge.id, edge.source, edge.target, { weight: edge.weight });
-  }
-
-  const mapping = louvain(graph, { getEdgeWeight: "weight", randomWalk: true, rng: createXorshift32() });
-  const communities = new Map<number, string[]>();
-  for (const nodeId of nodeIds) {
-    const community = mapping[nodeId];
-    const members = communities.get(community);
-    if (members) {
-      members.push(nodeId);
-    } else {
-      communities.set(community, [nodeId]);
-    }
-  }
-  return normalizeGroups(communities);
 }
 
 function memoryGroups(nodeIds: readonly string[], edges: readonly ProjectedRelationship[]): Map<string, number> {
@@ -421,7 +384,6 @@ function projectGraphVisualization(
   entities: readonly ProjectedEntity[],
   relationships: readonly ProjectedRelationship[],
   source: GraphVisualizationSource,
-  graphKind: "knowledge" | "memory",
   maxNodes: number,
 ): GraphVisualizationDocument {
   const entityById = new Map(entities.map((entity) => [entity.id, entity]));
@@ -444,8 +406,7 @@ function projectGraphVisualization(
   const retainedEdges = eligibleEdges
     .sort((left, right) => right.weight - left.weight || ordinal(left.id, right.id))
     .slice(0, MAX_EDGES);
-  const detectedGroups =
-    graphKind === "knowledge" ? knowledgeGroups(retainedIds, retainedEdges) : memoryGroups(retainedIds, retainedEdges);
+  const detectedGroups = memoryGroups(retainedIds, retainedEdges);
   const { nodes, groups } = placeNodes(retainedIds, entityById, degree, retainedEdges, detectedGroups);
   const edges = retainedEdges.map((edge) => ({
     id: edge.id,
@@ -482,43 +443,9 @@ function projectGraphVisualization(
   };
 }
 
-export function projectKnowledgeGraphVisualization(
-  snapshot: { entities: readonly GraphEntity[]; relationships: readonly GraphRelationship[] },
-  source: Extract<GraphVisualizationSource, { kind: "knowledge" }>,
-  options: GraphVisualizationOptions = {},
-): GraphVisualizationDocument {
-  const entities: ProjectedEntity[] = snapshot.entities.map((entity) => ({
-    id: entity.id,
-    label: entity.name,
-    type: entity.type,
-    attributes: {
-      description: entity.description,
-      sourceChunkIds: entity.sourceChunkIds,
-      confidence: entity.confidence,
-      strength: entity.strength,
-      lastAccessedAt: entity.lastAccessedAt,
-      metadata: entity.metadata,
-    },
-  }));
-  const relationships: ProjectedRelationship[] = snapshot.relationships.map((relationship) => ({
-    id: relationship.id,
-    source: relationship.sourceId,
-    target: relationship.targetId,
-    label: relationship.type,
-    weight: relationship.weight,
-    attributes: {
-      ...(relationship.description === undefined ? {} : { description: relationship.description }),
-      sourceChunkIds: relationship.sourceChunkIds,
-      confidence: relationship.confidence,
-      metadata: relationship.metadata,
-    },
-  }));
-  return projectGraphVisualization(entities, relationships, source, "knowledge", validateMaxNodes(options.maxNodes));
-}
-
 export function projectMemoryGraphVisualization(
   snapshot: { entities: readonly Omit<MemoryEntity, "vector">[]; relationships: readonly MemoryRelationship[] },
-  source: Extract<GraphVisualizationSource, { kind: "memory" }>,
+  source: GraphVisualizationSource,
   options: GraphVisualizationOptions = {},
 ): GraphVisualizationDocument {
   const entities: ProjectedEntity[] = snapshot.entities.map((entity) => ({
@@ -550,7 +477,7 @@ export function projectMemoryGraphVisualization(
       metadata: relationship.metadata,
     },
   }));
-  return projectGraphVisualization(entities, relationships, source, "memory", validateMaxNodes(options.maxNodes));
+  return projectGraphVisualization(entities, relationships, source, validateMaxNodes(options.maxNodes));
 }
 
 export function reduceGraphVisualizationDocument(

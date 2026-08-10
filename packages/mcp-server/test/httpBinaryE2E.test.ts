@@ -39,7 +39,6 @@ const CURATOR_TOOLS = [
   "rag_create_document_upload",
   "rag_create_topic",
   "rag_delete_topic",
-  "rag_graph_visualize",
   "rag_ingest_upload",
   "rag_remove_document",
   "rag_rename_topic",
@@ -196,37 +195,45 @@ describe("shared-mode HTTP E2E (real binary)", function () {
     }
   });
 
-  it("proves graph visualization protocol resources, roles, and shared graph behavior", async function () {
+  it("proves the graph UI resource stays while the graph tool is absent from shared deployments", async function () {
     const reader = authedClient(port, READ_TOKEN);
     const curator = authedClient(port, WRITE_TOKEN);
     await reader.client.connect(reader.transport);
     await curator.client.connect(curator.transport);
     try {
+      // Memory is always personal, so the graph tool is structurally absent from
+      // a shared deployment for every role — not merely gated behind an error.
       const readerTools = (await reader.client.listTools(undefined, { cacheMode: "refresh" })).tools;
       expect(readerTools.map(({ name }) => name)).not.to.include("rag_graph_visualize");
-      let unauthorizedCall: unknown;
-      try {
-        await reader.client.callTool({
-          name: "rag_graph_visualize",
-          arguments: { source: "knowledge", topic: "http-populated" },
-        });
-      } catch (error) {
-        unauthorizedCall = error;
-      }
-      expect(unauthorizedCall).to.be.instanceOf(Error);
-      expect((unauthorizedCall as { code?: number }).code).to.equal(-32602);
-
       const curatorTools = (await curator.client.listTools(undefined, { cacheMode: "refresh" })).tools;
-      const graphTool = curatorTools.find(({ name }) => name === "rag_graph_visualize");
-      expect(graphTool, "curator graph tool catalog entry").to.exist;
-      expect(graphTool?._meta).to.deep.equal({ ui: { resourceUri: "ui://ragnarok/graph" } });
-      expect(graphTool?._meta).not.to.have.property("ui/resourceUri");
+      expect(curatorTools.map(({ name }) => name)).not.to.include("rag_graph_visualize");
 
+      for (const { client, label } of [
+        { client: reader.client, label: "reader" },
+        { client: curator.client, label: "curator" },
+      ]) {
+        for (const arguments_ of [
+          { source: "memory", memoryScope: "workspace" },
+          { source: "memory", memoryScope: "branch", branch: "feature/protocol" },
+        ]) {
+          let absentToolCall: unknown;
+          try {
+            await client.callTool({ name: "rag_graph_visualize", arguments: arguments_ });
+          } catch (error) {
+            absentToolCall = error;
+          }
+          expect(absentToolCall, `${label} ${JSON.stringify(arguments_)}`).to.be.instanceOf(Error);
+          expect((absentToolCall as { code?: number }).code).to.equal(-32602);
+        }
+      }
+
+      // The MCP App resource is registered unconditionally so hosts can render a
+      // graph document produced by a local deployment.
       const resources = (await curator.client.listResources(undefined, { cacheMode: "refresh" })).resources;
       expect(resources).to.deep.include({
         name: "ragnarok-graph",
         uri: "ui://ragnarok/graph",
-        description: "Interactive graph visualization for RAGnarōk knowledge and memory graphs.",
+        description: "Interactive graph visualization for RAGnarōk memory graphs.",
         mimeType: "text/html;profile=mcp-app",
         annotations: { audience: ["user"], priority: 1 },
       });
@@ -242,28 +249,6 @@ describe("shared-mode HTTP E2E (real binary)", function () {
       expect(resource.text).to.include("<svg");
       expect(resource.text).to.include('id="reset-view"');
       expect(resource.text).not.to.match(/<script\s+[^>]*src\s*=/i);
-
-      // The knowledge source was removed with the document graph.
-      const removedKnowledge = await curator.client.callTool({
-        name: "rag_graph_visualize",
-        arguments: { source: "knowledge", topic: "http-populated" },
-      });
-      expect(removedKnowledge.isError, JSON.stringify(removedKnowledge)).to.equal(true);
-      expect((removedKnowledge.structuredContent as any).error.code).to.equal("GRAPH_VISUALIZATION_FAILED");
-
-      for (const arguments_ of [
-        { source: "memory", memoryScope: "workspace" },
-        { source: "memory", memoryScope: "branch", branch: "feature/protocol" },
-      ]) {
-        const result = await curator.client.callTool({ name: "rag_graph_visualize", arguments: arguments_ });
-        expect(result.isError, JSON.stringify(result)).to.equal(true);
-        expect(result.structuredContent).to.deep.include({
-          error: {
-            code: "GRAPH_MEMORY_UNAVAILABLE",
-            message: "Memory graph visualization is unavailable in this deployment",
-          },
-        });
-      }
     } finally {
       await Promise.allSettled([reader.client.close(), curator.client.close()]);
     }

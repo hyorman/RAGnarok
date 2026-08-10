@@ -14,7 +14,7 @@ export function registerGraphUiResource(server: McpServer): void {
     "ragnarok-graph",
     RESOURCE_URI,
     {
-      description: "Interactive graph visualization for RAGnarōk knowledge and memory graphs.",
+      description: "Interactive graph visualization for RAGnarōk memory graphs.",
       mimeType: GRAPH_RESOURCE_MIME_TYPE,
       annotations: { audience: ["user"], priority: 1 },
     },

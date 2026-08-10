@@ -59,31 +59,22 @@ export const MCP_LIMITS = Object.freeze({
   responseBytes: 1_048_576,
 });
 
-const graphVisualizationInput = z.discriminatedUnion("source", [
+const graphVisualizationInput = z.discriminatedUnion("memoryScope", [
   z
     .object({
-      source: z.literal("knowledge"),
-      topic: z.string().trim().min(1).max(MCP_LIMITS.topicName),
+      source: z.literal("memory"),
+      memoryScope: z.literal("workspace"),
       maxNodes: z.number().int().min(1).max(2_000).optional(),
     })
     .strict(),
-  z.discriminatedUnion("memoryScope", [
-    z
-      .object({
-        source: z.literal("memory"),
-        memoryScope: z.literal("workspace"),
-        maxNodes: z.number().int().min(1).max(2_000).optional(),
-      })
-      .strict(),
-    z
-      .object({
-        source: z.literal("memory"),
-        memoryScope: z.literal("branch"),
-        branch: z.string().trim().min(1).max(255),
-        maxNodes: z.number().int().min(1).max(2_000).optional(),
-      })
-      .strict(),
-  ]),
+  z
+    .object({
+      source: z.literal("memory"),
+      memoryScope: z.literal("branch"),
+      branch: z.string().trim().min(1).max(255),
+      maxNodes: z.number().int().min(1).max(2_000).optional(),
+    })
+    .strict(),
 ]);
 
 class GraphVisualizationRecordTooLargeError extends Error {
@@ -1895,43 +1886,37 @@ export function registerTools(
     );
   }
 
-  // rag_graph_visualize — interactive knowledge/memory graph document for MCP Apps.
-  registerCuratorTool(
-    "rag_graph_visualize",
-    "Visualize a RAGnarōk knowledge, workspace-memory, or branch-memory graph as a deterministic bounded document.",
-    graphVisualizationInput,
-    readOnlyAnnotations,
-    async (input) => {
-      if (input.source === "knowledge") {
-        return graphError(
-          "GRAPH_VISUALIZATION_FAILED",
-          "Document knowledge graphs no longer exist; use source: memory",
-        );
-      }
-
-      if (deployment === "shared" || !memoryStore) {
-        return graphError("GRAPH_MEMORY_UNAVAILABLE", "Memory graph visualization is unavailable in this deployment");
-      }
-
-      try {
-        const branch = input.memoryScope === "branch" ? input.branch : undefined;
-        const snapshot = await memoryStore.getGraphSnapshot(input.memoryScope, branch);
-        const source =
-          input.memoryScope === "branch"
-            ? ({ kind: "memory", scope: "branch", branch: input.branch } as const)
-            : ({ kind: "memory", scope: "workspace" } as const);
-        const document = projectMemoryGraphVisualization(snapshot, source, { maxNodes: input.maxNodes });
-        return toolJson(fitGraphVisualizationResult(document));
-      } catch (error) {
-        if (error instanceof GraphVisualizationRecordTooLargeError) {
-          return graphError("GRAPH_VISUALIZATION_RECORD_TOO_LARGE", error.message);
+  // rag_graph_visualize — interactive memory graph document for MCP Apps. Memory
+  // is always personal, so the tool is structurally absent in shared deployments
+  // rather than registered as a tool that could only ever error.
+  if (memoryStore && deployment !== "shared") {
+    const graphMemoryStore = memoryStore;
+    registerCuratorTool(
+      "rag_graph_visualize",
+      "Visualize a RAGnarōk workspace-memory or branch-memory graph as a deterministic bounded document.",
+      graphVisualizationInput,
+      readOnlyAnnotations,
+      async (input) => {
+        try {
+          const branch = input.memoryScope === "branch" ? input.branch : undefined;
+          const snapshot = await graphMemoryStore.getGraphSnapshot(input.memoryScope, branch);
+          const source =
+            input.memoryScope === "branch"
+              ? ({ kind: "memory", scope: "branch", branch: input.branch } as const)
+              : ({ kind: "memory", scope: "workspace" } as const);
+          const document = projectMemoryGraphVisualization(snapshot, source, { maxNodes: input.maxNodes });
+          return toolJson(fitGraphVisualizationResult(document));
+        } catch (error) {
+          if (error instanceof GraphVisualizationRecordTooLargeError) {
+            return graphError("GRAPH_VISUALIZATION_RECORD_TOO_LARGE", error.message);
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          return graphError("GRAPH_VISUALIZATION_FAILED", message);
         }
-        const message = error instanceof Error ? error.message : String(error);
-        return graphError("GRAPH_VISUALIZATION_FAILED", message);
-      }
-    },
-    { ui: { resourceUri: GRAPH_RESOURCE_URI } },
-  );
+      },
+      { ui: { resourceUri: GRAPH_RESOURCE_URI } },
+    );
+  }
 
   for (const tool of pendingTools.sort((left, right) => left.name.localeCompare(right.name))) {
     server.registerTool(tool.name, tool.config, tool.handler);

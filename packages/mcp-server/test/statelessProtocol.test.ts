@@ -328,7 +328,7 @@ describe("stateless modern MCP protocol", function () {
       expect(resources).to.deep.include({
         name: "ragnarok-graph",
         uri: "ui://ragnarok/graph",
-        description: "Interactive graph visualization for RAGnarōk knowledge and memory graphs.",
+        description: "Interactive graph visualization for RAGnarōk memory graphs.",
         mimeType: "text/html;profile=mcp-app",
         annotations: { audience: ["user"], priority: 1 },
       });

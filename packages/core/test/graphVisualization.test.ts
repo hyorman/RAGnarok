@@ -1,50 +1,11 @@
 import { expect } from "chai";
 import type { MemoryEntity, MemoryRelationship } from "../src/memory/types";
-import type { GraphEntity, GraphRelationship } from "../src/utils/graphTypes";
 import {
-  projectKnowledgeGraphVisualization,
   projectMemoryGraphVisualization,
   reduceGraphVisualizationDocument,
 } from "../src/visualization/graphVisualization";
 
-const knowledgeSource = { kind: "knowledge", topicId: "topic-1", topicName: "Aurora" } as const;
 const workspaceSource = { kind: "memory", scope: "workspace" } as const;
-
-function makeEntity(id: string, overrides: Partial<GraphEntity> = {}): GraphEntity {
-  return {
-    id,
-    name: `Entity ${id}`,
-    type: "concept",
-    description: `Description ${id}`,
-    vector: [0.1, 0.2],
-    sourceChunkIds: [`chunk-${id}`],
-    confidence: 0.9,
-    strength: 0.7,
-    lastAccessedAt: 100,
-    metadata: {},
-    ...overrides,
-  };
-}
-
-function makeRelationship(
-  id: string,
-  sourceId: string,
-  targetId: string,
-  overrides: Partial<GraphRelationship> = {},
-): GraphRelationship {
-  return {
-    id,
-    sourceId,
-    targetId,
-    type: "related_to",
-    description: `Relationship ${id}`,
-    weight: 0.5,
-    sourceChunkIds: [`chunk-${id}`],
-    confidence: 0.8,
-    metadata: {},
-    ...overrides,
-  };
-}
 
 function makeMemoryEntity(id: string, overrides: Partial<MemoryEntity> = {}): MemoryEntity {
   return {
@@ -84,35 +45,31 @@ function makeMemoryRelationship(
 }
 
 describe("graph visualization", () => {
-  it("projects a deterministic bounded knowledge document with complete non-vector details", () => {
-    const a = makeEntity("a", {
-      sourceChunkIds: ["chunk-z", "chunk-a"],
+  it("projects a deterministic bounded memory document with complete non-vector details", () => {
+    const a = makeMemoryEntity("a", {
+      sourceMemoryIds: ["memory-z", "memory-a"],
       metadata: { owner: "team" },
     });
-    const b = makeEntity("b");
-    const c = makeEntity("c");
-    const isolated = makeEntity("isolated");
-    const ab = makeRelationship("ab", "a", "b", {
-      description: undefined,
-      sourceChunkIds: ["chunk-z", "chunk-a"],
-      metadata: { reviewed: true },
-    });
-    const bc = makeRelationship("bc", "b", "c");
+    const b = makeMemoryEntity("b");
+    const c = makeMemoryEntity("c");
+    const isolated = makeMemoryEntity("isolated");
+    const ab = makeMemoryRelationship("ab", "a", "b", { metadata: { reviewed: true } });
+    const bc = makeMemoryRelationship("bc", "b", "c");
 
-    const forward = projectKnowledgeGraphVisualization(
+    const forward = projectMemoryGraphVisualization(
       { entities: [a, b, c, isolated], relationships: [ab, bc] },
-      knowledgeSource,
+      workspaceSource,
       { maxNodes: 3 },
     );
-    const reverse = projectKnowledgeGraphVisualization(
+    const reverse = projectMemoryGraphVisualization(
       { entities: [isolated, c, b, a], relationships: [bc, ab] },
-      knowledgeSource,
+      workspaceSource,
       { maxNodes: 3 },
     );
 
     expect(JSON.stringify(reverse)).to.equal(JSON.stringify(forward));
     expect(forward.schema).to.equal("ragnarok.graph.visualization.v1");
-    expect(forward.source).to.deep.equal(knowledgeSource);
+    expect(forward.source).to.deep.equal(workspaceSource);
     expect(forward.nodes.map((node) => node.id)).to.deep.equal(["b", "a", "c"]);
     expect(forward.nodes).to.have.length(3);
     expect(forward.metadata).to.deep.include({
@@ -126,29 +83,33 @@ describe("graph visualization", () => {
     expect(forward.metadata.truncationReasons).to.deep.equal(["maxNodes"]);
     expect(forward.nodes.every((node) => !("vector" in node.attributes))).to.equal(true);
     expect(forward.nodes.find((node) => node.id === "a")!.attributes).to.deep.equal({
-      confidence: 0.9,
-      description: "Description a",
-      lastAccessedAt: 100,
+      confidence: 0.85,
+      createdAt: 200,
+      description: "Memory description a",
       metadata: { owner: "team" },
-      sourceChunkIds: ["chunk-a", "chunk-z"],
-      strength: 0.7,
+      scope: "workspace",
+      sourceMemoryIds: ["memory-a", "memory-z"],
+      strength: 0.65,
+      updatedAt: 300,
     });
     expect(forward.edges.find((edge) => edge.id === "ab")!.attributes).to.deep.equal({
-      confidence: 0.8,
+      description: "Memory relationship ab",
       metadata: { reviewed: true },
-      sourceChunkIds: ["chunk-a", "chunk-z"],
+      scope: "workspace",
     });
   });
 
   it("validates maxNodes and applies the 500-node default", () => {
     for (const maxNodes of [0, -1, 1.5, 2001]) {
       expect(() =>
-        projectKnowledgeGraphVisualization({ entities: [], relationships: [] }, knowledgeSource, { maxNodes }),
+        projectMemoryGraphVisualization({ entities: [], relationships: [] }, workspaceSource, { maxNodes }),
       ).to.throw(RangeError, "maxNodes must be an integer between 1 and 2000");
     }
 
-    const entities = Array.from({ length: 501 }, (_, index) => makeEntity(`node-${index.toString().padStart(3, "0")}`));
-    const document = projectKnowledgeGraphVisualization({ entities, relationships: [] }, knowledgeSource);
+    const entities = Array.from({ length: 501 }, (_, index) =>
+      makeMemoryEntity(`node-${index.toString().padStart(3, "0")}`),
+    );
+    const document = projectMemoryGraphVisualization({ entities, relationships: [] }, workspaceSource);
     expect(document.nodes).to.have.length(500);
     expect(document.metadata.truncationReasons).to.deep.equal(["maxNodes"]);
   });
@@ -186,26 +147,28 @@ describe("graph visualization", () => {
   });
 
   it("canonicalizes recursive metadata while preserving ordinary array order", () => {
-    const entity = makeEntity("a", {
-      sourceChunkIds: ["z", "a"],
+    const entity = makeMemoryEntity("a", {
+      sourceMemoryIds: ["z", "a"],
       metadata: {
         z: [{ b: 2, a: 1 }],
         sequence: ["z", "a"],
         a: { sourceMemoryIds: ["z", "a"] },
       },
     });
-    const document = projectKnowledgeGraphVisualization({ entities: [entity], relationships: [] }, knowledgeSource);
+    const document = projectMemoryGraphVisualization({ entities: [entity], relationships: [] }, workspaceSource);
     const attributes = document.nodes[0].attributes;
 
     expect(Object.keys(attributes)).to.deep.equal([
       "confidence",
+      "createdAt",
       "description",
-      "lastAccessedAt",
       "metadata",
-      "sourceChunkIds",
+      "scope",
+      "sourceMemoryIds",
       "strength",
+      "updatedAt",
     ]);
-    expect(attributes.sourceChunkIds).to.deep.equal(["a", "z"]);
+    expect(attributes.sourceMemoryIds).to.deep.equal(["a", "z"]);
     expect(attributes.metadata).to.deep.equal({
       a: { sourceMemoryIds: ["a", "z"] },
       sequence: ["z", "a"],
@@ -230,13 +193,13 @@ describe("graph visualization", () => {
       ["10", "ten"],
     ]);
 
-    const forward = projectKnowledgeGraphVisualization(
-      { entities: [makeEntity("a", { metadata: forwardMetadata })], relationships: [] },
-      knowledgeSource,
+    const forward = projectMemoryGraphVisualization(
+      { entities: [makeMemoryEntity("a", { metadata: forwardMetadata })], relationships: [] },
+      workspaceSource,
     );
-    const reverse = projectKnowledgeGraphVisualization(
-      { entities: [makeEntity("a", { metadata: reverseMetadata })], relationships: [] },
-      knowledgeSource,
+    const reverse = projectMemoryGraphVisualization(
+      { entities: [makeMemoryEntity("a", { metadata: reverseMetadata })], relationships: [] },
+      workspaceSource,
     );
     const metadata = forward.nodes[0].attributes.metadata as Record<string, unknown>;
 
@@ -248,24 +211,24 @@ describe("graph visualization", () => {
 
   it("rejects unsupported and cyclic values in metadata or provenance", () => {
     for (const bad of [1n, undefined, () => undefined, Symbol("bad")]) {
-      const entity = makeEntity("a", { metadata: { nested: { bad } } });
+      const entity = makeMemoryEntity("a", { metadata: { nested: { bad } } });
       expect(() =>
-        projectKnowledgeGraphVisualization({ entities: [entity], relationships: [] }, knowledgeSource),
+        projectMemoryGraphVisualization({ entities: [entity], relationships: [] }, workspaceSource),
       ).to.throw(TypeError);
     }
 
     const cycle: Record<string, unknown> = {};
     cycle.self = cycle;
     expect(() =>
-      projectKnowledgeGraphVisualization(
-        { entities: [makeEntity("a", { metadata: cycle })], relationships: [] },
-        knowledgeSource,
+      projectMemoryGraphVisualization(
+        { entities: [makeMemoryEntity("a", { metadata: cycle })], relationships: [] },
+        workspaceSource,
       ),
     ).to.throw(TypeError);
 
-    const invalidProvenance = makeEntity("a", { sourceChunkIds: ["valid", undefined as unknown as string] });
+    const invalidProvenance = makeMemoryEntity("a", { sourceMemoryIds: ["valid", undefined as unknown as string] });
     expect(() =>
-      projectKnowledgeGraphVisualization({ entities: [invalidProvenance], relationships: [] }, knowledgeSource),
+      projectMemoryGraphVisualization({ entities: [invalidProvenance], relationships: [] }, workspaceSource),
     ).to.throw(TypeError);
   });
 
@@ -275,24 +238,24 @@ describe("graph visualization", () => {
     sparse[2] = "third";
 
     expect(() =>
-      projectKnowledgeGraphVisualization(
-        { entities: [makeEntity("a", { metadata: { sparse } })], relationships: [] },
-        knowledgeSource,
+      projectMemoryGraphVisualization(
+        { entities: [makeMemoryEntity("a", { metadata: { sparse } })], relationships: [] },
+        workspaceSource,
       ),
     ).to.throw(TypeError, "Sparse graph visualization arrays are not supported");
   });
 
   it("maps non-finite metadata numbers to null", () => {
-    const document = projectKnowledgeGraphVisualization(
+    const document = projectMemoryGraphVisualization(
       {
         entities: [
-          makeEntity("a", {
+          makeMemoryEntity("a", {
             metadata: { nan: Number.NaN, negative: Number.NEGATIVE_INFINITY, nested: [Number.POSITIVE_INFINITY] },
           }),
         ],
         relationships: [],
       },
-      knowledgeSource,
+      workspaceSource,
     );
 
     expect(document.nodes[0].attributes.metadata).to.deep.equal({ nan: null, negative: null, nested: [null] });
@@ -317,21 +280,17 @@ describe("graph visualization", () => {
     expect(document.edges.every((edge) => document.nodes.some((node) => node.id === edge.target))).to.equal(true);
   });
 
-  it("uses edge weights for deterministic nontrivial Louvain membership", () => {
-    const entities = [makeEntity("a"), makeEntity("b"), makeEntity("c"), makeEntity("d")];
+  it("separates disconnected components into deterministic groups", () => {
+    const entities = [makeMemoryEntity("a"), makeMemoryEntity("b"), makeMemoryEntity("c"), makeMemoryEntity("d")];
     const relationships = [
-      makeRelationship("ab", "a", "b", { weight: 1 }),
-      makeRelationship("ac", "a", "c", { weight: 0.01 }),
-      makeRelationship("ad", "a", "d", { weight: 0.01 }),
-      makeRelationship("bc", "b", "c", { weight: 0.01 }),
-      makeRelationship("bd", "b", "d", { weight: 0.01 }),
-      makeRelationship("cd", "c", "d", { weight: 1 }),
+      makeMemoryRelationship("ab", "a", "b", { weight: 1 }),
+      makeMemoryRelationship("cd", "c", "d", { weight: 1 }),
     ];
 
-    const forward = projectKnowledgeGraphVisualization({ entities, relationships }, knowledgeSource);
-    const reverse = projectKnowledgeGraphVisualization(
+    const forward = projectMemoryGraphVisualization({ entities, relationships }, workspaceSource);
+    const reverse = projectMemoryGraphVisualization(
       { entities: [...entities].reverse(), relationships: [...relationships].reverse() },
-      knowledgeSource,
+      workspaceSource,
     );
     const memberships = forward.groups.map((group) =>
       forward.nodes
@@ -474,26 +433,22 @@ describe("graph visualization", () => {
     expect(reducedAgain.metadata.truncationReasons).to.deep.equal(["maxNodes", "maxEdges", "responseBytes"]);
   });
 
-  it("returns successful empty knowledge and memory documents", () => {
-    const knowledge = projectKnowledgeGraphVisualization({ entities: [], relationships: [] }, knowledgeSource);
+  it("returns a successful empty memory document", () => {
     const memory = projectMemoryGraphVisualization({ entities: [], relationships: [] }, workspaceSource);
 
-    for (const document of [knowledge, memory]) {
-      expect(document.nodes).to.deep.equal([]);
-      expect(document.edges).to.deep.equal([]);
-      expect(document.groups).to.deep.equal([]);
-      expect(document.viewport).to.deep.equal({ minX: 0, minY: 0, maxX: 0, maxY: 0 });
-      expect(document.metadata).to.deep.equal({
-        originalNodeCount: 0,
-        retainedNodeCount: 0,
-        originalEdgeCount: 0,
-        retainedEdgeCount: 0,
-        truncated: false,
-        truncationReasons: [],
-        empty: true,
-      });
-    }
-    expect(knowledge.source).to.deep.equal(knowledgeSource);
+    expect(memory.nodes).to.deep.equal([]);
+    expect(memory.edges).to.deep.equal([]);
+    expect(memory.groups).to.deep.equal([]);
+    expect(memory.viewport).to.deep.equal({ minX: 0, minY: 0, maxX: 0, maxY: 0 });
+    expect(memory.metadata).to.deep.equal({
+      originalNodeCount: 0,
+      retainedNodeCount: 0,
+      originalEdgeCount: 0,
+      retainedEdgeCount: 0,
+      truncated: false,
+      truncationReasons: [],
+      empty: true,
+    });
     expect(memory.source).to.deep.equal(workspaceSource);
   });
 

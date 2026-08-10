@@ -160,7 +160,7 @@ describe("rag_graph_visualize tool", function () {
   it("exposes graph UI resource metadata only for curator and admin", function () {
     for (const role of ["reader", "curator", "admin"] as const) {
       const { server, captured } = fakeServer();
-      register(server, makeTopicManager(), { role });
+      registerMemorySnapshot(server, [], [], { role });
       const graph = captured.find((tool) => tool.name === "rag_graph_visualize");
       expect(Boolean(graph), role).to.equal(role !== "reader");
       if (graph) {
@@ -171,13 +171,12 @@ describe("rag_graph_visualize tool", function () {
     }
   });
 
-  it("uses the exact three-branch discriminated input schema", function () {
+  it("uses the exact two-branch memory-only input schema", function () {
     const { server, captured } = fakeServer();
-    register(server, makeTopicManager());
+    registerMemorySnapshot(server, []);
     const schema = graphTool(captured).config.inputSchema!;
 
     for (const valid of [
-      { source: "knowledge", topic: " real ", maxNodes: 25 },
       { source: "memory", memoryScope: "workspace", maxNodes: 25 },
       { source: "memory", memoryScope: "branch", branch: " feature/graph ", maxNodes: 25 },
     ]) {
@@ -185,16 +184,44 @@ describe("rag_graph_visualize tool", function () {
     }
 
     for (const invalid of [
-      { source: "knowledge" },
-      { source: "knowledge", topic: "   " },
       { source: "memory", memoryScope: "branch" },
       { source: "memory", memoryScope: "branch", branch: "   " },
       { source: "memory", memoryScope: "workspace", branch: "feature/graph" },
-      { source: "knowledge", topic: "real", memoryScope: "workspace" },
-      { source: "knowledge", topic: "real", maxNodes: 2_001 },
+      { source: "memory", memoryScope: "workspace", topic: "real" },
       { source: "memory", memoryScope: "workspace", maxNodes: 0 },
+      { source: "memory", memoryScope: "workspace", maxNodes: 2_001 },
     ]) {
       expect(schema.safeParse(invalid).success, JSON.stringify(invalid)).to.equal(false);
+    }
+  });
+
+  it("rejects the removed knowledge source at schema validation", function () {
+    const { server, captured } = fakeServer();
+    registerMemorySnapshot(server, []);
+    const schema = graphTool(captured).config.inputSchema!;
+
+    for (const removed of [
+      { source: "knowledge", topic: "anything" },
+      { source: "knowledge" },
+      { source: "knowledge", topic: "anything", maxNodes: 25 },
+      { source: "knowledge", memoryScope: "workspace" },
+    ]) {
+      expect(schema.safeParse(removed).success, JSON.stringify(removed)).to.equal(false);
+    }
+  });
+
+  it("is not registered without local memory", function () {
+    for (const options of [
+      { deployment: "shared" as const, memoryStore: { getGraphSnapshot: sinon.stub() } },
+      { deployment: "shared" as const, memoryStore: undefined },
+      { deployment: "local" as const, memoryStore: undefined },
+    ]) {
+      const { server, captured } = fakeServer();
+      register(server, makeTopicManager(), options);
+      expect(
+        captured.map((tool) => tool.name),
+        `deployment=${options.deployment} memoryStore=${Boolean(options.memoryStore)}`,
+      ).to.not.include("rag_graph_visualize");
     }
   });
 
@@ -262,41 +289,6 @@ describe("rag_graph_visualize tool", function () {
     expect(payload.source).to.deep.equal({ kind: "memory", scope: "branch", branch: "feature/absent" });
     expect(payload.metadata.empty).to.equal(true);
   });
-
-  for (const memoryScope of ["workspace", "branch"] as const) {
-    it(`rejects shared ${memoryScope} memory with GRAPH_MEMORY_UNAVAILABLE`, async function () {
-      const { server, captured } = fakeServer();
-      register(server, makeTopicManager(), {
-        memoryStore: { getGraphSnapshot: sinon.stub().rejects(new Error("must not be called")) },
-        deployment: "shared",
-      });
-
-      const result = await graphTool(captured).handler(
-        {
-          source: "memory",
-          memoryScope,
-          ...(memoryScope === "branch" ? { branch: "feature/graph" } : {}),
-        },
-        makeServerContext(),
-      );
-      expect(result.isError).to.equal(true);
-      expect(parseResult(result).error.code).to.equal("GRAPH_MEMORY_UNAVAILABLE");
-    });
-  }
-
-  for (const deployment of ["local", "shared"] as const) {
-    it(`rejects the removed knowledge source in a ${deployment} deployment`, async function () {
-      const { server, captured } = fakeServer();
-      const getGraphSnapshot = sinon.stub().rejects(new Error("must not be called"));
-      register(server, makeTopicManager(), { deployment, memoryStore: { getGraphSnapshot } });
-
-      const result = await graphTool(captured).handler({ source: "knowledge", topic: "Anything" }, makeServerContext());
-      expect(result.isError).to.equal(true);
-      expect(parseResult(result).error.code).to.equal("GRAPH_VISUALIZATION_FAILED");
-      // The knowledge source must never fall through to the memory projection.
-      expect(getGraphSnapshot.called).to.equal(false);
-    });
-  }
 
   it("reduces huge metadata to the final wrapped response budget", async function () {
     const { server, captured } = fakeServer();
