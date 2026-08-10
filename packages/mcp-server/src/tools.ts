@@ -42,7 +42,6 @@ import {
 import type { AvailableModel, GraphVisualizationDocument } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "./uiResource";
 import type { McpConfig } from "./config";
-import type { TransferManager } from "./transferManager";
 import { markMcpToolResult } from "./auditContext";
 
 /**
@@ -115,9 +114,9 @@ function sanitizeSharedValue(value: unknown, fieldName?: string): unknown {
     );
   }
   if (typeof value === "string") {
-    // Transfer capability URLs are opaque, principal-bound, expiring relative
-    // endpoints—not filesystem paths. Preserve only the exact shape emitted
-    // by TransferManager; all other path-like strings remain redacted.
+    // Dead since the transfer subsystem was deleted: no tool emits a transfer
+    // endpoint any more. Retained only because it belongs to the shared-mode
+    // sanitizer, which is removed wholesale when shared mode collapses.
     if (fieldName && TRANSFER_ENDPOINT_FIELD.test(fieldName) && TRANSFER_ENDPOINT.test(value)) {
       return value;
     }
@@ -216,7 +215,6 @@ export function registerTools(
   runMutation: MutationRunner = (operation) => operation(),
   deployment: "local" | "shared" = "local",
   runtime: ToolRuntime = { run: (operation) => operation() },
-  transferManager?: TransferManager,
   principal = "local-owner",
 ): void {
   const normalizedRole: AccessRole = accessRole === "writer" ? "admin" : accessRole;
@@ -702,67 +700,6 @@ export function registerTools(
       }
     },
   );
-
-  if (transferManager && deployment === "shared") {
-    registerCuratorTool(
-      "rag_create_document_upload",
-      "Create an owned, expiring streamed upload handle. PUT raw bytes to the returned relative endpoint.",
-      z.object({
-        filename: z.string().trim().min(1).max(255),
-        contentType: z.enum([
-          "text/markdown",
-          "text/plain",
-          "text/html",
-          "application/pdf",
-          "application/octet-stream",
-        ]),
-        size: z.number().int().positive(),
-        sha256: z.string().regex(/^[a-f0-9]{64}$/i),
-      }),
-      writeAnnotations,
-      async ({ filename, contentType, size, sha256 }) => {
-        try {
-          curatorOnly();
-          return toolJson(
-            await transferManager.createUpload(principal, normalizedRole, {
-              kind: "document",
-              filename,
-              contentType,
-              size,
-              sha256,
-            }),
-          );
-        } catch (error) {
-          return toolError(error);
-        }
-      },
-    );
-    registerCuratorTool(
-      "rag_ingest_upload",
-      "Consume a completed streamed document upload and ingest it into a topic. Upload handles are single-use.",
-      z.object({
-        topic: z.string().trim().min(1).max(MCP_LIMITS.topicName),
-        uploadId: z.string().uuid(),
-      }),
-      writeAnnotations,
-      async ({ topic, uploadId }, context) => {
-        try {
-          curatorOnly();
-          const match = await topicManager.resolveTopicByName(topic);
-          const results = await transferManager.consumeUpload(principal, uploadId, "document", (uploadedPath) =>
-            runMutation(() =>
-              topicManager.addDocuments(match.topic.id, [uploadedPath], {
-                signal: context.mcpReq.signal,
-              }),
-            ),
-          );
-          return toolJson({ success: results.length > 0, topic: match.topic.name, outcomes: results });
-        } catch (error) {
-          return toolError(error);
-        }
-      },
-    );
-  }
 
   // ────────────────────────────────────────────────────────────
   // Embedding management tools
@@ -1308,21 +1245,10 @@ export function registerTools(
         const exportPath = path.join(config.exportDir, `${safeName}-${Date.now()}.rag`);
         await runMutation(() => topicManager.exportTopic(match.topic.id, exportPath));
         if (deployment === "shared") {
-          if (!transferManager) {
-            await fs.rm(exportPath, { force: true });
-            throw new Error("Shared transfer service unavailable");
-          }
-          try {
-            const handle = await transferManager.createDownload(principal, {
-              filePath: exportPath,
-              filename: `${safeName}.rag`,
-              contentType: "application/vnd.ragnarok.archive",
-            });
-            return toolJson({ transfer: handle });
-          } catch (error) {
-            await fs.rm(exportPath, { force: true });
-            throw error;
-          }
+          // The transfer subsystem is gone, and a shared deployment must never
+          // return a server filesystem path. Fail closed.
+          await fs.rm(exportPath, { force: true });
+          throw new Error("Shared transfer service unavailable");
         }
         const bytes = await fs.readFile(exportPath);
         return toolJson({
@@ -1352,53 +1278,6 @@ export function registerTools(
       }
     },
   );
-
-  if (transferManager && deployment === "shared") {
-    registerAdminTool(
-      "rag_create_archive_upload",
-      "Create an owned, expiring streamed .rag upload handle. PUT raw bytes to the returned relative endpoint.",
-      z.object({
-        filename: z.string().trim().min(1).max(255),
-        contentType: z.enum(["application/vnd.ragnarok.archive", "application/octet-stream", "application/zip"]),
-        size: z.number().int().positive(),
-        sha256: z.string().regex(/^[a-f0-9]{64}$/i),
-      }),
-      writeAnnotations,
-      async ({ filename, contentType, size, sha256 }) => {
-        try {
-          adminOnly();
-          return toolJson(
-            await transferManager.createUpload(principal, "admin", {
-              kind: "archive",
-              filename,
-              contentType,
-              size,
-              sha256,
-            }),
-          );
-        } catch (error) {
-          return toolError(error);
-        }
-      },
-    );
-    registerAdminTool(
-      "rag_import_upload",
-      "Consume a completed streamed .rag archive upload and import it. Upload handles are single-use.",
-      z.object({ uploadId: z.string().uuid(), confirm: z.literal(true) }),
-      destructiveAnnotations,
-      async ({ uploadId }) => {
-        try {
-          adminOnly();
-          const topic = await transferManager.consumeUpload(principal, uploadId, "archive", (uploadedPath) =>
-            runMutation(() => topicManager.importTopic(uploadedPath)),
-          );
-          return toolJson({ success: true, topic });
-        } catch (error) {
-          return toolError(error);
-        }
-      },
-    );
-  }
 
   // Memory is always personal → never served from a shared deployment, so the
   // memory tools are structurally absent there for every role (P3).

@@ -1134,7 +1134,6 @@ describe("MCP Tools (registerTools)", () => {
       role: "reader" | "curator" | "admin",
       deployment: "local" | "shared",
       cfg?: McpConfig,
-      transferManager?: any,
     ) {
       const handlers: Record<string, ToolHandler> = {};
       const server = {
@@ -1156,7 +1155,6 @@ describe("MCP Tools (registerTools)", () => {
         undefined,
         deployment,
         undefined,
-        transferManager,
         `${role}:test`,
       );
       return handlers;
@@ -1164,18 +1162,11 @@ describe("MCP Tools (registerTools)", () => {
 
     it("exposes curator content mutations but reserves model, archive, and server-path tools for admin", () => {
       const reader = Object.keys(captureForRole("reader", "shared"));
-      const transferManager = { consumeUpload: sinon.stub(), createDownload: sinon.stub() };
-      const curator = Object.keys(captureForRole("curator", "shared", undefined, transferManager));
-      const admin = Object.keys(captureForRole("admin", "shared", undefined, transferManager));
+      const curator = Object.keys(captureForRole("curator", "shared"));
+      const admin = Object.keys(captureForRole("admin", "shared"));
 
       expect(reader).to.not.include.members(["rag_create_topic", "rag_add_url", "rag_switch_embedding_model"]);
-      expect(curator).to.include.members([
-        "rag_create_topic",
-        "rag_add_url",
-        "rag_add_github_repo",
-        "rag_create_document_upload",
-        "rag_ingest_upload",
-      ]);
+      expect(curator).to.include.members(["rag_create_topic", "rag_add_url", "rag_add_github_repo"]);
       expect(curator).to.not.include.members([
         "rag_add_documents",
         "rag_switch_embedding_model",
@@ -1188,8 +1179,6 @@ describe("MCP Tools (registerTools)", () => {
         "rag_switch_embedding_model",
         "rag_switch_reranker_model",
         "rag_export_topic",
-        "rag_create_archive_upload",
-        "rag_import_upload",
       ]);
       expect(admin).to.not.include("rag_add_documents");
       expect(admin).to.not.include("rag_import_topic");
@@ -1232,27 +1221,6 @@ describe("MCP Tools (registerTools)", () => {
       expect(output).to.not.include("/srv/ragnarok");
       expect(output).to.not.include("localModelPath");
       expect(result.structuredContent).to.deep.equal({ currentModel: "model", backend: "huggingface" });
-    });
-
-    it("preserves only validated relative transfer endpoints in shared output", async () => {
-      const uploadEndpoint = "transfer/uploads/123e4567-e89b-42d3-a456-426614174000";
-      const transferManager = {
-        createUpload: sinon.stub().resolves({
-          id: "123e4567-e89b-42d3-a456-426614174000",
-          uploadEndpoint,
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        }),
-      };
-      const handler = captureForRole("curator", "shared", undefined, transferManager).rag_create_document_upload;
-      const result = await handler({
-        filename: "facts.md",
-        contentType: "text/markdown",
-        size: 5,
-        sha256: "a".repeat(64),
-      });
-      expect(result.isError, JSON.stringify(result)).not.to.equal(true);
-      expect(result.structuredContent.uploadEndpoint).to.equal(uploadEndpoint);
-      expect(result.content[0].text).to.include(uploadEndpoint);
     });
   });
 });

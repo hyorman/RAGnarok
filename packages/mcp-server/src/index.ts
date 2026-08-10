@@ -49,7 +49,6 @@ import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner, ToolRuntime } from "./tools";
 import type { AccessRole } from "./tools";
-import { TransferManager } from "./transferManager";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -117,17 +116,6 @@ async function main(): Promise<void> {
 
   const deployment: "local" | "shared" = config.deploymentMode ?? "local";
   const sharedDeployment = deployment === "shared";
-  const transferManager =
-    sharedDeployment
-      ? new TransferManager(path.join(config.storageDir, ".transfers"), {
-          maxFileBytes: config.transferMaxFileBytes ?? 64 * 1024 * 1024,
-          maxAggregateBytes: config.transferMaxAggregateBytes ?? 256 * 1024 * 1024,
-          maxSessionsPerPrincipal: config.transferMaxSessions ?? 8,
-          ttlMs: config.transferTtlMs ?? 15 * 60_000,
-        })
-      : undefined;
-  await transferManager?.initialize();
-
   // Create standalone memory store
   // Branch-scoped memory needs the PROJECT's directory, not the server's.
   // Global MCP clients often launch servers from a home/app directory, which
@@ -249,7 +237,6 @@ async function main(): Promise<void> {
       runMutation,
       deployment,
       toolRuntime,
-      transferManager,
       principal,
     );
     registerGraphUiResource(server);
@@ -287,7 +274,6 @@ async function main(): Promise<void> {
       await ragQueryService.dispose();
       await topicManager.dispose();
       await embeddingService.dispose();
-      await transferManager?.dispose();
       logger.info("Shutdown complete");
       clearTimeout(hardExit);
     } catch (error) {
