@@ -1,6 +1,6 @@
 # How RAGnarōk works: ingestion to retrieval
 
-Traced from source at commit `c98fc8c`. File and line references are load-bearing — this describes
+Traced from source at commit `406d9b3`. File and line references are load-bearing — this describes
 what the code does, not what it intends to do.
 
 There is no document knowledge graph. Entity extraction over ingested documents, the `graph` and
@@ -103,8 +103,8 @@ in `originalScoreKind`.
 | Strategy | Mechanism |
 | --- | --- |
 | `vector` | LanceDB ANN over chunk embeddings; squared-L2 converted to the unit-vector cosine score contract |
-| `bm25` | log-TF × length-norm × position boost. **No IDF** — `keywordRetriever.ts:141,144` computes `log(1 + tf)` and `1 / (1 + log(1 + len/100))` only; the code calls itself "BM25-like", it is not Okapi BM25 |
-| `hybrid` | weighted blend of semantic + keyword; defaults `vectorWeight` 0.9 / `keywordWeight` 0.1 (`hybridRetriever.ts:29-31`) |
+| `bm25` | genuine Okapi BM25. `search()` delegates to LangChain's `BM25Retriever` (`keywordRetriever.ts:10,47`), which scores with IDF `log((N − n + 0.5) / (n + 0.5) + 1)` and the usual saturation term at k1=1.2, b=0.75 |
+| `hybrid` | weighted blend of semantic + keyword; defaults `vectorWeight` 0.9 / `keywordWeight` 0.1 (`hybridRetriever.ts:29-31`). Candidates come from the real BM25 `search()` (`hybridRetriever.ts:111`), but the lexical score actually blended in is `scoreDocument` — log-TF × length-norm × position boost, **no IDF** (`keywordRetriever.ts:141,144`, called at `hybridRetriever.ts:140`) |
 
 Cross-encoder reranking is an orthogonal second stage available to all three.
 
@@ -177,8 +177,9 @@ most 10,000 edges, and oversized records return `GRAPH_VISUALIZATION_RECORD_TOO_
 
 ## 7. Known issues
 
-- `bm25` has no IDF despite the `ragnarok.retrievalStrategy` setting description in `package.json`
-  claiming "Okapi BM25".
+- `hybrid`'s lexical half is TF-only despite the BM25-adjacent naming around it: `scoreDocument`
+  (`keywordRetriever.ts:119-150`) has no IDF and no document-frequency term, so the keyword component
+  of the blend is not Okapi BM25 — even though the standalone `bm25` strategy is.
 - The offline migrator still emits a `graphRebuildRequired` flag and a "rebuild is required" warning
   for legacy `kg-*` tables. Both are vestigial: there is nothing to rebuild and no strategy that
   would consume the result.

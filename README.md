@@ -86,7 +86,7 @@ Notes:
 
 - **Hybrid Search** (recommended): Combines vector + keyword (90%/10% weights, configurable)
 - **Vector Search**: Pure semantic similarity using embeddings
-- **BM25 Search**: BM25-like keyword scoring (no embeddings needed)
+- **BM25 Search**: Pure keyword search using Okapi BM25 algorithm (no embeddings needed)
 - **Cross-Encoder Reranking**: Optional second-stage reranking over any strategy's candidates
 - **Position Boosting**: Keywords near document start weighted higher
 - **Result Explanations**: Human-readable scoring breakdown for all strategies
