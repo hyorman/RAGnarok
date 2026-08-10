@@ -15,7 +15,7 @@ import { registerGraphUiResource } from "../src/uiResource";
 function graphDocument(): GraphVisualizationDocument {
   return {
     schema: "ragnarok.graph.visualization.v1",
-    source: { kind: "knowledge", topicId: "topic-1", topicName: "Test Topic" },
+    source: { kind: "memory", scope: "workspace" },
     nodes: [
       {
         id: "node-1",
@@ -187,7 +187,7 @@ describe("graph app lifecycle", function () {
       await startGraphApp(bridge);
       expect(order).to.deep.equal(["setToolResultHandler", "connect"]);
       expect(installed.dom.window.document.querySelector("#graph")?.textContent).to.include(
-        "Ingest documents into this topic to populate the graph.",
+        "No memories yet in this scope/branch.",
       );
       expect(installed.dom.window.document.querySelector("#loading")?.hasAttribute("hidden")).to.equal(true);
     } finally {
@@ -354,9 +354,7 @@ describe("graph app lifecycle", function () {
   it("rejects semantic disagreement between text and structured representations", function () {
     const structuredContent = graphDocument();
     const textDocument = cloneDocument();
-    if (textDocument.source.kind === "knowledge") {
-      textDocument.source.topicName = "Different Topic";
-    }
+    textDocument.source = { kind: "memory", scope: "branch", branch: "other-branch" };
     expect(() =>
       parseGraphVisualizationResult({
         structuredContent,
@@ -380,7 +378,11 @@ describe("graph app lifecycle", function () {
       ...graphDocument(),
       source: { kind: "memory", scope: "workspace", branch: "must-not-exist" },
     };
-    for (const candidate of [wrongSchema, wrongSource, inexactSource]) {
+    const removedKnowledgeSource = {
+      ...graphDocument(),
+      source: { kind: "knowledge", topicId: "topic-1", topicName: "Test Topic" },
+    };
+    for (const candidate of [wrongSchema, wrongSource, inexactSource, removedKnowledgeSource]) {
       expect(() => parseGraphVisualizationResult({ structuredContent: candidate })).to.throw(
         /invalid graph visualization document/i,
       );

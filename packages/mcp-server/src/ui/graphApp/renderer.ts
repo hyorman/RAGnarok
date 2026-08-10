@@ -1,10 +1,5 @@
 import { select } from "d3-selection";
-import type {
-  GraphVisualizationDocument,
-  GraphVisualizationEdge,
-  GraphVisualizationNode,
-  GraphVisualizationSource,
-} from "./documentTypes";
+import type { GraphVisualizationDocument, GraphVisualizationEdge, GraphVisualizationNode } from "./documentTypes";
 import { installGraphInteractions, type RenderedEdge, type RenderedNode } from "./interactions";
 import { createDetailsPanel, resetPanel } from "./panel";
 import { createViewport } from "./viewport";
@@ -34,7 +29,7 @@ let activeEdgeUpdater: ((nodeId: string) => void) | undefined;
 export function renderDocument(graph: GraphVisualizationDocument): void {
   clearVisualization();
   if (graph.nodes.length === 0) {
-    renderEmpty(graph.source);
+    renderEmpty();
     return;
   }
 
@@ -253,9 +248,9 @@ export function clearVisualization(): void {
   }
 }
 
-export function showEmpty(source: GraphVisualizationSource): void {
+export function showEmpty(): void {
   clearVisualization();
-  renderEmpty(source);
+  renderEmpty();
 }
 
 export function showError(message: string): void {
@@ -268,16 +263,13 @@ export function showError(message: string): void {
   }
 }
 
-function renderEmpty(source: GraphVisualizationSource): void {
+function renderEmpty(): void {
   const svgElement = document.querySelector<SVGSVGElement>("#graph");
   if (!svgElement) {
     return;
   }
   initializeSvg(svgElement);
-  const message =
-    source.kind === "memory"
-      ? "No memories yet in this scope/branch."
-      : "Ingest documents into this topic to populate the graph.";
+  const message = "No memories yet in this scope/branch.";
   select(svgElement)
     .append("text")
     .attr("class", "empty")

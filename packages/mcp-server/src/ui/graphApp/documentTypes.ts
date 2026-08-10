@@ -1,7 +1,6 @@
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export type GraphVisualizationSource =
-  | { kind: "knowledge"; topicId: string; topicName: string }
   | { kind: "memory"; scope: "workspace" }
   | { kind: "memory"; scope: "branch"; branch: string };
 

@@ -39,7 +39,7 @@ const globalNames = [
 export function graphDocument(truncated = false): GraphVisualizationDocument {
   return {
     schema: "ragnarok.graph.visualization.v1",
-    source: { kind: "knowledge", topicId: "topic-1", topicName: "Test Topic" },
+    source: { kind: "memory", scope: "workspace" },
     nodes: [
       {
         id: "source",

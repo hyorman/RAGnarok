@@ -13,7 +13,7 @@ export async function startGraphApp(bridge: GraphAppBridge = createMcpGraphAppBr
     try {
       const graph = parseGraphVisualizationResult(result);
       if (graph.nodes.length === 0) {
-        showEmpty(graph.source);
+        showEmpty();
       } else {
         renderDocument(graph);
       }

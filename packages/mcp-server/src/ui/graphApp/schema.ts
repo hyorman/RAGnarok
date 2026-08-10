@@ -99,14 +99,6 @@ function jsonValue(value: unknown, path: string, ancestors: Set<object>): assert
 
 function source(value: unknown): GraphVisualizationSource {
   const candidate = record(value, "source");
-  if (candidate.kind === "knowledge") {
-    exactKeys(candidate, ["kind", "topicId", "topicName"], "source");
-    return {
-      kind: "knowledge",
-      topicId: string(candidate.topicId, "source.topicId", true),
-      topicName: string(candidate.topicName, "source.topicName", true),
-    };
-  }
   if (candidate.kind === "memory" && candidate.scope === "workspace") {
     exactKeys(candidate, ["kind", "scope"], "source");
     return { kind: "memory", scope: "workspace" };

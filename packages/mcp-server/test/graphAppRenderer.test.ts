@@ -367,7 +367,7 @@ describe("graph app renderer", function () {
     expect(document.querySelector("#truncation-banner")?.textContent).to.include("2 of 5");
     dispatchPointer(installed, oldNode, "pointerdown", { pointerId: 9, clientX: 0, clientY: 0 });
 
-    showEmpty({ kind: "memory", scope: "branch", branch: "feature/test" });
+    showEmpty();
     expect(document.querySelector<HTMLElement>("#panel")!.hidden).to.equal(true);
     expect(document.querySelector("#truncation-banner")?.textContent).to.equal("");
     expect(document.querySelector("#status")?.textContent).not.to.include("2 nodes");

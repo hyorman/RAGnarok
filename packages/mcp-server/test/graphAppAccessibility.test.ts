@@ -189,7 +189,7 @@ describe("graph app accessibility", function () {
     const document = installed.dom.window.document;
     const replacements = [
       () => renderDocument(graphDocument()),
-      () => showEmpty({ kind: "knowledge", topicId: "topic-1", topicName: "Test Topic" }),
+      () => showEmpty(),
       () => showError("Unable to render graph."),
     ];
 
@@ -211,7 +211,7 @@ describe("graph app accessibility", function () {
   it("keeps valid SVG names after empty and error transitions clear graph children", function () {
     const document = installed.dom.window.document;
 
-    showEmpty({ kind: "knowledge", topicId: "topic-1", topicName: "Test Topic" });
+    showEmpty();
     expectValidSvgName(document);
 
     showError("Unable to render graph.");
