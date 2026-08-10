@@ -48,8 +48,7 @@ import { createLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner, ToolRuntime } from "./tools";
-import { startHttpTransport, HttpTransportHandle } from "./httpServer";
-import type { AccessRole } from "./httpServer";
+import type { AccessRole } from "./tools";
 import { TransferManager } from "./transferManager";
 
 async function main(): Promise<void> {
@@ -116,11 +115,10 @@ async function main(): Promise<void> {
   const ragQueryService = new RAGQueryService(topicManager, configProvider, llmProvider);
   TopicManager.onAgentCacheCleanup.subscribe((topicId) => ragQueryService.clearAgentCache(topicId));
 
-  const useHttp = process.argv.includes("--http");
   const deployment: "local" | "shared" = config.deploymentMode ?? "local";
   const sharedDeployment = deployment === "shared";
   const transferManager =
-    useHttp && sharedDeployment
+    sharedDeployment
       ? new TransferManager(path.join(config.storageDir, ".transfers"), {
           maxFileBytes: config.transferMaxFileBytes ?? 64 * 1024 * 1024,
           maxAggregateBytes: config.transferMaxAggregateBytes ?? 256 * 1024 * 1024,
@@ -160,7 +158,6 @@ async function main(): Promise<void> {
   const reranker = config.rerankerEnabled
     ? new CrossEncoderReranker(config.rerankerModel, { maxCandidates: config.rerankerMaxCandidates })
     : null;
-  let rerankerReady = reranker === null;
   let rerankerFailure: string | undefined;
   // Share the SAME instance with the query path so rag_switch_reranker_model
   // affects query behaviour, not just the management tools' private copy.
@@ -170,9 +167,6 @@ async function main(): Promise<void> {
     // broken model surfaces in the startup log instead of at query time.
     void reranker
       .initialize()
-      .then(() => {
-        rerankerReady = true;
-      })
       .catch((error) => {
         rerankerFailure = error instanceof Error ? error.message : String(error);
         logger.warn("Reranker warm-up failed — queries will fall back to original ranking", rerankerFailure);
@@ -262,45 +256,15 @@ async function main(): Promise<void> {
     return server;
   };
 
-  // Start transport
-  let httpHandle: HttpTransportHandle | null = null;
+  // Start transport — stdio is the only transport.
   let stdioHandle: StdioServerHandle | null = null;
 
-  if (useHttp) {
-    httpHandle = await startHttpTransport(createMcpServer, config, {
-      readiness: async () => {
-        const blockingReasons: string[] = [];
-        const modelState: string[] = [];
-        if (!acceptingOperations) {
-          blockingReasons.push("draining");
-        }
-        try {
-          await topicManager.getStorageStatus();
-        } catch {
-          blockingReasons.push("storage_unavailable_or_locked");
-        }
-        if (!embeddingService.getCurrentModel()) {
-          blockingReasons.push("embedding_model_unavailable");
-        }
-        if (!rerankerReady) {
-          modelState.push(rerankerFailure ? "reranker_model_degraded" : "reranker_model_loading");
-        }
-        return {
-          ready: blockingReasons.length === 0,
-          reasons: [...blockingReasons, ...modelState],
-        };
-      },
-      transferManager,
-    });
-  } else {
-    // stdio transport for local agents (default)
-    logger.info("Starting stdio transport");
-    stdioHandle = serveStdio(() => createMcpServer(), {
-      legacy: "reject",
-      onerror: (error) => logger.error("stdio MCP error", error),
-    });
-    logger.info("RAGnarōk MCP server running (stdio, MCP 2026-07-28)");
-  }
+  logger.info("Starting stdio transport");
+  stdioHandle = serveStdio(() => createMcpServer(), {
+    legacy: "reject",
+    onerror: (error) => logger.error("stdio MCP error", error),
+  });
+  logger.info("RAGnarōk MCP server running (stdio, MCP 2026-07-28)");
 
   // Graceful shutdown: close transports, then release native/model resources
   // and pending timers (memory auto-decay, ONNX sessions, LanceDB handles).
@@ -312,17 +276,12 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info(`Received ${signal} — shutting down`);
     closeOperationAdmission();
-    httpHandle?.closeAdmission();
     const drainBudgetMs = config.shutdownDrainMs ?? 10_000;
-    const shutdownDeadline = Date.now() + drainBudgetMs;
     const hardExit = setTimeout(() => process.exit(1), drainBudgetMs + 5_000);
 
     try {
       const drainDeadline = new Promise<void>((resolve) => setTimeout(resolve, drainBudgetMs).unref());
       await Promise.race([waitForOperationDrain(), drainDeadline]);
-      if (httpHandle) {
-        await httpHandle.shutdown(shutdownDeadline);
-      }
       await stdioHandle?.close();
       await memoryStore?.dispose();
       await ragQueryService.dispose();

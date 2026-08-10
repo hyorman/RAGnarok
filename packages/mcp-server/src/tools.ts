@@ -42,9 +42,14 @@ import {
 import type { AvailableModel, GraphVisualizationDocument } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "./uiResource";
 import type { McpConfig } from "./config";
-import type { AccessRole } from "./httpServer";
 import type { TransferManager } from "./transferManager";
 import { markMcpToolResult } from "./auditContext";
+
+/**
+ * Access role. Vestigial: with stdio as the only transport every caller is the
+ * machine owner and this is always "admin". Removed entirely in a later change.
+ */
+export type AccessRole = "reader" | "curator" | "admin";
 
 export type MutationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
 export type ToolRuntime = {

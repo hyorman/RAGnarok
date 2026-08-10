@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline as streamPipeline } from "node:stream/promises";
 import type { Request, Response } from "express";
-import type { AccessRole } from "./httpServer";
+import type { AccessRole } from "./tools";
 
 export type TransferKind = "document" | "archive";
 
