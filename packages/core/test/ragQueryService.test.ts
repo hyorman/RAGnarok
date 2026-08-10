@@ -49,7 +49,6 @@ function createTopicManagerStub(): TopicManager {
     getTopicStats: sinon.stub().resolves({ documentCount: 5, chunkCount: 100 }),
     getVectorStore: sinon.stub().resolves({}),
     getAllDocuments: sinon.stub().resolves([]),
-    getKnowledgeGraph: sinon.stub().resolves(null),
     getEmbeddingService: sinon.stub().returns({}),
   } as any;
 }

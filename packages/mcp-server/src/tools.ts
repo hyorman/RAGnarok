@@ -35,7 +35,6 @@ import {
   MemoryStore,
   CrossEncoderReranker,
   RerankerModelRegistry,
-  projectKnowledgeGraphVisualization,
   projectMemoryGraphVisualization,
   reduceGraphVisualizationDocument,
 } from "@ragnarok/core";
@@ -92,12 +91,6 @@ class GraphVisualizationRecordTooLargeError extends Error {
     super("A graph visualization record exceeds the response byte limit");
     this.name = "GraphVisualizationRecordTooLargeError";
   }
-}
-
-const NO_TOPICS_ERROR = "No topics found in the RAG database. Create a topic first.";
-
-function isTopicNotFoundError(message: string): boolean {
-  return message === NO_TOPICS_ERROR || message.startsWith("Topic not found:");
 }
 
 function utf8Prefix(value: Buffer, maximumBytes: number): string {
@@ -1910,38 +1903,10 @@ export function registerTools(
     readOnlyAnnotations,
     async (input) => {
       if (input.source === "knowledge") {
-        let match;
-        try {
-          match = await topicManager.resolveTopicByName(input.topic);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return graphError(
-            isTopicNotFoundError(message) ? "GRAPH_TOPIC_NOT_FOUND" : "GRAPH_VISUALIZATION_FAILED",
-            message,
-          );
-        }
-        if (!match?.topic) {
-          return graphError("GRAPH_TOPIC_NOT_FOUND", `Topic not found: ${input.topic}`);
-        }
-
-        try {
-          const graph = await topicManager.getKnowledgeGraph(match.topic.id);
-          const document = projectKnowledgeGraphVisualization(
-            {
-              entities: graph?.getAllEntities() ?? [],
-              relationships: graph?.getAllRelationships() ?? [],
-            },
-            { kind: "knowledge", topicId: match.topic.id, topicName: match.topic.name },
-            { maxNodes: input.maxNodes },
-          );
-          return toolJson(fitGraphVisualizationResult(document));
-        } catch (error) {
-          if (error instanceof GraphVisualizationRecordTooLargeError) {
-            return graphError("GRAPH_VISUALIZATION_RECORD_TOO_LARGE", error.message);
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          return graphError("GRAPH_VISUALIZATION_FAILED", message);
-        }
+        return graphError(
+          "GRAPH_VISUALIZATION_FAILED",
+          "Document knowledge graphs no longer exist; use source: memory",
+        );
       }
 
       if (deployment === "shared" || !memoryStore) {

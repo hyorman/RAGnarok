@@ -106,12 +106,7 @@ describe("TopicManager common database identity", function () {
     await fs.writeFile(path.join(database, "topics.json"), JSON.stringify(index));
     await fs.writeFile(path.join(database, `topic-${local.id}-documents.json`), "[]");
     await fs.writeFile(path.join(database, `vector-${local.id}-metadata.json`), "{}");
-    for (const table of [
-      `${local.id}.lance`,
-      `kg-entities-${local.id}.lance`,
-      `kg-edges-${local.id}.lance`,
-      `kg-metadata-${local.id}.lance`,
-    ]) {
+    for (const table of [`${local.id}.lance`]) {
       await fs.mkdir(path.join(lancedb, table));
       await fs.writeFile(path.join(lancedb, table, "data"), "fixture");
     }
@@ -120,7 +115,6 @@ describe("TopicManager common database identity", function () {
     (manager as any).topicsIndex = index;
     (manager as any).topicDocuments = new Map([[local.id, new Map()]]);
     (manager as any).vectorStoreFactory = { dispose: () => undefined };
-    (manager as any).knowledgeGraphStore = { dispose: () => undefined };
 
     await manager.deleteTopic(local.id);
     expect(manager.getTopic(local.id)).to.equal(null);
@@ -129,7 +123,6 @@ describe("TopicManager common database identity", function () {
       path.join(database, `topic-${local.id}-documents.json`),
       path.join(database, `vector-${local.id}-metadata.json`),
       path.join(lancedb, `${local.id}.lance`),
-      path.join(lancedb, `kg-entities-${local.id}.lance`),
     ]) {
       let exists = true;
       try {

@@ -13,7 +13,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import AdmZip from "adm-zip";
-import { KnowledgeGraphStore, MemoryVectorStore } from "@ragnarok/core";
+import { MemoryVectorStore } from "@ragnarok/core";
 import { StdioHarness, withStdioHarness } from "./helpers/stdioHarness";
 
 const LOCAL_ADMIN_TOOLS = [
@@ -49,65 +49,7 @@ const MODERN_ENVELOPE = {
   "io.modelcontextprotocol/clientCapabilities": {},
 };
 
-async function seedGraphProtocolFixtures(storageDir: string, topicId: string): Promise<void> {
-  const knowledgeStore = new KnowledgeGraphStore(path.join(storageDir, "database", "lancedb"));
-  try {
-    await knowledgeStore.saveGraph(topicId, {
-      entities: [
-        {
-          id: "knowledge-beta",
-          name: "Beta",
-          type: "technology",
-          description: "Beta graph entity",
-          vector: [0, 1],
-          sourceChunkIds: ["chunk-beta"],
-          confidence: 0.8,
-          strength: 0.7,
-          lastAccessedAt: 20,
-          metadata: { rank: 2 },
-        },
-        {
-          id: "knowledge-alpha",
-          name: "Alpha",
-          type: "concept",
-          description: "Alpha graph entity",
-          vector: [1, 0],
-          sourceChunkIds: ["chunk-alpha"],
-          confidence: 0.9,
-          strength: 0.95,
-          lastAccessedAt: 10,
-          metadata: { rank: 1 },
-        },
-      ],
-      relationships: [
-        {
-          id: "knowledge-edge",
-          sourceId: "knowledge-alpha",
-          targetId: "knowledge-beta",
-          type: "uses",
-          weight: 0.75,
-          description: "Alpha uses Beta",
-          sourceChunkIds: ["chunk-beta", "chunk-alpha"],
-          confidence: 0.85,
-          metadata: { evidence: "protocol fixture" },
-        },
-      ],
-      communities: [],
-      metadata: {
-        topicId,
-        createdAt: 1,
-        updatedAt: 2,
-        entityCount: 2,
-        edgeCount: 1,
-        communityCount: 0,
-        embeddingModel: "protocol-fixture",
-        embeddingDimension: 2,
-      },
-    });
-  } finally {
-    knowledgeStore.dispose();
-  }
-
+async function seedGraphProtocolFixtures(storageDir: string): Promise<void> {
   const memoryStore = new MemoryVectorStore(path.join(storageDir, "memory-lancedb"));
   try {
     for (const scopeCase of [
@@ -214,7 +156,7 @@ describe("stdio transport E2E", function () {
       },
       "fixture stdio server",
     );
-    await seedGraphProtocolFixtures(storageDir, fixtureTopic.id);
+    await seedGraphProtocolFixtures(storageDir);
 
     harness = new StdioHarness(storageDir, sourceDir, { RAGNAROK_RERANKER_ENABLED: "false" });
 
@@ -301,7 +243,6 @@ describe("stdio transport E2E", function () {
     });
     expect(createResponse.error, "rag_create_topic returned a protocol error").to.equal(undefined);
     expect(createResponse.result?.isError, JSON.stringify(createResponse.result)).not.to.equal(true);
-    const createdTopic = JSON.parse(createResponse.result?.content?.[0]?.text ?? "{}").topic;
 
     const ingestResponse = await harness.callTool(
       4,
@@ -348,70 +289,16 @@ describe("stdio transport E2E", function () {
     expect(statsPayload.documentCount).to.equal(1);
     expect(statsPayload.chunkCount).to.equal(1);
 
-    const graphResponse = await harness.callTool(70, "rag_graph_visualize", {
-      source: "knowledge",
-      topic: "stdio-flow",
-    });
-    expect(graphResponse.error, "rag_graph_visualize returned a protocol error").to.equal(undefined);
-    expect(graphResponse.result?.isError, JSON.stringify(graphResponse.result)).not.to.equal(true);
-    const emptyKnowledge = JSON.parse(graphResponse.result?.content?.[0]?.text ?? "{}");
-    expect(emptyKnowledge).to.deep.include({
-      schema: "ragnarok.graph.visualization.v1",
-      source: { kind: "knowledge", topicId: createdTopic.id, topicName: "stdio-flow" },
-      nodes: [],
-      edges: [],
-      groups: [],
-    });
-    expect(emptyKnowledge.metadata).to.deep.include({
-      originalNodeCount: 0,
-      retainedNodeCount: 0,
-      originalEdgeCount: 0,
-      retainedEdgeCount: 0,
-      truncated: false,
-      truncationReasons: [],
-      empty: true,
-    });
-
-    const populatedGraphResponse = await harness.callTool(71, "rag_graph_visualize", {
+    // The knowledge source was removed with the document graph; the tool must
+    // reject it over the wire rather than silently serving a memory graph.
+    const removedKnowledgeGraph = await harness.callTool(70, "rag_graph_visualize", {
       source: "knowledge",
       topic: "stdio-populated",
     });
-    expect(populatedGraphResponse.result?.isError, JSON.stringify(populatedGraphResponse.result)).not.to.equal(true);
-    const populatedKnowledge = JSON.parse(populatedGraphResponse.result?.content?.[0]?.text ?? "{}");
-    expect(populatedKnowledge.schema).to.equal("ragnarok.graph.visualization.v1");
-    expect(populatedKnowledge.source).to.deep.include({ kind: "knowledge", topicName: "stdio-populated" });
-    expect(populatedKnowledge.nodes.map((node: { id: string }) => node.id)).to.deep.equal([
-      "knowledge-alpha",
-      "knowledge-beta",
-    ]);
-    expect(populatedKnowledge.edges.map((edge: { id: string }) => edge.id)).to.deep.equal(["knowledge-edge"]);
-    expect(populatedKnowledge.nodes[0].attributes).to.deep.include({
-      description: "Alpha graph entity",
-      sourceChunkIds: ["chunk-alpha"],
-      confidence: 0.9,
-      strength: 0.95,
-      lastAccessedAt: 10,
-      metadata: { rank: 1 },
-    });
-    expect(populatedKnowledge.edges[0].attributes).to.deep.include({
-      description: "Alpha uses Beta",
-      sourceChunkIds: ["chunk-alpha", "chunk-beta"],
-      confidence: 0.85,
-      metadata: { evidence: "protocol fixture" },
-    });
-    expect(populatedKnowledge.edges[0]).to.deep.include({
-      source: "knowledge-alpha",
-      target: "knowledge-beta",
-      label: "uses",
-      weight: 0.75,
-    });
-    expect(JSON.stringify(populatedKnowledge)).not.to.include("vector");
-    const repeatedPopulatedGraph = await harness.callTool(74, "rag_graph_visualize", {
-      source: "knowledge",
-      topic: "stdio-populated",
-    });
-    expect(repeatedPopulatedGraph.result?.content?.[0]?.text).to.equal(
-      populatedGraphResponse.result?.content?.[0]?.text,
+    expect(removedKnowledgeGraph.error, "rag_graph_visualize returned a protocol error").to.equal(undefined);
+    expect(removedKnowledgeGraph.result?.isError, JSON.stringify(removedKnowledgeGraph.result)).to.equal(true);
+    expect(JSON.parse(removedKnowledgeGraph.result?.content?.[0]?.text ?? "{}").error.code).to.equal(
+      "GRAPH_VISUALIZATION_FAILED",
     );
 
     for (const memoryCase of [
@@ -598,6 +485,10 @@ describe("stdio transport E2E", function () {
 
     const listTopics = await harness.callTool(49, "rag_list_topics", {});
     expect(listTopics.result?.isError, JSON.stringify(listTopics.result)).not.to.equal(true);
+    // The fixture topic was created by an earlier server process; it must survive the restart.
+    expect(
+      JSON.parse(listTopics.result?.content?.[0]?.text ?? "{}").topics?.map((topic: { name: string }) => topic.name),
+    ).to.include(fixtureTopic.name);
     const embeddingModels = await harness.callTool(50, "rag_list_embedding_models", {});
     expect(embeddingModels.result?.isError, JSON.stringify(embeddingModels.result)).not.to.equal(true);
     const embeddingInfo = await harness.callTool(51, "rag_embedding_info", {});

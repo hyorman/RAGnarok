@@ -253,12 +253,7 @@ function validateAllowedPayloadPath(entryPath: string, topicId: string): void {
   if (entryPath === "topic.json" || entryPath === `vector-${topicId}-metadata.json`) {
     return;
   }
-  const allowedTables = new Set([
-    `${topicId}.lance`,
-    `kg-entities-${topicId}.lance`,
-    `kg-edges-${topicId}.lance`,
-    `kg-metadata-${topicId}.lance`,
-  ]);
+  const allowedTables = new Set([`${topicId}.lance`]);
   const match = /^lancedb\/([^/]+)\/(.+)$/.exec(entryPath);
   if (!match || !allowedTables.has(match[1])) {
     throw new Error(`Invalid archive: unsupported payload path (${entryPath})`);

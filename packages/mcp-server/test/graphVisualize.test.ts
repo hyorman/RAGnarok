@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import {
   EmbeddingService,
   TopicManager,
-  projectKnowledgeGraphVisualization,
+  projectMemoryGraphVisualization,
   reduceGraphVisualizationDocument,
 } from "@ragnarok/core";
 import { MCP_LIMITS, measureToolResultForResponse, registerTools } from "../src/tools";
@@ -76,29 +76,23 @@ function parseResult(result: any): any {
   return result.structuredContent ?? JSON.parse(result.content[0].text);
 }
 
-function knowledgeEntity(id: string, metadata: Record<string, unknown> = {}): any {
+function memoryEntity(id: string, metadata: Record<string, unknown> = {}): any {
   return {
     id,
     name: `Entity ${id}`,
     type: "concept",
     description: `Description ${id}`,
-    vector: [0.25, 0.75],
-    sourceChunkIds: [`chunk-${id}`],
+    scope: "workspace",
     confidence: 0.9,
     strength: 0.8,
-    lastAccessedAt: 123,
+    createdAt: 10,
+    updatedAt: 20,
+    sourceMemoryIds: [`memory-${id}`],
     metadata,
   };
 }
 
-function knowledgeGraph(entities: any[], relationships: any[] = []): any {
-  return {
-    getAllEntities: () => entities,
-    getAllRelationships: () => relationships,
-  };
-}
-
-function knowledgeRelationship(id: string, blob: string): any {
+function memoryRelationship(id: string, blob: string): any {
   return {
     id,
     sourceId: "edge-source",
@@ -106,11 +100,25 @@ function knowledgeRelationship(id: string, blob: string): any {
     type: "related_to",
     weight: 1,
     description: `Relationship ${id}`,
-    sourceChunkIds: [`chunk-${id}`],
-    confidence: 0.9,
+    scope: "workspace",
     metadata: { blob },
   };
 }
+
+/** Registers the tool against a workspace-memory store returning the given snapshot. */
+function registerMemorySnapshot(
+  server: McpServer,
+  entities: any[],
+  relationships: any[] = [],
+  options: RegisterOptions = {},
+): void {
+  register(server, makeTopicManager(), {
+    ...options,
+    memoryStore: { getGraphSnapshot: sinon.stub().resolves({ entities, relationships }) },
+  });
+}
+
+const WORKSPACE_MEMORY_INPUT = { source: "memory" as const, memoryScope: "workspace" as const };
 
 function memorySnapshot(scope: "workspace" | "branch", branch?: string): any {
   return {
@@ -192,10 +200,8 @@ describe("rag_graph_visualize tool", function () {
 
   it("uses the common runtime wrapper", async function () {
     const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().rejects(new Error("Topic not found: missing"));
     let runtimeRuns = 0;
-    register(server, topicManager, {
+    registerMemorySnapshot(server, [memoryEntity("runtime")], [], {
       runtime: {
         run: async (operation) => {
           runtimeRuns += 1;
@@ -204,122 +210,8 @@ describe("rag_graph_visualize tool", function () {
       },
     });
 
-    await graphTool(captured).handler({ source: "knowledge", topic: "missing" }, makeServerContext());
+    await graphTool(captured).handler(WORKSPACE_MEMORY_INPUT, makeServerContext());
     expect(runtimeRuns).to.equal(1);
-  });
-
-  it("returns the canonical resolved knowledge source and full non-vector details", async function () {
-    const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "topic-123", name: "Canonical Aurora" },
-      matchType: "similar",
-    });
-    topicManager.getKnowledgeGraph = sinon
-      .stub()
-      .resolves(knowledgeGraph([knowledgeEntity("entity-1", { owner: "science" })]));
-    register(server, topicManager);
-
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "aurora", maxNodes: 25 },
-      makeServerContext(),
-    );
-    const payload = parseResult(result);
-    expect(result.isError).not.to.equal(true);
-    expect(payload.schema).to.equal("ragnarok.graph.visualization.v1");
-    expect(payload.source).to.deep.equal({ kind: "knowledge", topicId: "topic-123", topicName: "Canonical Aurora" });
-    expect(payload.nodes[0].attributes).to.deep.include({
-      description: "Description entity-1",
-      sourceChunkIds: ["chunk-entity-1"],
-      confidence: 0.9,
-      strength: 0.8,
-      lastAccessedAt: 123,
-      metadata: { owner: "science" },
-    });
-    expect(payload.nodes[0].attributes).not.to.have.property("vector");
-    expect(payload).not.to.have.any.keys("scope", "communities");
-  });
-
-  it("returns a successful empty document when knowledge storage is absent", async function () {
-    const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "topic-empty", name: "Empty Topic" },
-      matchType: "exact",
-    });
-    topicManager.getKnowledgeGraph = sinon.stub().resolves(null);
-    register(server, topicManager);
-
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "Empty Topic" },
-      makeServerContext(),
-    );
-    const payload = parseResult(result);
-    expect(result.isError).not.to.equal(true);
-    expect(payload.source).to.deep.equal({ kind: "knowledge", topicId: "topic-empty", topicName: "Empty Topic" });
-    expect(payload.nodes).to.deep.equal([]);
-    expect(payload.edges).to.deep.equal([]);
-    expect(payload.metadata.empty).to.equal(true);
-  });
-
-  it("returns GRAPH_TOPIC_NOT_FOUND with the structured graph error shape", async function () {
-    const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().rejects(new Error("Topic not found: nope"));
-    register(server, topicManager);
-
-    const result = await graphTool(captured).handler({ source: "knowledge", topic: "nope" }, makeServerContext());
-    expect(result.isError).to.equal(true);
-    expect(parseResult(result)).to.deep.equal({
-      error: { code: "GRAPH_TOPIC_NOT_FOUND", message: "Topic not found: nope" },
-    });
-  });
-
-  it("maps the exact empty-topic catalog error to GRAPH_TOPIC_NOT_FOUND", async function () {
-    const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon
-      .stub()
-      .rejects(new Error("No topics found in the RAG database. Create a topic first."));
-    register(server, topicManager);
-
-    const result = await graphTool(captured).handler({ source: "knowledge", topic: "missing" }, makeServerContext());
-    expect(parseResult(result).error.code).to.equal("GRAPH_TOPIC_NOT_FOUND");
-  });
-
-  it("bounds huge explicit topic-not-found errors without changing their graph code", async function () {
-    const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().rejects(new Error(`Topic not found: ${HUGE_UTF8_ERROR_SUFFIX}`));
-    register(server, topicManager, { maxResponseBytes: 16 * 1024 * 1024 });
-    const call = graphTool(captured);
-
-    const first = await call.handler({ source: "knowledge", topic: "missing" }, makeServerContext());
-    const second = await call.handler({ source: "knowledge", topic: "missing" }, makeServerContext());
-    const firstPayload = expectBoundedGraphError(first, "GRAPH_TOPIC_NOT_FOUND");
-    const secondPayload = expectBoundedGraphError(second, "GRAPH_TOPIC_NOT_FOUND");
-    expect(firstPayload.error.message).to.equal(secondPayload.error.message);
-    expect(firstPayload.error.message).to.match(/^Topic not found: /);
-    expect(firstPayload.error.message.endsWith("...")).to.equal(true);
-    expect(firstPayload.error.message).not.to.include("�");
-  });
-
-  it("maps and bounds huge operational resolution errors as GRAPH_VISUALIZATION_FAILED", async function () {
-    const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon
-      .stub()
-      .rejects(new Error(`Embedding service offline: ${HUGE_UTF8_ERROR_SUFFIX}`));
-    register(server, topicManager, { maxResponseBytes: 16 * 1024 * 1024 });
-
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "unavailable" },
-      makeServerContext(),
-    );
-    const payload = expectBoundedGraphError(result, "GRAPH_VISUALIZATION_FAILED");
-    expect(payload.error.message).to.match(/^Embedding service offline: /);
-    expect(payload.error.message.endsWith("...")).to.equal(true);
-    expect(payload.error.message).not.to.include("�");
   });
 
   for (const memoryCase of [
@@ -392,41 +284,28 @@ describe("rag_graph_visualize tool", function () {
     });
   }
 
-  it("allows knowledge visualization in a shared deployment", async function () {
-    const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "shared-topic", name: "Shared Topic" },
-      matchType: "exact",
-    });
-    topicManager.getKnowledgeGraph = sinon.stub().resolves(null);
-    register(server, topicManager, { deployment: "shared" });
+  for (const deployment of ["local", "shared"] as const) {
+    it(`rejects the removed knowledge source in a ${deployment} deployment`, async function () {
+      const { server, captured } = fakeServer();
+      const getGraphSnapshot = sinon.stub().rejects(new Error("must not be called"));
+      register(server, makeTopicManager(), { deployment, memoryStore: { getGraphSnapshot } });
 
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "Shared Topic" },
-      makeServerContext(),
-    );
-    expect(result.isError).not.to.equal(true);
-    expect(parseResult(result).source.topicId).to.equal("shared-topic");
-  });
+      const result = await graphTool(captured).handler({ source: "knowledge", topic: "Anything" }, makeServerContext());
+      expect(result.isError).to.equal(true);
+      expect(parseResult(result).error.code).to.equal("GRAPH_VISUALIZATION_FAILED");
+      // The knowledge source must never fall through to the memory projection.
+      expect(getGraphSnapshot.called).to.equal(false);
+    });
+  }
 
   it("reduces huge metadata to the final wrapped response budget", async function () {
     const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
     const entities = Array.from({ length: 20 }, (_, index) =>
-      knowledgeEntity(`large-${String(index).padStart(2, "0")}`, { blob: "x".repeat(90_000) }),
+      memoryEntity(`large-${String(index).padStart(2, "0")}`, { blob: "x".repeat(90_000) }),
     );
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "topic-large", name: "Large Topic" },
-      matchType: "exact",
-    });
-    topicManager.getKnowledgeGraph = sinon.stub().resolves(knowledgeGraph(entities));
-    register(server, topicManager);
+    registerMemorySnapshot(server, entities);
 
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "Large Topic" },
-      makeServerContext(),
-    );
+    const result = await graphTool(captured).handler(WORKSPACE_MEMORY_INPUT, makeServerContext());
     const payload = parseResult(result);
     expect(result.isError).not.to.equal(true);
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).to.be.at.most(MCP_LIMITS.responseBytes);
@@ -436,52 +315,32 @@ describe("rag_graph_visualize tool", function () {
 
   it("keeps graph results within the absolute byte budget when the server limit is larger", async function () {
     const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
     const entities = Array.from({ length: 20 }, (_, index) =>
-      knowledgeEntity(`absolute-${String(index).padStart(2, "0")}`, { blob: "x".repeat(90_000) }),
+      memoryEntity(`absolute-${String(index).padStart(2, "0")}`, { blob: "x".repeat(90_000) }),
     );
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "topic-absolute", name: "Absolute Limit Topic" },
-      matchType: "exact",
-    });
-    topicManager.getKnowledgeGraph = sinon.stub().resolves(knowledgeGraph(entities));
-    register(server, topicManager, { maxResponseBytes: 16 * 1024 * 1024 });
+    registerMemorySnapshot(server, entities, [], { maxResponseBytes: 16 * 1024 * 1024 });
 
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "Absolute Limit Topic" },
-      makeServerContext(),
-    );
+    const result = await graphTool(captured).handler(WORKSPACE_MEMORY_INPUT, makeServerContext());
     expect(result.isError).not.to.equal(true);
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).to.be.at.most(MCP_LIMITS.responseBytes);
     expect(parseResult(result).metadata.truncationReasons).to.include("responseBytes");
   });
 
   it("maximally and deterministically edge-prefix reduces a once-projected 10,000-edge graph", async function () {
-    const entities = [knowledgeEntity("edge-source"), knowledgeEntity("edge-target")];
+    const entities = [memoryEntity("edge-source"), memoryEntity("edge-target")];
     const edgeBlob = "e".repeat(400);
     const relationships = Array.from({ length: 10_000 }, (_, index) =>
-      knowledgeRelationship(`edge-${String(index).padStart(5, "0")}`, edgeBlob),
+      memoryRelationship(`edge-${String(index).padStart(5, "0")}`, edgeBlob),
     );
 
     const execute = async (orderedRelationships: any[]) => {
       const { server, captured } = fakeServer();
-      const topicManager = makeTopicManager();
-      const getAllEntities = sinon.stub().returns(entities);
-      const getAllRelationships = sinon.stub().returns(orderedRelationships);
-      topicManager.resolveTopicByName = sinon.stub().resolves({
-        topic: { id: "topic-edge-limit", name: "Edge Limit Topic" },
-        matchType: "exact",
-      });
-      topicManager.getKnowledgeGraph = sinon.stub().resolves({ getAllEntities, getAllRelationships });
-      register(server, topicManager);
+      const getGraphSnapshot = sinon.stub().resolves({ entities, relationships: orderedRelationships });
+      register(server, makeTopicManager(), { memoryStore: { getGraphSnapshot } });
 
-      const result = await graphTool(captured).handler(
-        { source: "knowledge", topic: "Edge Limit Topic", maxNodes: 2 },
-        makeServerContext(),
-      );
+      const result = await graphTool(captured).handler({ ...WORKSPACE_MEMORY_INPUT, maxNodes: 2 }, makeServerContext());
       expect(result.isError).not.to.equal(true);
-      expect(getAllEntities.calledOnce).to.equal(true);
-      expect(getAllRelationships.calledOnce).to.equal(true);
+      expect(getGraphSnapshot.calledOnce).to.equal(true);
       return { result, payload: parseResult(result) };
     };
 
@@ -496,9 +355,9 @@ describe("rag_graph_visualize tool", function () {
     );
     expect(Buffer.byteLength(JSON.stringify(forward.result), "utf8")).to.be.at.most(MCP_LIMITS.responseBytes);
 
-    const projected = projectKnowledgeGraphVisualization(
+    const projected = projectMemoryGraphVisualization(
       { entities, relationships },
-      { kind: "knowledge", topicId: "topic-edge-limit", topicName: "Edge Limit Topic" },
+      { kind: "memory", scope: "workspace" },
       { maxNodes: 2 },
     );
     const retained = reduceGraphVisualizationDocument(projected, 2, retainedEdgeCount);
@@ -515,62 +374,34 @@ describe("rag_graph_visualize tool", function () {
 
   it("returns GRAPH_VISUALIZATION_RECORD_TOO_LARGE for one oversized node and zero edges", async function () {
     const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "topic-oversized", name: "Oversized Topic" },
-      matchType: "exact",
-    });
-    topicManager.getKnowledgeGraph = sinon
-      .stub()
-      .resolves(knowledgeGraph([knowledgeEntity("oversized", { blob: "x".repeat(700_000) })]));
-    register(server, topicManager);
+    registerMemorySnapshot(server, [memoryEntity("oversized", { blob: "x".repeat(700_000) })]);
 
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "Oversized Topic" },
-      makeServerContext(),
-    );
+    const result = await graphTool(captured).handler(WORKSPACE_MEMORY_INPUT, makeServerContext());
     expect(result.isError).to.equal(true);
     expect(parseResult(result).error.code).to.equal("GRAPH_VISUALIZATION_RECORD_TOO_LARGE");
   });
 
   it("returns GRAPH_VISUALIZATION_FAILED for unexpected projection errors", async function () {
     const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "topic-broken", name: "Broken Topic" },
-      matchType: "exact",
-    });
-    topicManager.getKnowledgeGraph = sinon
-      .stub()
-      .resolves(knowledgeGraph([knowledgeEntity("broken", { unsupported: 1n })]));
-    register(server, topicManager);
+    registerMemorySnapshot(server, [memoryEntity("broken", { unsupported: 1n })]);
 
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "Broken Topic" },
-      makeServerContext(),
-    );
+    const result = await graphTool(captured).handler(WORKSPACE_MEMORY_INPUT, makeServerContext());
     expect(result.isError).to.equal(true);
     expect(parseResult(result).error.code).to.equal("GRAPH_VISUALIZATION_FAILED");
   });
 
   it("bounds huge graph storage errors without changing GRAPH_VISUALIZATION_FAILED", async function () {
     const { server, captured } = fakeServer();
-    const topicManager = makeTopicManager();
-    topicManager.resolveTopicByName = sinon.stub().resolves({
-      topic: { id: "topic-storage-error", name: "Storage Error Topic" },
-      matchType: "exact",
+    register(server, makeTopicManager(), {
+      maxResponseBytes: 16 * 1024 * 1024,
+      memoryStore: {
+        getGraphSnapshot: sinon.stub().rejects(new Error(`Memory graph storage failed: ${HUGE_UTF8_ERROR_SUFFIX}`)),
+      },
     });
-    topicManager.getKnowledgeGraph = sinon
-      .stub()
-      .rejects(new Error(`Knowledge graph storage failed: ${HUGE_UTF8_ERROR_SUFFIX}`));
-    register(server, topicManager, { maxResponseBytes: 16 * 1024 * 1024 });
 
-    const result = await graphTool(captured).handler(
-      { source: "knowledge", topic: "Storage Error Topic" },
-      makeServerContext(),
-    );
+    const result = await graphTool(captured).handler(WORKSPACE_MEMORY_INPUT, makeServerContext());
     const payload = expectBoundedGraphError(result, "GRAPH_VISUALIZATION_FAILED");
-    expect(payload.error.message).to.match(/^Knowledge graph storage failed: /);
+    expect(payload.error.message).to.match(/^Memory graph storage failed: /);
     expect(payload.error.message.endsWith("...")).to.equal(true);
     expect(payload.error.message).not.to.include("�");
   });

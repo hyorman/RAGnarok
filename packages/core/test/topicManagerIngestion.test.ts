@@ -6,7 +6,6 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   EmbeddingFingerprintMismatchError,
   EmbeddingReindexRequiredError,
-  KnowledgeGraphCorruptionError,
   TopicManager,
   VectorStoreMetadataCorruptionError,
   type IConfigProvider,
@@ -14,7 +13,6 @@ import {
 } from "../src/index";
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
 import type { PipelineOptions, PipelineResult, PipelineSourceDocument } from "../src/managers/documentPipeline";
-import type { KnowledgeGraphData } from "../src/utils/graphTypes";
 import type { Document as TopicDocument, Topic, TopicsIndex } from "../src/utils/types";
 
 const topicId = "topic-ingestion";
@@ -308,7 +306,6 @@ describe("TopicManager durable expanded-source ingestion", function () {
       new EmbeddingReindexRequiredError(topicId),
       new VectorStoreMetadataCorruptionError(topicId, "missing"),
       new EmbeddingFingerprintMismatchError(topicId, "fingerprint mismatch"),
-      new KnowledgeGraphCorruptionError("graph metadata is torn"),
     ];
 
     for (const failure of safetyFailures) {
@@ -394,150 +391,6 @@ describe("TopicManager durable expanded-source ingestion", function () {
     await (manager as any).recoverIngestionJournal();
     expect(manager.listDocuments(topicId)).to.deep.equal([]);
     expect(await readJournal(storageDir)).to.deep.equal([]);
-  });
-
-  it("serializes concurrent graph mutations so both entity additions survive", async function () {
-    const manager = createManager(storageDir, vectorStore);
-    let graphData: KnowledgeGraphData | null = null;
-    const graphStore = {
-      hasGraph: async () => graphData !== null,
-      loadGraph: async () => (graphData ? structuredClone(graphData) : null),
-      saveGraph: async (_topic: string, data: KnowledgeGraphData) => {
-        graphData = structuredClone(data);
-      },
-    };
-    (manager as any).knowledgeGraphStore = graphStore;
-    const entity = (id: string) => ({
-      id,
-      name: id,
-      type: "concept" as const,
-      description: id,
-      vector: [1],
-      sourceChunkIds: [`chunk-${id}`],
-      confidence: 1,
-      strength: 1,
-      lastAccessedAt: 1,
-      metadata: {},
-    });
-
-    await Promise.all([
-      manager.mutateKnowledgeGraph(topicId, async (graph) => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        graph.addEntity(entity("one"));
-      }),
-      manager.mutateKnowledgeGraph(topicId, (graph) => {
-        graph.addEntity(entity("two"));
-      }),
-    ]);
-
-    const savedGraph = graphData as KnowledgeGraphData | null;
-    expect(savedGraph?.entities.map((item) => item.id)).to.have.members(["one", "two"]);
-  });
-
-  it("fails graph mutation closed when the latest graph cannot be loaded", async function () {
-    const manager = createManager(storageDir, vectorStore);
-    let saveCalled = false;
-    (manager as any).knowledgeGraphStore = {
-      hasGraph: async () => true,
-      loadGraph: async () => {
-        throw new Error("injected graph read failure");
-      },
-      saveGraph: async () => {
-        saveCalled = true;
-      },
-    };
-
-    let caught: unknown;
-    try {
-      await manager.mutateKnowledgeGraph(topicId, (graph) => graph);
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).to.be.instanceOf(Error);
-    expect((caught as Error).message).to.equal("injected graph read failure");
-    expect(saveCalled).to.equal(false);
-  });
-
-  it("removes vector and graph provenance without orphaning shared entities", async function () {
-    const manager = createManager(storageDir, vectorStore);
-    const containerId = "container";
-    const documents = new Map<string, TopicDocument>([
-      [
-        "leaf-one",
-        {
-          id: "leaf-one",
-          topicId,
-          name: "one.txt",
-          filePath: "/docs/one.txt",
-          fileType: "text",
-          addedAt: 1,
-          chunkCount: 1,
-          containerId,
-        },
-      ],
-      [
-        "leaf-two",
-        {
-          id: "leaf-two",
-          topicId,
-          name: "two.txt",
-          filePath: "/docs/two.txt",
-          fileType: "text",
-          addedAt: 1,
-          chunkCount: 1,
-          containerId,
-        },
-      ],
-    ]);
-    (manager as any).topicDocuments.set(topicId, documents);
-    vectorStore.rows = [
-      new LangChainDocument({
-        pageContent: "one",
-        metadata: { documentId: "leaf-one", chunkId: "chunk-one", source: "/docs/one.txt" },
-      }),
-      new LangChainDocument({
-        pageContent: "two",
-        metadata: { documentId: "leaf-two", chunkId: "chunk-two", source: "/docs/two.txt" },
-      }),
-    ];
-    const entity = (id: string, sourceChunkIds: string[]) => ({
-      id,
-      name: id,
-      type: "concept" as const,
-      description: id,
-      vector: [1],
-      sourceChunkIds,
-      confidence: 1,
-      strength: 1,
-      lastAccessedAt: 1,
-      metadata: {},
-    });
-    let graphData: KnowledgeGraphData = {
-      entities: [entity("removed-only", ["chunk-one"]), entity("shared", ["chunk-one", "chunk-two"])],
-      relationships: [],
-      communities: [],
-      metadata: {
-        topicId,
-        createdAt: 1,
-        updatedAt: 1,
-        entityCount: 2,
-        edgeCount: 0,
-        communityCount: 0,
-        embeddingModel: "test-model",
-      },
-    };
-    (manager as any).knowledgeGraphStore = {
-      hasGraph: async () => true,
-      loadGraph: async () => structuredClone(graphData),
-      saveGraph: async (_topic: string, data: KnowledgeGraphData) => {
-        graphData = structuredClone(data);
-      },
-    };
-
-    await manager.removeDocument(topicId, "leaf-one");
-    expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["leaf-two"]);
-    expect(graphData.entities.map((item) => item.id)).to.deep.equal(["shared"]);
-    expect(graphData.entities[0].sourceChunkIds).to.deep.equal(["chunk-two"]);
   });
 
   it("expands legacy directory metadata on removal to avoid vector orphans", async function () {
@@ -653,7 +506,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
     expect(disposed).to.equal(true);
   });
 
-  it("allows nested graph work from an admitted operation while rejecting unrelated shutdown work", async function () {
+  it("allows nested managed work from an admitted operation while rejecting unrelated shutdown work", async function () {
     const manager = createManager(storageDir, vectorStore);
     let releaseOuter!: () => void;
     let outerStarted!: () => void;
@@ -663,27 +516,20 @@ describe("TopicManager durable expanded-source ingestion", function () {
     const gate = new Promise<void>((resolve) => {
       releaseOuter = resolve;
     });
-    let graphSaved = false;
-    (manager as any).knowledgeGraphStore = {
-      hasGraph: async () => false,
-      loadGraph: async () => null,
-      saveGraph: async () => {
-        graphSaved = true;
-      },
-      dispose: () => undefined,
-    };
+    let nestedCompleted = false;
     (manager as any).documentPipeline = { dispose: () => undefined };
 
     const admitted = (manager as any).runManagedOperation(async () => {
       outerStarted();
       await gate;
-      await manager.mutateKnowledgeGraph(topicId, () => undefined);
+      await manager.updateTopic(topicId, { description: "nested" });
+      nestedCompleted = true;
     });
     await started;
     const disposal = manager.dispose();
     const rejected = await (async () => {
       try {
-        await manager.mutateKnowledgeGraph(topicId, () => undefined);
+        await manager.updateTopic(topicId, { description: "too late" });
       } catch (error) {
         return error as Error;
       }
@@ -694,6 +540,6 @@ describe("TopicManager durable expanded-source ingestion", function () {
     releaseOuter();
     await admitted;
     await disposal;
-    expect(graphSaved).to.equal(true);
+    expect(nestedCompleted).to.equal(true);
   });
 });

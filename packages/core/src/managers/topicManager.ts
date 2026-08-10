@@ -30,12 +30,6 @@ import {
   VectorStoreFactory,
   VectorStoreMetadataCorruptionError,
 } from "../stores/vectorStoreFactory";
-import {
-  KnowledgeGraphCorruptionError,
-  KnowledgeGraphLimitError,
-  KnowledgeGraphStore,
-} from "../stores/knowledgeGraphStore";
-import { KnowledgeGraph, KnowledgeGraphEmbeddingMismatchError } from "../stores/knowledgeGraph";
 import { EventEmitter } from "events";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { Logger } from "../logger";
@@ -278,7 +272,6 @@ export class TopicManager {
   private topicsIndex: TopicsIndex | null = null;
   private documentPipeline: DocumentPipeline;
   private vectorStoreFactory: VectorStoreFactory | null = null;
-  private knowledgeGraphStore: KnowledgeGraphStore | null = null;
   private isInitialized: boolean = false;
 
   // Cache for loaded vector stores
@@ -291,12 +284,10 @@ export class TopicManager {
   private commonTopicsIndex: TopicsIndex | null = null;
   private commonTopicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
   private commonDatabasePath: string | null = null;
-  private commonKnowledgeGraphStore: KnowledgeGraphStore | null = null;
   private journalMutex = new Mutex();
   private archiveMutex = new Mutex();
   private storageMutationMutex = new Mutex();
   private topicMutationMutexes = new Map<string, Mutex>();
-  private graphMutationMutexes = new Map<string, Mutex>();
   private storageLock: StorageLockHandle | null = null;
   private transactionCoordinator: StorageTransactionCoordinator | null = null;
   private acceptingManagedOperations = true;
@@ -367,7 +358,6 @@ export class TopicManager {
       await this.documentPipeline.initialize(storageDir);
 
       this.vectorStoreFactory = new VectorStoreFactory(storageDir, this.topicsIndex!.modelName, this.embeddingService);
-      this.knowledgeGraphStore = new KnowledgeGraphStore(path.join(storageDir, "lancedb"));
       await this.recoverPostCommitCleanupJournal();
       await this.recoverIngestionJournal();
 
@@ -401,16 +391,6 @@ export class TopicManager {
         const factory = this.vectorStoreFactory;
         this.vectorStoreFactory = null;
         await close(() => factory.dispose());
-      }
-      if (this.knowledgeGraphStore) {
-        const graphStore = this.knowledgeGraphStore;
-        this.knowledgeGraphStore = null;
-        await close(() => graphStore.dispose());
-      }
-      if (this.commonKnowledgeGraphStore) {
-        const commonGraphStore = this.commonKnowledgeGraphStore;
-        this.commonKnowledgeGraphStore = null;
-        await close(() => commonGraphStore.dispose());
       }
       if (this.storageLock) {
         const lock = this.storageLock;
@@ -554,16 +534,12 @@ export class TopicManager {
         { type: "delete", destination: this.getTopicDocumentsPath(topicId) },
         { type: "delete", destination: path.join(this.getDatabaseDir(), `vector-${topicId}-metadata.json`) },
         { type: "delete", destination: path.join(lancedbDir, `${topicId}.lance`) },
-        { type: "delete", destination: path.join(lancedbDir, `kg-entities-${topicId}.lance`) },
-        { type: "delete", destination: path.join(lancedbDir, `kg-edges-${topicId}.lance`) },
-        { type: "delete", destination: path.join(lancedbDir, `kg-metadata-${topicId}.lance`) },
       ];
 
       // Closing the shared factory invalidates handles for every local/common
       // topic, so clear the complete cache before reopening it.
       this.invalidateVectorStoreCache();
       this.vectorStoreFactory.dispose();
-      this.knowledgeGraphStore?.dispose();
       const previousTopicsIndex = this.topicsIndex;
       this.topicsIndex = nextTopicsIndex;
       let committed = false;
@@ -580,12 +556,10 @@ export class TopicManager {
           nextTopicsIndex.modelName,
           this.embeddingService,
         );
-        this.knowledgeGraphStore = new KnowledgeGraphStore(lancedbDir);
       }
 
       this.topicDocuments.delete(topicId);
       this.topicMutationMutexes.delete(topicId);
-      this.graphMutationMutexes.delete(topicId);
 
       this.notifyAgentCacheCleanup(topicId);
 
@@ -613,71 +587,6 @@ export class TopicManager {
     } else {
       this.vectorStoreCache.clear();
     }
-  }
-
-  /**
-   * Get the knowledge graph store for persisting entity/edge tables
-   */
-  public getKnowledgeGraphStore(): KnowledgeGraphStore | null {
-    return this.knowledgeGraphStore;
-  }
-
-  /**
-   * Load the knowledge graph for a topic (returns null if none exists)
-   */
-  public async getKnowledgeGraph(topicId: string): Promise<KnowledgeGraph | null> {
-    const graphStore = this.isCommonTopic(topicId) ? this.commonKnowledgeGraphStore : this.knowledgeGraphStore;
-    if (!graphStore) {
-      return null;
-    }
-    const hasGraph = await graphStore.hasGraph(topicId);
-    if (!hasGraph) {
-      return null;
-    }
-    const data = await graphStore.loadGraph(topicId);
-    if (!data) {
-      return null;
-    }
-    return KnowledgeGraph.fromJSON(data);
-  }
-
-  /**
-   * Serialize a complete graph read-modify-write for one topic. Entity
-   * embeddings may be prepared outside this critical section, but every merge
-   * reloads the latest committed graph so concurrent ingests preserve union.
-   */
-  public async mutateKnowledgeGraph<T>(
-    topicId: string,
-    mutation: (graph: KnowledgeGraph) => T | Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    return this.runManagedOperation(() => this.mutateKnowledgeGraphUnlocked(topicId, mutation, signal));
-  }
-
-  private async mutateKnowledgeGraphUnlocked<T>(
-    topicId: string,
-    mutation: (graph: KnowledgeGraph) => T | Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    const store = this.knowledgeGraphStore;
-    if (!store) {
-      throw new Error("Knowledge graph store is not initialized");
-    }
-    return this.getGraphMutationMutex(topicId).runExclusive(async () => {
-      signal?.throwIfAborted();
-      // Mutation must fail closed on a read error; only true absence creates a
-      // new graph. Corruption is never converted into "no graph."
-      const existingData = (await store.hasGraph(topicId)) ? await store.loadGraph(topicId) : null;
-      signal?.throwIfAborted();
-      const graph = existingData ? KnowledgeGraph.fromJSON(existingData) : new KnowledgeGraph(topicId);
-      const result = await mutation(graph);
-      signal?.throwIfAborted();
-      await store.saveGraph(topicId, graph.toJSON());
-      // A save is not interruptible. If cancellation arrived while LanceDB
-      // committed, surface it so the ingestion journal remains recoverable.
-      signal?.throwIfAborted();
-      return result;
-    });
   }
 
   /**
@@ -1075,10 +984,6 @@ export class TopicManager {
           };
           const pipelineResult = await this.documentPipeline.processDocument(filePath, topicId, pipelineOptions);
 
-          // The standard pipeline can return a failure after a native vector
-          // merge partially committed. Always reconcile graph provenance
-          // before interpreting the outcome or observing cancellation.
-          await this.reconcileKnowledgeGraphProvenance(topicId);
           options?.signal?.throwIfAborted();
           if (!pipelineResult.success) {
             this.logger.warn("Document processing failed", {
@@ -1148,16 +1053,6 @@ export class TopicManager {
             });
           }
         } catch (error) {
-          let reconciliationFailure: unknown;
-          try {
-            await this.reconcileKnowledgeGraphProvenance(topicId);
-          } catch (reconciliationError) {
-            reconciliationFailure = reconciliationError;
-            this.logger.error("Failed to reconcile graph after interrupted ingestion", {
-              topicId,
-              error: reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError),
-            });
-          }
           this.logger.error("Failed to add document", {
             error: error instanceof Error ? error.message : String(error),
             filePath,
@@ -1167,9 +1062,6 @@ export class TopicManager {
           // committed leaves or roll back an uncommitted starter.
           if (options?.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
             throw options?.signal?.reason ?? error;
-          }
-          if (this.isIngestionIntegrityFailure(reconciliationFailure)) {
-            throw reconciliationFailure;
           }
           if (this.isIngestionIntegrityFailure(error)) {
             throw error;
@@ -1200,10 +1092,7 @@ export class TopicManager {
     return (
       error instanceof EmbeddingReindexRequiredError ||
       error instanceof VectorStoreMetadataCorruptionError ||
-      error instanceof EmbeddingFingerprintMismatchError ||
-      error instanceof KnowledgeGraphCorruptionError ||
-      error instanceof KnowledgeGraphLimitError ||
-      error instanceof KnowledgeGraphEmbeddingMismatchError
+      error instanceof EmbeddingFingerprintMismatchError
     );
   }
 
@@ -1315,15 +1204,6 @@ export class TopicManager {
     }
     signal?.throwIfAborted();
     const removedChunkIds = await this.vectorStoreFactory.removeDocument(topicId, documentId);
-    // Once vector deletion commits, graph cleanup is a required consistency
-    // continuation. Do not let a cancellation arriving during the
-    // non-interruptible delete strand graph provenance; surface it after the
-    // graph has been reconciled. Reconciliation scans live chunks, so retrying
-    // after a graph-save failure is safe even though the vector delete is
-    // already idempotently complete.
-    if (this.knowledgeGraphStore && (await this.knowledgeGraphStore.hasGraph(topicId))) {
-      await this.reconcileKnowledgeGraphProvenance(topicId);
-    }
     signal?.throwIfAborted();
     return removedChunkIds;
   }
@@ -1405,51 +1285,8 @@ export class TopicManager {
     signal?: AbortSignal,
   ): Promise<void> {
     signal?.throwIfAborted();
-    try {
-      await this.documentPipeline.storeProcessedChunks(chunks, topicId, { signal });
-    } catch (error) {
-      // A storage error/cancellation can arrive after one or more native
-      // merge commits. Repair graph provenance from the live vector table
-      // before surfacing the original operation failure.
-      await this.reconcileKnowledgeGraphProvenance(topicId);
-      throw error;
-    }
-    // Treat provenance reconciliation as the consistency tail of the durable
-    // vector commit. Cancellation is observed after that tail completes.
-    await this.reconcileKnowledgeGraphProvenance(topicId);
+    await this.documentPipeline.storeProcessedChunks(chunks, topicId, { signal });
     signal?.throwIfAborted();
-  }
-
-  private async reconcileKnowledgeGraphProvenance(topicId: string, signal?: AbortSignal): Promise<void> {
-    if (!this.knowledgeGraphStore || !(await this.knowledgeGraphStore.hasGraph(topicId))) {
-      return;
-    }
-    signal?.throwIfAborted();
-    const liveChunks = new Set(
-      (await this.getAllDocuments(topicId, 1_000_000)).map((document) => String(document.metadata.chunkId)),
-    );
-    await this.mutateKnowledgeGraph(
-      topicId,
-      (graph) => {
-        for (const relationship of graph.getAllRelationships()) {
-          const sourceChunkIds = relationship.sourceChunkIds.filter((id) => liveChunks.has(id));
-          if (sourceChunkIds.length === 0) {
-            graph.removeRelationship(relationship.id);
-          } else if (sourceChunkIds.length !== relationship.sourceChunkIds.length) {
-            graph.updateRelationship(relationship.id, { sourceChunkIds });
-          }
-        }
-        for (const entity of graph.getAllEntities()) {
-          const sourceChunkIds = entity.sourceChunkIds.filter((id) => liveChunks.has(id));
-          if (sourceChunkIds.length === 0) {
-            graph.removeEntity(entity.id);
-          } else if (sourceChunkIds.length !== entity.sourceChunkIds.length) {
-            graph.updateEntity(entity.id, { sourceChunkIds });
-          }
-        }
-      },
-      signal,
-    );
   }
 
   /**
@@ -1744,21 +1581,10 @@ export class TopicManager {
       this.vectorStoreFactory = null;
       await close(() => factory.dispose());
     }
-    if (this.knowledgeGraphStore) {
-      const graphStore = this.knowledgeGraphStore;
-      this.knowledgeGraphStore = null;
-      await close(() => graphStore.dispose());
-    }
-    if (this.commonKnowledgeGraphStore) {
-      const commonGraphStore = this.commonKnowledgeGraphStore;
-      this.commonKnowledgeGraphStore = null;
-      await close(() => commonGraphStore.dispose());
-    }
 
     this.vectorStoreCache.clear();
     this.topicDocuments.clear();
     this.topicMutationMutexes.clear();
-    this.graphMutationMutexes.clear();
     this.topicsIndex = null;
     this.isInitialized = false;
     TopicManager._onAgentCacheCleanup.removeAllListeners();
@@ -2130,7 +1956,7 @@ export class TopicManager {
   private async collectArchiveSourceFiles(topicId: string): Promise<ArchiveSourceFile[]> {
     const databaseDir = this.getDatabaseDir();
     const sources: ArchiveSourceFile[] = [];
-    for (const tableName of [topicId, `kg-entities-${topicId}`, `kg-edges-${topicId}`, `kg-metadata-${topicId}`]) {
+    for (const tableName of [topicId]) {
       const tableDir = path.join(databaseDir, "lancedb", `${tableName}.lance`);
       let tableStat: fsSync.Stats;
       try {
@@ -2211,12 +2037,7 @@ export class TopicManager {
   private async commitStagedTopicImport(commit: StagedTopicImportCommit): Promise<void> {
     const databaseDir = this.getDatabaseDir();
     const operations: StorageTransactionOperation[] = [];
-    const tableMappings = [
-      { oldName: commit.originalTopicId, newName: commit.newTopicId },
-      { oldName: `kg-entities-${commit.originalTopicId}`, newName: `kg-entities-${commit.newTopicId}` },
-      { oldName: `kg-edges-${commit.originalTopicId}`, newName: `kg-edges-${commit.newTopicId}` },
-      { oldName: `kg-metadata-${commit.originalTopicId}`, newName: `kg-metadata-${commit.newTopicId}` },
-    ];
+    const tableMappings = [{ oldName: commit.originalTopicId, newName: commit.newTopicId }];
     for (const mapping of tableMappings) {
       const source = path.join(commit.contentDir, "lancedb", `${mapping.oldName}.lance`);
       if (await this.pathExists(source)) {
@@ -2305,8 +2126,6 @@ export class TopicManager {
       this.commonTopicsIndex = null;
       this.commonTopicDocuments.clear();
       this.commonDatabasePath = null;
-      this.commonKnowledgeGraphStore?.dispose();
-      this.commonKnowledgeGraphStore = null;
       return;
     }
 
@@ -2319,8 +2138,6 @@ export class TopicManager {
       }
       const commonDatabaseDir = path.join(commonPath, EXTENSION.DATABASE_DIR);
       this.commonDatabasePath = commonDatabaseDir;
-      this.commonKnowledgeGraphStore?.dispose();
-      this.commonKnowledgeGraphStore = new KnowledgeGraphStore(path.join(commonDatabaseDir, "lancedb"));
 
       // Check for topics.json
       const indexPath = path.join(commonDatabaseDir, EXTENSION.TOPICS_INDEX_FILENAME);
@@ -2371,8 +2188,6 @@ export class TopicManager {
           this.commonTopicsIndex = null;
           this.commonTopicDocuments.clear();
           this.commonDatabasePath = null;
-          this.commonKnowledgeGraphStore?.dispose();
-          this.commonKnowledgeGraphStore = null;
           return;
         }
 
@@ -2392,8 +2207,6 @@ export class TopicManager {
       this.commonTopicsIndex = null;
       this.commonTopicDocuments.clear();
       this.commonDatabasePath = null;
-      this.commonKnowledgeGraphStore?.dispose();
-      this.commonKnowledgeGraphStore = null;
     }
   }
 
@@ -2743,7 +2556,6 @@ export class TopicManager {
         return;
       }
       const touched = new Set<string>();
-      const journalTopics = new Set<string>();
       const rowsByTopic = new Map<string, LangChainDocument[]>();
       const transactions = new Map<string, IngestionJournalEntry[]>();
       for (const entry of pending) {
@@ -2759,7 +2571,6 @@ export class TopicManager {
         if (!topic) {
           continue;
         }
-        journalTopics.add(starter.topicId);
 
         let durableEntries = originalEntries.filter((entry) => entry.stage !== "started");
         if (durableEntries.length === 0) {
@@ -2841,9 +2652,6 @@ export class TopicManager {
         topic.documentCount = documents.size;
         topic.updatedAt = Math.max(topic.updatedAt, ...durableEntries.map((entry) => entry.updatedAt));
         touched.add(starter.topicId);
-      }
-      for (const topicId of journalTopics) {
-        await this.reconcileKnowledgeGraphProvenance(topicId);
       }
       for (const topicId of touched) {
         await this.saveTopicDocuments(topicId);
@@ -2991,15 +2799,6 @@ export class TopicManager {
       await this.transactionCoordinator.initialize();
     }
     return this.transactionCoordinator;
-  }
-
-  private getGraphMutationMutex(topicId: string): Mutex {
-    let mutex = this.graphMutationMutexes.get(topicId);
-    if (!mutex) {
-      mutex = new Mutex();
-      this.graphMutationMutexes.set(topicId, mutex);
-    }
-    return mutex;
   }
 
   private async runManagedOperation<T>(operation: () => Promise<T>): Promise<T> {

@@ -14,8 +14,7 @@ import * as net from "net";
 import * as os from "os";
 import * as path from "path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { KnowledgeGraphStore } from "@ragnarok/core";
-import { StdioHarness, withStdioHarness } from "./helpers/stdioHarness";
+import { StdioHarness } from "./helpers/stdioHarness";
 
 const READ_TOKEN = "e2e-read-token-32-bytes-minimum-value";
 const WRITE_TOKEN = "e2e-write-token-32-bytes-minimum-value";
@@ -99,76 +98,6 @@ function authedClient(port: number, token: string): { client: Client; transport:
   return { client, transport };
 }
 
-async function seedHttpGraphFixture(storageDir: string, topicId: string): Promise<void> {
-  const store = new KnowledgeGraphStore(path.join(storageDir, "database", "lancedb"));
-  try {
-    await store.saveGraph(topicId, {
-      entities: [
-        {
-          id: "knowledge-beta",
-          name: "Beta",
-          type: "technology",
-          description: "Beta graph entity",
-          vector: [0, 1],
-          sourceChunkIds: ["chunk-beta"],
-          confidence: 0.8,
-          strength: 0.7,
-          lastAccessedAt: 20,
-          metadata: { rank: 2 },
-        },
-        {
-          id: "knowledge-alpha",
-          name: "Alpha",
-          type: "concept",
-          description: "Alpha graph entity",
-          vector: [1, 0],
-          sourceChunkIds: ["chunk-alpha"],
-          confidence: 0.9,
-          strength: 0.95,
-          lastAccessedAt: 10,
-          metadata: {
-            rank: 1,
-            storagePath: "/private/server/path",
-            artifact: "/private/server/value-path",
-            benign: "visible node detail",
-          },
-        },
-      ],
-      relationships: [
-        {
-          id: "knowledge-edge",
-          sourceId: "knowledge-alpha",
-          targetId: "knowledge-beta",
-          type: "uses",
-          weight: 0.75,
-          description: "Alpha uses Beta",
-          sourceChunkIds: ["chunk-beta", "chunk-alpha"],
-          confidence: 0.85,
-          metadata: {
-            evidence: "protocol fixture",
-            storagePath: "/private/server/path",
-            artifact: "/private/server/edge-path",
-            benign: "visible edge detail",
-          },
-        },
-      ],
-      communities: [],
-      metadata: {
-        topicId,
-        createdAt: 1,
-        updatedAt: 2,
-        entityCount: 2,
-        edgeCount: 1,
-        communityCount: 0,
-        embeddingModel: "protocol-fixture",
-        embeddingDimension: 2,
-      },
-    });
-  } finally {
-    store.dispose();
-  }
-}
-
 describe("shared-mode HTTP E2E (real binary)", function () {
   this.timeout(120000);
 
@@ -180,20 +109,6 @@ describe("shared-mode HTTP E2E (real binary)", function () {
   before(async function () {
     storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-http-e2e-"));
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-http-work-"));
-    const fixtureTopic = await withStdioHarness(
-      () => new StdioHarness(storageDir, workDir, { RAGNAROK_RERANKER_ENABLED: "false" }),
-      async (fixtureHarness) => {
-        expect((await fixtureHarness.discover(900)).error).to.equal(undefined);
-        const fixtureTopicResponse = await fixtureHarness.callTool(901, "rag_create_topic", {
-          name: "http-populated",
-          description: "Persisted HTTP graph protocol fixture",
-        });
-        expect(fixtureTopicResponse.result?.isError, JSON.stringify(fixtureTopicResponse.result)).not.to.equal(true);
-        return JSON.parse(fixtureTopicResponse.result?.content?.[0]?.text ?? "{}").topic;
-      },
-      "HTTP fixture stdio server",
-    );
-    await seedHttpGraphFixture(storageDir, fixtureTopic.id);
     port = await getFreePort();
     harness = new StdioHarness(
       storageDir,
@@ -328,70 +243,13 @@ describe("shared-mode HTTP E2E (real binary)", function () {
       expect(resource.text).to.include('id="reset-view"');
       expect(resource.text).not.to.match(/<script\s+[^>]*src\s*=/i);
 
-      const created = await curator.client.callTool({
-        name: "rag_create_topic",
-        arguments: { name: "http-empty", description: "Empty graph protocol fixture" },
-      });
-      expect(created.isError, JSON.stringify(created)).not.to.equal(true);
-      const createdTopic = (created.structuredContent as any).topic;
-      const emptyResult = await curator.client.callTool({
-        name: "rag_graph_visualize",
-        arguments: { source: "knowledge", topic: "http-empty" },
-      });
-      expect(emptyResult.isError, JSON.stringify(emptyResult)).not.to.equal(true);
-      expect(emptyResult.structuredContent).to.deep.include({
-        schema: "ragnarok.graph.visualization.v1",
-        source: { kind: "knowledge", topicId: createdTopic.id, topicName: "http-empty" },
-        nodes: [],
-        edges: [],
-        groups: [],
-      });
-      expect((emptyResult.structuredContent as any).metadata.empty).to.equal(true);
-
-      const populatedResult = await curator.client.callTool({
+      // The knowledge source was removed with the document graph.
+      const removedKnowledge = await curator.client.callTool({
         name: "rag_graph_visualize",
         arguments: { source: "knowledge", topic: "http-populated" },
       });
-      expect(populatedResult.isError, JSON.stringify(populatedResult)).not.to.equal(true);
-      const populated = populatedResult.structuredContent as any;
-      expect(populated.schema).to.equal("ragnarok.graph.visualization.v1");
-      expect(populated.source).to.deep.include({ kind: "knowledge", topicName: "http-populated" });
-      expect(populated.nodes.map(({ id }: { id: string }) => id)).to.deep.equal(["knowledge-alpha", "knowledge-beta"]);
-      expect(populated.edges.map(({ id }: { id: string }) => id)).to.deep.equal(["knowledge-edge"]);
-      expect(populated.nodes[0].attributes).to.deep.include({
-        description: "Alpha graph entity",
-        sourceChunkIds: ["chunk-alpha"],
-        confidence: 0.9,
-        strength: 0.95,
-        lastAccessedAt: 10,
-        metadata: {
-          rank: 1,
-          artifact: "[server-managed]",
-          benign: "visible node detail",
-        },
-      });
-      expect(populated.edges[0]).to.deep.include({
-        id: "knowledge-edge",
-        source: "knowledge-alpha",
-        target: "knowledge-beta",
-        label: "uses",
-        weight: 0.75,
-      });
-      expect(populated.edges[0].attributes).to.deep.include({
-        description: "Alpha uses Beta",
-        sourceChunkIds: ["chunk-alpha", "chunk-beta"],
-        confidence: 0.85,
-        metadata: {
-          evidence: "protocol fixture",
-          artifact: "[server-managed]",
-          benign: "visible edge detail",
-        },
-      });
-      expect(JSON.stringify(populated)).not.to.include("vector");
-      expect(JSON.stringify(populated)).not.to.include("/private/server/path");
-      expect(JSON.stringify(populated)).not.to.include("/private/server/value-path");
-      expect(JSON.stringify(populated)).not.to.include("/private/server/edge-path");
-      expect(JSON.stringify(populated)).not.to.include("storagePath");
+      expect(removedKnowledge.isError, JSON.stringify(removedKnowledge)).to.equal(true);
+      expect((removedKnowledge.structuredContent as any).error.code).to.equal("GRAPH_VISUALIZATION_FAILED");
 
       for (const arguments_ of [
         { source: "memory", memoryScope: "workspace" },
@@ -474,6 +332,17 @@ describe("shared-mode HTTP E2E (real binary)", function () {
         arguments: { topic: "shared-transfer-flow", uploadId: upload.id },
       });
       expect(replay.isError, "upload handles must be single-use").to.equal(true);
+
+      // Shared deployments must never leak server filesystem paths in tool output.
+      const listedDocuments = await reader.client.callTool({
+        name: "rag_list_documents",
+        arguments: { topic: "shared-transfer-flow" },
+      });
+      expect(listedDocuments.isError, JSON.stringify(listedDocuments)).not.to.equal(true);
+      const listedText = JSON.stringify(listedDocuments);
+      expect(listedText).to.include("[server-managed]");
+      expect(listedText).not.to.include(storageDir);
+      expect(listedText).not.to.include(workDir);
 
       for (const retrievalStrategy of ["vector", "hybrid", "bm25"]) {
         const queried = await reader.client.callTool({

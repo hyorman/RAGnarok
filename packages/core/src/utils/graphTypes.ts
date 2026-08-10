@@ -1,7 +1,6 @@
 /**
- * Knowledge Graph types for entity-relationship modeling
+ * Entity-relationship types consumed by the graph visualization projection.
  */
-import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 /**
  * Entity type classification.
@@ -21,23 +20,6 @@ export type EntityType =
   | "preference"
   | "episode"
   | "other";
-
-/** Runtime set of valid EntityType values for validation */
-export const VALID_ENTITY_TYPES: ReadonlySet<string> = new Set<EntityType>([
-  "class",
-  "function",
-  "module",
-  "technology",
-  "concept",
-  "person",
-  "organization",
-  "location",
-  "event",
-  "fact",
-  "preference",
-  "episode",
-  "other",
-]);
 
 /**
  * Relationship type between entities.
@@ -61,27 +43,7 @@ export type RelationshipType =
   | "derives"
   | "other";
 
-/** Runtime set of valid RelationshipType values for validation */
-export const VALID_RELATIONSHIP_TYPES: ReadonlySet<string> = new Set<RelationshipType>([
-  "calls",
-  "imports",
-  "inherits",
-  "implements",
-  "references",
-  "contains",
-  "uses",
-  "explains",
-  "related_to",
-  "depends_on",
-  "similar_to",
-  "contradicts",
-  "updates",
-  "extends",
-  "derives",
-  "other",
-]);
-
-/** A node in the knowledge graph */
+/** A node in the graph */
 export interface GraphEntity {
   /** Unique entity ID */
   id: string;
@@ -125,48 +87,4 @@ export interface GraphRelationship {
   confidence: number;
   /** Extensible metadata bag */
   metadata: Record<string, unknown>;
-}
-
-/** A community detected by Louvain algorithm */
-export interface GraphCommunity {
-  /** Louvain community label (integer) */
-  id: number;
-  /** Entity IDs belonging to this community */
-  entityIds: string[];
-  /** LLM-generated summary (populated in Phase 2+) */
-  summary?: string;
-  /** Hierarchy level (0 = base) */
-  level: number;
-  /** Parent community at higher level */
-  parentId?: number;
-  /** Extensible metadata bag */
-  metadata: Record<string, unknown>;
-}
-
-/** Serializable snapshot of a knowledge graph */
-export interface KnowledgeGraphData {
-  entities: GraphEntity[];
-  relationships: GraphRelationship[];
-  communities: GraphCommunity[];
-  metadata: {
-    topicId: string;
-    createdAt: number;
-    updatedAt: number;
-    entityCount: number;
-    edgeCount: number;
-    communityCount: number;
-    embeddingModel: string;
-    embeddingDimension?: number;
-    embeddingFingerprint?: EmbeddingFingerprint;
-  };
-}
-
-/** Statistics about a knowledge graph */
-export interface KnowledgeGraphStats {
-  entityCount: number;
-  edgeCount: number;
-  averageDegree: number;
-  communityCount: number;
-  density: number;
-  connectedComponents: number;
 }

@@ -82,19 +82,8 @@ export {
 } from "./stores/vectorStoreFactory";
 export type { VectorStoreConfig, VectorStoreMetadata } from "./stores/vectorStoreFactory";
 
-// Knowledge Graph
-export {
-  EntityType,
-  RelationshipType,
-  GraphEntity,
-  GraphRelationship,
-  GraphCommunity,
-  KnowledgeGraphData,
-  KnowledgeGraphStats,
-  VALID_ENTITY_TYPES,
-  VALID_RELATIONSHIP_TYPES,
-} from "./utils/graphTypes";
-export { KnowledgeGraph, KnowledgeGraphEmbeddingMismatchError } from "./stores/knowledgeGraph";
+// Graph visualization types
+export { EntityType, RelationshipType, GraphEntity, GraphRelationship } from "./utils/graphTypes";
 export {
   projectKnowledgeGraphVisualization,
   projectMemoryGraphVisualization,
@@ -109,11 +98,6 @@ export type {
   GraphVisualizationDocument,
   GraphVisualizationOptions,
 } from "./visualization/graphVisualization";
-export {
-  KnowledgeGraphStore,
-  KnowledgeGraphCorruptionError,
-  KnowledgeGraphLimitError,
-} from "./stores/knowledgeGraphStore";
 
 // Retrievers
 export { VectorRetriever } from "./retrievers/vectorRetriever";
