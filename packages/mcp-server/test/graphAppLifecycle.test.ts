@@ -311,7 +311,7 @@ describe("graph app lifecycle", function () {
       expect(initialize, "the installed Apps SDK must emit ui/initialize").not.to.equal(undefined);
       expect((initialize!.params as { appInfo: unknown }).appInfo).to.deep.equal({
         name: "RAGnarok Graph",
-        version: "0.5.0",
+        version: "0.6.0",
       });
     } finally {
       console.debug = originalDebug;

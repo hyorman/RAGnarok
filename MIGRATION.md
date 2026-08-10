@@ -1,8 +1,8 @@
 # Storage migration
 
-## 0.5.0 MCP client migration
+## 0.6.0 MCP client migration
 
-RAGnarok 0.5.0 serves MCP protocol `2026-07-28` only. MCP clients must use
+RAGnarok 0.6.0 serves MCP protocol `2026-07-28` only. MCP clients must use
 `server/discover` or modern version negotiation. Legacy `initialize` is
 rejected; there is no compatibility mode.
 
@@ -29,12 +29,16 @@ The migrator deliberately supports only layouts emitted by the 0.3 release:
 The flat common layout is converted to the v2 `database/` layout. Its topic IDs are deterministically
 namespaced and every remap is recorded, preventing the known local/common ID collision.
 
-Version 0.3 did not persist memory, knowledge-graph, or LangGraph checkpoint stores. An unversioned store
-containing unknown tables/files is therefore rejected instead of guessed at. If legacy `kg-*` tables are
-present alongside otherwise valid topics, vectors and documents are migrated, the graph is omitted, and
-the report marks the affected topics for explicit graph rebuild because the graph embedding identity cannot
-be proven. Legacy vector model names are preserved, but no backend fingerprint is invented; reindexing is
-required before adding vectors under a new embedding configuration.
+Version 0.3 did not persist memory stores. An unversioned store containing unknown tables/files is
+therefore rejected instead of guessed at. Some 0.3-era stores contain `kg-*` tables from the document
+knowledge graph, a subsystem that no longer exists. Those tables are recognized so that they do not
+count as unknown structure, but they are never copied: vectors and documents are migrated and the
+`kg-*` tables are dropped. The report still marks such topics `graphRebuildRequired` and warns that
+the legacy graph was not copied; that flag is vestigial, because document knowledge graphs no longer
+exist and graphs now live only in the memory subsystem. Ignore it — there is nothing to rebuild and
+no strategy that would consume the result. Legacy vector model names are preserved, but no backend
+fingerprint is invented; reindexing is required before adding vectors under a new embedding
+configuration.
 
 ## CLI
 

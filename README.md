@@ -86,8 +86,8 @@ Notes:
 
 - **Hybrid Search** (recommended): Combines vector + keyword (90%/10% weights, configurable)
 - **Vector Search**: Pure semantic similarity using embeddings
-- **Ensemble Search**: Advanced RRF (Reciprocal Rank Fusion) with BM25 for highest accuracy
 - **BM25 Search**: Pure keyword search using Okapi BM25 algorithm (no embeddings needed)
+- **Cross-Encoder Reranking**: Optional second-stage reranking over any strategy's candidates
 - **Position Boosting**: Keywords near document start weighted higher
 - **Result Explanations**: Human-readable scoring breakdown for all strategies
 
@@ -124,52 +124,39 @@ Notes:
 - **Async-Safe**: Mutex locks prevent race conditions
 - **Configurable**: 15+ settings for customization
 
-### 🕸️ **Knowledge Graph**
-
-- **LLM-Powered Entity Extraction**: Automatically extracts entities (concepts, technologies, people, organizations) and relationships from ingested documents using LLM with Zod-validated output, circuit breaker, and batch processing
-- **Graph-Based Retrieval** (`graph` strategy): Finds entities matching the query via name + embedding similarity, traverses the knowledge graph neighborhood via BFS, and scores results by match quality and hop distance
-- **Graph-Hybrid Retrieval** (`graph_hybrid` strategy): Fuses graph traversal results with vector similarity search using weighted score fusion (default: 70% vector / 30% graph), with graceful fallback when either source is unavailable
-- **In-Memory Graph**: Uses [graphology](https://graphology.github.io/) `DirectedGraph` with LanceDB persistence via `KnowledgeGraphStore` — one graph per topic
-- **Community Detection**: Louvain algorithm for automatic community/cluster identification across entities
-
-#### MCP graph visualization
-
-The MCP server's curator/admin-only `rag_graph_visualize` tool accepts exactly
-`{ source: "knowledge", topic, maxNodes? }`,
-`{ source: "memory", memoryScope: "workspace", maxNodes? }`, or
-`{ source: "memory", memoryScope: "branch", branch, maxNodes? }`. It returns
-the deterministic `ragnarok.graph.visualization.v1` document; the unpublished
-layout-v1 contract has been removed. The default is 500 nodes, the accepted
-range is 1 through 2,000, and output is capped at 10,000 edges and the MCP
-response-byte limit.
-
-Authorized documents include full persisted node/edge descriptions,
-provenance, confidence, scope/branch fields, and arbitrary metadata, but never
-embedding vectors. Shared HTTP supports knowledge graphs for curators/admins,
-sanitizes server-managed paths, and returns `GRAPH_MEMORY_UNAVAILABLE` for both
-memory scopes; readers cannot list or invoke the tool. MCP Apps hosts load the
-self-contained `ui://ragnarok/graph` resource as
-`text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. The app provides
-loading, empty, error, keyboard, screen-reader, touch, detail-panel, and viewport
-reset behavior. The VS Code extension webview remains deferred. See the
-[MCP server graph contract](packages/mcp-server/README.md#graph-visualization).
-
 ### 🧠 **Standalone Memory Module**
 
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
 - **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
-- **LLM-Powered Entity Extraction**: Optionally extracts entities (facts, preferences, concepts, tools, conventions) from stored memories; gracefully degrades when no LLM is available
+- **LLM-Powered Entity Extraction**: Optionally extracts entities (facts, preferences, concepts, tools, conventions) from stored memories; the graph stays empty when no LLM provider is configured
 - **Markdown Export**: Automatically generates a `memories.md` file summarizing stored memories for human review
-- **MCP Integration**: Exposed as the `rag_memory` tool with store, recall, forget, stats, list, decay, history, promote, and link operations. Memory TTL is supported; reserved `auto:` memories are hidden unless explicitly requested.
+- **MCP Integration**: Exposed as the `rag_memory` tool with store, recall, forget, stats, list, decay, history, promote, and link operations. Memory TTL is supported; reserved `auto:` memories are hidden unless explicitly requested. Memory is written and recalled only through explicit `rag_memory` calls — there is no automatic query-time recall or write-back.
 
-### 🔮 **LangGraph Orchestration** _(experimental, opt-in)_
+#### MCP memory graph visualization
 
-- Enable with the `ragnarok.langGraphEnabled` VS Code setting or `RAGNAROK_LANGGRAPH_ENABLED=true` for the MCP server
-- When enabled, [LangGraph](https://langchain-ai.github.io/langgraphjs/) `StateGraph` pipelines orchestrate both query execution and document ingestion — ingestion additionally builds a per-topic knowledge graph (entity extraction requires an LLM provider), which powers the `graph` retrieval strategies
-- LanceDB checkpoints support crash recovery. Successful checkpoints are deleted immediately by default; set `ragnarok.checkpointRetentionMs` or `RAGNAROK_CHECKPOINT_RETENTION_MS` for bounded debugging retention. Automatic query memory remains disabled unless `ragnarok.queryMemoryEnabled` or `RAGNAROK_QUERY_MEMORY_ENABLED=true` is set.
-- The existing procedural flows (`RAGAgent`, `DocumentPipeline`) remain the default
-- See [Phase 4 plan](docs/knowledge-graph/phase-4-memory-langgraph.md) for the full design
+Graphs exist only in the memory subsystem. There is no document knowledge
+graph, no entity extraction over ingested documents, and no `graph` or
+`graph_hybrid` retrieval strategy.
+
+Because memory is always personal, the `rag_graph_visualize` tool is
+**structurally absent in shared deployments** — it is registered only for local
+stdio and local HTTP curators/admins. It accepts exactly
+`{ source: "memory", memoryScope: "workspace", maxNodes? }` or
+`{ source: "memory", memoryScope: "branch", branch, maxNodes? }` and returns the
+deterministic `ragnarok.graph.visualization.v1` document. The default is 500
+nodes, the accepted range is 1 through 2,000, and output is capped at 10,000
+edges and the MCP response-byte limit. Failures surface as
+`GRAPH_VISUALIZATION_RECORD_TOO_LARGE` or `GRAPH_VISUALIZATION_FAILED`; an empty
+or unknown scope returns an empty document rather than fabricated data.
+
+Documents include full persisted node/edge descriptions, provenance,
+confidence, scope/branch fields, and arbitrary metadata, but never embedding
+vectors. MCP Apps hosts load the self-contained `ui://ragnarok/graph` resource
+as `text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. The app
+provides loading, empty, error, keyboard, screen-reader, touch, detail-panel,
+and viewport reset behavior. The VS Code extension webview remains deferred. See
+the [MCP server graph contract](packages/mcp-server/README.md#graph-visualization).
 
 ---
 
@@ -406,7 +393,7 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   // Chunk overlap for context preservation
   "ragnarok.chunkOverlap": 50,
 
-  // Retrieval strategy: vector, hybrid, ensemble, bm25, graph, graph_hybrid
+  // Retrieval strategy: vector, hybrid, bm25
   "ragnarok.retrievalStrategy": "hybrid",
 
   // Path to shared/common RAG database (read-only topics)
@@ -476,9 +463,9 @@ copilot-rag/
 | **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                   |
 | **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio + HTTP transports) |
 
-### MCP 0.5.0 protocol
+### MCP 0.6.0 protocol
 
-RAGnarok 0.5.0 serves MCP protocol `2026-07-28` only. Clients must use
+RAGnarok 0.6.0 serves MCP protocol `2026-07-28` only. Clients must use
 `server/discover` or modern version negotiation; legacy `initialize` is
 rejected. There is no compatibility mode and no `Mcp-Session-Id`.
 
@@ -499,7 +486,7 @@ npm run test:all         # Run all tests (core → vscode → mcp-server)
 npm run test:core        # Run core package tests only
 npm test                 # Run VS Code extension tests only
 npm run test:mcp         # Run MCP server tests only
-npm run bench:smoke      # Fast deterministic retrieval/graph/reranker gate
+npm run bench:smoke      # Fast deterministic retrieval/reranker gate
 npm run bench:release    # Pinned release benchmark; missing inputs fail
 npm run test:docs        # Validate canonical documentation links/contracts
 npm run lint             # Lint all packages
@@ -525,7 +512,7 @@ The MCP server exposes these tools to any MCP-compatible agent:
 | `rag_memory`                 | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped) |
 | `rag_list_documents`         | List stable source documents in a topic                                                  |
 | `rag_delete_topic`           | Delete a topic after explicit confirmation                                               |
-| `rag_remove_document`        | Remove a document and reconcile chunks and graph provenance                              |
+| `rag_remove_document`        | Remove a document and reconcile its chunks                                               |
 | `rag_rename_topic`           | Rename a topic                                                                           |
 | `rag_add_url`                | Securely ingest a public HTTP(S) page                                                    |
 | `rag_add_github_repo`        | Ingest an allowlisted GitHub/GHES repository                                             |
@@ -566,9 +553,9 @@ passed, failed, or unrun. Docker runtime and all six installed VSIX platform
 combinations are release blockers until their designated CI environments
 execute them; a local compile or package build does not imply those gates
 passed. The release benchmark also exits nonzero with `status: "blocked"` when
-aggregate graph quality, child-process peak RSS, isolated index time, or exact
-package-size measurements are absent; deterministic smoke tests do not stand
-in for those declared measurements.
+child-process peak RSS, isolated index time, or exact package-size
+measurements are absent; deterministic smoke tests do not stand in for those
+declared measurements.
 
 ---
 

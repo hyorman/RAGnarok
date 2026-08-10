@@ -17,7 +17,7 @@ const releaseArtifactDir = path.resolve(root, process.env.RAGNAROK_RELEASE_ARTIF
 if (baseline.corpusManifestSha256 !== sha256(manifestContents)) {
   throw new Error("Benchmark baseline is not bound to the current corpus manifest");
 }
-for (const strategy of ["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid", "rerank"]) {
+for (const strategy of ["vector", "hybrid", "bm25", "rerank"]) {
   if (!manifest.config.strategies.includes(strategy) || !baseline.minimums[strategy]) {
     throw new Error(`Release benchmark contract is missing strategy ${strategy}`);
   }
@@ -29,10 +29,6 @@ const corpusChecks = [
   [".cache/beir/scifact/queries.jsonl", manifest.corpora[1].files["queries.jsonl"]],
   [".cache/beir/scifact/qrels/test.tsv", manifest.corpora[1].files["qrels/test.tsv"]],
   [".cache/frames/frames-test.tsv", manifest.corpora[2].sha256],
-  [
-    "packages/core/test/helpers/releaseGraphFixture.ts",
-    manifest.corpora.find((corpus) => corpus.id === "ragnarok-graph-release-v1")?.sha256,
-  ],
 ];
 for (const [relative, expected] of corpusChecks) {
   if (typeof expected !== "string") {
@@ -108,14 +104,6 @@ const benchmarkWorkloads = [
   {
     id: "retrieval-fixture",
     files: ["dist-test/test/retrievalBenchmark.test.js", "dist-test/test/vectorRetriever.test.js"],
-  },
-  {
-    id: "graph",
-    files: [
-      "dist-test/test/graphRetriever.test.js",
-      "dist-test/test/graphHybridRetriever.test.js",
-      "dist-test/test/releaseGraphBenchmark.test.js",
-    ],
   },
   { id: "beir", files: ["dist-test/test/beirBenchmark.test.js"] },
   { id: "beir-rerank", files: ["dist-test/test/rerankBenchmark.test.js"] },
@@ -208,7 +196,7 @@ measuredQuality.performance = {
 for (const required of ["beir", "beir-rerank", "frames-rerank"]) {
   if (!measuredQuality[required]) throw new Error(`Release benchmark omitted machine metrics for ${required}`);
 }
-for (const strategy of ["vector", "hybrid", "ensemble", "bm25"]) {
+for (const strategy of ["vector", "hybrid", "bm25"]) {
   for (const [metric, minimum] of Object.entries(baseline.minimums[strategy])) {
     const actual = measuredQuality.beir[strategy]?.[metric];
     if (!Number.isFinite(actual) || actual < minimum) {
@@ -233,30 +221,6 @@ for (const suite of ["beir-rerank", "frames-rerank"]) {
 }
 
 const blockers = [];
-for (const strategy of ["graph", "graph_hybrid"]) {
-  const metrics = measuredQuality[strategy];
-  if (!metrics) {
-    blockers.push({
-      code: "missing_graph_aggregate",
-      measure: strategy,
-      message: `No aggregate machine metrics were emitted for ${strategy}`,
-    });
-    continue;
-  }
-  for (const [metric, minimum] of Object.entries(baseline.minimums[strategy])) {
-    const actual = metrics[metric];
-    if (!Number.isFinite(actual)) {
-      blockers.push({
-        code: "missing_graph_metric",
-        measure: `${strategy}.${metric}`,
-        message: `No finite value was emitted for ${strategy}.${metric}`,
-      });
-    } else if (actual < minimum) {
-      throw new Error(`${strategy}.${metric} ${actual} is below release minimum ${minimum}`);
-    }
-  }
-}
-
 const emittedPerformance = measuredQuality.performance ?? {};
 const childPeakRssBytes = emittedPerformance.childPeakRssBytes;
 const indexTimeMs = emittedPerformance.indexTimeMs;
@@ -343,9 +307,6 @@ for (const [name, pattern] of [
     throw new Error(`${name} ${packageSizes[name]} exceeds release maximum ${baseline.maximums[name]}`);
   }
 }
-const graphMeasured = ["graph", "graph_hybrid"].every((strategy) =>
-  Object.keys(baseline.minimums[strategy]).every((metric) => Number.isFinite(measuredQuality[strategy]?.[metric])),
-);
 const output = {
   schemaVersion: 1,
   sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
@@ -360,12 +321,6 @@ const output = {
   strategies: manifest.config.strategies,
   qualityContract: baseline.minimums,
   measuredQuality,
-  graphContractEvidence: {
-    measured: graphMeasured,
-    reason: graphMeasured
-      ? undefined
-      : "Named deterministic graph tests are not a substitute for the declared aggregate graph release metrics.",
-  },
   performance: {
     suiteTimeMs: Math.round(performance.now() - started),
     harnessRssDeltaBytes: Math.max(0, process.memoryUsage().rss - beforeRss),
@@ -403,15 +358,7 @@ const output = {
           documentCount: emittedPerformance.indexDocumentCount,
         }
       : null,
-    requiredMetrics: [
-      "Recall@5",
-      "MRR@10",
-      "nDCG@5",
-      "entityRecall@5",
-      "chunkRecall@5",
-      "fallbackAccuracy",
-      "explanationCoverage",
-    ],
+    requiredMetrics: ["Recall@5", "MRR@10", "nDCG@5"],
     limits: baseline.maximums,
   },
   packageSizes,

@@ -1,5 +1,12 @@
 # Phase 3 Plan: Graph Retriever + Query Routing
 
+> **Superseded.** The document knowledge graph, entity extraction over ingested
+> documents, the `graph`/`graph_hybrid`/`ensemble` retrieval strategies, and the
+> LangGraph orchestration layer were all removed. Graphs now exist only in the
+> memory subsystem. This document is retained as design history only — see
+> [ARCHITECTURE.md](../../ARCHITECTURE.md) and
+> [docs/RETRIEVAL-PIPELINE.md](../RETRIEVAL-PIPELINE.md) for current behavior.
+
 ## TL;DR
 Add a `GraphRetriever` that queries the Phase 1/2 KnowledgeGraph (local search via entity neighborhood traversal, global search via community summaries), introduce `GRAPH` and `GRAPH_HYBRID` retrieval strategies, and update query routing so the QueryPlannerAgent can dynamically select graph-based retrieval for relationship-aware and holistic queries.
 

@@ -1,5 +1,12 @@
 # Phase 4: Memory Integration + LangGraph Orchestration — Implementation Plan
 
+> **Superseded.** The document knowledge graph, entity extraction over ingested
+> documents, the `graph`/`graph_hybrid`/`ensemble` retrieval strategies, and the
+> LangGraph orchestration layer were all removed. Graphs now exist only in the
+> memory subsystem. This document is retained as design history only — see
+> [ARCHITECTURE.md](../../ARCHITECTURE.md) and
+> [docs/RETRIEVAL-PIPELINE.md](../RETRIEVAL-PIPELINE.md) for current behavior.
+
 ## TL;DR
 
 Add rememory-inspired persistent memory (Fact/Preference/Episode entities with typed edges, temporal decay, cross-topic links) to the KnowledgeGraph from Phases 1-3, introduce a forgetting engine, adopt LangGraph for pipeline orchestration, and expose memory via MCP tools + VS Code UI.

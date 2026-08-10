@@ -58,7 +58,12 @@ for (const variable of [
 }
 
 const core = await readFile(path.join(root, "packages/core/README.md"), "utf8");
-assert.match(core, /GRAPH_HYBRID/);
+for (const strategy of ["VECTOR", "HYBRID", "BM25"]) {
+  assert.match(core, new RegExp(`\\*\\*${strategy}\\*\\*`), `Core guide must document the ${strategy} strategy`);
+}
+for (const removed of ["GRAPH_HYBRID", "EnsembleRetriever", "LangGraph"]) {
+  assert.doesNotMatch(core, new RegExp(removed), `Core guide must not document removed subsystem ${removed}`);
+}
 assert.match(core, /embedding fingerprint/i);
 assert.match(core, /requires reindexing/i);
 

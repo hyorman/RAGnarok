@@ -1,12 +1,12 @@
 # RAGnarōk architecture
 
-This document describes the v0.4 implementation. Future work is identified as
+This document describes the v0.6 implementation. Future work is identified as
 such; passing unit tests is not presented as release evidence.
 
 ## Surfaces
 
-`@ragnarok/core` owns ingestion, embedding, retrieval, reranking, topic
-knowledge graphs, memory, archives, migration, and LanceDB persistence.
+`@ragnarok/core` owns ingestion, embedding, retrieval, reranking, memory,
+archives, migration, and LanceDB persistence.
 `@ragnarok/vscode` adapts the core to VS Code. `@ragnarok/mcp-server` exposes
 the same core through local stdio or Streamable HTTP.
 
@@ -36,7 +36,6 @@ The configured storage root has one v2 marker and one lease:
     lancedb/
   memory-lancedb/
   memory-manifest.json
-  checkpoints-lancedb/
   exports/
   .transfers/
 ```
@@ -53,30 +52,24 @@ metadata.
 Topic ingestion stages data and metadata under a durable journal. Archive
 import validates the central directory, normalized paths, duplicates,
 case-collisions, sizes, compression ratio, manifest coverage, schemas, and
-checksums before publication. Memory entry/graph views and topic graph
-entity/edge views use feature-local recovery journals. Those journals are
-before-image based and can be expensive for very large scopes; a unified WAL
-is future optimization.
+checksums before publication. Memory entry and memory-graph views use
+feature-local recovery journals. Those journals are before-image based and can
+be expensive for very large scopes; a unified WAL is future optimization.
 
-## Retrieval and graph semantics
+## Retrieval semantics
 
 - `vector`: LanceDB squared-L2 is converted to the unit-vector cosine score
   contract.
 - `bm25`: lexical BM25 retrieval.
 - `hybrid`: weighted vector and lexical evidence.
-- `ensemble`: reciprocal-rank fusion.
-- `graph`: entity matching plus graph traversal and chunk provenance.
-- `graph_hybrid`: graph and vector fusion.
 
-Results expose `scoreKind`, component scores, effective strategy, matched
-entities, hop depth, and fallback reason. A graph request that falls back to
-vector is labeled vector; graph failure is not disguised as graph evidence.
-Dimension mismatch and orthogonal entity vectors are not matches.
+These are the only strategies. There is no document knowledge graph, no
+document entity extraction, and therefore no graph-derived retrieval.
 
-Knowledge-graph metadata stores the embedding fingerprint. A fingerprint
-mismatch is a hard reindex error and is not swallowed by hybrid fallback.
-Indexing with an LLM builds entity/relationship provenance; without an LLM,
-graph extraction is skipped rather than fabricated.
+Results expose `scoreKind`, component scores, and effective strategy.
+
+Topic metadata stores the embedding fingerprint. A fingerprint mismatch is a
+hard reindex error and is not swallowed by a partial result.
 
 Cross-encoder reranking leases the active model generation so in-flight work
 can drain during a model switch. Cancellation propagates rather than returning
@@ -88,8 +81,12 @@ Memory is personal and absent from shared deployments. Workspace and explicit
 branch scopes are separate; detached HEAD never silently becomes workspace.
 Recall excludes superseded, expired, below-confidence, and reserved automatic
 entries unless explicitly requested. Only memories whose referenced entities
-are all facts receive fact immunity. The graph is a directed multigraph, so
-different relationship types may connect the same ordered pair.
+are all facts receive fact immunity. The memory graph is a directed multigraph,
+so different relationship types may connect the same ordered pair. It is the
+only graph in the system: it is populated by memory entity extraction, which
+requires an LLM provider, and it is exposed read-only through
+`rag_graph_visualize` in local deployments. Memory is read and written only
+through explicit `rag_memory` operations.
 
 ## MCP protocol, authorization, and transfer
 
@@ -98,7 +95,7 @@ but cannot perform administrative model/storage/import/export operations.
 Admins receive the complete non-memory shared surface. Memory tools exist only
 in local mode.
 
-RAGnarok 0.5.0 serves only MCP `2026-07-28`. Modern clients begin with
+RAGnarok 0.6.0 serves only MCP `2026-07-28`. Modern clients begin with
 `server/discover`; legacy `initialize` is rejected. HTTP MCP traffic is
 request-scoped and POST-only, while `GET /mcp` and `DELETE /mcp` return `405`.
 There is no `Mcp-Session-Id`.

@@ -5,6 +5,12 @@
 **Expected Impact:** +5-15% NDCG@10 on BEIR benchmarks (Thakur et al., 2021)
 **Finding:** STRUCTURAL-REVIEW-REPORT.md §2.2 F5, Proposal A
 
+> **Historical.** Cross-encoder reranking shipped, but this document was written
+> when the engine had six retrieval strategies. Every mention below of
+> `ensemble`, `graph`, or `graph_hybrid` describes strategies that have since
+> been removed; the engine now has exactly `vector`, `hybrid`, and `bm25`.
+> Reranking applies to all three. See [RETRIEVAL-PIPELINE.md](RETRIEVAL-PIPELINE.md).
+
 ---
 
 ## 1. Background & Motivation

@@ -9,27 +9,30 @@ cross-model benchmarks.
 
 ## Retrieval Strategies
 
-| Strategy              | Description                                                                      |
-| --------------------- | -------------------------------------------------------------------------------- |
-| **HYBRID-default**    | Weighted score fusion (V0.9 / K0.1) combining vector + BM25 keyword scores       |
-| **HYBRID-kw-bm25**    | Same as HYBRID-default but BM25 receives extracted keywords instead of raw query |
-| **ENSEMBLE-default**  | Reciprocal Rank Fusion (RRF, k=60) with default weights (V0.5 / B0.5)            |
-| **ENSEMBLE-raw-bm25** | Same as ENSEMBLE-default but BM25 receives the raw natural-language query        |
-| **VECTOR-only**       | Pure semantic search via cosine similarity                                       |
-| **BM25-raw**          | BM25 with the raw natural-language query                                         |
-| **BM25-keyword**      | BM25 with extracted keywords                                                     |
-| **+rerank**           | Any strategy above with cross-encoder reranking (Xenova/ms-marco-MiniLM-L-6-v2)  |
+| Strategy           | Description                                                                      |
+| ------------------ | -------------------------------------------------------------------------------- |
+| **HYBRID-default** | Weighted score fusion (V0.9 / K0.1) combining vector + BM25 keyword scores       |
+| **HYBRID-kw-bm25** | Same as HYBRID-default but BM25 receives extracted keywords instead of raw query |
+| **VECTOR-only**    | Pure semantic search via cosine similarity                                       |
+| **BM25-raw**       | BM25 with the raw natural-language query                                         |
+| **BM25-keyword**   | BM25 with extracted keywords                                                     |
+| **+rerank**        | Any strategy above with cross-encoder reranking (Xenova/ms-marco-MiniLM-L-6-v2)  |
+
+The engine implements exactly three retrieval strategies — `vector`, `hybrid`,
+and `bm25` — plus optional cross-encoder reranking over any of them. Earlier
+revisions of this document also reported an `ensemble` (Reciprocal Rank Fusion)
+strategy; that strategy has been removed and its rows are gone from the tables
+below.
 
 ---
 
 ## Quick Reference — Cross-Dataset Comparison (NDCG@10)
 
-| Strategy         | SciFact   | NFCorpus  | FiQA      | FRAMES     |
-| ---------------- | --------- | --------- | --------- | ---------- |
-| HYBRID-default   | **0.661** | **0.335** | 0.318     | 0.481¹     |
-| ENSEMBLE-default | 0.635     | 0.320     | 0.326     | 0.417¹     |
-| VECTOR-only      | 0.603     | 0.319     | **0.358** | **0.535**¹ |
-| BM25-keyword     | 0.588     | 0.259     | 0.169     | 0.321¹     |
+| Strategy       | SciFact   | NFCorpus  | FiQA      | FRAMES     |
+| -------------- | --------- | --------- | --------- | ---------- |
+| HYBRID-default | **0.661** | **0.335** | 0.318     | 0.481¹     |
+| VECTOR-only    | 0.603     | 0.319     | **0.358** | **0.535**¹ |
+| BM25-keyword   | 0.588     | 0.259     | 0.169     | 0.321¹     |
 
 ¹ FRAMES uses NDCG@5 (MRR@10 reported separately).
 
@@ -49,23 +52,15 @@ matching.
 
 ### Results
 
-| Config             | NDCG@1    | NDCG@5 | NDCG@10   | Recall@5  | MRR   |
-| ------------------ | --------- | ------ | --------- | --------- | ----- |
-| **HYBRID-default** | **0.550** | —      | **0.661** | 68.6%     | 0.629 |
-| ENSEMBLE-default   | 0.487     | —      | 0.635     | **68.9%** | 0.589 |
-| VECTOR-only        | —         | —      | 0.603     | —         | —     |
-| BM25-keyword       | —         | —      | 0.588     | —         | —     |
+| Config             | NDCG@1    | NDCG@5 | NDCG@10   | Recall@5 | MRR   |
+| ------------------ | --------- | ------ | --------- | -------- | ----- |
+| **HYBRID-default** | **0.550** | —      | **0.661** | 68.6%    | 0.629 |
+| VECTOR-only        | —         | —      | 0.603     | —        | —     |
+| BM25-keyword       | —         | —      | 0.588     | —        | —     |
 
 ### Weight Sweep
 
 - **HYBRID optimal:** V0.9/K0.1 (default is already optimal)
-- **ENSEMBLE optimal:** V0.5/B0.5 (NDCG@10=0.635); default V0.7/B0.3 is suboptimal (0.623)
-
-### Head-to-Head
-
-HYBRID wins 49 queries vs ENSEMBLE's 43 at NDCG@10 (208 ties). HYBRID excels
-at ranking quality (NDCG@1 +8.3%, MRR +5.2%); ENSEMBLE has marginally better
-recall (+1.6%).
 
 ---
 
@@ -83,15 +78,12 @@ recall (+1.6%).
 | **HYBRID-default** | **0.432** | **0.365** | **0.335** | 12.6%    | **0.534** |
 | HYBRID-kw-bm25     | 0.432     | 0.365     | 0.335     | 12.6%    | 0.534     |
 | VECTOR-only        | 0.377     | 0.344     | 0.319     | 12.2%    | 0.502     |
-| ENSEMBLE-raw-bm25  | 0.401     | 0.340     | 0.322     | 11.7%    | 0.517     |
-| ENSEMBLE-default   | 0.402     | 0.339     | 0.320     | 11.8%    | 0.522     |
 | BM25-keyword       | 0.338     | 0.282     | 0.259     | 10.0%    | 0.434     |
 | BM25-raw           | 0.315     | 0.266     | 0.246     | 9.8%     | 0.413     |
 
 ### Weight Sweep
 
 - **HYBRID optimal:** V0.95/K0.05 (NDCG@10=0.345, Δ=+0.009 vs default)
-- **ENSEMBLE optimal:** V0.9/B0.1 (NDCG@10=0.327, Δ=+0.007 vs default)
 
 ### Notes
 
@@ -111,28 +103,19 @@ here because biomedical terminology provides strong keyword signals.
 
 ### Results
 
-| Config            | NDCG@1    | NDCG@5    | NDCG@10   | Recall@5  | MRR       |
-| ----------------- | --------- | --------- | --------- | --------- | --------- |
-| **VECTOR-only**   | **0.347** | **0.332** | **0.358** | **34.1%** | **0.433** |
-| HYBRID-default    | 0.327     | 0.301     | 0.318     | 30.7%     | 0.401     |
-| ENSEMBLE-raw-bm25 | 0.278     | 0.298     | 0.331     | 33.1%     | 0.391     |
-| ENSEMBLE-default  | 0.295     | 0.297     | 0.326     | 33.0%     | 0.397     |
-| BM25-keyword      | 0.159     | 0.147     | 0.169     | 15.8%     | 0.217     |
-| BM25-raw          | 0.120     | 0.116     | 0.134     | 12.3%     | 0.171     |
+| Config          | NDCG@1    | NDCG@5    | NDCG@10   | Recall@5  | MRR       |
+| --------------- | --------- | --------- | --------- | --------- | --------- |
+| **VECTOR-only** | **0.347** | **0.332** | **0.358** | **34.1%** | **0.433** |
+| HYBRID-default  | 0.327     | 0.301     | 0.318     | 30.7%     | 0.401     |
+| BM25-keyword    | 0.159     | 0.147     | 0.169     | 15.8%     | 0.217     |
+| BM25-raw        | 0.120     | 0.116     | 0.134     | 12.3%     | 0.171     |
 
 ### Weight Sweep
 
 - **HYBRID optimal:** V0.95/K0.05 (NDCG@10=0.363, Δ=+0.045 vs default)
-- **ENSEMBLE optimal:** V0.95/B0.05 (NDCG@10=0.363, Δ=+0.038 vs default)
 
-Both converge to near-pure vector search (V≈1.0), confirming VECTOR-only
+The sweep converges to near-pure vector search (V≈1.0), confirming VECTOR-only
 superiority on this dataset.
-
-### Head-to-Head
-
-HYBRID wins 119 vs ENSEMBLE 101 at NDCG@5 (428 ties). At NDCG@10, ENSEMBLE
-wins 152 vs HYBRID 140 (356 ties) — ENSEMBLE's RRF slightly better at deeper
-ranking.
 
 ---
 
@@ -147,21 +130,19 @@ ranking.
 
 ### Results (all-MiniLM-L6-v2, 384-dim)
 
-| Config           | NDCG@5    | Recall@5  | MRR@10    |
-| ---------------- | --------- | --------- | --------- |
-| **VECTOR-only**  | **0.535** | **52.2%** | **0.675** |
-| HYBRID-default   | 0.485     | 48.0%     | 0.615     |
-| ENSEMBLE-default | 0.398     | 42.7%     | 0.513     |
-| BM25-keyword     | 0.223     | 23.2%     | 0.321     |
+| Config          | NDCG@5    | Recall@5  | MRR@10    |
+| --------------- | --------- | --------- | --------- |
+| **VECTOR-only** | **0.535** | **52.2%** | **0.675** |
+| HYBRID-default  | 0.485     | 48.0%     | 0.615     |
+| BM25-keyword    | 0.223     | 23.2%     | 0.321     |
 
 ### Results (bge-base-en-v1.5, 768-dim)
 
-| Config           | NDCG@5    | Recall@5  | MRR@10    |
-| ---------------- | --------- | --------- | --------- |
-| **VECTOR-only**  | **0.667** | **64.8%** | **0.823** |
-| HYBRID-default   | 0.509     | 49.3%     | 0.686     |
-| ENSEMBLE-default | 0.491     | 50.2%     | 0.661     |
-| BM25-keyword     | 0.256     | 25.4%     | 0.397     |
+| Config          | NDCG@5    | Recall@5  | MRR@10    |
+| --------------- | --------- | --------- | --------- |
+| **VECTOR-only** | **0.667** | **64.8%** | **0.823** |
+| HYBRID-default  | 0.509     | 49.3%     | 0.686     |
+| BM25-keyword    | 0.256     | 25.4%     | 0.397     |
 
 ### Model Comparison on FRAMES
 
@@ -216,13 +197,13 @@ All models use ONNX fp32 weights with CPU inference. Times measured on Apple M-s
 
 ### Per-Strategy Results
 
-| Model                     | HYBRID NDCG@10 | HYBRID Recall@5 | ENSEMBLE NDCG@10 | VECTOR NDCG@10 | VECTOR Recall@5 | BM25 NDCG@10 |
-| ------------------------- | -------------- | --------------- | ---------------- | -------------- | --------------- | ------------ |
-| all-MiniLM-L6-v2          | 0.661          | 71.7%           | 0.635            | 0.603          | 67.7%           | 0.545        |
-| bge-small-en-v1.5         | 0.661          | 71.1%           | 0.647            | 0.644          | 70.5%           | 0.545        |
-| **bge-base-en-v1.5**      | 0.677          | 73.3%           | 0.670            | **0.706**      | **76.5%**       | 0.545        |
-| text-embedding-3-small¹   | 0.692          | 74.3%           | 0.676            | 0.703          | 76.4%           | 0.545        |
-| multi-qa-MiniLM-L6-cos-v1 | 0.617          | 67.3%           | 0.576            | 0.499          | 55.3%           | 0.545        |
+| Model                     | HYBRID NDCG@10 | HYBRID Recall@5 | VECTOR NDCG@10 | VECTOR Recall@5 | BM25 NDCG@10 |
+| ------------------------- | -------------- | --------------- | -------------- | --------------- | ------------ |
+| all-MiniLM-L6-v2          | 0.661          | 71.7%           | 0.603          | 67.7%           | 0.545        |
+| bge-small-en-v1.5         | 0.661          | 71.1%           | 0.644          | 70.5%           | 0.545        |
+| **bge-base-en-v1.5**      | 0.677          | 73.3%           | **0.706**      | **76.5%**       | 0.545        |
+| text-embedding-3-small¹   | 0.692          | 74.3%           | 0.703          | 76.4%           | 0.545        |
+| multi-qa-MiniLM-L6-cos-v1 | 0.617          | 67.3%           | 0.499          | 55.3%           | 0.545        |
 
 <details>
 <summary>Full per-model metrics (NDCG@5, MRR)</summary>
@@ -230,19 +211,14 @@ All models use ONNX fp32 weights with CPU inference. Times measured on Apple M-s
 | Model                     | Strategy | NDCG@5 | NDCG@10 | Recall@5 | MRR   |
 | ------------------------- | -------- | ------ | ------- | -------- | ----- |
 | all-MiniLM-L6-v2          | HYBRID   | 0.641  | 0.661   | 71.7%    | 0.629 |
-| all-MiniLM-L6-v2          | ENSEMBLE | 0.594  | 0.635   | 68.5%    | 0.585 |
 | all-MiniLM-L6-v2          | VECTOR   | 0.574  | 0.603   | 67.7%    | 0.558 |
 | bge-small-en-v1.5         | HYBRID   | 0.643  | 0.661   | 71.1%    | 0.636 |
-| bge-small-en-v1.5         | ENSEMBLE | 0.614  | 0.647   | 70.0%    | 0.609 |
 | bge-small-en-v1.5         | VECTOR   | 0.619  | 0.644   | 70.5%    | 0.608 |
 | bge-base-en-v1.5          | HYBRID   | 0.666  | 0.677   | 73.3%    | 0.658 |
-| bge-base-en-v1.5          | ENSEMBLE | 0.639  | 0.670   | 74.4%    | 0.627 |
 | bge-base-en-v1.5          | VECTOR   | 0.676  | 0.706   | 76.5%    | 0.667 |
 | multi-qa-MiniLM-L6-cos-v1 | HYBRID   | 0.594  | 0.617   | 67.3%    | 0.586 |
-| multi-qa-MiniLM-L6-cos-v1 | ENSEMBLE | 0.533  | 0.576   | 62.4%    | 0.530 |
 | multi-qa-MiniLM-L6-cos-v1 | VECTOR   | 0.478  | 0.499   | 55.3%    | 0.469 |
 | text-embedding-3-small    | HYBRID   | 0.678  | 0.692   | 74.3%    | 0.671 |
-| text-embedding-3-small    | ENSEMBLE | 0.646  | 0.676   | 73.8%    | 0.638 |
 | text-embedding-3-small    | VECTOR   | 0.679  | 0.703   | 76.4%    | 0.669 |
 
 </details>
@@ -314,25 +290,22 @@ the final top-k results.
 
 ### Reranking Impact by Strategy
 
-| Strategy     | Base NDCG@10 | +Rerank NDCG@10 | Δ NDCG     | Win/Loss/Tie     |
-| ------------ | ------------ | --------------- | ---------- | ---------------- |
-| **BM25**     | 0.489        | 0.594           | **+0.105** | 87W / 18L / 195T |
-| **VECTOR**   | 0.603        | 0.676           | **+0.073** | 80W / 45L / 175T |
-| **ENSEMBLE** | 0.628        | **0.688**       | **+0.060** | 84W / 55L / 161T |
-| **HYBRID**   | 0.677        | 0.686           | +0.009     | 61W / 55L / 184T |
+| Strategy   | Base NDCG@10 | +Rerank NDCG@10 | Δ NDCG     | Win/Loss/Tie     |
+| ---------- | ------------ | --------------- | ---------- | ---------------- |
+| **BM25**   | 0.489        | 0.594           | **+0.105** | 87W / 18L / 195T |
+| **VECTOR** | 0.603        | **0.676**       | **+0.073** | 80W / 45L / 175T |
+| **HYBRID** | 0.677        | **0.686**       | +0.009     | 61W / 55L / 184T |
 
 ### Detailed Metrics
 
-| Config              | NDCG@10   | MRR@10    | Recall@5  | Time (ms) |
-| ------------------- | --------- | --------- | --------- | --------- |
-| VECTOR              | 0.603     | 0.558     | 67.7%     | 51        |
-| VECTOR+rerank       | 0.676     | 0.643     | 72.3%     | 2,148     |
-| HYBRID              | 0.677     | 0.644     | 71.2%     | 225       |
-| HYBRID+rerank       | 0.686     | 0.653     | 73.0%     | 2,085     |
-| ENSEMBLE            | 0.628     | 0.585     | 68.5%     | 221       |
-| **ENSEMBLE+rerank** | **0.688** | **0.657** | **72.8%** | 2,060     |
-| BM25                | 0.489     | 0.452     | 53.7%     | 263       |
-| BM25+rerank         | 0.594     | 0.579     | 63.3%     | 2,076     |
+| Config            | NDCG@10   | MRR@10    | Recall@5  | Time (ms) |
+| ----------------- | --------- | --------- | --------- | --------- |
+| VECTOR            | 0.603     | 0.558     | 67.7%     | 51        |
+| VECTOR+rerank     | 0.676     | 0.643     | 72.3%     | 2,148     |
+| HYBRID            | 0.677     | 0.644     | 71.2%     | 225       |
+| **HYBRID+rerank** | **0.686** | **0.653** | **73.0%** | 2,085     |
+| BM25              | 0.489     | 0.452     | 53.7%     | 263       |
+| BM25+rerank       | 0.594     | 0.579     | 63.3%     | 2,076     |
 
 ### Candidate Pool Size Sweep (HYBRID+rerank)
 
@@ -349,9 +322,9 @@ the final top-k results.
    retrievers. BM25 gains +0.105 NDCG (87W/18L), while HYBRID gains only +0.009
    because its base ranking is already strong.
 
-2. **ENSEMBLE+rerank achieves the best absolute NDCG@10 (0.688)**, surpassing
-   HYBRID's base score. Reranking compensates for ENSEMBLE's weaker initial
-   ranking (RRF) by rescoring with true cross-attention.
+2. **HYBRID+rerank achieves the best absolute NDCG@10 (0.686)** of the
+   surviving strategies, with VECTOR+rerank close behind at 0.676 — reranking
+   pulls the weaker first stage almost level with the stronger one.
 
 3. **20 candidates is the practical sweet spot.** NDCG@10 jumps +0.015 from
    10→20 candidates, but only +0.002 from 20→50. The latency savings are
@@ -360,8 +333,8 @@ the final top-k results.
 4. **Reranking adds ~2s latency** per query (from ~50–260ms to ~2,050–2,150ms
    on CPU). The cross-encoder dominates total query time.
 
-5. **Score distributions tighten** with reranking (σ decreases) for
-   VECTOR/HYBRID/ENSEMBLE, indicating more consistent ranking quality.
+5. **Score distributions tighten** with reranking (σ decreases) for both VECTOR
+   and HYBRID, indicating more consistent ranking quality.
 
 ### Running Reranking Benchmarks
 

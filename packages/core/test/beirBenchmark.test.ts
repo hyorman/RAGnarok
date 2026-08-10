@@ -253,7 +253,7 @@ describe(`BEIR ${DATASET} Retrieval Benchmark`, function (this: Mocha.Suite) {
   // Section 1: Per-Query Evaluation
   // ═══════════════════════════════════════════════════════════════════
 
-  it("should evaluate the selected query set across all 7 configs", async function (this: Mocha.Context) {
+  it("should evaluate the selected query set across all 5 configs", async function (this: Mocha.Context) {
     this.timeout(0);
 
     console.log("\n");

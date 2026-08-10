@@ -29,9 +29,10 @@ block:retrieval["Retrievers"]:3
   VectorRetriever["VectorRetriever"]
   KeywordRetriever["KeywordRetriever\n(BM25)"]
   HybridRetriever["HybridRetriever\n(weighted fusion)"]
-  EnsembleRetriever["EnsembleRetriever\n(RRF)"]
-  GraphRetriever["GraphRetriever\n(entity traversal)"]
-  GraphHybridRetriever["GraphHybridRetriever\n(graph + vector fusion)"]
+end
+
+block:rerankers["Rerankers"]:3
+  CrossEncoderReranker["CrossEncoderReranker\n(ONNX cross-encoder)"]
 end
 
 block:embeddings["Embeddings"]:3
@@ -54,8 +55,8 @@ end
 
 block:stores["Stores"]:3
   VectorStoreFactory["VectorStoreFactory\n(LanceDB, per-topic tables, caching)"]
-  KnowledgeGraphStore["KnowledgeGraphStore\n(entity/edge provenance)"]
   MemoryStore["MemoryStore\n(workspace/branch scopes)"]
+  MemoryGraph["MemoryGraph\n(memory entity graph, LLM-gated)"]
 end
 
 block:infra["Infrastructure"]:3
@@ -68,6 +69,7 @@ managers --> retrieval
 managers --> loaders
 managers --> splitters
 managers --> stores
+retrieval --> rerankers
 retrieval --> embeddings
 stores --> embeddings
 ```
@@ -85,6 +87,7 @@ src/
 │
 ├── agents/
 │   ├── ragAgent.ts            # Orchestrates retrieval, iterative refinement, gap analysis
+│   ├── ragQueryService.ts     # Query execution facade over RAGAgent
 │   └── queryPlannerAgent.ts   # LLM-powered query decomposition with heuristic fallback
 │
 ├── managers/
@@ -92,20 +95,20 @@ src/
 │   └── documentPipeline.ts    # End-to-end: load → chunk → embed → store
 │
 ├── retrievers/
-│   ├── ensembleRetriever.ts   # Reciprocal Rank Fusion across sub-retrievers
-│   ├── hybridRetriever.ts     # Weighted fusion of vector + keyword
 │   ├── vectorRetriever.ts     # Squared-L2 to unit-cosine score contract
 │   ├── keywordRetriever.ts    # BM25 keyword scoring
-│   ├── graphRetriever.ts      # Entity matching, traversal, provenance
-│   └── graphHybridRetriever.ts # Graph/vector score fusion
+│   └── hybridRetriever.ts     # Weighted fusion of vector + keyword
+│
+├── rerankers/
+│   ├── reranker.ts            # Reranker interface
+│   └── crossEncoderReranker.ts # ONNX cross-encoder second-stage reranking
 │
 ├── embeddings/
 │   ├── embeddingService.ts        # Pluggable backend router — selects active embedding backend
 │   ├── embeddingBackend.ts        # Backend interface (EmbeddingBackend)
 │   ├── huggingFaceBackend.ts      # Local ONNX inference via @xenova/transformers
 │   ├── remoteEmbeddingBackend.ts  # Remote HTTP backends (OpenAI / Ollama formats)
-│   ├── langchainEmbeddings.ts     # TransformersEmbeddings LangChain adapter
-│   └── modelRegistry.ts           # Tracks available / downloaded models
+│   └── langchainEmbeddings.ts     # TransformersEmbeddings LangChain adapter
 │
 ├── loaders/
 │   ├── documentLoaderFactory.ts # Picks loader by extension / URI scheme
@@ -121,12 +124,13 @@ src/
 │   └── semanticChunker.ts     # Markdown-aware, code-aware, general chunking
 │
 ├── stores/
-│   ├── vectorStoreFactory.ts  # LanceDB store creation, per-topic tables, caching
-│   ├── knowledgeGraphStore.ts # Persistent topic graphs and fingerprints
-│   └── lanceDBCheckpointer.ts # LangGraph checkpoint persistence
-├── memory/                    # Scoped memory, vector recall, graph, decay/export
+│   └── vectorStoreFactory.ts  # LanceDB store creation, per-topic tables, caching
 │
-└── utils/                     # Shared helpers
+├── memory/                    # Scoped memory: vector recall, entity graph, decay/export
+├── models/                    # Embedding and reranker model registries
+├── visualization/             # Deterministic memory-graph visualization documents
+│
+└── utils/                     # Storage v2, lease, migration, archive, shared helpers
 ```
 
 ---
@@ -162,32 +166,31 @@ These are defined in `src/interfaces.ts` and consumed throughout the codebase.
 
 ## Retrieval Strategies
 
-The engine supports six retrieval strategies, selectable per query:
+The engine supports three retrieval strategies, selectable per query:
 
-| Strategy         | Algorithm                                          | When to use                                                 |
-| ---------------- | -------------------------------------------------- | ----------------------------------------------------------- |
-| **VECTOR**       | Cosine similarity over embedded vectors            | Best for semantic / natural-language queries                |
-| **BM25**         | TF-IDF keyword scoring                             | Best for exact term matching (e.g. error messages)          |
-| **HYBRID**       | Weighted linear fusion of vector + BM25 scores     | Balanced default — combines semantic and lexical signals    |
-| **ENSEMBLE**     | Reciprocal Rank Fusion (RRF) across sub-retrievers | Most robust — merges ranked lists without score calibration |
-| **GRAPH**        | Entity match plus relationship traversal           | Explainable entity/neighborhood queries when a graph exists |
-| **GRAPH_HYBRID** | Weighted graph and vector fusion                   | Semantic recall plus graph provenance                       |
+| Strategy   | Algorithm                                      | When to use                                              |
+| ---------- | ---------------------------------------------- | -------------------------------------------------------- |
+| **VECTOR** | Cosine similarity over embedded vectors        | Best for semantic / natural-language queries             |
+| **BM25**   | TF-IDF keyword scoring                         | Best for exact term matching (e.g. error messages)       |
+| **HYBRID** | Weighted linear fusion of vector + BM25 scores | Balanced default — combines semantic and lexical signals |
+
+An optional cross-encoder reranker runs as a second stage over any strategy's
+candidates.
 
 Vector retrieval converts LanceDB squared-L2 distances to the repository's
 unit-vector cosine score contract. Results identify their effective strategy,
-score kind, components, graph entities/hops, and any fallback reason. A graph
-request that falls back is labeled with its actual strategy.
+score kind, and components.
 
-Topic and graph metadata persist the complete embedding fingerprint, not only
-vector dimension. Changing backend, model, revision, normalization, or distance
+Topic metadata persists the complete embedding fingerprint, not only vector
+dimension. Changing backend, model, revision, normalization, or distance
 contract requires reindexing. Fingerprint mismatch is a hard error and is never
-hidden by graph-hybrid fallback.
+silently downgraded to a partial result.
 
 ## Storage compatibility
 
-Core owns the v2 marker, lease, topic/vector/graph stores, standalone memory,
-checkpoints, archive validation, and the offline legacy migrator. One storage
-root has one writer. See the repository [architecture](../../ARCHITECTURE.md),
+Core owns the v2 marker, lease, topic and vector stores, standalone memory,
+archive validation, and the offline legacy migrator. One storage root has one
+writer. See the repository [architecture](../../ARCHITECTURE.md),
 [migration guide](../../MIGRATION.md), and
 [operations guide](../../docs/OPERATIONS.md).
 

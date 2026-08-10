@@ -1,5 +1,12 @@
 # Phase 1 Plan: Knowledge Graph Foundation — Data Layer
 
+> **Superseded.** The document knowledge graph, entity extraction over ingested
+> documents, the `graph`/`graph_hybrid`/`ensemble` retrieval strategies, and the
+> LangGraph orchestration layer were all removed. Graphs now exist only in the
+> memory subsystem. This document is retained as design history only — see
+> [ARCHITECTURE.md](../../ARCHITECTURE.md) and
+> [docs/RETRIEVAL-PIPELINE.md](../RETRIEVAL-PIPELINE.md) for current behavior.
+
 ## TL;DR
 Add graphology as an in-memory graph engine with new KG types, a `KnowledgeGraph` class wrapping graphology, and LanceDB persistence for entity/edge tables — all scoped per-topic, matching the existing architecture. No new retrieval strategy — just the data layer and serialization.
 

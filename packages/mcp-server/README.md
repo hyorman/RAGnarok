@@ -3,7 +3,7 @@
 MCP server exposing RAGnarōk tools to any MCP-compatible agent — Claude Desktop,
 Cursor, VS Code (via MCP client), CLI tools, and more.
 
-RAGnarok 0.5.0 serves MCP protocol `2026-07-28` only. Clients must use
+RAGnarok 0.6.0 serves MCP protocol `2026-07-28` only. Clients must use
 `server/discover` or modern version negotiation; legacy `initialize` is
 rejected and there is no compatibility mode.
 
@@ -61,7 +61,7 @@ use checksum-declared upload/download handles instead.
 
 | Tool                         | Description                                                                                          | Parameters                                                                                                                                                         |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `rag_query`                  | Query a topic with RAG (supports agentic multi-step planning)                                        | `topic` (string), `query` (string), `topK?` (number), `retrievalStrategy?` (`"vector"` \| `"hybrid"` \| `"ensemble"` \| `"bm25"` \| `"graph"` \| `"graph_hybrid"`) |
+| `rag_query`                  | Query a topic with RAG (supports agentic multi-step planning)                                        | `topic` (string), `query` (string), `topK?` (number), `retrievalStrategy?` (`"vector"` \| `"hybrid"` \| `"bm25"`)                                                   |
 | `rag_list_topics`            | List all available topics with metadata                                                              | _(none)_                                                                                                                                                           |
 | `rag_topic_stats`            | Get statistics for a topic                                                                           | `topic` (string)                                                                                                                                                   |
 | `rag_create_topic`           | Create a new topic                                                                                   | `name` (string), `description?` (string)                                                                                                                           |
@@ -78,9 +78,9 @@ use checksum-declared upload/download handles instead.
 | `rag_memory`                 | Project memory: store, recall, forget (incl. `expired`), stats, list, decay, history, promote, links | `action` (string) plus action-specific fields (`content`, `query`, `id`, `scope`, `branch`, `tags`, `topK`, `olderThan`, `expired`, `limit`, `includeEntities`)    |
 | `rag_list_documents`         | List a topic's indexed source documents                                                              | `topic` (string)                                                                                                                                                   |
 | `rag_delete_topic`           | Delete a topic and all managed data                                                                  | `topic` (string), `confirm` (`true`)                                                                                                                               |
-| `rag_remove_document`        | Remove one document, its chunks, and graph provenance                                                | `topic` (string), `documentId` (string), `confirm` (`true`)                                                                                                        |
+| `rag_remove_document`        | Remove one document and its chunks                                                                   | `topic` (string), `documentId` (string), `confirm` (`true`)                                                                                                        |
 | `rag_rename_topic`           | Rename a topic                                                                                       | `topic` (string), `newName` (string)                                                                                                                               |
-| `rag_graph_visualize`        | Return a deterministic knowledge or local memory graph and associate the MCP App                     | One exact input shape from [Graph visualization](#graph-visualization)                                                                                             |
+| `rag_graph_visualize`        | Return a deterministic local memory graph and associate the MCP App (local deployments only)         | One exact input shape from [Memory graph visualization](#memory-graph-visualization)                                                                               |
 | `rag_add_url`                | Securely ingest a public HTTP(S) URL                                                                 | `topic` (string), `url` (string)                                                                                                                                   |
 | `rag_add_github_repo`        | Ingest an allowlisted GitHub/GHES repository                                                         | `topic` (string), `url` (string), `branch?` (string)                                                                                                               |
 | `rag_export_topic`           | Export a checksummed storage-format-v2 `.rag` archive                                                | `topic` (string)                                                                                                                                                   |
@@ -92,27 +92,35 @@ use checksum-declared upload/download handles instead.
 
 ---
 
-## Graph visualization
+## Memory graph visualization
 
-`rag_graph_visualize` is available only to local owners and HTTP curators or
-admins. A shared reader does not see it in `tools/list`, and direct invocation
-is rejected. The tool accepts exactly one of these discriminated inputs; fields
-from another branch of the union and other unknown fields are rejected:
+Graphs exist only in the memory subsystem. There is no document knowledge
+graph, and `rag_graph_visualize` has no knowledge input.
+
+Because memory is always personal, the tool is registered only when a memory
+store is present and the deployment is not shared — that is, local stdio and
+local HTTP, for curators and admins. Shared deployments do not register it at
+all, so it never appears in `tools/list` and any invocation is an unknown-tool
+error rather than an authorization error. The tool accepts exactly one of these
+discriminated inputs; fields from the other branch of the union and other
+unknown fields are rejected:
 
 ```ts
-{ source: "knowledge", topic: string, maxNodes?: number }
 { source: "memory", memoryScope: "workspace", maxNodes?: number }
 { source: "memory", memoryScope: "branch", branch: string, maxNodes?: number }
 ```
 
-`topic` is trimmed and must contain 1 through 200 characters. `branch` is
-trimmed, must contain 1 through 255 characters, is required only for branch
-memory, and identifies that exact stored branch graph; an absent branch graph
-returns a successful empty document. Workspace memory uses the single workspace
-scope. Existing topics without persisted knowledge graphs likewise return
-successful empty documents. `maxNodes` defaults to 500 and accepts integers 1
-through 2,000. Projection retains at most 10,000 edges, and final sanitized,
-wrapped results remain within the configured response limit (1 MiB by default).
+`branch` is trimmed, must contain 1 through 255 characters, is required only for
+branch memory, and identifies that exact stored branch graph; an absent branch
+graph returns a successful empty document. Workspace memory uses the single
+workspace scope. `maxNodes` defaults to 500 and accepts integers 1 through
+2,000. Projection retains at most 10,000 edges, and final wrapped results remain
+within the configured response limit (1 MiB by default).
+
+The memory graph is built by memory entity extraction, which requires a
+configured LLM provider. Without one, memories are still stored and recalled by
+vector similarity, the graph stays empty, and every visualization is a
+successful empty document.
 
 The first published output schema is
 `ragnarok.graph.visualization.v1`. The unpublished
@@ -122,21 +130,17 @@ groups, viewport bounds, original/retained counts, empty/truncated status, and
 ordered truncation reasons. Clients without MCP Apps can consume the same
 document from text or `structuredContent` as machine-readable JSON.
 
-Authorized results contain complete persisted non-vector details. Knowledge
-node attributes include `description`, `sourceChunkIds`, `confidence`,
-`strength`, `lastAccessedAt`, and `metadata`; memory node attributes include
-`description`, `scope`, optional `branch`, `confidence`, `strength`,
+Results contain complete persisted non-vector details. Memory node attributes
+include `description`, `scope`, optional `branch`, `confidence`, `strength`,
 `createdAt`, `updatedAt`, `sourceMemoryIds`, and `metadata`. Edge attributes
 include the corresponding persisted description, provenance, confidence,
-scope/branch, and metadata fields. Arbitrary authorized metadata can contain
-sensitive topic or memory content. Embedding vectors are always excluded.
+scope/branch, and metadata fields. Arbitrary metadata can contain sensitive
+memory content. Embedding vectors are always excluded.
 
-Shared HTTP permits knowledge visualization for curators and admins and applies
-the normal shared-result sanitizer, which removes server-managed path fields
-and redacts path-like values. Shared deployments never expose workspace or
-branch memory: both inputs return
-`GRAPH_MEMORY_UNAVAILABLE`. This is a stable tool error in both text and
-structured content, not fallback or fabricated graph data.
+A record too large to fit the response limit returns
+`GRAPH_VISUALIZATION_RECORD_TOO_LARGE`; any other failure returns
+`GRAPH_VISUALIZATION_FAILED`. Both are stable tool errors in text and structured
+content, never fallback or fabricated graph data.
 
 The tool advertises exactly this modern metadata:
 
@@ -179,8 +183,6 @@ All settings are read from environment variables at startup:
 | `RAGNAROK_STORAGE_DIR`                   | `~/.ragnarok`                        | Database & topic storage directory                                                                                                                                 |
 | `RAGNAROK_WORKING_DIR`                   | `process.cwd()`                      | Project root for git-branch-scoped memory                                                                                                                          |
 | `RAGNAROK_ALLOWED_PATHS`                 | _(the working dir)_                  | Roots `rag_add_documents` may read, path-delimiter separated                                                                                                       |
-| `RAGNAROK_LANGGRAPH_ENABLED`             | `false`                              | Run queries/indexing through the LangGraph pipeline (experimental)                                                                                                 |
-| `RAGNAROK_QUERY_MEMORY_ENABLED`          | `false`                              | Allow high-confidence query insights to be stored as reserved automatic memories                                                                                   |
 | `RAGNAROK_EMBEDDING_MODEL`               | `Xenova/all-MiniLM-L6-v2`            | Embedding model name (HuggingFace or remote)                                                                                                                       |
 | `RAGNAROK_EMBEDDING_PROVIDER`            | `huggingface`                        | Embedding provider: `huggingface`, `openai`, `ollama`                                                                                                              |
 | `RAGNAROK_EMBEDDING_BASE_URL`            | _(empty)_                            | Remote embedding API base URL (required for openai/ollama)                                                                                                         |
@@ -223,7 +225,6 @@ All settings are read from environment variables at startup:
 | `RAGNAROK_EXPORT_DIR`                    | `<storage>/exports`                  | Only directory used for exported archives                                                                                                                          |
 | `RAGNAROK_GITHUB_HOSTS`                  | `github.com`                         | Comma-separated GitHub/GHES host allowlist                                                                                                                         |
 | `RAGNAROK_GITHUB_TOKEN`                  | _(empty)_                            | GitHub credential; never accepted as a tool argument                                                                                                               |
-| `RAGNAROK_CHECKPOINT_RETENTION_MS`       | `0`                                  | Debug retention for successful checkpoints; zero cleans immediately                                                                                                |
 | `RAGNAROK_RESET_STORAGE`                 | `false`                              | Set to `1` to back up managed data and initialize storage v2                                                                                                       |
 | `RAGNAROK_IGNORE_LOCK`                   | unset                                | Bypass the cross-process storage lock (`<storageDir>/.ragnarok.lock`). Unsafe with concurrent writers — only for advanced setups that serialize access externally. |
 

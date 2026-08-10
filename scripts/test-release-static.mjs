@@ -1185,7 +1185,7 @@ assert.equal(
 );
 assert.match(graphBundleSource, /data-ragnarok-graph-app/, "Generated graph app must retain its app marker");
 assert.match(graphBundleSource, /RAGnarok Graph/, "Generated graph app must retain the MCP app name marker");
-assert.match(graphBundleSource, /0\.5\.0/, "Generated graph app must retain the MCP app version marker");
+assert.match(graphBundleSource, /0\.6\.0/, "Generated graph app must retain the MCP app version marker");
 assertSingleGraphAppShell(graphBundleSource);
 for (const [name, mutated] of [
   ["duplicate html", `${graphBundleSource}<html>`],
@@ -1202,16 +1202,18 @@ execFileSync(process.execPath, ["packages/mcp-server/src/ui/graphApp/build.mjs",
 });
 const stdioTransportSource = await read("packages/mcp-server/test/stdioTransport.test.ts");
 const httpBinarySource = await read("packages/mcp-server/test/httpBinaryE2E.test.ts");
-for (const [name, source] of [
-  ["stdio", stdioTransportSource],
-  ["HTTP", httpBinarySource],
+// Local stdio still proves the memory-graph tool end to end; shared HTTP proves the opposite
+// contract — the graph UI resource remains while the tool itself is never registered.
+for (const [name, source, graphTest] of [
+  ["stdio", stdioTransportSource, /graph visualization protocol/],
+  ["HTTP", httpBinarySource, /graph UI resource stays while the graph tool is absent from shared deployments/],
 ]) {
   assert.doesNotMatch(
     source,
     /existsSync\(SERVER_ENTRY\)|Skipping (?:stdio|HTTP) binary E2E|Skipping stdio E2E/,
     `${name} binary tests must fail closed`,
   );
-  assert.match(source, /graph visualization protocol/, `${name} binary graph test must execute in the focused suite`);
+  assert.match(source, graphTest, `${name} binary graph test must execute in the focused suite`);
 }
 const mcpReadme = await read("packages/mcp-server/README.md");
 assert.match(mcpReadme, /createMcpHandler/);
@@ -1572,7 +1574,6 @@ for (const requiredBenchmarkFile of [
   );
 }
 for (const blocker of [
-  "missing_graph_aggregate",
   "missing_child_peak_rss",
   "missing_index_time",
   "missing_exact_package_measurement",

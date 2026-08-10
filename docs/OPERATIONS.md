@@ -18,7 +18,6 @@ The configured `RAGNAROK_STORAGE_DIR` is one atomic administrative unit:
     lancedb/
   memory-lancedb/
   memory-manifest.json
-  checkpoints-lancedb/
   exports/
   .transfers/
 ```
@@ -48,7 +47,7 @@ To restore:
 4. Verify `storage-format.json`, file ownership, and free space.
 5. Atomically rename the restored directory into place.
 6. Start one process and verify `/ready`, topic listing, representative vector
-   and graph queries, and memory recall when memory is enabled.
+   and hybrid queries, and memory recall when memory is enabled.
 
 Archive export/import is for moving individual topics, not for backing up the
 complete service. Imports validate archive paths, limits, schemas, and
@@ -81,7 +80,14 @@ Clients must use `server/discover` or modern version negotiation; legacy
 `initialize` is rejected. Cacheable discovery, list, and resource-read results
 advertise `ttlMs=0` and `cacheScope=private`.
 
-## Graph visualization operations
+## Memory graph visualization operations
+
+Graphs exist only in the memory subsystem, and memory is always personal, so
+`rag_graph_visualize` is **not registered at all in shared deployments** —
+`tools/list` omits it and any call is an unknown-tool error. It is registered
+for local stdio and local HTTP curators and admins whenever a memory store is
+present. Do not monitor for an authorization error code here; absence of the
+tool is the shared-mode contract.
 
 The graph MCP App is registered at `ui://ragnarok/graph`. Verify that both
 `resources/list` and `resources/read` report
@@ -89,21 +95,18 @@ The graph MCP App is registered at `ui://ragnarok/graph`. Verify that both
 `_meta.ui.resourceUri`. The generated response is one self-contained HTML shell
 with inline code, an SVG, and reset control; it must not load external scripts.
 
-The tool accepts only the three documented knowledge/workspace-memory/
-branch-memory discriminated inputs and emits
-`ragnarok.graph.visualization.v1`. `maxNodes` defaults to 500 and is bounded at
-2,000; edge work is bounded at 10,000, followed by response-byte reduction.
-Existing topics and branches without persisted graphs are healthy empty results,
-not incidents. `GRAPH_TOPIC_NOT_FOUND`, `GRAPH_MEMORY_UNAVAILABLE`,
-`GRAPH_VISUALIZATION_RECORD_TOO_LARGE`, and `GRAPH_VISUALIZATION_FAILED` are the
+The tool accepts only the two documented workspace-memory and branch-memory
+discriminated inputs and emits `ragnarok.graph.visualization.v1`. `maxNodes`
+defaults to 500 and is bounded at 2,000; edge work is bounded at 10,000,
+followed by response-byte reduction. Scopes and branches without stored memory
+entities are healthy empty results, not incidents.
+`GRAPH_VISUALIZATION_RECORD_TOO_LARGE` and `GRAPH_VISUALIZATION_FAILED` are the
 stable error codes to monitor.
 
-Shared deployments support only curator/admin knowledge visualization; readers
-cannot list or invoke the tool, both memory scopes return
-`GRAPH_MEMORY_UNAVAILABLE`, and server path data is sanitized. Local stdio and
-owner HTTP support knowledge plus workspace and exact named branch memory.
-Successful graph data contains full authorized non-vector node/edge details;
-embedding vectors must never appear.
+The memory graph is populated by memory entity extraction, which requires a
+configured LLM provider. Without one the graph stays empty and every
+visualization is an empty document — that is expected, not a failure. Successful
+graph data contains full node/edge details; embedding vectors must never appear.
 
 The app visibly transitions through loading, ready, empty, and accessible error
 states. Keyboard operators can traverse graph items with arrows, open details

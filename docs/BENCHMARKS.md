@@ -20,9 +20,9 @@ npm run bench:acquire
 RAGNAROK_RELEASE_ARTIFACT_DIR=/tmp/ragnarok-release-candidate npm run bench:release
 ```
 
-`bench:smoke` compiles the core tests and exercises vector, hybrid, ensemble,
-BM25, graph, graph-hybrid, and cross-encoder behavior on repository fixtures.
-It does not produce release evidence.
+`bench:smoke` compiles the core tests and exercises vector, hybrid, BM25, and
+cross-encoder behavior on repository fixtures. It does not produce release
+evidence.
 
 `bench:release` verifies `benchmarks/corpus-manifest.json` and its binding to
 `benchmarks/release-baseline.json`, compiles tests, enables every external
@@ -42,9 +42,7 @@ directly. Those exploratory results do not replace the release gate.
 
 The manifest records seed `1729`, ranking contract, exact embedding model
 revision and digest, corpus revisions, licenses, file SHA-256 values, sample
-sizes, and required strategies. It also pins the deterministic graph-quality
-fixture used for graph and graph-hybrid entity/chunk/fallback evaluation. The
-release harness expects:
+sizes, and required strategies. The release harness expects:
 
 ```text
 .cache/beir/scifact/corpus.jsonl
@@ -67,9 +65,7 @@ digests and upstream revisions are checked by `npm run verify:models`.
 
 The baseline requires quality coverage for:
 
-- vector, hybrid, ensemble, and BM25 Recall/MRR/nDCG;
-- graph and graph-hybrid entity/chunk recall;
-- graph fallback accuracy and explanation coverage;
+- vector, hybrid, and BM25 Recall/MRR/nDCG;
 - reranked Recall/MRR/nDCG;
 - p50/p95 query latency, index time, peak RSS, and package-size ceilings.
 
@@ -81,21 +77,14 @@ budgets are additionally enforced by the release policy and audited CI
 evidence. Results from different operating systems, CPU architectures, Node
 versions, model revisions, or corpora are not directly comparable.
 
-The release subset measures and enforces SciFact retrieval quality,
-SciFact/FRAMES reranker p50 and p95 query latency, and deterministic graph and
-graph-hybrid entity recall, chunk recall, fallback accuracy, and explanation
-coverage. The graph aggregate is computed from actual `GraphRetriever` and
-`GraphHybridRetriever` results over the checksum-pinned graph fixture.
-`entityRecallAt5` is macro recall over entity-bearing queries;
-`chunkRecallAt5` is macro recall over every query's relevant chunks;
-`fallbackAccuracy` checks whether the top result's effective strategy agrees
-with the fixture's graph/fallback expectation; and `explanationCoverage` is the
-fraction of queries whose returned top-five results all contain finite score
-components, score semantics, entity/hop evidence, and—when degraded—an explicit
-fallback reason.
+The release subset measures and enforces SciFact retrieval quality for the
+`vector`, `hybrid`, and `bm25` strategies, and SciFact/FRAMES reranker p50 and
+p95 query latency. `recallAt5` and `ndcgAt5` are macro averages over the sampled
+query set and `mrrAt10` is the mean reciprocal rank of the first relevant
+result within the top ten.
 
 Each required workload runs sequentially in a fresh child process: repository
-retrieval fixtures, graph retrieval, SciFact, SciFact reranking, FRAMES, FRAMES
+retrieval fixtures, SciFact, SciFact reranking, FRAMES, FRAMES
 reranking, and index construction. This prevents unrelated suites from
 accumulating retired model/native generations in one process. It does not omit
 combined production dependencies: each workload retains its complete runtime
@@ -147,5 +136,5 @@ when inputs changed, and have both the evidence and threshold diff reviewed.
 - A checksum mismatch means the input is not the reviewed corpus.
 - A quality failure is a retrieval regression until explained and approved.
 - A latency/RSS/package failure must be reproduced on the baseline runner.
-- A fingerprint mismatch means persisted vectors or graph embeddings require
-  reindexing; it is not a benchmark fallback.
+- A fingerprint mismatch means persisted vectors require reindexing; it is not
+  a benchmark fallback.

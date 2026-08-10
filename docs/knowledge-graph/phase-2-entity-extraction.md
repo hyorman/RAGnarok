@@ -1,5 +1,12 @@
 # Phase 2: Entity Extraction — Implementation Plan
 
+> **Superseded.** The document knowledge graph, entity extraction over ingested
+> documents, the `graph`/`graph_hybrid`/`ensemble` retrieval strategies, and the
+> LangGraph orchestration layer were all removed. Graphs now exist only in the
+> memory subsystem. This document is retained as design history only — see
+> [ARCHITECTURE.md](../../ARCHITECTURE.md) and
+> [docs/RETRIEVAL-PIPELINE.md](../RETRIEVAL-PIPELINE.md) for current behavior.
+
 ## TL;DR
 
 Build an LLM-powered `EntityExtractor` agent that processes document chunks, extracts entities and relationships, and populates the Phase 1 `KnowledgeGraph`. Integrate as an optional step in `DocumentPipeline` (after chunking, before storing). No LangGraph — use simple sequential processing with a per-chunk progress tracker for resumability.

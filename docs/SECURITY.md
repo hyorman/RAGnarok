@@ -54,24 +54,23 @@ allowed only on loopback and also has owner/admin authority. Do not use that
 mode on a shared workstation. Memory is deliberately absent from shared
 deployments because its workspace/branch scopes are personal.
 
-## Graph visualization exposure
+## Memory graph visualization exposure
 
-`rag_graph_visualize` is a full-detail data export, not a topology-only view.
-Local owners and shared curators/admins authorized to invoke it can receive
-complete persisted knowledge node and edge descriptions, source chunk IDs,
-confidence/strength values, timestamps, provenance, and arbitrary metadata.
-Local workspace/branch memory visualization additionally exposes memory scope,
-branch, source memory IDs, and memory metadata. Embedding vectors are always
-excluded.
+`rag_graph_visualize` serves memory graphs only; the document knowledge graph
+no longer exists. It is a full-detail data export, not a topology-only view.
+A caller authorized to invoke it receives complete persisted memory node and
+edge descriptions, memory scope, branch, source memory IDs, confidence/strength
+values, timestamps, provenance, and arbitrary metadata. Embedding vectors are
+always excluded.
 
-Shared readers cannot list or invoke the tool. Shared curators/admins may
-visualize knowledge topics; the standard shared sanitizer removes
-server-managed path fields and redacts path-like values before the final
-response is measured. Both shared memory inputs fail with
-`GRAPH_MEMORY_UNAVAILABLE`, because personal workspace and branch memory never
-crosses the shared boundary. The server does not substitute fallback or sample
-graph records. Treat graph authorization as authorization to read all of the
-non-vector details above.
+Because memory is personal, the tool is **structurally absent in shared
+deployments**: it is never registered, so no shared role — reader, curator, or
+admin — can list or invoke it, and there is no shared code path that could leak
+personal memory. It is registered only for local stdio and local HTTP
+curators/admins. The server does not substitute fallback or sample graph
+records; a scope with no stored entities returns an empty document. Treat graph
+authorization as authorization to read all of the non-vector memory details
+above.
 
 The associated `ui://ragnarok/graph` MCP App is self-contained and loads no
 external scripts. It renders user-controlled strings through text DOM APIs,

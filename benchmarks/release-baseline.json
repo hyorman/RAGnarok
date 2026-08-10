@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "baselineCommit": "ac9ebb1859cb65b8481fd820b66cc122ea3585aa",
-  "corpusManifestSha256": "f2aaa6ee72da1fae61b11ad9d994a6a3a19313678dd80457d28c3bfdc5f57f5c",
+  "corpusManifestSha256": "c5ff91ed7fefb87c2a2530dbd2c7e69c3db54155220a4736e8fe3879739333ed",
   "rankingContract": "squared-l2-unit-cosine-v1",
   "environment": {
     "node": "20-or-22",
@@ -12,20 +12,7 @@
   "minimums": {
     "vector": { "recallAt5": 0.7, "mrrAt10": 0.6, "ndcgAt5": 0.6 },
     "hybrid": { "recallAt5": 0.65, "mrrAt10": 0.6, "ndcgAt5": 0.6 },
-    "ensemble": { "recallAt5": 0.65, "mrrAt10": 0.55, "ndcgAt5": 0.55 },
     "bm25": { "recallAt5": 0.55, "mrrAt10": 0.35, "ndcgAt5": 0.4 },
-    "graph": {
-      "entityRecallAt5": 0.8,
-      "chunkRecallAt5": 0.6,
-      "fallbackAccuracy": 1,
-      "explanationCoverage": 1
-    },
-    "graph_hybrid": {
-      "entityRecallAt5": 0.8,
-      "chunkRecallAt5": 0.7,
-      "fallbackAccuracy": 1,
-      "explanationCoverage": 1
-    },
     "rerank": { "recallAt5": 0.5, "mrrAt10": 0.5, "ndcgAt10": 0.52 }
   },
   "maximums": {

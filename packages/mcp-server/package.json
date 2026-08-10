@@ -1,6 +1,6 @@
 {
   "name": "@ragnarok/mcp-server",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server exposing RAGnarōk tools to any MCP-compatible agent",
   "main": "dist/index.js",
   "bin": {
@@ -41,7 +41,7 @@
     "@anthropic-ai/sdk": "0.39.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "@ragnarok/core": "0.5.0",
+    "@ragnarok/core": "0.6.0",
     "cors": "2.8.6",
     "express": "5.2.1",
     "express-rate-limit": "8.5.2",

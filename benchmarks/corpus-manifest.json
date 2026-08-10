@@ -35,13 +35,6 @@
       "sampleArticleCount": 35,
       "sampleArticlesSha256": "f6cd207782d04ae3918a1f652d5bf5cfd75cffba0606825a89d2898c963f9616",
       "license": "CC-BY-4.0"
-    },
-    {
-      "id": "ragnarok-graph-release-v1",
-      "source": "packages/core/test/helpers/releaseGraphFixture.ts",
-      "revision": "repository-commit",
-      "sha256": "389aadc6cc19020fd2c09ff7492ca02e048f5549c64669a9fc9bd2ce55125d54",
-      "license": "MIT"
     }
   ],
   "config": {
@@ -49,6 +42,6 @@
     "beirSampleSize": 10,
     "framesSampleSize": 10,
     "rerankSampleSize": 10,
-    "strategies": ["vector", "hybrid", "ensemble", "bm25", "graph", "graph_hybrid", "rerank"]
+    "strategies": ["vector", "hybrid", "bm25", "rerank"]
   }
 }
