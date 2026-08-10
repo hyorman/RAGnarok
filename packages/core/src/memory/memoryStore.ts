@@ -780,6 +780,47 @@ export class MemoryStore {
     };
   }
 
+  /**
+   * Whether entity extraction — and therefore the entity graph that backs
+   * communities, `includeEntities` recall and graph visualization — is active.
+   *
+   * Extraction needs an LLM provider. Without one memories are still stored and
+   * recalled by vector similarity, but the graph stays empty. Callers must tell
+   * the user that instead of presenting an empty graph as "nothing known".
+   */
+  public isEntityExtractionEnabled(): boolean {
+    return this.extractor !== null;
+  }
+
+  /**
+   * Cluster the scope's entity graph and return each community's members,
+   * largest community first.
+   *
+   * Requires an LLM provider: without one no entities are extracted, so the
+   * graph is empty and there is nothing to cluster. The empty result is
+   * therefore ambiguous on its own — callers pair it with
+   * {@link isEntityExtractionEnabled} to distinguish "graph disabled" from
+   * "graph enabled, no communities yet".
+   */
+  public async recallCommunities(
+    scope: MemoryScope = "workspace",
+    branch?: string,
+  ): Promise<Array<{ id: number; entityNames: string[] }>> {
+    if (!this.extractor) {
+      return [];
+    }
+    const resolved = await this.resolveBranch({ scope, branch });
+    const graph = await this.getGraph(resolved.scope, resolved.branch);
+    const communities = graph.detectCommunities();
+    const namesById = new Map(graph.getAllEntities().map((entity) => [entity.id, entity.name]));
+    return Array.from(communities.entries())
+      .map(([id, entityIds]) => ({
+        id,
+        entityNames: entityIds.map((entityId) => namesById.get(entityId) ?? entityId),
+      }))
+      .sort((left, right) => right.entityNames.length - left.entityNames.length || left.id - right.id);
+  }
+
   // ── Private Methods ────────────────────────────────────────────────
 
   private cloneJsonSafe<T>(value: T): T {

@@ -806,6 +806,81 @@ describe("MCP Tools (registerTools)", () => {
   });
 
   // -----------------------------------------------------------------------
+  // rag_memory — communities
+  // -----------------------------------------------------------------------
+
+  describe("rag_memory communities", () => {
+    function memoryHandlers(memoryStore: unknown): Record<string, ToolHandler> {
+      return captureHandlers({ topicManager, config, llmProvider, embeddingService, ragQueryService, memoryStore });
+    }
+
+    it("states the LLM requirement instead of returning a bare empty result", async () => {
+      const recallCommunities = sinon.stub().resolves([]);
+      const memoryStore = {
+        getCurrentBranch: sinon.stub().resolves(null),
+        isEntityExtractionEnabled: sinon.stub().returns(false),
+        recallCommunities,
+      };
+
+      const result = await memoryHandlers(memoryStore).rag_memory({ action: "communities" });
+      const body = parseResponse(result);
+
+      expect(result.isError).to.not.equal(true);
+      expect(body.entityExtractionEnabled).to.equal(false);
+      expect(body.hint).to.be.a("string");
+      expect(body.hint).to.include("require an LLM provider");
+      expect(body.hint).to.include("RAGNAROK_LLM_PROVIDER");
+      // The disabled path must not pretend to have consulted the graph.
+      expect(recallCommunities.called).to.equal(false);
+    });
+
+    it("returns clusters without a hint when entity extraction is enabled", async () => {
+      const memoryStore = {
+        getCurrentBranch: sinon.stub().resolves(null),
+        isEntityExtractionEnabled: sinon.stub().returns(true),
+        recallCommunities: sinon.stub().resolves([{ id: 0, entityNames: ["Redis", "API gateway"] }]),
+      };
+
+      const result = await memoryHandlers(memoryStore).rag_memory({ action: "communities" });
+      const body = parseResponse(result);
+
+      expect(body.hint).to.equal(undefined);
+      expect(body.entityExtractionEnabled).to.equal(true);
+      expect(body.count).to.equal(1);
+      expect(body.communities).to.deep.equal([{ id: 0, entityNames: ["Redis", "API gateway"] }]);
+      expect(memoryStore.recallCommunities.firstCall.args).to.deep.equal(["workspace", undefined]);
+    });
+
+    it("distinguishes an enabled-but-empty graph from a disabled one", async () => {
+      const memoryStore = {
+        getCurrentBranch: sinon.stub().resolves(null),
+        isEntityExtractionEnabled: sinon.stub().returns(true),
+        recallCommunities: sinon.stub().resolves([]),
+      };
+
+      const body = parseResponse(await memoryHandlers(memoryStore).rag_memory({ action: "communities" }));
+
+      expect(body.count).to.equal(0);
+      expect(body.entityExtractionEnabled).to.equal(true);
+      expect(body.hint).to.equal(undefined);
+    });
+
+    it("errors when branch scope is requested but no branch can be detected", async () => {
+      const memoryStore = {
+        getCurrentBranch: sinon.stub().resolves(null),
+        isEntityExtractionEnabled: sinon.stub().returns(true),
+        recallCommunities: sinon.stub().resolves([]),
+      };
+
+      const result = await memoryHandlers(memoryStore).rag_memory({ action: "communities", scope: "branch" });
+
+      expect(result.isError).to.equal(true);
+      expect(parseResponse(result).error).to.include("no git branch could be detected");
+      expect(memoryStore.recallCommunities.called).to.equal(false);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Reranker tools
   // -----------------------------------------------------------------------
 

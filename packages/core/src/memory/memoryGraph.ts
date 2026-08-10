@@ -12,6 +12,9 @@ import { MemoryEntity, MemoryRelationship, MemoryGraphData, MemoryEntityType, Me
 export class MemoryGraph {
   private graph: Graph;
   private communities: MemoryCommunity[] = [];
+  // Communities describe a topology. Any structural edit invalidates them, so
+  // getCommunities() recomputes rather than handing back a stale clustering.
+  private communitiesStale = true;
   private logger = new Logger("MemoryGraph");
 
   constructor() {
@@ -29,6 +32,7 @@ export class MemoryGraph {
       return;
     }
     this.graph.addNode(entity.id, { ...entity });
+    this.communitiesStale = true;
   }
 
   updateEntity(id: string, updates: Partial<Omit<MemoryEntity, "id">>): void {
@@ -57,6 +61,7 @@ export class MemoryGraph {
       this.graph.dropEdge(edgeId);
     }
     this.graph.dropNode(id);
+    this.communitiesStale = true;
   }
 
   /** Find entities by exact name+type key (case-insensitive) */
@@ -119,6 +124,7 @@ export class MemoryGraph {
     }
     try {
       this.graph.addEdgeWithKey(rel.id, rel.sourceId, rel.targetId, { ...rel });
+      this.communitiesStale = true;
     } catch (error) {
       this.logger.debug(`Unable to add relationship ${rel.id}`, error);
     }
@@ -134,6 +140,7 @@ export class MemoryGraph {
   removeRelationship(id: string): void {
     if (this.graph.hasEdge(id)) {
       this.graph.dropEdge(id);
+      this.communitiesStale = true;
     }
   }
 
@@ -188,36 +195,56 @@ export class MemoryGraph {
    * and tested but never called. Communities are what let memory recall answer
    * holistic questions ("what do you know about X overall") instead of only
    * nearest-neighbour lookups.
+   *
+   * Uses the non-mutating `louvain(graph, options)` form rather than
+   * `louvain.assign`: `assign` writes a `community` attribute onto every node,
+   * and node attribute objects are handed out live by getEntity/getAllEntities
+   * and spread straight into toJSON(), persistence, and the MCP graph
+   * snapshot. Computing the mapping instead of stamping it keeps clustering a
+   * read-only operation over the entity graph.
    */
   detectCommunities(options?: { resolution?: number }): Map<number, string[]> {
     const communityMap = new Map<number, string[]>();
     if (this.graph.order === 0) {
       this.communities = [];
+      this.communitiesStale = false;
       return communityMap;
     }
 
-    louvain.assign(this.graph, { resolution: options?.resolution ?? 1.0 });
+    const assignments = louvain(this.graph, { resolution: options?.resolution ?? 1.0 });
 
-    this.graph.forEachNode((node, attrs) => {
-      const communityId = attrs.community as number;
+    for (const node of this.graph.nodes()) {
+      const communityId: number | undefined = assignments[node];
+      if (communityId === undefined) {
+        continue;
+      }
       if (!communityMap.has(communityId)) {
         communityMap.set(communityId, []);
       }
       communityMap.get(communityId)!.push(node);
-    });
+    }
 
     this.communities = Array.from(communityMap.entries()).map(([id, entityIds]) => ({
       id,
       entityIds,
       level: 0,
     }));
+    this.communitiesStale = false;
 
     this.logger.debug(`Detected ${this.communities.length} memory communities`);
     return communityMap;
   }
 
+  /**
+   * The current clustering, recomputed on demand when the topology changed
+   * since the last detection. Returns a deep copy: the cached communities are
+   * internal state, and an earlier version handed out the live array.
+   */
   getCommunities(): MemoryCommunity[] {
-    return this.communities;
+    if (this.communitiesStale) {
+      this.detectCommunities();
+    }
+    return this.communities.map((community) => ({ ...community, entityIds: [...community.entityIds] }));
   }
 
   // ── Serialization ──────────────────────────────────────────────────

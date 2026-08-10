@@ -17,7 +17,8 @@
  * - rag_llm_status: Get current LLM provider status
  *
  * Memory tools:
- * - rag_memory: Store, recall, forget, list, stats, decay, history, promote, or links for project memories
+ * - rag_memory: Store, recall, forget, list, stats, decay, history, promote, links, or communities for project
+ *   memories
  */
 
 import fs from "node:fs/promises";
@@ -1441,10 +1442,11 @@ export function registerTools(
       "Store, recall, forget, list, or get stats for project memories. " +
         "Memories are stored per-workspace or per-git-branch. " +
         "Entities and relationships are automatically extracted when an LLM is available. " +
-        "Supports decay (expire stale entries), history (version chain), promote (branch→workspace), and links (cross-scope entity links).",
+        "Supports decay (expire stale entries), history (version chain), promote (branch→workspace), links (cross-scope entity links), " +
+        "and communities (clusters of related entities in the memory graph; requires an LLM provider).",
       z.object({
         action: z
-          .enum(["store", "recall", "forget", "stats", "list", "decay", "history", "promote", "links"])
+          .enum(["store", "recall", "forget", "stats", "list", "decay", "history", "promote", "links", "communities"])
           .describe("The memory operation to perform"),
         content: z
           .string()
@@ -1536,7 +1538,11 @@ export function registerTools(
           // Branch scope explicitly requested but unresolvable must be an
           // error, not a silent fall-back to workspace scope: the caller
           // would store/read memories in a scope they didn't ask for.
-          if (scope === "branch" && !branch && (action === "store" || action === "recall" || action === "list")) {
+          if (
+            scope === "branch" &&
+            !branch &&
+            (action === "store" || action === "recall" || action === "list" || action === "communities")
+          ) {
             const detected = await memoryStore.getCurrentBranch();
             if (!detected) {
               return {
@@ -1860,6 +1866,51 @@ export function registerTools(
                           confidence: Math.round(l.confidence * 1000) / 1000,
                         })),
                         count: links.length,
+                      },
+                      null,
+                      2,
+                    ),
+                  },
+                ],
+              };
+            }
+
+            case "communities": {
+              // An empty result means one of two very different things. Say
+              // which: a disabled memory graph must not read as "nothing known".
+              if (!memoryStore.isEntityExtractionEnabled()) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: JSON.stringify(
+                        {
+                          action: "communities",
+                          communities: [],
+                          count: 0,
+                          entityExtractionEnabled: false,
+                          hint: "Memory graph features require an LLM provider (set RAGNAROK_LLM_PROVIDER). Memories are still stored and recalled by vector similarity, but no entities are extracted, so the memory graph is empty and has no communities.",
+                        },
+                        null,
+                        2,
+                      ),
+                    },
+                  ],
+                };
+              }
+              const communities = await memoryStore.recallCommunities(scope ?? "workspace", branch);
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: JSON.stringify(
+                      {
+                        action: "communities",
+                        scope: scope ?? "workspace",
+                        branch,
+                        communities,
+                        count: communities.length,
+                        entityExtractionEnabled: true,
                       },
                       null,
                       2,

@@ -783,3 +783,121 @@ describe("MemoryStore standalone format and markdown privacy", function () {
     await fs.rm(directory, { recursive: true, force: true });
   });
 });
+
+describe("MemoryStore recallCommunities", function () {
+  this.timeout(30000);
+
+  let tempDir: string;
+  let store: MemoryStore;
+
+  /**
+   * Extraction stub: every stored memory yields the same three connected
+   * entities, so the workspace graph has a component Louvain can cluster.
+   */
+  function createExtractingLlmProvider(): ILLMProvider {
+    return {
+      isAvailable: async () => true,
+      selectModel: async () => ({
+        id: "memory-communities-test",
+        family: "test",
+        sendRequest: async () =>
+          (async function* () {
+            yield JSON.stringify({
+              entities: [
+                { name: "Redis", type: "tool", description: "Cache" },
+                { name: "API gateway", type: "project", description: "Edge service" },
+                { name: "billing service", type: "project", description: "Billing" },
+              ],
+              relationships: [
+                { source: "Redis", target: "API gateway", type: "uses", description: "caching", weight: 1 },
+                { source: "API gateway", target: "billing service", type: "uses", description: "routes", weight: 1 },
+              ],
+            });
+          })(),
+      }),
+    } as unknown as ILLMProvider;
+  }
+
+  async function createStore(llmProvider?: ILLMProvider): Promise<MemoryStore> {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-communities-test-"));
+    return new MemoryStore({
+      storageDir: tempDir,
+      embeddingService: createMockEmbeddingService(),
+      llmProvider,
+      workingDir: tempDir,
+      markdownPath: null,
+    });
+  }
+
+  afterEach(async function () {
+    await store.dispose();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("returns entity clusters for the active scope", async function () {
+    store = await createStore(createExtractingLlmProvider());
+    await store.store({ content: "Redis is used for caching in the API gateway" });
+    await store.store({ content: "The API gateway routes requests to the billing service" });
+
+    const communities = await store.recallCommunities();
+
+    expect(communities).to.be.an("array");
+    expect(communities.length).to.be.greaterThan(0);
+    for (const community of communities) {
+      expect(community.id).to.be.a("number");
+      expect(community.entityNames).to.be.an("array");
+    }
+    const allNames = communities.flatMap((community) => community.entityNames);
+    expect(allNames).to.have.members(["Redis", "API gateway", "billing service"]);
+    // Ordered largest community first so callers see the dominant cluster.
+    const sizes = communities.map((community) => community.entityNames.length);
+    expect(sizes).to.deep.equal([...sizes].sort((left, right) => right - left));
+  });
+
+  it("resolves names through entity IDs rather than echoing raw IDs", async function () {
+    store = await createStore(createExtractingLlmProvider());
+    await store.store({ content: "Redis is used for caching in the API gateway" });
+
+    const communities = await store.recallCommunities("workspace");
+    const names = communities.flatMap((community) => community.entityNames);
+
+    expect(names).to.not.be.empty;
+    for (const name of names) {
+      expect(name).to.not.match(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    }
+  });
+
+  it("returns an empty array when no LLM provider is configured", async function () {
+    store = await createStore(undefined);
+    await store.store({ content: "Redis is used for caching" });
+
+    expect(await store.recallCommunities()).to.deep.equal([]);
+    expect(store.isEntityExtractionEnabled()).to.equal(false);
+  });
+
+  it("reports entity extraction as enabled when an LLM provider is configured", async function () {
+    store = await createStore(createExtractingLlmProvider());
+    expect(store.isEntityExtractionEnabled()).to.equal(true);
+  });
+
+  it("does not leak a community attribute into the graph snapshot", async function () {
+    store = await createStore(createExtractingLlmProvider());
+    await store.store({ content: "Redis is used for caching in the API gateway" });
+
+    await store.recallCommunities();
+    const snapshot = await store.getGraphSnapshot("workspace");
+
+    expect(snapshot.entities.length).to.be.greaterThan(0);
+    for (const entity of snapshot.entities) {
+      expect(entity).to.not.have.property("community");
+    }
+  });
+
+  it("rejects branch scope when no attached branch can be resolved", async function () {
+    store = await createStore(createExtractingLlmProvider());
+
+    const error = await captureError(store.recallCommunities("branch"));
+
+    expect((error as Error).message).to.include("Branch scope requested");
+  });
+});

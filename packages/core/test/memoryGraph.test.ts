@@ -447,6 +447,85 @@ describe("MemoryGraph", function () {
       expect(graph.getCommunities()).to.have.length(2);
       expect(graph.getCommunities()[0].level).to.equal(0);
     });
+
+    it("handles keyed parallel edges between the same ordered pair", function () {
+      // The graph is multi:true precisely so several relationship types can
+      // connect one pair. Louvain must survive that, or the first real caller
+      // fails on real data.
+      graph.addEntity(createTestEntity({ id: "p1", name: "p1" }));
+      graph.addEntity(createTestEntity({ id: "p2", name: "p2" }));
+      graph.addRelationship(createTestRelationship({ id: "pr1", sourceId: "p1", targetId: "p2", weight: 1 }));
+      graph.addRelationship(
+        createTestRelationship({ id: "pr2", sourceId: "p1", targetId: "p2", type: "depends_on", weight: 1 }),
+      );
+
+      const communities = graph.detectCommunities();
+
+      expect([...communities.values()].flat().sort()).to.deep.equal(["p1", "p2"]);
+    });
+
+    it("never writes a community attribute onto graph entities", function () {
+      graph.addEntity(createTestEntity({ id: "c1", name: "c1" }));
+      graph.addEntity(createTestEntity({ id: "c2", name: "c2" }));
+      graph.addRelationship(createTestRelationship({ id: "cr1", sourceId: "c1", targetId: "c2", weight: 1 }));
+
+      graph.detectCommunities();
+
+      for (const entity of graph.getAllEntities()) {
+        expect(entity).to.not.have.property("community");
+      }
+      for (const entity of graph.toJSON().entities) {
+        expect(entity).to.not.have.property("community");
+      }
+    });
+  });
+
+  describe("getCommunities", function () {
+    it("returns a defensive copy that callers cannot use to mutate cached state", function () {
+      graph.addEntity(createTestEntity({ id: "d1", name: "d1" }));
+      graph.addEntity(createTestEntity({ id: "d2", name: "d2" }));
+      graph.addRelationship(createTestRelationship({ id: "dr1", sourceId: "d1", targetId: "d2", weight: 1 }));
+      graph.detectCommunities();
+
+      const first = graph.getCommunities();
+      const originalLength = first.length;
+      first.push({ id: 99, entityIds: ["injected"], level: 7 });
+      first[0].entityIds.push("injected");
+
+      const second = graph.getCommunities();
+      expect(second).to.have.length(originalLength);
+      expect(second.flatMap((community) => community.entityIds)).to.not.include("injected");
+    });
+
+    it("recomputes after the graph topology changes instead of returning stale communities", function () {
+      graph.addEntity(createTestEntity({ id: "s1", name: "s1" }));
+      graph.addEntity(createTestEntity({ id: "s2", name: "s2" }));
+      graph.addRelationship(createTestRelationship({ id: "sr1", sourceId: "s1", targetId: "s2", weight: 1 }));
+      graph.detectCommunities();
+      expect(
+        graph
+          .getCommunities()
+          .flatMap((community) => community.entityIds)
+          .sort(),
+      ).to.deep.equal(["s1", "s2"]);
+
+      graph.addEntity(createTestEntity({ id: "s3", name: "s3" }));
+
+      expect(
+        graph
+          .getCommunities()
+          .flatMap((community) => community.entityIds)
+          .sort(),
+      ).to.deep.equal(["s1", "s2", "s3"]);
+
+      graph.removeEntity("s3");
+      expect(
+        graph
+          .getCommunities()
+          .flatMap((community) => community.entityIds)
+          .sort(),
+      ).to.deep.equal(["s1", "s2"]);
+    });
   });
 
   describe("Stats", function () {

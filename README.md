@@ -131,7 +131,7 @@ Notes:
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
 - **LLM-Powered Entity Extraction**: Optionally extracts entities (facts, preferences, concepts, tools, conventions) from stored memories; the graph stays empty when no LLM provider is configured
 - **Markdown Export**: Automatically generates a `memories.md` file summarizing stored memories for human review
-- **MCP Integration**: Exposed as the `rag_memory` tool with store, recall, forget, stats, list, decay, history, promote, and link operations. Memory TTL is supported; reserved `auto:` memories are hidden unless explicitly requested. Memory is written and recalled only through explicit `rag_memory` calls — there is no automatic query-time recall or write-back.
+- **MCP Integration**: Exposed as the `rag_memory` tool with store, recall, forget, stats, list, decay, history, promote, link, and community operations. `communities` clusters the memory entity graph and requires an LLM provider — without one the tool says so instead of returning an empty result. Memory TTL is supported; reserved `auto:` memories are hidden unless explicitly requested. Memory is written and recalled only through explicit `rag_memory` calls — there is no automatic query-time recall or write-back.
 
 #### MCP memory graph visualization
 
