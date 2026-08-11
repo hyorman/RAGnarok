@@ -4,6 +4,7 @@
 
 import { expect } from "chai";
 import * as sinon from "sinon";
+import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { CONFIG, setLoggerFactory, ILoggerFactory } from "@ragnarok/core";
@@ -541,6 +542,56 @@ describe("MCP Server", () => {
         errStub.restore();
         logStub.restore();
       }
+    });
+  });
+
+  describe("config file precedence", () => {
+    let dir: string;
+    const saved = { ...process.env };
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-prec-"));
+      process.env.RAGNAROK_STORAGE_DIR = dir;
+    });
+    afterEach(() => {
+      process.env = { ...saved };
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    const writeConfig = (value: unknown) => fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(value));
+
+    it("uses the built-in default when neither env nor file sets a key", () => {
+      expect(loadConfig().topK).to.equal(10);
+    });
+
+    it("uses the file value when env does not set the key", () => {
+      writeConfig({ retrieval: { topK: 42 } });
+      expect(loadConfig().topK).to.equal(42);
+    });
+
+    it("lets env beat the file", () => {
+      writeConfig({ retrieval: { topK: 42 } });
+      process.env.RAGNAROK_TOP_K = "7";
+      expect(loadConfig().topK).to.equal(7);
+    });
+
+    it("uses the CURRENT default for an absent key even when $defaults records an older one", () => {
+      // The regression test for "absence is the signal". $defaults is documentation,
+      // never configuration: a stale value in it must not pin behaviour.
+      writeConfig({ $defaults: { retrieval: { topK: 3 } } });
+      expect(loadConfig().topK).to.equal(10);
+    });
+
+    it("applies file values for booleans and arrays too", () => {
+      writeConfig({ reranker: { enabled: false }, security: { githubHosts: ["ghe.example.com"] } });
+      const config = loadConfig();
+      expect(config.rerankerEnabled).to.equal(false);
+      expect(config.githubHosts).to.deep.equal(["ghe.example.com"]);
+    });
+
+    it("keeps env-only settings out of the file's reach", () => {
+      writeConfig({ retrieval: { topK: 42 } });
+      process.env.RAGNAROK_LLM_API_KEY = "from-env";
+      expect(loadConfig().llmApiKey).to.equal("from-env");
     });
   });
 });

@@ -1,11 +1,13 @@
 /**
- * MCP server configuration loaded from environment variables
+ * MCP server configuration: environment variables first, then the optional
+ * config.json in the storage directory, then the built-in defaults.
  */
 
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { z } from "zod";
+import { readConfigFile } from "./configFile";
 
 let cachedVersion: string | null = null;
 
@@ -187,45 +189,70 @@ const configSchema = z
   });
 
 export function loadConfig(): McpConfig {
+  const storageDir = process.env.RAGNAROK_STORAGE_DIR || path.join(os.homedir(), ".ragnarok");
+  const file = readConfigFile(storageDir);
+
   const raw: McpConfig = {
-    storageDir: process.env.RAGNAROK_STORAGE_DIR || path.join(os.homedir(), ".ragnarok"),
+    storageDir,
     workingDir: process.env.RAGNAROK_WORKING_DIR || "",
-    allowedPaths: (process.env.RAGNAROK_ALLOWED_PATHS || "")
-      .split(path.delimiter)
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0),
-    embeddingModel: process.env.RAGNAROK_EMBEDDING_MODEL || "Xenova/all-MiniLM-L6-v2",
-    chunkSize: parseInt(process.env.RAGNAROK_CHUNK_SIZE || "1000", 10),
-    chunkOverlap: parseInt(process.env.RAGNAROK_CHUNK_OVERLAP || "200", 10),
-    topK: parseInt(process.env.RAGNAROK_TOP_K || "10", 10),
-    retrievalStrategy: process.env.RAGNAROK_RETRIEVAL_STRATEGY || "hybrid",
-    maxIterations: parseInt(process.env.RAGNAROK_MAX_ITERATIONS || "3", 10),
-    confidenceThreshold: parseFloat(process.env.RAGNAROK_CONFIDENCE_THRESHOLD || "0.7"),
-    logLevel: process.env.RAGNAROK_LOG_LEVEL || "info",
-    llmProvider: process.env.RAGNAROK_LLM_PROVIDER || "none",
+    // An empty RAGNAROK_ALLOWED_PATHS means "no paths", not "unset", so the
+    // file is consulted only when the variable is genuinely absent.
+    allowedPaths:
+      process.env.RAGNAROK_ALLOWED_PATHS !== undefined
+        ? process.env.RAGNAROK_ALLOWED_PATHS.split(path.delimiter)
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0)
+        : (file.allowedPaths ?? []),
+    embeddingModel: process.env.RAGNAROK_EMBEDDING_MODEL || file.embeddingModel || "Xenova/all-MiniLM-L6-v2",
+    chunkSize: parseInt(process.env.RAGNAROK_CHUNK_SIZE || String(file.chunkSize ?? 1000), 10),
+    chunkOverlap: parseInt(process.env.RAGNAROK_CHUNK_OVERLAP || String(file.chunkOverlap ?? 200), 10),
+    topK: parseInt(process.env.RAGNAROK_TOP_K || String(file.topK ?? 10), 10),
+    retrievalStrategy: process.env.RAGNAROK_RETRIEVAL_STRATEGY || file.retrievalStrategy || "hybrid",
+    maxIterations: parseInt(process.env.RAGNAROK_MAX_ITERATIONS || String(file.maxIterations ?? 3), 10),
+    confidenceThreshold: parseFloat(
+      process.env.RAGNAROK_CONFIDENCE_THRESHOLD || String(file.confidenceThreshold ?? 0.7),
+    ),
+    logLevel: process.env.RAGNAROK_LOG_LEVEL || file.logLevel || "info",
+    llmProvider: process.env.RAGNAROK_LLM_PROVIDER || file.llmProvider || "none",
     llmApiKey: process.env.RAGNAROK_LLM_API_KEY || "",
-    llmModel: process.env.RAGNAROK_LLM_MODEL || "",
+    llmModel: process.env.RAGNAROK_LLM_MODEL || file.llmModel || "",
     // No default here: each provider applies its own (Ollama falls back to
     // http://localhost:11434). A global Ollama default silently routed
     // OpenAI/Anthropic requests to localhost.
-    llmBaseUrl: process.env.RAGNAROK_LLM_BASE_URL || "",
-    embeddingProvider: process.env.RAGNAROK_EMBEDDING_PROVIDER || "huggingface",
-    embeddingBaseUrl: process.env.RAGNAROK_EMBEDDING_BASE_URL || "",
+    llmBaseUrl: process.env.RAGNAROK_LLM_BASE_URL || file.llmBaseUrl || "",
+    embeddingProvider: process.env.RAGNAROK_EMBEDDING_PROVIDER || file.embeddingProvider || "huggingface",
+    embeddingBaseUrl: process.env.RAGNAROK_EMBEDDING_BASE_URL || file.embeddingBaseUrl || "",
     embeddingApiKey: process.env.RAGNAROK_EMBEDDING_API_KEY || "",
-    shutdownDrainMs: parseInt(process.env.RAGNAROK_SHUTDOWN_DRAIN_MS || "10000", 10),
-    llmRequestTimeoutMs: parseInt(process.env.RAGNAROK_LLM_REQUEST_TIMEOUT_MS || "30000", 10),
-    maxResponseBytes: parseInt(process.env.RAGNAROK_MAX_RESPONSE_BYTES || "1048576", 10),
-    rerankerModel: process.env.RAGNAROK_RERANKER_MODEL || "Xenova/ms-marco-MiniLM-L-6-v2",
-    rerankerEnabled: process.env.RAGNAROK_RERANKER_ENABLED !== "0" && process.env.RAGNAROK_RERANKER_ENABLED !== "false",
-    rerankerMaxCandidates: parseInt(process.env.RAGNAROK_RERANKER_MAX_CANDIDATES || "20", 10),
-    rerankerCandidateMultiplier: parseInt(process.env.RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER || "4", 10),
-    exportDir:
-      process.env.RAGNAROK_EXPORT_DIR ||
-      path.join(process.env.RAGNAROK_STORAGE_DIR || path.join(os.homedir(), ".ragnarok"), "exports"),
-    githubHosts: (process.env.RAGNAROK_GITHUB_HOSTS || "github.com")
-      .split(",")
-      .map((host) => host.trim().toLowerCase())
-      .filter(Boolean),
+    shutdownDrainMs: parseInt(process.env.RAGNAROK_SHUTDOWN_DRAIN_MS || String(file.shutdownDrainMs ?? 10000), 10),
+    llmRequestTimeoutMs: parseInt(
+      process.env.RAGNAROK_LLM_REQUEST_TIMEOUT_MS || String(file.llmRequestTimeoutMs ?? 30000),
+      10,
+    ),
+    maxResponseBytes: parseInt(process.env.RAGNAROK_MAX_RESPONSE_BYTES || String(file.maxResponseBytes ?? 1048576), 10),
+    rerankerModel: process.env.RAGNAROK_RERANKER_MODEL || file.rerankerModel || "Xenova/ms-marco-MiniLM-L-6-v2",
+    // `false` is a meaningful env value, so absence - not falsiness - is what
+    // hands the decision to the file.
+    rerankerEnabled:
+      process.env.RAGNAROK_RERANKER_ENABLED !== undefined
+        ? process.env.RAGNAROK_RERANKER_ENABLED !== "0" && process.env.RAGNAROK_RERANKER_ENABLED !== "false"
+        : (file.rerankerEnabled ?? true),
+    rerankerMaxCandidates: parseInt(
+      process.env.RAGNAROK_RERANKER_MAX_CANDIDATES || String(file.rerankerMaxCandidates ?? 20),
+      10,
+    ),
+    rerankerCandidateMultiplier: parseInt(
+      process.env.RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER || String(file.rerankerCandidateMultiplier ?? 4),
+      10,
+    ),
+    exportDir: process.env.RAGNAROK_EXPORT_DIR || file.exportDir || path.join(storageDir, "exports"),
+    // As with allowedPaths, an empty RAGNAROK_GITHUB_HOSTS is a deliberate
+    // "no hosts" rather than an absent setting.
+    githubHosts:
+      process.env.RAGNAROK_GITHUB_HOSTS !== undefined
+        ? process.env.RAGNAROK_GITHUB_HOSTS.split(",")
+            .map((host) => host.trim().toLowerCase())
+            .filter(Boolean)
+        : (file.githubHosts ?? ["github.com"]),
     githubToken: process.env.RAGNAROK_GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || "",
     resetStorage:
       process.argv.includes("--reset-storage") ||
