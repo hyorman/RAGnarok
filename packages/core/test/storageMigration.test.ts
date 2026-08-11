@@ -8,6 +8,7 @@ import { connect } from "@lancedb/lancedb";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   EmbeddingReindexRequiredError,
+  EmbeddingServiceRegistry,
   MIGRATION_REPORT_FILENAME,
   STORAGE_FORMAT_FILENAME,
   StorageMigrationError,
@@ -274,6 +275,7 @@ describe("offline v0.3 storage migration", function () {
       path.join(fixture.storageDir, "database"),
       "Xenova/all-MiniLM-L6-v2",
       embeddingService,
+      new EmbeddingServiceRegistry({ createService: () => embeddingService, maxResidentLocal: 2 }),
     );
     (manager as any).vectorStoreFactory = vectorStoreFactory;
     try {

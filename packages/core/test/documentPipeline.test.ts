@@ -11,6 +11,7 @@ import {
   DocumentPipeline,
   PipelineProgress,
   EmbeddingService,
+  EmbeddingServiceRegistry,
   IConfigProvider,
   INotifier,
   HuggingFaceBackend,
@@ -35,6 +36,7 @@ describe("DocumentPipeline", function () {
 
   let pipeline: DocumentPipeline;
   let embeddingService: EmbeddingService;
+  let embeddingRegistry: EmbeddingServiceRegistry;
   let originalModel: string | null = null;
 
   // When tests are compiled, they're in packages/core/dist-test/test, so go up to workspace root
@@ -50,9 +52,13 @@ describe("DocumentPipeline", function () {
     const hfBackend = new HuggingFaceBackend(modelRegistry, mockNotifier);
     embeddingService.registerBackend(hfBackend);
     originalModel = embeddingService.getCurrentModel();
+    embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => embeddingService,
+      maxResidentLocal: 2,
+    });
 
     // Initialize pipeline
-    pipeline = new DocumentPipeline(mockNotifier, embeddingService, mockConfig);
+    pipeline = new DocumentPipeline(mockNotifier, embeddingService, embeddingRegistry, mockConfig);
     await pipeline.initialize(tempStorageDir);
   });
 
@@ -69,7 +75,7 @@ describe("DocumentPipeline", function () {
 
   describe("Initialization", function () {
     it("should initialize successfully", async function () {
-      const newPipeline = new DocumentPipeline(mockNotifier, embeddingService, mockConfig);
+      const newPipeline = new DocumentPipeline(mockNotifier, embeddingService, embeddingRegistry, mockConfig);
       await newPipeline.initialize(tempStorageDir);
 
       // If initialization succeeds, pipeline should be ready
@@ -77,7 +83,7 @@ describe("DocumentPipeline", function () {
     });
 
     it("should throw error if processing before initialization", async function () {
-      const uninitializedPipeline = new DocumentPipeline(mockNotifier, embeddingService, mockConfig);
+      const uninitializedPipeline = new DocumentPipeline(mockNotifier, embeddingService, embeddingRegistry, mockConfig);
       const testFile = path.join(fixturesPath, "sample-text.txt");
 
       const result = await uninitializedPipeline.processDocument(testFile, "test-topic");
@@ -364,7 +370,7 @@ describe("DocumentPipeline", function () {
       }
 
       expect(caught).to.equal(controller.signal.reason);
-      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService);
+      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService, embeddingRegistry);
       await verifier.initialize();
       expect(await verifier.loadStore(topicId)).to.equal(null);
       verifier.dispose();
@@ -461,7 +467,7 @@ describe("DocumentPipeline", function () {
       const files = ["sample-text.txt", "sample.md", "sample.html", "sample.pdf"].map((name) =>
         path.join(fixturesPath, name),
       );
-      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService);
+      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService, embeddingRegistry);
       for (let first = 0; first < files.length; first++) {
         const topicId = `mixed-first-${first}`;
         const order = [files[first], ...files.filter((_, index) => index !== first)];
@@ -547,7 +553,7 @@ describe("DocumentPipeline", function () {
         await embeddingService.initialize(differentModel);
 
         // The new pipeline will use the currently initialized model from the singleton
-        const differentPipeline = new DocumentPipeline(mockNotifier, embeddingService, mockConfig);
+        const differentPipeline = new DocumentPipeline(mockNotifier, embeddingService, embeddingRegistry, mockConfig);
         await differentPipeline.initialize(tempStorageDir);
 
         // Try to add document to same topic with different model - should fail

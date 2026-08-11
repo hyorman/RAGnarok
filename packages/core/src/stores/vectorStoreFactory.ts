@@ -23,6 +23,7 @@ import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { EmbeddingService } from "../embeddings/embeddingService";
+import type { EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { Logger } from "../logger";
 import { atomicWriteJson, STORAGE_FORMAT_VERSION } from "../utils/storageV2";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
@@ -97,7 +98,12 @@ export class VectorStoreFactory {
   private connections = new Map<string, Connection>();
   private tables = new Set<Table>();
 
-  constructor(storageDir: string, embeddingModel: string, embeddingService: EmbeddingService) {
+  constructor(
+    storageDir: string,
+    embeddingModel: string,
+    embeddingService: EmbeddingService,
+    private readonly registry: EmbeddingServiceRegistry,
+  ) {
     this.logger = new Logger("VectorStoreFactory");
 
     if (!embeddingModel) {

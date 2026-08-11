@@ -54,10 +54,19 @@ interface AsyncToolRegistration extends AwaitableDisposable {
   disposeAsync(): Promise<void>;
 }
 
+interface DisposableRegistry {
+  disposeAll(): Promise<void>;
+}
+
 export interface ExtensionLifecycleResources {
   memoryStore?: AwaitableDisposable;
   topicManager?: AwaitableDisposable;
   embeddingService?: AwaitableDisposable;
+  /**
+   * Closed after topicManager: the manager's stores hold services owned by the
+   * registry, so releasing the registry first would pull them out from under it.
+   */
+  embeddingRegistry?: DisposableRegistry;
   ragTool?: AsyncToolRegistration;
 }
 
@@ -194,6 +203,13 @@ export class ExtensionLifecycle {
     if (this.resources.topicManager) {
       try {
         await this.waitForStorageLeaseRelease();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (this.resources.embeddingRegistry) {
+      try {
+        await this.resources.embeddingRegistry.disposeAll();
       } catch (error) {
         failures.push(error);
       }

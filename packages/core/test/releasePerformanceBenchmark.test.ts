@@ -5,6 +5,7 @@ import * as path from "path";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   EmbeddingService,
+  EmbeddingServiceRegistry,
   HuggingFaceBackend,
   ModelRegistry,
   VectorStoreFactory,
@@ -35,7 +36,11 @@ describe("release performance evidence", function () {
     const embeddingService = new EmbeddingService({ config, notifier });
     const registry = ModelRegistry.getInstance();
     embeddingService.registerBackend(new HuggingFaceBackend(registry, notifier));
-    const factory = new VectorStoreFactory(storageDir, registry.getDefaultModel(), embeddingService);
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => embeddingService,
+      maxResidentLocal: 2,
+    });
+    const factory = new VectorStoreFactory(storageDir, registry.getDefaultModel(), embeddingService, embeddingRegistry);
     try {
       // Model initialization is deliberately outside the timed region: this
       // metric covers database setup, corpus embedding, and durable index

@@ -8,6 +8,7 @@ import * as fs from "fs/promises";
 import {
   TopicManager,
   EmbeddingService,
+  EmbeddingServiceRegistry,
   Logger,
   setLoggerFactory,
   CONFIG,
@@ -101,6 +102,15 @@ export async function activateWithServiceFactory(
     const hfBackend = new HuggingFaceBackend(modelRegistry, notifier);
     embeddingService.registerBackend(hfBackend);
 
+    // One registry for the whole extension host: a registry per consumer would
+    // give each its own resident models and defeat the cap. Mirrors the
+    // McpConfig.maxResidentModels default; VS Code has no contributed setting.
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => serviceFactory.createEmbeddingService({ config: configProvider, notifier }),
+      maxResidentLocal: 2,
+    });
+    lifecycle.setResources({ embeddingRegistry });
+
     // Initialize TopicManager with VS Code storage path
     const createTopicManager = () =>
       serviceFactory.createTopicManager({
@@ -108,6 +118,7 @@ export async function activateWithServiceFactory(
         config: configProvider,
         notifier,
         embeddingService,
+        embeddingRegistry,
         llmProvider,
       });
     const topicManager = await openTopicManagerWithMigration(storageDir, createDefaultMigrationUx(createTopicManager));

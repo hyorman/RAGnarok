@@ -11,6 +11,7 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import { DocumentLoaderFactory, LoaderOptions } from "../loaders/documentLoaderFactory";
 import { SemanticChunker, ChunkingOptions } from "../splitters/semanticChunker";
 import { EmbeddingService } from "../embeddings/embeddingService";
+import type { EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { VectorStoreFactory } from "../stores/vectorStoreFactory";
 import { Logger } from "../logger";
 import { createHash } from "crypto";
@@ -108,6 +109,7 @@ export class DocumentPipeline {
   constructor(
     private notifier: INotifier,
     embeddingService: EmbeddingService,
+    private readonly embeddingRegistry: EmbeddingServiceRegistry,
     config?: IConfigProvider,
   ) {
     this.logger = new Logger("DocumentPipeline");
@@ -136,7 +138,12 @@ export class DocumentPipeline {
         this.vectorStoreFactory.dispose();
       }
 
-      this.vectorStoreFactory = new VectorStoreFactory(storageDir, actualModelName, this.embeddingService);
+      this.vectorStoreFactory = new VectorStoreFactory(
+        storageDir,
+        actualModelName,
+        this.embeddingService,
+        this.embeddingRegistry,
+      );
 
       this.logger.info("Pipeline initialized successfully");
     } catch (error) {

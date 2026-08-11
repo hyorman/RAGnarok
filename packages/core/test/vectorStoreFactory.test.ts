@@ -19,6 +19,7 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   VectorStoreFactory,
   EmbeddingService,
+  EmbeddingServiceRegistry,
   ModelRegistry,
   HuggingFaceBackend,
   IConfigProvider,
@@ -53,7 +54,11 @@ describe("VectorStoreFactory metadata persistence", function () {
     storageDir = path.join(os.tmpdir(), `vsf-test-${crypto.randomUUID()}`);
     await fs.mkdir(storageDir, { recursive: true });
 
-    factory = new VectorStoreFactory(storageDir, modelRegistry.getDefaultModel(), embeddingService);
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => embeddingService,
+      maxResidentLocal: 2,
+    });
+    factory = new VectorStoreFactory(storageDir, modelRegistry.getDefaultModel(), embeddingService, embeddingRegistry);
     await factory.initialize();
   });
 

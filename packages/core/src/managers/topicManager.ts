@@ -32,6 +32,7 @@ import {
 } from "../stores/vectorStoreFactory";
 import { EventEmitter } from "events";
 import { EmbeddingService } from "../embeddings/embeddingService";
+import type { EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { Logger } from "../logger";
 import { EXTENSION, CONFIG } from "../constants";
 import {
@@ -60,6 +61,12 @@ export interface TopicManagerOptions {
   config: IConfigProvider;
   notifier: INotifier;
   embeddingService: EmbeddingService;
+  /**
+   * Owns one embedding service per embedding space. Created at the composition
+   * root and shared: a registry per manager would give each its own resident
+   * models and defeat the cap.
+   */
+  embeddingRegistry: EmbeddingServiceRegistry;
   /**
    * LLM provider for entity extraction during indexing.
    * Optional — without it extraction is skipped.
@@ -266,6 +273,7 @@ export class TopicManager {
   private config: IConfigProvider;
   private notifier: INotifier;
   private embeddingService: EmbeddingService;
+  private embeddingRegistry: EmbeddingServiceRegistry;
   private llmProvider: ILLMProvider | undefined;
 
   private logger: Logger;
@@ -311,8 +319,14 @@ export class TopicManager {
     this.config = options.config;
     this.notifier = options.notifier;
     this.embeddingService = options.embeddingService;
+    this.embeddingRegistry = options.embeddingRegistry;
     this.llmProvider = options.llmProvider;
-    this.documentPipeline = new DocumentPipeline(this.notifier, this.embeddingService, this.config);
+    this.documentPipeline = new DocumentPipeline(
+      this.notifier,
+      this.embeddingService,
+      this.embeddingRegistry,
+      this.config,
+    );
 
     this.logger.info("TopicManager created");
   }
@@ -357,7 +371,12 @@ export class TopicManager {
       const storageDir = this.getDatabaseDir();
       await this.documentPipeline.initialize(storageDir);
 
-      this.vectorStoreFactory = new VectorStoreFactory(storageDir, this.topicsIndex!.modelName, this.embeddingService);
+      this.vectorStoreFactory = new VectorStoreFactory(
+        storageDir,
+        this.topicsIndex!.modelName,
+        this.embeddingService,
+        this.embeddingRegistry,
+      );
       await this.recoverPostCommitCleanupJournal();
       await this.recoverIngestionJournal();
 
@@ -555,6 +574,7 @@ export class TopicManager {
           this.getDatabaseDir(),
           nextTopicsIndex.modelName,
           this.embeddingService,
+          this.embeddingRegistry,
         );
       }
 
@@ -1511,9 +1531,19 @@ export class TopicManager {
       const topicIds = this.topicsIndex ? Object.keys(this.topicsIndex.topics) : [];
       const storageDir = this.getDatabaseDir();
       const currentModel = this.embeddingService.getCurrentModel();
-      const replacementPipeline = new DocumentPipeline(this.notifier, this.embeddingService, this.config);
+      const replacementPipeline = new DocumentPipeline(
+        this.notifier,
+        this.embeddingService,
+        this.embeddingRegistry,
+        this.config,
+      );
       await replacementPipeline.initialize(storageDir);
-      const replacementFactory = new VectorStoreFactory(storageDir, currentModel, this.embeddingService);
+      const replacementFactory = new VectorStoreFactory(
+        storageDir,
+        currentModel,
+        this.embeddingService,
+        this.embeddingRegistry,
+      );
       const previousIndexModel = this.topicsIndex?.modelName;
       try {
         if (this.topicsIndex) {

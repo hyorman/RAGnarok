@@ -32,6 +32,7 @@ import {
   LogLevel,
   TopicManager,
   EmbeddingService,
+  EmbeddingServiceRegistry,
   HuggingFaceBackend,
   RemoteEmbeddingBackend,
   ModelRegistry,
@@ -104,12 +105,20 @@ async function main(): Promise<void> {
     logger.info(`Registered remote embedding backend (${config.embeddingProvider}) at ${config.embeddingBaseUrl}`);
   }
 
+  // One registry for the whole process: a registry per consumer would give each
+  // its own resident models and defeat the cap.
+  const embeddingRegistry = new EmbeddingServiceRegistry({
+    createService: () => new EmbeddingService({ config: configProvider, notifier }),
+    maxResidentLocal: config.maxResidentModels,
+  });
+
   // Create topic manager
   const topicManager = await TopicManager.create({
     storageDir: config.storageDir,
     config: configProvider,
     notifier,
     embeddingService,
+    embeddingRegistry,
     llmProvider,
     resetStorage: config.resetStorage,
   });
@@ -261,6 +270,7 @@ async function main(): Promise<void> {
       await memoryStore?.dispose();
       await ragQueryService.dispose();
       await topicManager.dispose();
+      await embeddingRegistry.disposeAll();
       await embeddingService.dispose();
       logger.info("Shutdown complete");
       clearTimeout(hardExit);
