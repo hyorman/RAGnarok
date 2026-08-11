@@ -1,5 +1,5 @@
 import { strict as assert } from "assert";
-import { EmbeddingServiceRegistry, isRemoteBackend } from "../src/embeddings/embeddingServiceRegistry";
+import { EmbeddingServiceRegistry, isCapExempt } from "../src/embeddings/embeddingServiceRegistry";
 
 /** Minimal stand-in — the registry only ever calls initialize() and dispose(). */
 class FakeService {
@@ -27,10 +27,12 @@ describe("EmbeddingServiceRegistry", () => {
     return { registry, created };
   };
 
-  it("classifies backends", () => {
-    assert.equal(isRemoteBackend("remote"), true);
-    assert.equal(isRemoteBackend("huggingface"), false);
-    assert.equal(isRemoteBackend(""), false);
+  it("classifies backends by whether they hold weights", () => {
+    assert.equal(isCapExempt("remote"), true);
+    assert.equal(isCapExempt("vscodeLM"), true);
+    assert.equal(isCapExempt("huggingface"), false);
+    assert.equal(isCapExempt(""), false);
+    assert.equal(isCapExempt("some-future-backend"), false, "unknown kinds count against the cap");
   });
 
   it("initializes each service to exactly one model", async () => {
@@ -85,7 +87,40 @@ describe("EmbeddingServiceRegistry", () => {
       created.map(() => false),
       "remote entries must not evict local ones, nor be evicted themselves",
     );
-    assert.deepEqual(registry.size(), { local: 2, remote: 4 });
+    assert.deepEqual(registry.size(), { local: 2, exempt: 4 });
+  });
+
+  it("never counts or evicts vscodeLM services", async () => {
+    const { registry, created } = makeRegistry(2);
+    await registry.get({ model: "a", backend: "huggingface", endpointHash: "local" });
+    await registry.get({ model: "b", backend: "huggingface", endpointHash: "local" });
+    for (const model of ["v1", "v2", "v3", "v4"]) {
+      await registry.get({ model, backend: "vscodeLM", endpointHash: "local" });
+    }
+    assert.deepEqual(
+      created.map((s) => s.disposed),
+      created.map(() => false),
+      "vscodeLM holds no weights, so it must not evict a real model to make room for nothing",
+    );
+    assert.deepEqual(registry.size(), { local: 2, exempt: 4 });
+  });
+
+  it("counts an unknown backend against the cap", async () => {
+    const { registry, created } = makeRegistry(1);
+    await registry.get({ model: "a", backend: "some-future-backend", endpointHash: "local" });
+    await registry.get({ model: "b", backend: "some-future-backend", endpointHash: "local" });
+    assert.equal(created[0].disposed, true, "an unknown backend must be treated as weight-bearing");
+    assert.equal(created[1].disposed, false);
+    assert.deepEqual(registry.size(), { local: 1, exempt: 0 });
+  });
+
+  it("creates one service when two concurrent gets race for the same key", async () => {
+    const { registry, created } = makeRegistry(2);
+    const resolution = { model: "m", backend: "huggingface", endpointHash: "local" };
+    const [first, second] = await Promise.all([registry.get(resolution), registry.get(resolution)]);
+    assert.equal(first, second, "concurrent callers must share one service");
+    assert.equal(created.length, 1, "a concurrent race must not create a second service");
+    assert.deepEqual(registry.size(), { local: 1, exempt: 0 });
   });
 
   it("works at a cap of 1 without disposing a service it is about to return", async () => {
@@ -106,6 +141,6 @@ describe("EmbeddingServiceRegistry", () => {
       created.map((s) => s.disposed),
       [true, true],
     );
-    assert.deepEqual(registry.size(), { local: 0, remote: 0 });
+    assert.deepEqual(registry.size(), { local: 0, exempt: 0 });
   });
 });

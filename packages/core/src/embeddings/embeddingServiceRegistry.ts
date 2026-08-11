@@ -8,9 +8,16 @@ export interface EmbeddingResolution {
   endpointHash: string;
 }
 
-/** Backend kinds are exactly "huggingface" and "remote". */
-export function isRemoteBackend(backend: string): boolean {
-  return backend === "remote";
+/**
+ * Backend kinds that hold no resident weights and therefore never occupy a
+ * cap slot. Unknown kinds deliberately COUNT against the cap: an unknown
+ * weight-bearing backend treated as exempt grows unbounded to OOM, whereas
+ * an unknown stateless one merely wastes a slot. Fail toward the cheaper mistake.
+ */
+const CAP_EXEMPT_BACKENDS = new Set(["remote", "vscodeLM"]);
+
+export function isCapExempt(backend: string): boolean {
+  return CAP_EXEMPT_BACKENDS.has(backend);
 }
 
 const keyOf = (r: EmbeddingResolution): string => `${r.backend}::${r.endpointHash}::${r.model}`;
@@ -18,7 +25,7 @@ const keyOf = (r: EmbeddingResolution): string => `${r.backend}::${r.endpointHas
 export interface EmbeddingServiceRegistryOptions {
   /** Creates an uninitialised EmbeddingService. */
   createService: () => EmbeddingService;
-  /** Maximum resident LOCAL services. Remote services are exempt. */
+  /** Maximum resident weight-bearing services. Cap-exempt backends do not count. */
   maxResidentLocal: number;
 }
 
@@ -29,16 +36,22 @@ export interface EmbeddingServiceRegistryOptions {
  * That immutability is the point: a single shared service being re-pointed by
  * whichever topic loaded last is the bug this registry exists to remove.
  *
- * Local services hold ONNX weights and are LRU-bounded. Remote services are
- * stateless HTTP clients, so they neither occupy a slot nor get evicted.
+ * Weight-bearing services (ONNX models) are LRU-bounded. Cap-exempt backends —
+ * remote HTTP clients and vscodeLM — hold no weights, so they neither occupy a
+ * slot nor get evicted; letting one take a slot would evict a real model to
+ * make room for nothing.
+ *
+ * Entries are pooled as PROMISES, claimed synchronously on a miss, so two
+ * concurrent get() calls for the same key share one service rather than each
+ * building their own and leaking the loser.
  */
 export class EmbeddingServiceRegistry {
   private readonly logger = new Logger("EmbeddingServiceRegistry");
   private readonly createService: () => EmbeddingService;
   private readonly maxResidentLocal: number;
   /** Map iteration order is insertion order, which we maintain as LRU order. */
-  private readonly local = new Map<string, EmbeddingService>();
-  private readonly remote = new Map<string, EmbeddingService>();
+  private readonly local = new Map<string, Promise<EmbeddingService>>();
+  private readonly exempt = new Map<string, Promise<EmbeddingService>>();
 
   constructor(options: EmbeddingServiceRegistryOptions) {
     this.createService = options.createService;
@@ -47,7 +60,7 @@ export class EmbeddingServiceRegistry {
 
   public async get(resolution: EmbeddingResolution): Promise<EmbeddingService> {
     const key = keyOf(resolution);
-    const pool = isRemoteBackend(resolution.backend) ? this.remote : this.local;
+    const pool = isCapExempt(resolution.backend) ? this.exempt : this.local;
 
     const existing = pool.get(key);
     if (existing) {
@@ -59,37 +72,70 @@ export class EmbeddingServiceRegistry {
       return existing;
     }
 
-    const service = this.createService();
-    await service.initialize(resolution.model);
+    // Claim the key SYNCHRONOUSLY — before the first await — so a concurrent
+    // caller for the same key finds this promise instead of starting a second
+    // service that would overwrite ours and leak undisposed.
+    const creation = (async () => {
+      const service = this.createService();
+      await service.initialize(resolution.model);
+      return service;
+    })();
+    pool.set(key, creation);
 
-    if (pool === this.local) {
-      // Evict BEFORE inserting, so the service we are about to return can
-      // never be the one evicted — which is what a cap of 1 would otherwise do.
-      while (this.local.size >= this.maxResidentLocal) {
-        const oldestKey = this.local.keys().next().value;
-        if (oldestKey === undefined) {
-          break;
-        }
-        const evicted = this.local.get(oldestKey);
-        this.local.delete(oldestKey);
-        if (evicted) {
-          this.logger.info("Evicting embedding service", { key: oldestKey });
-          await evicted.dispose();
-        }
+    try {
+      await creation;
+    } catch (error) {
+      // A failed initialise must not poison the key.
+      if (pool.get(key) === creation) {
+        pool.delete(key);
       }
+      throw error;
     }
 
-    pool.set(key, service);
-    return service;
+    if (pool === this.local) {
+      await this.evictDownTo(this.maxResidentLocal, key);
+    }
+
+    return creation;
   }
 
-  public size(): { local: number; remote: number } {
-    return { local: this.local.size, remote: this.remote.size };
+  /**
+   * Trims the local pool to `max` entries, oldest first.
+   *
+   * The synchronous claim above forces insert-before-evict, so the invariant
+   * "never dispose the service we are about to return" is held here instead of
+   * by ordering: `size > max` (post-insert) is the old pre-insert `size >= max`,
+   * and `protectedKey` is skipped outright.
+   */
+  private async evictDownTo(max: number, protectedKey: string): Promise<void> {
+    while (this.local.size > max) {
+      let oldestKey: string | undefined;
+      for (const candidate of this.local.keys()) {
+        if (candidate !== protectedKey) {
+          oldestKey = candidate;
+          break;
+        }
+      }
+      if (oldestKey === undefined) {
+        break;
+      }
+      const evicted = this.local.get(oldestKey);
+      this.local.delete(oldestKey);
+      if (evicted) {
+        this.logger.info("Evicting embedding service", { key: oldestKey });
+        await (await evicted).dispose();
+      }
+    }
+  }
+
+  public size(): { local: number; exempt: number } {
+    return { local: this.local.size, exempt: this.exempt.size };
   }
 
   public async disposeAll(): Promise<void> {
-    for (const pool of [this.local, this.remote]) {
-      for (const service of pool.values()) {
+    for (const pool of [this.local, this.exempt]) {
+      for (const pending of pool.values()) {
+        const service = await pending;
         await service.dispose();
       }
       pool.clear();
