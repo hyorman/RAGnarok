@@ -7,8 +7,8 @@ import { loadConfig } from "../src/config";
 import { STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
 
 describe("config file key table", () => {
-  it("declares exactly the 23 keys that move to the file", () => {
-    assert.equal(FILE_KEYS.length, 23);
+  it("declares exactly the 24 keys that move to the file", () => {
+    assert.equal(FILE_KEYS.length, 24);
   });
 
   it("names the same file core exempts from storage-format gating and reset backups", () => {

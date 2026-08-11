@@ -87,6 +87,8 @@ export interface McpConfig {
   embeddingProvider: string;
   embeddingBaseUrl: string;
   embeddingApiKey: string;
+  /** Ceiling on how many weight-bearing embedding models stay resident at once. */
+  maxResidentModels: number;
   /** Budget for draining in-flight tool calls on SIGINT/SIGTERM. */
   shutdownDrainMs?: number;
   llmRequestTimeoutMs?: number;
@@ -128,6 +130,7 @@ const configSchema = z
     embeddingProvider: z.enum(["huggingface", "openai", "ollama"]),
     embeddingBaseUrl: z.string(),
     embeddingApiKey: z.string(),
+    maxResidentModels: z.number().int().min(1),
     rerankerModel: z.string().min(1),
     rerankerEnabled: z.boolean(),
     rerankerMaxCandidates: z.number().int().min(1).max(200),
@@ -226,6 +229,7 @@ export function loadConfig(): McpConfig {
     embeddingProvider: process.env.RAGNAROK_EMBEDDING_PROVIDER || file.embeddingProvider || "huggingface",
     embeddingBaseUrl: process.env.RAGNAROK_EMBEDDING_BASE_URL || file.embeddingBaseUrl || "",
     embeddingApiKey: process.env.RAGNAROK_EMBEDDING_API_KEY || "",
+    maxResidentModels: parseInt(process.env.RAGNAROK_MAX_RESIDENT_MODELS || String(file.maxResidentModels ?? 2), 10),
     shutdownDrainMs: parseInt(process.env.RAGNAROK_SHUTDOWN_DRAIN_MS || String(file.shutdownDrainMs ?? 10000), 10),
     llmRequestTimeoutMs: parseInt(
       process.env.RAGNAROK_LLM_REQUEST_TIMEOUT_MS || String(file.llmRequestTimeoutMs ?? 30000),

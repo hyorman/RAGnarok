@@ -10,6 +10,7 @@ export type FileField =
   | "embeddingProvider"
   | "embeddingModel"
   | "embeddingBaseUrl"
+  | "maxResidentModels"
   | "llmProvider"
   | "llmModel"
   | "llmBaseUrl"
@@ -50,6 +51,7 @@ export const FILE_KEYS: readonly FileKey[] = [
   { path: ["embedding", "provider"], field: "embeddingProvider", schema: z.string(), shown: "huggingface" },
   { path: ["embedding", "model"], field: "embeddingModel", schema: z.string(), shown: "Xenova/all-MiniLM-L6-v2" },
   { path: ["embedding", "baseUrl"], field: "embeddingBaseUrl", schema: z.string(), shown: "" },
+  { path: ["embedding", "maxResidentModels"], field: "maxResidentModels", schema: z.number().int().min(1), shown: 2 },
 
   { path: ["llm", "provider"], field: "llmProvider", schema: z.string(), shown: "none" },
   { path: ["llm", "model"], field: "llmModel", schema: z.string(), shown: "" },

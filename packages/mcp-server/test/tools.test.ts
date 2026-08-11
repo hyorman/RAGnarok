@@ -83,6 +83,7 @@ function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     embeddingProvider: "huggingface",
     embeddingBaseUrl: "",
     embeddingApiKey: "",
+    maxResidentModels: 2,
     rerankerModel: "Xenova/ms-marco-MiniLM-L-6-v2",
     rerankerEnabled: true,
     rerankerMaxCandidates: 20,

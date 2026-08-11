@@ -646,5 +646,16 @@ describe("MCP Server", () => {
       process.env.RAGNAROK_GITHUB_HOSTS = "";
       expect(() => loadConfig()).to.throw(/githubHosts/);
     });
+
+    it("resolves maxResidentModels from the file, and env beats it", () => {
+      writeConfig({ embedding: { maxResidentModels: 3 } });
+      expect(loadConfig().maxResidentModels).to.equal(3);
+      process.env.RAGNAROK_MAX_RESIDENT_MODELS = "1";
+      expect(loadConfig().maxResidentModels).to.equal(1);
+    });
+
+    it("defaults maxResidentModels to 2", () => {
+      expect(loadConfig().maxResidentModels).to.equal(2);
+    });
   });
 });
