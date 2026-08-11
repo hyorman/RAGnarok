@@ -82,33 +82,49 @@ async function main(): Promise<void> {
   const notifier = new ConsoleNotifier();
   const llmProvider = createLLMProvider(config);
 
-  // Initialize core services
-  const embeddingService = new EmbeddingService({ config: configProvider, notifier });
-
-  // Initialize embedding backend (HuggingFace only — no VS Code LM in MCP mode)
-  const modelRegistry = ModelRegistry.getInstance();
-  const hfBackend = new HuggingFaceBackend(modelRegistry, notifier, config.embeddingModel);
-  embeddingService.registerBackend(hfBackend);
-
-  // Register remote embedding backend if URL is configured
+  // A misconfigured remote provider must fail at startup, not on the first
+  // store load, so the URL is validated here rather than inside the builder.
+  let remoteEmbeddingOptions: ConstructorParameters<typeof RemoteEmbeddingBackend>[0] | undefined;
   if (config.embeddingProvider !== "huggingface") {
     if (!config.embeddingBaseUrl) {
       throw new Error("RAGNAROK_EMBEDDING_BASE_URL is required when RAGNAROK_EMBEDDING_PROVIDER is not huggingface");
     }
-    const remoteBackend = new RemoteEmbeddingBackend({
+    remoteEmbeddingOptions = {
       baseUrl: config.embeddingBaseUrl,
       apiKey: config.embeddingApiKey || undefined,
       format: config.embeddingProvider as RemoteEmbeddingFormat,
       modelName: config.embeddingModel,
-    });
-    embeddingService.registerBackend(remoteBackend);
+    };
+  }
+
+  // Builds a fully-backed embedding service. Every service needs the same
+  // backends: one with none registered cannot initialize at all, and the
+  // fallback in EmbeddingService.initialize is disabled for an empty list.
+  // The backend instances are constructed per call on purpose — sharing one
+  // HuggingFaceBackend across services would reintroduce the shared-model bug
+  // one level down, since initializeForBackend re-points the backend itself.
+  const modelRegistry = ModelRegistry.getInstance();
+  const buildEmbeddingService = () => {
+    const service = new EmbeddingService({ config: configProvider, notifier });
+    // HuggingFace only in MCP mode — no VS Code LM. Registered first so the
+    // remote backend, when present, stays the last-registered fallback.
+    service.registerBackend(new HuggingFaceBackend(modelRegistry, notifier, config.embeddingModel));
+    if (remoteEmbeddingOptions) {
+      service.registerBackend(new RemoteEmbeddingBackend(remoteEmbeddingOptions));
+    }
+    return service;
+  };
+
+  // Initialize core services
+  const embeddingService = buildEmbeddingService();
+  if (remoteEmbeddingOptions) {
     logger.info(`Registered remote embedding backend (${config.embeddingProvider}) at ${config.embeddingBaseUrl}`);
   }
 
   // One registry for the whole process: a registry per consumer would give each
   // its own resident models and defeat the cap.
   const embeddingRegistry = new EmbeddingServiceRegistry({
-    createService: () => new EmbeddingService({ config: configProvider, notifier }),
+    createService: buildEmbeddingService,
     maxResidentLocal: config.maxResidentModels,
   });
 

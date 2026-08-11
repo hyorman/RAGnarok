@@ -16,6 +16,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { Document as LangChainDocument } from "@langchain/core/documents";
+import { VectorStore } from "@langchain/core/vectorstores";
 import {
   VectorStoreFactory,
   EmbeddingService,
@@ -160,6 +161,153 @@ describe("VectorStoreFactory metadata persistence", function () {
     }
     expect(error).to.be.instanceOf(VectorStoreMetadataCorruptionError);
     expect(await fs.readFile(metadataPath, "utf8")).to.equal(corruptBytes);
+  });
+});
+
+/**
+ * Records every model it is pointed at, so a test can ask which model actually
+ * served an embed. Mirrors the real service closely enough for the property
+ * under test: `initializeForBackend` re-points the (per-service) backend, so a
+ * service shared between two topics ends up serving whichever loaded last.
+ */
+class RecordingEmbeddingService {
+  public currentModel = "";
+  public lastEmbedModel = "";
+  public readonly embedLog: string[] = [];
+
+  public async initialize(modelName?: string): Promise<void> {
+    this.currentModel = modelName ?? this.currentModel;
+  }
+
+  public async initializeForBackend(_backendType: string, modelName?: string): Promise<void> {
+    this.currentModel = modelName ?? this.currentModel;
+  }
+
+  public async getFingerprint(): Promise<Record<string, unknown>> {
+    return {
+      backendKind: "huggingface",
+      providerFormat: "huggingface",
+      model: this.currentModel,
+      revision: "test",
+      dimension: 4,
+      endpointHash: "local",
+    };
+  }
+
+  public async embed(_text: string): Promise<number[]> {
+    return this.record();
+  }
+
+  public async embedWithBackend(_backendType: string, _text: string): Promise<number[]> {
+    return this.record();
+  }
+
+  public async embedBatch(texts: string[]): Promise<number[][]> {
+    return texts.map(() => this.record());
+  }
+
+  public async embedBatchWithBackend(_backendType: string, texts: string[]): Promise<number[][]> {
+    return texts.map(() => this.record());
+  }
+
+  public getCurrentModel(): string {
+    return this.currentModel;
+  }
+
+  public async dispose(): Promise<void> {}
+
+  private record(): number[] {
+    this.lastEmbedModel = this.currentModel;
+    this.embedLog.push(this.currentModel);
+    return [0.1, 0.2, 0.3, 0.4];
+  }
+}
+
+/**
+ * A topic must keep embedding with the model its vectors were built from, no
+ * matter which other topic was loaded — or queried — after it.
+ *
+ * Regression test for the shared-EmbeddingService bug: every store's
+ * TransformersEmbeddings used to close over one service and re-point it via
+ * initialize(model) behind a one-shot flag, so the topic that embedded first
+ * silently inherited the model of whichever topic embedded next.
+ */
+describe("VectorStoreFactory per-topic embedding model", function () {
+  this.timeout(60000);
+
+  let factory: VectorStoreFactory;
+  let storageDir: string;
+  let sharedService: RecordingEmbeddingService;
+
+  /** The service each store actually embeds through. */
+  const serviceOf = (store: VectorStore): RecordingEmbeddingService =>
+    (store as any).embeddings.embeddingService as RecordingEmbeddingService;
+
+  /** Embeds a query through the store and reports the model that served it. */
+  async function resolvedModelFor(store: VectorStore): Promise<string> {
+    await (store as any).embeddings.embedQuery("which model am I using?");
+    const service = serviceOf(store);
+    const fingerprint = await service.getFingerprint();
+    expect(service.lastEmbedModel, "fingerprint disagrees with the model that served the embed").to.equal(
+      fingerprint.model,
+    );
+    return service.lastEmbedModel;
+  }
+
+  before(async function () {
+    storageDir = path.join(os.tmpdir(), `vsf-per-topic-${crypto.randomUUID()}`);
+    await fs.mkdir(storageDir, { recursive: true });
+
+    sharedService = new RecordingEmbeddingService();
+    await sharedService.initialize("model-x");
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      // A fresh service per embedding space, exactly as the real roots do.
+      createService: () => new RecordingEmbeddingService() as unknown as EmbeddingService,
+      maxResidentLocal: 4,
+    });
+    factory = new VectorStoreFactory(
+      storageDir,
+      "model-x",
+      sharedService as unknown as EmbeddingService,
+      embeddingRegistry,
+    );
+    await factory.initialize();
+
+    // Topic "a" records model-x; topic "b" is re-stamped to model-y.
+    await factory.createStore({ topicId: "a", storageDir });
+    await factory.createStore({ topicId: "b", storageDir });
+    await factory.saveStore("b", {
+      embeddingModel: "model-y",
+      embeddingBackend: "huggingface",
+      embeddingFingerprint: {
+        backendKind: "huggingface",
+        providerFormat: "huggingface",
+        model: "model-y",
+        revision: "test",
+        dimension: 4,
+        endpointHash: "local",
+      },
+    });
+    // Drop the stores cached by createStore so both topics load from metadata.
+    (factory as any).storeCache.clear();
+  });
+
+  after(async function () {
+    factory?.dispose();
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("keeps each topic on its own embedding model when another topic is loaded", async function () {
+    const storeA = await factory.loadStore("a");
+    expect(storeA, "topic a failed to load").to.not.equal(null);
+    expect(await resolvedModelFor(storeA!)).to.equal("model-x");
+
+    const storeB = await factory.loadStore("b");
+    expect(storeB, "topic b failed to load").to.not.equal(null);
+    expect(await resolvedModelFor(storeB!), "topic b must use its own recorded model").to.equal("model-y");
+
+    // The decisive assertion: querying A again, after B has embedded.
+    expect(await resolvedModelFor(storeA!), "loading topic B must not re-point topic A's embedder").to.equal("model-x");
   });
 });
 

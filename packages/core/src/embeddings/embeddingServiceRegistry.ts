@@ -20,6 +20,17 @@ export function isCapExempt(backend: string): boolean {
   return CAP_EXEMPT_BACKENDS.has(backend);
 }
 
+/**
+ * Whether a backend talks to a configurable HTTP endpoint, and therefore has a
+ * meaningful endpointHash. Distinct from isCapExempt: "vscodeLM" is cap-exempt
+ * (it holds no weights) but has NO endpoint, so it must key as "local" here.
+ * Using isCapExempt for this would make every vscodeLM store load perform a
+ * live embed probe against an endpoint that does not exist.
+ */
+export function hasRemoteEndpoint(backend: string): boolean {
+  return backend === "remote";
+}
+
 const keyOf = (r: EmbeddingResolution): string => `${r.backend}::${r.endpointHash}::${r.model}`;
 
 export interface EmbeddingServiceRegistryOptions {

@@ -87,26 +87,35 @@ export async function activateWithServiceFactory(
     // Create LLM provider
     const llmProvider = new VsCodeLLMProvider();
 
-    // Initialize embedding service
-    const embeddingService = serviceFactory.createEmbeddingService({ config: configProvider, notifier });
-    lifecycle.setResources({ embeddingService });
-
-    // Register VS Code LM embedding backend (proposed embeddings API)
-    const vscodeLmBackend = new VscodeLmBackend(undefined, {
-      modelIdResolver: () => configProvider.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, ""),
-    });
-    embeddingService.registerBackend(vscodeLmBackend);
-
-    // Register HuggingFace backend as the default fallback
+    // Builds a fully-backed embedding service. Every service needs the same
+    // backends: one with none registered cannot initialize at all, and the
+    // fallback in EmbeddingService.initialize is disabled for an empty list.
+    // The backend instances are constructed per call on purpose — sharing one
+    // HuggingFaceBackend across services would reintroduce the shared-model bug
+    // one level down, since initializeForBackend re-points the backend itself.
     const modelRegistry = ModelRegistry.getInstance();
-    const hfBackend = new HuggingFaceBackend(modelRegistry, notifier);
-    embeddingService.registerBackend(hfBackend);
+    const buildEmbeddingService = () => {
+      const service = serviceFactory.createEmbeddingService({ config: configProvider, notifier });
+      // VS Code LM embedding backend (proposed embeddings API) first; the
+      // HuggingFace backend is registered last so it is the default fallback.
+      service.registerBackend(
+        new VscodeLmBackend(undefined, {
+          modelIdResolver: () => configProvider.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, ""),
+        }),
+      );
+      service.registerBackend(new HuggingFaceBackend(modelRegistry, notifier));
+      return service;
+    };
+
+    // Initialize embedding service
+    const embeddingService = buildEmbeddingService();
+    lifecycle.setResources({ embeddingService });
 
     // One registry for the whole extension host: a registry per consumer would
     // give each its own resident models and defeat the cap. Mirrors the
     // McpConfig.maxResidentModels default; VS Code has no contributed setting.
     const embeddingRegistry = new EmbeddingServiceRegistry({
-      createService: () => serviceFactory.createEmbeddingService({ config: configProvider, notifier }),
+      createService: buildEmbeddingService,
       maxResidentLocal: 2,
     });
     lifecycle.setResources({ embeddingRegistry });

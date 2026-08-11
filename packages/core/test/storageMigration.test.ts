@@ -249,6 +249,10 @@ describe("offline v0.3 storage migration", function () {
         dimension: 3,
         normalized: true,
       }),
+      // The registry initializes and may dispose the services it hands out, so
+      // a stub standing in for one has to answer both.
+      initialize: async () => undefined,
+      dispose: async () => undefined,
     } as unknown as EmbeddingService;
     const config: IConfigProvider = { get: <T>(_key: string, fallback: T) => fallback };
     const notifier: INotifier = {
@@ -258,13 +262,24 @@ describe("offline v0.3 storage migration", function () {
       withProgress: async <T>(_title: string, task: (report: (message: string) => void) => Promise<T>) =>
         task(() => undefined),
     };
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => embeddingService,
+      maxResidentLocal: 2,
+    });
     const Manager = TopicManager as unknown as new (options: {
       storageDir: string;
       config: IConfigProvider;
       notifier: INotifier;
       embeddingService: EmbeddingService;
+      embeddingRegistry: EmbeddingServiceRegistry;
     }) => TopicManager;
-    const manager = new Manager({ storageDir: fixture.storageDir, config, notifier, embeddingService });
+    const manager = new Manager({
+      storageDir: fixture.storageDir,
+      config,
+      notifier,
+      embeddingService,
+      embeddingRegistry,
+    });
     (manager as any).topicsIndex = JSON.parse(
       await fs.readFile(path.join(fixture.storageDir, "database", "topics.json"), "utf8"),
     );
@@ -275,7 +290,7 @@ describe("offline v0.3 storage migration", function () {
       path.join(fixture.storageDir, "database"),
       "Xenova/all-MiniLM-L6-v2",
       embeddingService,
-      new EmbeddingServiceRegistry({ createService: () => embeddingService, maxResidentLocal: 2 }),
+      embeddingRegistry,
     );
     (manager as any).vectorStoreFactory = vectorStoreFactory;
     try {

@@ -23,7 +23,7 @@ import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { EmbeddingService } from "../embeddings/embeddingService";
-import type { EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
+import { hasRemoteEndpoint, type EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { Logger } from "../logger";
 import { atomicWriteJson, STORAGE_FORMAT_VERSION } from "../utils/storageV2";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
@@ -94,6 +94,7 @@ export class VectorStoreFactory {
   private embeddingModel: string;
   private lanceDbUri: string;
   private metadataDropWarningShown = false;
+  private endpointHashCache?: Promise<string>;
   private embeddingService: EmbeddingService;
   private connections = new Map<string, Connection>();
   private tables = new Set<Table>();
@@ -180,7 +181,7 @@ export class VectorStoreFactory {
       const table = await db.createEmptyTable(config.topicId, this.createDocumentSchema(fingerprint.dimension));
       signal?.throwIfAborted();
       this.tables.add(table);
-      const store = new LanceDB(this.createEmbeddings(this.embeddingModel), { table });
+      const store = new LanceDB(await this.createEmbeddings(this.embeddingModel), { table });
       // A freshly-created table is the only case where missing metadata is
       // expected. Establish its semantic-space identity before the first
       // vector write so every public mutation path can fail closed.
@@ -272,7 +273,7 @@ export class VectorStoreFactory {
       }
 
       // Initialize with specific model and backend for this topic
-      const embeddings = this.createEmbeddings(modelToUse, backendToUse);
+      const embeddings = await this.createEmbeddings(modelToUse, backendToUse);
 
       // Open existing table
       const table = await db.openTable(topicId);
@@ -838,7 +839,43 @@ export class VectorStoreFactory {
     ]);
   }
 
-  private createEmbeddings(modelName: string, backendType?: string): TransformersEmbeddings {
-    return new TransformersEmbeddings({ modelName, backendType, embeddingService: this.embeddingService });
+  /**
+   * Resolves the embedding service for one topic's embedding space.
+   *
+   * Every store used to share this factory's single EmbeddingService, which the
+   * most recently loaded topic re-pointed via initialize(model). The registry
+   * hands out one immutable service per (backend, endpoint, model) instead, so
+   * a topic keeps embedding with the model its vectors were built from.
+   */
+  private async createEmbeddings(modelName: string, backendType?: string): Promise<TransformersEmbeddings> {
+    // "auto" is a configuration request, not a resolved backend: keying on it
+    // would occupy a cap slot under a name no store can be identified by.
+    const backend = backendType && backendType !== "auto" ? backendType : "huggingface";
+    const service = await this.registry.get({
+      model: modelName,
+      backend,
+      endpointHash: hasRemoteEndpoint(backend) ? await this.configuredEndpointHash() : "local",
+    });
+    return new TransformersEmbeddings({ modelName, backendType, embeddingService: service });
+  }
+
+  /**
+   * endpointHash of the currently configured backend.
+   *
+   * Cached because getFingerprint() may perform a live embed probe, which must
+   * not run once per store load. A rejection clears the cache rather than
+   * poisoning every later load with the same failure.
+   */
+  private configuredEndpointHash(): Promise<string> {
+    if (!this.endpointHashCache) {
+      this.endpointHashCache = this.embeddingService.getFingerprint().then(
+        (fingerprint) => fingerprint.endpointHash ?? "local",
+        (error) => {
+          this.endpointHashCache = undefined;
+          throw error;
+        },
+      );
+    }
+    return this.endpointHashCache;
   }
 }
