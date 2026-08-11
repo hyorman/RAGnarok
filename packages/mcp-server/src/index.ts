@@ -2,12 +2,11 @@
 /**
  * RAGnarōk MCP Server
  *
- * Exposes RAG tools via the Model Context Protocol.
- * Supports stdio transport (default) and HTTP transport (--http flag).
+ * Exposes RAG tools via the Model Context Protocol over stdio — the only
+ * transport. The server is a personal, single-user engine on this machine.
  *
  * Usage:
- *   ragnarok-mcp              # stdio mode (for Claude, Cursor, VS Code, etc.)
- *   ragnarok-mcp --http       # HTTP mode (for web agents)
+ *   ragnarok-mcp              # stdio (for Claude, Cursor, VS Code, etc.)
  *
  * Environment variables:
  *   RAGNAROK_STORAGE_DIR      — Database storage directory (default: ~/.ragnarok)
@@ -18,7 +17,6 @@
  *   RAGNAROK_LLM_API_KEY      — API key for OpenAI or Anthropic
  *   RAGNAROK_LLM_MODEL        — LLM model name (default: gpt-4o-mini)
  *   RAGNAROK_LLM_BASE_URL     — LLM API base URL override (Ollama defaults to http://localhost:11434; OpenAI/Anthropic use their official endpoints unless set)
- *   RAGNAROK_PORT             — HTTP server port (default: 3000)
  *   RAGNAROK_EMBEDDING_PROVIDER   — Embedding provider: huggingface, openai, ollama (default: huggingface)
  *   RAGNAROK_EMBEDDING_BASE_URL   — Remote embedding API base URL (required for openai/ollama)
  *   RAGNAROK_EMBEDDING_API_KEY    — API key for remote embedding API (optional)
@@ -42,7 +40,7 @@ import {
   CrossEncoderReranker,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
-import { loadConfig, getServerVersion } from "./config";
+import { loadConfig, getServerVersion, assertNoRemovedEnvVars } from "./config";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
@@ -50,6 +48,9 @@ import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner, ToolRuntime } from "./tools";
 
 async function main(): Promise<void> {
+  // Before anything else: an operator who still supplies HTTP-era settings has
+  // a false model of what this process is. Say so instead of ignoring them.
+  assertNoRemovedEnvVars();
   const config = loadConfig();
 
   // Bootstrap logging
