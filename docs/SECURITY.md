@@ -1,58 +1,43 @@
-# Security and shared MCP deployment
+# Security
 
-RAGnarōk has two trust models: a local owner process and an authenticated
-shared service. Shared mode is designed for a private service behind a trusted
-TLS boundary; it is not a multi-tenant isolation or billing system.
+RAGnarōk has one trust model. Both the VS Code extension and the MCP server run
+as the local operating-system user, on that user's data, at that user's
+authority. It is not a multi-tenant service, and it is not designed to be
+exposed to a network.
 
-## Transport boundary
+## Process boundary
 
-Set `RAGNAROK_DEPLOYMENT_MODE=shared` for every shared deployment. Shared or
-non-loopback HTTP refuses to start unless one of these topologies is explicit:
+The MCP server speaks stdio only. It binds no address, accepts no connection,
+and terminates when its client closes the pipe. Its attacker model is therefore
+whatever can already run code as that user — not a remote caller. There is no
+transport to configure and nothing to authenticate.
 
-- native TLS with both `RAGNAROK_TLS_CERT_PATH` and
-  `RAGNAROK_TLS_KEY_PATH`; or
-- a TLS-terminating reverse proxy whose exact IP addresses are listed in
-  `RAGNAROK_TRUSTED_PROXIES`.
+The variables that once configured a network listener (TLS paths, bind host,
+allowed hosts, CORS origin, bearer tokens, rate limit, trusted proxies,
+transfer limits) are **rejected at startup**. Setting one aborts the process
+with an error naming every offender, so a configuration that promises a
+hardened network service can never quietly become a local pipe. The complete
+list is in [MIGRATION.md](../MIGRATION.md).
 
-Only a configured trusted peer may establish HTTPS through
-`X-Forwarded-Proto: https` or supply the forwarded client IP. Never trust a
-CIDR, wildcard, or arbitrary forwarded header. Keep an unencrypted backend
-listener private. Set `RAGNAROK_CORS_ORIGIN` to the one browser origin that
-needs access. Requests without `Origin` still require authentication.
+Do not attempt to re-expose the server by wrapping stdio in a network relay. A
+relay would grant every caller the spawning user's full authority — including
+memory, model switching, storage reset, and read access to every path under
+`RAGNAROK_ALLOWED_PATHS` — with no role, quota, or credential in between. Run a
+separate instance per user and per storage root instead.
 
-Set `RAGNAROK_ALLOWED_HOSTS` to the exact public DNS names or IP addresses that
-clients use, without ports or wildcards. The HTTP server validates the native
-`Host` header. It accepts `X-Forwarded-Host` only from the directly connected
-trusted proxy, so that proxy must overwrite the forwarded value rather than
-passing arbitrary client input. The server also rejects unverified cleartext
-shared traffic, rate-limits health separately from user routes, bounds JSON
-bodies and tool responses, and closes admission during shutdown.
+## Capabilities
 
-## Roles and capabilities
+There are no roles. All 24 tools are registered unconditionally, and the client
+that spawned the process may call any of them, including destructive ones
+(`rag_delete_topic`, `rag_remove_document`, `rag_reset_memory`) and
+configuration ones (`rag_switch_embedding_model`, `rag_switch_reranker_model`).
+Each destructive tool requires an explicit `confirm: true` argument; that is a
+guard against an agent's mistake, not an authorization boundary.
 
-Use three distinct, randomly generated bearer tokens in shared mode:
-
-| Role    | Environment variable     | Capability                                                                                      |
-| ------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
-| Reader  | `RAGNAROK_API_KEY`       | Query, list, status, and storage inspection                                                     |
-| Curator | `RAGNAROK_WRITE_API_KEY` | Reader operations plus topic/document creation and mutation and document uploads                |
-| Admin   | `RAGNAROK_ADMIN_API_KEY` | Complete shared surface, including models, export/import, archive uploads, and reset operations |
-
-Shared mode enforces a minimum encoded length of 32 bytes and requires all
-configured role tokens to differ. Length validation cannot measure entropy:
-generate at least 32 random bytes with a secret manager or CSPRNG; do not pad a
-human password to satisfy the check. Each MCP request validates its configured
-opaque bearer string and receives the corresponding role and hashed principal
-identifier. There is no `Mcp-Session-Id`.
-
-Rotate a compromised token, update clients, and verify rejected use of the old
-token. The runtime rotation API affects the next request; there are no sessions
-to invalidate. Environment changes take effect after process restart.
-
-Local stdio has owner/admin authority. Explicit local HTTP with no tokens is
-allowed only on loopback and also has owner/admin authority. Do not use that
-mode on a shared workstation. Memory is deliberately absent from shared
-deployments because its workspace/branch scopes are personal.
+Treat the decision to add this server to an MCP client as the security
+decision. The meaningful controls are which storage root it uses, which paths
+`RAGNAROK_ALLOWED_PATHS` exposes, and which credentials
+(`RAGNAROK_LLM_API_KEY`, `RAGNAROK_GITHUB_TOKEN`) its environment carries.
 
 ## Memory graph visualization exposure
 
@@ -63,14 +48,11 @@ edge descriptions, memory scope, branch, source memory IDs, confidence/strength
 values, timestamps, provenance, and arbitrary metadata. Embedding vectors are
 always excluded.
 
-Because memory is personal, the tool is **structurally absent in shared
-deployments**: it is never registered, so no shared role — reader, curator, or
-admin — can list or invoke it, and there is no shared code path that could leak
-personal memory. It is registered only for local stdio and local HTTP
-curators/admins. The server does not substitute fallback or sample graph
-records; a scope with no stored entities returns an empty document. Treat graph
-authorization as authorization to read all of the non-vector memory details
-above.
+Memory is personal, and the tool that exports it is always registered, so the
+protection is the process boundary rather than a capability check: anything
+able to call this server can read the user's complete memory graph. The server
+does not substitute fallback or sample graph records; a scope with no stored
+entities returns an empty document.
 
 The associated `ui://ragnarok/graph` MCP App is self-contained and loads no
 external scripts. It renders user-controlled strings through text DOM APIs,
@@ -80,20 +62,20 @@ both resource catalog and resource content declare
 
 ## Authentication protocol scope
 
-RAGnarok validates configured opaque bearer strings. It does not implement an
-OAuth authorization-code flow, dynamic client registration (DCR), credential
-persistence, or client ID metadata documents (CIMD). The 2026 OAuth/DCR
-hardening items are therefore not applicable to this server. Deploy an identity
-provider at the trusted proxy when OAuth or attributable user identity is
-required.
+RAGnarok implements no authentication at all: authority comes from the OS user
+who spawned the process. It does not implement an OAuth authorization-code
+flow, dynamic client registration (DCR), credential persistence, or client ID
+metadata documents (CIMD), and it no longer validates bearer strings. The 2026
+OAuth/DCR hardening items are therefore not applicable to this server.
 
 ## File and network boundaries
 
-`rag_add_documents` and local archive import accept only server paths under
-canonical `RAGNAROK_ALLOWED_PATHS` or the configured export root. They never
-mean a remote client's local path. Shared clients transfer content through
-bounded, checksum-declared, principal-bound upload handles. Archive upload and
-import are admin-only.
+`rag_add_documents` and archive import accept only paths under canonical
+`RAGNAROK_ALLOWED_PATHS` or the configured export root, resolved on the machine
+running the server. There is no upload handle; content is indexed from the
+filesystem the server can already see. `RAGNAROK_ALLOWED_PATHS` therefore
+defines what an agent driving this server can read: default it to the project
+root rather than a home directory.
 
 URL ingestion rejects unsafe targets and GitHub ingestion is restricted to
 `RAGNAROK_GITHUB_HOSTS`. Credentials come from service configuration and are
@@ -106,22 +88,19 @@ unmanifested entries, checksum failures, excessive sizes, and excessive
 compression ratios before publication. Treat all imported content as
 untrusted text that may contain prompt injection.
 
-## Audit and secret handling
+## Logging and secret handling
 
-HTTP operations emit structured audit log events with a hashed principal,
-action, object category, outcome, and correlation ID. Logs deliberately do not
-contain bearer tokens. Send logs to access-controlled, append-oriented storage
-and set a retention policy.
+The server emits no audit ledger, and there is nothing meaningful to audit: one
+local user issues every request. Its stderr log is operational evidence for
+that user, is bounded by `RAGNAROK_LOG_LEVEL`, and must not be relied on as a
+tamper-proof or attributable record — a local operator can alter the process,
+its environment, and the storage root.
 
-The built-in log is operational evidence, not a tamper-proof audit ledger:
-token holders are pseudonymous, local operators can alter the process or
-filesystem, and no end-user identity provider is included. Put authentication
-at the proxy if attributable human identity is required and correlate its logs
-with the application correlation ID.
-
-Keep bearer tokens, LLM keys, GitHub tokens, and TLS private keys in an
-orchestrator secret store. Do not put them in Compose files, command history,
-archives, benchmark results, VSIX files, npm tarballs, or source control.
+Keep LLM keys and GitHub tokens in the OS keychain or a secret manager and
+inject them into the MCP client's server environment. Do not put them in
+committed client configuration, command history, archives, benchmark results,
+VSIX files, npm tarballs, or source control. `RAGNAROK_GITHUB_TOKEN` is read
+from configuration only and is never accepted as a tool argument.
 
 ## Release audit exceptions
 
@@ -160,18 +139,19 @@ files, and any guarded-file content hash mismatch.
 
 ## Threat boundaries and non-goals
 
-The service protects role separation, bounded parsing and transfer, canonical
-paths, per-request bearer validation, and storage integrity checks. It does not
-provide:
+The server protects canonical path resolution, bounded archive and response
+handling, GitHub/URL ingestion allowlists, and storage integrity checks. It does
+not provide:
 
-- hostile-tenant process or filesystem isolation;
+- any authentication, authorization, or multi-user separation;
+- isolation from the user who spawned it, or from another process running as
+  that user;
 - per-topic authorization within one server;
 - malware scanning or content moderation;
 - tamper-proof audit retention;
-- denial-of-service protection beyond local limits and rate limiting;
-- protection from a compromised host, reverse proxy, admin token, or LLM
-  provider.
+- protection from a compromised host or LLM provider.
 
-Run separate service instances and storage roots when those boundaries differ.
-Use a reverse proxy/WAF, egress controls, malware scanning, and centralized
-identity/audit systems when the risk model requires them.
+Run separate instances and storage roots when those boundaries differ. Use OS
+user accounts, egress controls, malware scanning, and centralized identity
+systems when the risk model requires them — none of those belong inside a stdio
+child process.

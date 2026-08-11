@@ -1214,8 +1214,11 @@ assert.match(
   "stdio binary graph test must execute in the focused suite",
 );
 const mcpReadme = await read("packages/mcp-server/README.md");
-assert.match(mcpReadme, /createMcpHandler/);
-assert.match(mcpReadme, /toNodeHandler/);
+// Stdio is the only transport, so the guide must not describe an HTTP adapter.
+assert.match(mcpReadme, /Stdio is the only transport/);
+assert.match(mcpReadme, /serveStdio/);
+assert.doesNotMatch(mcpReadme, /createMcpHandler/);
+assert.doesNotMatch(mcpReadme, /toNodeHandler/);
 assert.doesNotMatch(mcpReadme, /request-scoped HTTP/);
 assert.doesNotMatch(mcpReadme, /StreamableHTTPServerTransport/);
 for (const [dependency, version] of [
@@ -1878,14 +1881,13 @@ for (const model of models.models) {
 }
 
 const architecture = await read("ARCHITECTURE.md");
-assert.match(
-  architecture,
-  /MCP request audit records contain a hashed principal, role, method, name, outcome, and correlation/,
-);
-assert.match(
-  architecture,
-  /Transfer and operator token-rotation records retain action, object, outcome, and correlation/,
-);
+// Roles, audit records, and transfer handles left with the HTTP transport.
+// The architecture must state the single-authority stdio model instead of
+// re-describing a principal/role audit trail the server no longer emits.
+assert.match(architecture, /The MCP server serves stdio only/);
+assert.match(architecture, /The server emits no audit ledger/);
+assert.doesNotMatch(architecture, /MCP request audit records contain a hashed principal, role/);
+assert.doesNotMatch(architecture, /Transfer and operator token-rotation records/);
 
 execFileSync("node", ["scripts/verify-model-manifest.mjs"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["scripts/check-licenses.mjs"], { cwd: root, stdio: "inherit" });

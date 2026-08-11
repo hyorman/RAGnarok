@@ -46,15 +46,28 @@ for (const relative of canonical) {
 
 const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "utf8");
 assert.doesNotMatch(mcp, /Existing branch-era storage .* intentionally not migrated/);
-assert.match(mcp, /Shared reader[\s\S]*Shared curator[\s\S]*Shared admin/);
+// The stdio server has no roles, so the guide must not resurrect a role matrix.
+assert.doesNotMatch(mcp, /Shared reader|Shared curator|Shared admin/);
 for (const variable of [
+  "RAGNAROK_STORAGE_DIR",
+  "RAGNAROK_ALLOWED_PATHS",
+  "RAGNAROK_EMBEDDING_MODEL",
+  "RAGNAROK_LLM_PROVIDER",
+  "RAGNAROK_MAX_RESPONSE_BYTES",
+]) {
+  assert.match(mcp, new RegExp(variable), `MCP guide must document ${variable}`);
+}
+// Variables removed with the HTTP transport are rejected at startup. Naming
+// them here would read as documentation of a supported setting; MIGRATION.md
+// is the single place they are listed.
+for (const removed of [
   "RAGNAROK_DEPLOYMENT_MODE",
   "RAGNAROK_ADMIN_API_KEY",
   "RAGNAROK_TLS_CERT_PATH",
   "RAGNAROK_TRUSTED_PROXIES",
   "RAGNAROK_TRANSFER_MAX_FILE_BYTES",
 ]) {
-  assert.match(mcp, new RegExp(variable), `MCP guide must document ${variable}`);
+  assert.doesNotMatch(mcp, new RegExp(removed), `MCP guide must not document removed variable ${removed}`);
 }
 
 const core = await readFile(path.join(root, "packages/core/README.md"), "utf8");

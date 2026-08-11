@@ -1,4 +1,74 @@
-# Storage migration
+# Migration guide
+
+## 0.7.0 stdio-only MCP server
+
+**The HTTP transport is removed.** `@ragnarok/mcp-server` serves stdio and
+nothing else. There is no `--http` flag, no listener, no `/health` or `/ready`
+endpoint, no TLS or trusted-proxy configuration, no CORS/Origin policy, no
+bearer tokens, and no rate limiting. Removed with it:
+
+- **Shared deployment mode.** `RAGNAROK_DEPLOYMENT_MODE` no longer exists;
+  there is one mode, a local child process owned by the user who spawned it.
+- **Role-based access.** Reader, curator, and admin are gone. All 24 tools are
+  registered unconditionally, including memory and `rag_graph_visualize`.
+- **Streamed upload and download handles.** `rag_create_document_upload`,
+  `rag_ingest_upload`, `rag_create_archive_upload`, and `rag_import_upload` are
+  deleted. Use `rag_add_documents` and `rag_import_topic` with paths under
+  `RAGNAROK_ALLOWED_PATHS`; the tool count therefore falls from 28 to 24.
+
+### Removed environment variables (startup fails if any is set)
+
+Setting any of these aborts startup with an error naming every offender. That
+is deliberate: someone who configured TLS certificates and API keys believes
+they are running a hardened network service, and silently starting a stdio
+server would leave that belief intact.
+
+| Removed variable                        | What it used to do                |
+| --------------------------------------- | --------------------------------- |
+| `RAGNAROK_DEPLOYMENT_MODE`              | Selected local or shared mode     |
+| `RAGNAROK_PORT`                         | HTTP listener port                |
+| `RAGNAROK_HTTP_HOST`                    | HTTP bind address                 |
+| `RAGNAROK_ALLOWED_HOSTS`                | Accepted HTTP `Host` values       |
+| `RAGNAROK_CORS_ORIGIN`                  | Browser Origin policy             |
+| `RAGNAROK_TLS_CERT_PATH`                | Native TLS certificate            |
+| `RAGNAROK_TLS_KEY_PATH`                 | Native TLS private key            |
+| `RAGNAROK_API_KEY`                      | Reader bearer token               |
+| `RAGNAROK_WRITE_API_KEY`                | Curator bearer token              |
+| `RAGNAROK_ADMIN_API_KEY`                | Admin bearer token                |
+| `RAGNAROK_RATE_LIMIT_PER_MINUTE`        | Per-client HTTP request limit     |
+| `RAGNAROK_TRUSTED_PROXIES`              | Proxies allowed to assert HTTPS   |
+| `RAGNAROK_TRANSFER_TTL_MS`              | Transfer handle lifetime          |
+| `RAGNAROK_TRANSFER_MAX_FILE_BYTES`      | Maximum transferred file size     |
+| `RAGNAROK_TRANSFER_MAX_AGGREGATE_BYTES` | Active upload bytes per principal |
+| `RAGNAROK_TRANSFER_MAX_SESSIONS`        | Active uploads per principal      |
+
+To migrate, delete these from your MCP client configuration, `.env` files, and
+container environment. Every other `RAGNAROK_*` variable is unchanged; the
+surviving set is documented in
+[the MCP server guide](packages/mcp-server/README.md#configuration).
+
+One variable is **silently ignored** rather than rejected:
+`RAGNAROK_MAX_REQUEST_BYTES` bounded the HTTP JSON request body, and stdio
+frames are not bounded that way. It is deliberately absent from the rejection
+list above, so setting it produces neither an effect nor an error. Remove it;
+nothing reads it.
+
+### Container migration
+
+`docker-compose.yml`, the container health check, and the Docker smoke script
+are deleted — a stdio server has no port to publish and no endpoint to probe.
+Run the image as an interactive child process instead, with storage on a
+mounted volume:
+
+```sh
+docker run -i --rm --init --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:size=256m \
+  -v ragnarok-data:/data/ragnarok ragnarok-mcp
+```
+
+That invocation is kept in the root `package.json` as `npm run docker:run`.
+Point the MCP client's `command`/`args` at it; the container's stdin and stdout
+are the transport.
 
 ## 0.6.0 MCP client migration
 
@@ -6,11 +76,13 @@ RAGnarok 0.6.0 serves MCP protocol `2026-07-28` only. MCP clients must use
 `server/discover` or modern version negotiation. Legacy `initialize` is
 rejected; there is no compatibility mode.
 
-HTTP MCP traffic is POST-only, `GET /mcp` and `DELETE /mcp` return `405`, and
-the server does not issue `Mcp-Session-Id`. Shared bearer credentials are
-evaluated on every request, so token rotation affects the next request rather
-than invalidating a session. Cacheable discovery, list, and resource-read
-results advertise `ttlMs=0` and `cacheScope=private`.
+The server does not issue `Mcp-Session-Id`. Cacheable discovery, list, and
+resource-read results advertise `ttlMs=0` and `cacheScope=private`.
+
+This release also shipped an HTTP transport with bearer roles and transfer
+handles. All of it was removed in 0.7.0 above; the HTTP notes that were here
+described a surface that no longer exists and have been dropped rather than
+preserved as advice.
 
 ## 0.4.0 storage migration
 

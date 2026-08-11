@@ -139,9 +139,8 @@ Graphs exist only in the memory subsystem. There is no document knowledge
 graph, no entity extraction over ingested documents, and no `graph` or
 `graph_hybrid` retrieval strategy.
 
-Because memory is always personal, the `rag_graph_visualize` tool is
-**structurally absent in shared deployments** — it is registered only for local
-stdio and local HTTP curators/admins. It accepts exactly
+The `rag_graph_visualize` tool exports the local user's own memory graph. It
+accepts exactly
 `{ source: "memory", memoryScope: "workspace", maxNodes? }` or
 `{ source: "memory", memoryScope: "branch", branch, maxNodes? }` and returns the
 deterministic `ragnarok.graph.visualization.v1` document. The default is 500
@@ -457,11 +456,11 @@ copilot-rag/
 └── scripts/           # Build and packaging helpers
 ```
 
-| Package                    | Description                                                                                                                                                    |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`@ragnarok/core`**       | Loaders, chunkers, embeddings, retrievers, agents, stores — all platform-agnostic with dependency injection                                                    |
-| **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                   |
-| **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio + HTTP transports) |
+| Package                    | Description                                                                                                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`@ragnarok/core`**       | Loaders, chunkers, embeddings, retrievers, agents, stores — all platform-agnostic with dependency injection                                                 |
+| **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                |
+| **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio transport only) |
 
 ### MCP 0.6.0 protocol
 
@@ -469,13 +468,14 @@ RAGnarok 0.6.0 serves MCP protocol `2026-07-28` only. Clients must use
 `server/discover` or modern version negotiation; legacy `initialize` is
 rejected. There is no compatibility mode and no `Mcp-Session-Id`.
 
-HTTP MCP traffic is POST-only: `GET /mcp` and `DELETE /mcp` return `405`.
-Shared bearer credentials are evaluated on every request, so token rotation
-affects the next request and there are no sessions to invalidate. Cacheable
-discovery, list, and resource-read results advertise `ttlMs=0` and
-`cacheScope=private`. See the
-[MCP server guide](packages/mcp-server/README.md) for client headers and the
-complete role matrix.
+**Stdio is the only transport.** The HTTP transport, shared deployment mode,
+bearer roles, and upload/download handles were removed; the server is a child
+process of one MCP client, running as the user who spawned it. Environment
+variables belonging to the removed transport are rejected at startup — see
+[MIGRATION.md](MIGRATION.md#070-stdio-only-mcp-server). Cacheable discovery,
+list, and resource-read results advertise `ttlMs=0` and `cacheScope=private`.
+See the [MCP server guide](packages/mcp-server/README.md) for the complete tool
+surface and configuration.
 
 ### Build & Test Commands
 
@@ -520,13 +520,14 @@ The MCP server exposes these tools to any MCP-compatible agent:
 | `rag_import_topic`           | Validate and import a `.rag` archive                                                     |
 | `rag_reset_memory`           | Reset incompatible or unwanted standalone memory after confirmation                      |
 | `rag_storage_status`         | Inspect storage-format readiness and reset requirements                                  |
+| `rag_list_reranker_models`   | List available cross-encoder reranker models                                             |
+| `rag_reranker_info`          | Get current reranker configuration and status                                            |
+| `rag_switch_reranker_model`  | Switch the cross-encoder reranker model                                                  |
+| `rag_graph_visualize`        | Return a deterministic memory graph document and associate the MCP App                   |
 
-The MCP server exposes up to 27 tools, including upload-handle operations and
-the three reranker operations. Shared HTTP uses distinct reader, curator, and
-admin tokens. Non-loopback/shared deployments require verified HTTPS, using
-either native TLS or an explicitly trusted TLS-terminating proxy, plus an exact
-browser Origin. Local loopback remains usable without tokens. The complete
-surface and role matrix are in the
+That is the complete surface: 24 tools, all registered unconditionally on every
+connection. There are no roles and no capability tiers — the client already runs
+with the owner's authority. Parameters and error contracts are in the
 [MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility
@@ -544,7 +545,7 @@ locking model.
 - [Architecture](ARCHITECTURE.md)
 - [Storage migration](MIGRATION.md)
 - [Operations and recovery](docs/OPERATIONS.md)
-- [Shared-server security](docs/SECURITY.md)
+- [Security](docs/SECURITY.md)
 - [Benchmark gates](docs/BENCHMARKS.md)
 - [Release evidence and publication](docs/RELEASE.md)
 

@@ -8,19 +8,17 @@ such; passing unit tests is not presented as release evidence.
 `@ragnarok/core` owns ingestion, embedding, retrieval, reranking, memory,
 archives, migration, and LanceDB persistence.
 `@ragnarok/vscode` adapts the core to VS Code. `@ragnarok/mcp-server` exposes
-the same core through local stdio or Streamable HTTP.
+the same core through a stdio child process.
 
-| Surface               | Intended topology                          | Authority                                               |
-| --------------------- | ------------------------------------------ | ------------------------------------------------------- |
-| VS Code extension     | One user and workspace                     | Local OS user                                           |
-| MCP stdio             | Local child process                        | Local owner/admin                                       |
-| MCP HTTP, local mode  | Loopback personal service                  | Reader/curator/admin tokens; tokenless only on loopback |
-| MCP HTTP, shared mode | Private backend behind a trusted TLS proxy | Reader, curator, and admin are structurally distinct    |
+| Surface           | Intended topology      | Authority     |
+| ----------------- | ---------------------- | ------------- |
+| VS Code extension | One user and workspace | Local OS user |
+| MCP stdio         | Local child process    | Local OS user |
 
-The HTTP listener supports native TLS when certificate and key paths are
-configured. It also supports cleartext only as a private backend behind an
-explicitly trusted TLS-terminating proxy. A remote deployment must expose only
-the verified TLS endpoint and configure an exact browser origin.
+The MCP server serves stdio only. It opens no socket, so there is no listener,
+no TLS configuration, no browser origin policy, no bearer token, and no
+network-reachable surface to harden. Its trust boundary is the operating-system
+user who spawned it, exactly like the VS Code extension's.
 
 ## Storage
 
@@ -37,7 +35,6 @@ The configured storage root has one v2 marker and one lease:
   memory-lancedb/
   memory-manifest.json
   exports/
-  .transfers/
 ```
 
 Some directories are created only when their feature is used. Shared/common
@@ -77,7 +74,7 @@ stale first-stage results.
 
 ## Memory
 
-Memory is personal and absent from shared deployments. Workspace and explicit
+Memory is personal to the local user. Workspace and explicit
 branch scopes are separate; detached HEAD never silently becomes workspace.
 Recall excludes superseded, expired, below-confidence, and reserved automatic
 entries unless explicitly requested. Only memories whose referenced entities
@@ -85,31 +82,29 @@ are all facts receive fact immunity. The memory graph is a directed multigraph,
 so different relationship types may connect the same ordered pair. It is the
 only graph in the system: it is populated by memory entity extraction, which
 requires an LLM provider, and it is exposed read-only through
-`rag_graph_visualize` in local deployments. Memory is read and written only
-through explicit `rag_memory` operations.
+`rag_graph_visualize`. Memory is read and written only through explicit
+`rag_memory` operations.
 
-## MCP protocol, authorization, and transfer
+## MCP protocol surface
 
-Readers receive query/list/status tools. Curators add and remove topic content
-but cannot perform administrative model/storage/import/export operations.
-Admins receive the complete non-memory shared surface. Memory tools exist only
-in local mode.
+The MCP server registers 24 tools unconditionally. There are no roles, no
+capability tiers, and no per-principal registration: the client that spawned
+the process already has the owner's authority, so a second authorization model
+inside the process would protect nothing.
 
-RAGnarok 0.6.0 serves only MCP `2026-07-28`. Modern clients begin with
-`server/discover`; legacy `initialize` is rejected. HTTP MCP traffic is
-request-scoped and POST-only, while `GET /mcp` and `DELETE /mcp` return `405`.
-There is no `Mcp-Session-Id`.
-
-Shared bearer credentials are evaluated on every request. Rotation therefore
-affects the next request and has no sessions to invalidate. Cacheable discovery,
+RAGnarok serves only MCP `2026-07-28` over stdio. Modern clients begin with
+`server/discover`; legacy `initialize` is rejected. There is no
+`Mcp-Session-Id` and no request-scoped session state. Cacheable discovery,
 list, and resource-read results advertise `ttlMs=0` and `cacheScope=private`.
-MCP request audit records contain a hashed principal, role, method, name, outcome, and correlation
-identifier. Transfer and operator token-rotation records retain action, object, outcome, and correlation
-identifier. These are operational logs, not a tamper-proof human identity system.
 
-Remote files use bounded, checksum-declared, principal-bound, expiring upload
-and download handles. Server-mounted paths remain restricted to configured
-roots and are not client-local paths.
+The server emits no audit ledger. Its stderr log is operational evidence for the
+local user, not an attributable identity record, because every request already
+comes from that user.
+
+File ingestion reads paths on the machine running the server, restricted to
+canonical `RAGNAROK_ALLOWED_PATHS` roots. There is no upload or download
+handle: a client that needs to index a file places it somewhere the server may
+read.
 
 ## Build and release
 

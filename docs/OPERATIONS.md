@@ -1,8 +1,10 @@
 # Operations guide
 
-This guide covers the v0.4 storage surface and v0.5 MCP deployment surface. Read
-[SECURITY.md](SECURITY.md) before exposing HTTP outside a developer machine and
-[MIGRATION.md](../MIGRATION.md) before opening a pre-v0.4 store.
+The MCP server is a stdio child process spawned by one MCP client on one
+machine. It opens no socket, so this guide has no listener, certificate, token,
+or endpoint sections — operating it means operating its storage directory and
+its model configuration. Read [SECURITY.md](SECURITY.md) for the trust boundary
+and [MIGRATION.md](../MIGRATION.md) before opening a pre-v0.4 store.
 
 ## Storage layout and ownership
 
@@ -19,25 +21,35 @@ The configured `RAGNAROK_STORAGE_DIR` is one atomic administrative unit:
   memory-lancedb/
   memory-manifest.json
   exports/
-  .transfers/
 ```
 
-Feature-specific directories are created lazily. Give the service account read
-and write access to the storage root; do not share one root between concurrent
-processes. The storage lease intentionally fails a second process fast. Do not
-set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested single-writer mechanism
-protects the entire root.
+Feature-specific directories are created lazily. Give the account that spawns
+the server read and write access to the storage root.
 
-Server-side file ingestion is limited to `RAGNAROK_ALLOWED_PATHS` (the working
-directory by default). These paths are paths on the server, not paths on a
-remote MCP client. Shared clients should use the binary transfer protocol.
+## The single-writer lock
+
+Do not share one storage root between concurrent processes — a VS Code window,
+an MCP server, and the migration CLI all take the same lease. `.ragnarok.lock`
+records the holder's PID and host and is refreshed by heartbeat; a second
+process fails fast with a message naming the holder rather than corrupting the
+store. A crashed holder's lease goes stale after roughly five minutes and is
+then reclaimable, but a live same-host PID is never reclaimed merely for age.
+
+Do not set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested single-writer
+mechanism protects the entire root.
+
+The most common operational surprise is a second MCP client — or a VS Code
+window left open — pointed at the same `RAGNAROK_STORAGE_DIR`. Give each client
+its own root, or accept that only one may run at a time.
 
 ## Backup and recovery
 
-Stop admission and let in-flight requests drain before copying storage. Back up
-the complete storage root, including its version marker and feature stores.
-Filesystem snapshots are preferred. A file-by-file copy while the process is
-writing is not a supported consistency boundary.
+Stop the server and let in-flight tool calls drain before copying storage
+(`RAGNAROK_SHUTDOWN_DRAIN_MS`, 10 seconds by default, bounds the drain on
+SIGINT/SIGTERM; the process then exits). Back up the complete storage root,
+including its version marker and feature stores. Filesystem snapshots are
+preferred. A file-by-file copy while the process is writing is not a supported
+consistency boundary.
 
 To restore:
 
@@ -46,48 +58,48 @@ To restore:
 3. Restore the complete snapshot to a same-filesystem staging directory.
 4. Verify `storage-format.json`, file ownership, and free space.
 5. Atomically rename the restored directory into place.
-6. Start one process and verify `/ready`, topic listing, representative vector
-   and hybrid queries, and memory recall when memory is enabled.
+6. Start one server, then verify through the client: `rag_storage_status`,
+   `rag_list_topics`, representative vector and hybrid `rag_query` calls, and a
+   `rag_memory` recall.
 
 Archive export/import is for moving individual topics, not for backing up the
-complete service. Imports validate archive paths, limits, schemas, and
-checksums. Shared-mode archive import is admin-only and uses an uploaded handle.
+complete service. `rag_export_topic` writes a checksummed `.rag` archive into
+`RAGNAROK_EXPORT_DIR` (`<storage>/exports` by default). `rag_import_topic`
+reads an archive from a canonical `RAGNAROK_ALLOWED_PATHS` root and validates
+archive paths, limits, schemas, and checksums before publication.
 
 For a legacy store, first run the dry-run migration and retain its immutable
 backup. The exact commands, rollback behavior, and exit codes are in
 [MIGRATION.md](../MIGRATION.md).
 
-## HTTP lifecycle
+## Model configuration
 
-- `GET /health` proves the process is alive.
-- `GET /ready` proves it is accepting work and its dependencies are ready.
-- `POST /mcp` implements stateless MCP `2026-07-28` requests.
-- `GET /mcp` and `DELETE /mcp` return `405`.
-- `POST /transfer/uploads`, `PUT /transfer/uploads/:id`, and
-  `GET /transfer/downloads/:id` implement bounded binary transfer.
+Embedding, reranker, and LLM settings are read from the environment at startup;
+the MCP client that spawns the server owns them. Changing one means editing the
+client's server entry and restarting the process.
 
-On shutdown, admission closes first, active work drains up to
-`RAGNAROK_SHUTDOWN_DRAIN_MS` (10 seconds by default), and the listener stops.
-Configure the orchestrator grace period above that value.
+- `RAGNAROK_EMBEDDING_MODEL` and `RAGNAROK_EMBEDDING_PROVIDER` select the
+  embedding backend. Each topic persists its embedding fingerprint, so a
+  mismatch is a hard reindex error rather than a silently degraded result.
+  Switching models at runtime with `rag_switch_embedding_model` has the same
+  consequence: topics indexed under the old model need reindexing.
+- `RAGNAROK_RERANKER_ENABLED` and `RAGNAROK_RERANKER_MODEL` control the bundled
+  cross-encoder. A model switch leases the active generation so in-flight work
+  drains rather than returning stale first-stage results.
+- `RAGNAROK_LLM_PROVIDER` gates agentic query planning, memory entity
+  extraction, and `rag_memory` community clustering. With `none`, those degrade
+  to documented empty or explanatory results — not failures.
+  `RAGNAROK_LLM_REQUEST_TIMEOUT_MS` (30 seconds by default) bounds one request.
 
-There is no `Mcp-Session-Id`; shared bearer credentials are evaluated on every
-request. Token rotation is an in-process operator API, not an HTTP endpoint,
-and affects the next request because there are no sessions to invalidate.
-Environment changes take effect after process restart unless the embedding host
-calls the rotation API directly.
-
-Clients must use `server/discover` or modern version negotiation; legacy
-`initialize` is rejected. Cacheable discovery, list, and resource-read results
-advertise `ttlMs=0` and `cacheScope=private`.
+`RAGNAROK_MAX_RESPONSE_BYTES` (1 MiB by default) caps one serialized tool
+response. A result that cannot be reduced below it returns a stable error
+rather than a truncated document.
 
 ## Memory graph visualization operations
 
-Graphs exist only in the memory subsystem, and memory is always personal, so
-`rag_graph_visualize` is **not registered at all in shared deployments** —
-`tools/list` omits it and any call is an unknown-tool error. It is registered
-for local stdio and local HTTP curators and admins whenever a memory store is
-present. Do not monitor for an authorization error code here; absence of the
-tool is the shared-mode contract.
+Graphs exist only in the memory subsystem. `rag_graph_visualize` is registered
+like every other tool and returns a deterministic
+`ragnarok.graph.visualization.v1` document.
 
 The graph MCP App is registered at `ui://ragnarok/graph`. Verify that both
 `resources/list` and `resources/read` report
@@ -96,12 +108,11 @@ The graph MCP App is registered at `ui://ragnarok/graph`. Verify that both
 with inline code, an SVG, and reset control; it must not load external scripts.
 
 The tool accepts only the two documented workspace-memory and branch-memory
-discriminated inputs and emits `ragnarok.graph.visualization.v1`. `maxNodes`
-defaults to 500 and is bounded at 2,000; edge work is bounded at 10,000,
-followed by response-byte reduction. Scopes and branches without stored memory
-entities are healthy empty results, not incidents.
-`GRAPH_VISUALIZATION_RECORD_TOO_LARGE` and `GRAPH_VISUALIZATION_FAILED` are the
-stable error codes to monitor.
+discriminated inputs. `maxNodes` defaults to 500 and is bounded at 2,000; edge
+work is bounded at 10,000, followed by response-byte reduction. Scopes and
+branches without stored memory entities are healthy empty results, not
+incidents. `GRAPH_VISUALIZATION_RECORD_TOO_LARGE` and
+`GRAPH_VISUALIZATION_FAILED` are the stable error codes to monitor.
 
 The memory graph is populated by memory entity extraction, which requires a
 configured LLM provider. Without one the graph stays empty and every
@@ -114,53 +125,31 @@ with Enter/Space, close with Escape, and reset the fitted viewport. A missing
 or malformed result must show an alert rather than stale graph content. The VS
 Code webview remains deferred and is not an operational surface in this release.
 
-## Transfers and limits
-
-An upload has two phases: create a handle by declaring basename, media type,
-byte size, kind, and SHA-256; then PUT the exact body to the returned path.
-Handles are principal-bound, non-resumable, single-consumer, and expire. A
-topic export prepares a principal-bound, single-use download handle.
-
-Defaults:
-
-| Limit                             | Environment variable                    |    Default |
-| --------------------------------- | --------------------------------------- | ---------: |
-| JSON request                      | `RAGNAROK_MAX_REQUEST_BYTES`            |      1 MiB |
-| Tool response                     | `RAGNAROK_MAX_RESPONSE_BYTES`           |      1 MiB |
-| One transfer                      | `RAGNAROK_TRANSFER_MAX_FILE_BYTES`      |     64 MiB |
-| Active upload bytes per principal | `RAGNAROK_TRANSFER_MAX_AGGREGATE_BYTES` |    256 MiB |
-| Active uploads per principal      | `RAGNAROK_TRANSFER_MAX_SESSIONS`        |          8 |
-| Transfer lifetime                 | `RAGNAROK_TRANSFER_TTL_MS`              | 15 minutes |
-
-Document uploads accept `.md`, `.markdown`, `.txt`, `.html`, `.htm`, and
-`.pdf` with an approved content type. Archive uploads require `.rag`. Size and
-SHA-256 are checked while streaming; partial or invalid uploads are removed.
-
 ## Containers
 
-The supplied container runs as a non-root user with a read-only root
-filesystem, `no-new-privileges`, a bounded `/tmp` tmpfs, and one writable data
-volume at `/data/ragnarok`. Place exports and transfer staging under that
-volume. Do not mount the Docker socket or broad host directories.
+The supplied image runs the same stdio server as a non-root user with a
+read-only root filesystem, `no-new-privileges`, a bounded `/tmp` tmpfs, and one
+writable data volume at `/data/ragnarok`. It publishes no port and exposes no
+health endpoint, because a stdio process has neither. Keep storage and exports
+under the data volume. Do not mount the Docker socket or broad host
+directories.
 
-Before deploying, set an explicit deployment mode, all required distinct
-tokens, an exact browser origin, and either native TLS files or explicit trusted
-proxy IP addresses. The supplied Compose file chooses native TLS: certificate,
-private-key, and health-check CA files are mounted as read-only secrets, and
-the certificate hostname is used for readiness verification. Only the TLS
-endpoint should be reachable by clients. See [SECURITY.md](SECURITY.md).
+```sh
+npm run docker:build
+docker run -i --rm --init --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:size=256m \
+  -v ragnarok-data:/data/ragnarok ragnarok-mcp
+```
 
-For a custom trusted-proxy deployment, set `RAGNAROK_HEALTHCHECK_HOST` to one
-exact entry in `RAGNAROK_ALLOWED_HOSTS` and include `127.0.0.1` in
-`RAGNAROK_TRUSTED_PROXIES`. The container health check then sends an internal
-readiness request with that Host and `X-Forwarded-Proto: https`; this loopback
-exception is only for the in-container probe. Also list the proxy bridge/source
-IP explicitly so real forwarded client requests pass transport enforcement.
+`npm run docker:run` carries that exact invocation. The container is a child of
+the MCP client: `-i` keeps stdin open as the transport, `--rm` discards the
+container while the volume keeps the store, and liveness is the client's
+connection, not a probe. Use a host directory (`-v /path/on/host:/data/ragnarok`)
+when the store must be visible outside Docker.
 
 ## Routine checks
 
-Monitor readiness, process restarts, storage free space, transfer quota
-failures, rate limiting, and audit outcomes. Treat corruption, unsupported
-storage markers, fingerprint mismatches, and failed migration validation as
-hard operator incidents; do not reset storage until its backup and recovery
-path have been reviewed.
+Monitor process restarts, storage free space, and stderr for lock contention
+and provider errors. Treat corruption, unsupported storage markers, fingerprint
+mismatches, and failed migration validation as hard operator incidents; do not
+reset storage until its backup and recovery path have been reviewed.
