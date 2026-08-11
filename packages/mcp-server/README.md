@@ -173,8 +173,8 @@ A setting is resolved from three places, in this order:
 
 **environment variable → `config.json` → built-in default**
 
-Precedence is one-directional and there is no write-back: an environment
-variable always beats the file, the file always beats the built-in default, and
+Precedence is one-directional and there is no write-back: a non-empty
+environment variable beats the file, the file beats the built-in default, and
 nothing the server reads is ever copied down into a lower layer. An MCP client
 that exports variables in its server entry keeps working exactly as before; the
 file is for the settings you would rather not repeat in every client's JSON.
@@ -234,11 +234,13 @@ Settings are read before the file is generated or refreshed, so an edit — like
 the first run's generation itself — takes effect on the next start. Restart the
 server after changing the file.
 
-Because `$defaults` is documentation, it must not go stale. On every boot the
-server compares the block against the code's real defaults and, if they have
-drifted, rewrites the block in place — preserving your live keys and your `//`
-comments untouched. Upgrading the server therefore refreshes the documentation
-in your file without disturbing anything you set.
+Because `$defaults` and `$envOnly` are documentation, they must not go stale. On
+every boot the server compares both blocks against the code and, if either has
+drifted, rewrites them in place — preserving your live keys and your `//`
+comments untouched. The rewrite goes through a temporary file and a rename, so
+your settings survive a crash and a concurrently starting server never reads a
+half-written file. Upgrading the server therefore refreshes the documentation in
+your file without disturbing anything you set.
 
 Generating the file and refreshing `$defaults` are conveniences and never fail
 the server. If the storage directory is read-only — a mounted volume, or a

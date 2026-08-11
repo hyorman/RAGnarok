@@ -249,39 +249,89 @@ function scaffold(): Record<string, unknown> {
 }
 
 /**
- * Create the config file if absent, or refresh a stale `$defaults` block.
+ * Replace a file through a same-directory temporary and a rename.
+ *
+ * A plain writeFileSync opens with O_TRUNC: the file is empty for the width of
+ * the write, and what is in that window is the operator's live settings. A
+ * crash there loses them, and a second server booting concurrently — this runs
+ * before the storage lock is taken — reads the empty file and fails startup
+ * with "config.json is not valid JSON". Rename is atomic, so neither happens.
+ */
+function replaceFileAtomically(filePath: string, contents: string, mode: number): void {
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  try {
+    fs.writeFileSync(temporaryPath, contents, { flag: "wx", mode });
+    fs.renameSync(temporaryPath, filePath);
+  } catch (error) {
+    // Never strand a temporary beside the store: an unrecognised entry there
+    // makes an uninitialized storage root read as unversioned v0.3 data.
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {
+      // Never created, or already renamed away. Nothing to clean up.
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create the config file if absent, or refresh a stale `$defaults`/`$envOnly` block.
  *
  * Never throws: storage may be read-only (a mounted volume, or a container run
  * with --read-only), and a convenience file must not prevent the server starting.
  */
 export function ensureConfigFile(storageDir: string, log: (message: string) => void): void {
   const filePath = path.join(storageDir, CONFIG_FILE_NAME);
+  const warn = (error: unknown): void => {
+    const code = (error as NodeJS.ErrnoException).code;
+    log(`Could not create ${CONFIG_FILE_NAME} at ${filePath}: ${code ?? String(error)}. Using defaults.`);
+  };
+
+  // On a genuine first run the storage directory does not exist yet: core does
+  // not create it until TopicManager.create, which happens after this. Without
+  // this mkdir the write below fails ENOENT, the file appears only on the
+  // *second* boot, and the warning misreports a fresh install as read-only
+  // storage. Still inside a catch — an unwritable location must warn, not throw.
+  try {
+    fs.mkdirSync(storageDir, { recursive: true });
+  } catch (error) {
+    warn(error);
+    return;
+  }
 
   try {
     fs.writeFileSync(filePath, `${JSON.stringify(scaffold(), null, 2)}\n`, { flag: "wx" });
     return;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EEXIST") {
-      log(`Could not create ${CONFIG_FILE_NAME} at ${filePath}: ${code ?? String(error)}. Using defaults.`);
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      warn(error);
       return;
     }
   }
 
-  // The file exists. Refresh $defaults only if it has drifted, preserving every
-  // key we did not author. A malformed file is a startup error elsewhere, not
-  // something to overwrite.
+  // The file exists. Refresh the two blocks we author only if one has drifted,
+  // preserving every key we did not author. A malformed file is a startup error
+  // elsewhere, not something to overwrite.
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       return;
     }
-    const current = buildDefaultsBlock();
-    if (JSON.stringify(raw.$defaults) === JSON.stringify(current)) {
+    const defaults = buildDefaultsBlock();
+    if (
+      JSON.stringify(raw.$defaults) === JSON.stringify(defaults) &&
+      JSON.stringify(raw.$envOnly) === JSON.stringify(ENV_ONLY_DOC)
+    ) {
       return;
     }
-    raw.$defaults = current;
-    fs.writeFileSync(filePath, `${JSON.stringify(raw, null, 2)}\n`);
+    raw.$defaults = defaults;
+    // $envOnly used to be written at creation and never again, so an existing
+    // file's copy drifted unrepairably as the env-only set changed.
+    raw.$envOnly = ENV_ONLY_DOC;
+    replaceFileAtomically(filePath, `${JSON.stringify(raw, null, 2)}\n`, fs.statSync(filePath).mode & 0o777);
   } catch {
     // Malformed or unreadable: leave it exactly as it is.
   }

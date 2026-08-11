@@ -2,13 +2,7 @@ import { strict as assert } from "assert";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import {
-  FILE_KEYS,
-  buildDefaultsBlock,
-  ensureConfigFile,
-  readConfigFile,
-  CONFIG_FILE_NAME,
-} from "../src/configFile";
+import { FILE_KEYS, buildDefaultsBlock, ensureConfigFile, readConfigFile, CONFIG_FILE_NAME } from "../src/configFile";
 import { loadConfig } from "../src/config";
 import { STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
 
@@ -56,10 +50,7 @@ describe("reading the config file", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
   const write = (value: unknown) =>
-    fs.writeFileSync(
-      path.join(dir, CONFIG_FILE_NAME),
-      typeof value === "string" ? value : JSON.stringify(value),
-    );
+    fs.writeFileSync(path.join(dir, CONFIG_FILE_NAME), typeof value === "string" ? value : JSON.stringify(value));
 
   it("returns no values when the file is absent", () => {
     assert.deepEqual(readConfigFile(dir), {});
@@ -186,6 +177,27 @@ describe("generating the config file", () => {
     assert.equal(written["//"], "mine", "comment key must survive");
   });
 
+  it("refreshes a stale $envOnly block, which older files can never repair themselves", () => {
+    fs.writeFileSync(
+      path.join(dir, CONFIG_FILE_NAME),
+      JSON.stringify({ $defaults: buildDefaultsBlock(), $envOnly: { GONE: "stale" }, retrieval: { topK: 5 } }),
+    );
+    ensureConfigFile(dir, noop);
+    const written = read();
+    assert.equal(written.$envOnly.GONE, undefined, "the stale entry must be gone");
+    assert.ok(written.$envOnly.RAGNAROK_LLM_API_KEY, "the current env-only settings must be documented");
+    assert.equal(written.retrieval.topK, 5, "user key must survive the refresh");
+  });
+
+  it("leaves no temporary file beside the store when refreshing", () => {
+    // The refresh writes through a same-directory temporary and renames. A
+    // stranded one is not merely untidy: core's hasManagedData treats any
+    // unrecognised entry as unversioned v0.3 storage and refuses to start.
+    fs.writeFileSync(path.join(dir, CONFIG_FILE_NAME), JSON.stringify({ $defaults: { stale: true } }));
+    ensureConfigFile(dir, noop);
+    assert.deepEqual(fs.readdirSync(dir), [CONFIG_FILE_NAME]);
+  });
+
   it("does not overwrite a malformed file", () => {
     const filePath = path.join(dir, CONFIG_FILE_NAME);
     fs.writeFileSync(filePath, "{ not json");
@@ -193,10 +205,31 @@ describe("generating the config file", () => {
     assert.equal(fs.readFileSync(filePath, "utf8"), "{ not json");
   });
 
-  it("warns and continues when the directory is not writable", () => {
+  it("creates the storage directory on a fresh install, where nothing has made it yet", () => {
+    // Every other fixture here hands ensureConfigFile an existing mkdtemp
+    // directory. A real first run does not have one: core does not create the
+    // storage directory until TopicManager.create, which runs after this. If
+    // ensureConfigFile does not create it, the file appears only on the second
+    // boot and the operator is told their storage is read-only.
+    const fresh = path.join(dir, "does", "not", "exist");
     const messages: string[] = [];
-    ensureConfigFile(path.join(dir, "does", "not", "exist"), (m) => messages.push(m));
+    ensureConfigFile(fresh, (m) => messages.push(m));
+    assert.deepEqual(messages, [], "a fresh install is not a warning");
+    assert.ok(fs.statSync(fresh).isDirectory(), "the storage directory must be created");
+    const written = JSON.parse(fs.readFileSync(path.join(fresh, CONFIG_FILE_NAME), "utf8"));
+    assert.deepEqual(written.$defaults, buildDefaultsBlock(), "the file must be written on the first run");
+  });
+
+  it("warns and continues when the location genuinely cannot be created", () => {
+    // A path *under a regular file* is unwritable on every platform (ENOTDIR on
+    // POSIX) and needs no chmod, which Windows does not honour. The errno text
+    // is deliberately unasserted; only warn-once-and-do-not-throw is contractual.
+    const blocker = path.join(dir, "a-file");
+    fs.writeFileSync(blocker, "not a directory");
+    const messages: string[] = [];
+    ensureConfigFile(path.join(blocker, "sub"), (m) => messages.push(m));
     assert.equal(messages.length, 1, "must warn exactly once");
+    assert.equal(fs.readFileSync(blocker, "utf8"), "not a directory", "must not disturb what is there");
   });
 });
 

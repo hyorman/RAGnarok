@@ -36,8 +36,10 @@ guard against an agent's mistake, not an authorization boundary.
 
 Treat the decision to add this server to an MCP client as the security
 decision. The meaningful controls are which storage root it uses, which paths
-`RAGNAROK_ALLOWED_PATHS` exposes, and which credentials
+`RAGNAROK_ALLOWED_PATHS` — or, beneath it, `security.allowedPaths` in
+`<storageRoot>/config.json` — exposes, and which credentials
 (`RAGNAROK_LLM_API_KEY`, `RAGNAROK_GITHUB_TOKEN`) its environment carries.
+Credentials remain environment-only and cannot be set in the file.
 
 ## Memory graph visualization exposure
 
@@ -73,15 +75,26 @@ OAuth/DCR hardening items are therefore not applicable to this server.
 `rag_add_documents` and archive import accept only paths under canonical
 `RAGNAROK_ALLOWED_PATHS` or the configured export root, resolved on the machine
 running the server. There is no upload handle; content is indexed from the
-filesystem the server can already see. `RAGNAROK_ALLOWED_PATHS` therefore
-defines what an agent driving this server can read: default it to the project
-root rather than a home directory.
+filesystem the server can already see. That allowlist therefore defines what an
+agent driving this server can read: default it to the project root rather than
+a home directory.
 
-URL ingestion rejects unsafe targets and GitHub ingestion is restricted to
-`RAGNAROK_GITHUB_HOSTS`. Credentials come from service configuration and are
-never accepted as tool arguments. Review DNS/proxy policy and outbound network
-egress independently; application validation is not a substitute for an
-egress firewall.
+Both halves of that allowlist are also settable from `config.json`:
+`security.allowedPaths` beneath `RAGNAROK_ALLOWED_PATHS`, and the export root
+via `storage.exportDir` beneath `RAGNAROK_EXPORT_DIR` — the export root is
+joined into the same ingest allowlist, so widening it widens what can be read.
+GitHub ingestion is restricted to `RAGNAROK_GITHUB_HOSTS`, likewise settable as
+`security.githubHosts`. Write access to the storage root is therefore write
+access to these allowlists: a non-empty environment variable set by the MCP
+client wins, but any of the three left unset — or set empty — is decided by a
+file inside the store. Keep the storage root under the same protection as the
+paths it grants, and pin an allowlist in the client's environment when a file
+in the store must not be able to move it.
+
+URL ingestion rejects unsafe targets. Credentials come from service
+configuration and are never accepted as tool arguments. Review DNS/proxy policy
+and outbound network egress independently; application validation is not a
+substitute for an egress firewall.
 
 Archive import rejects traversal, absolute paths, duplicates, case collisions,
 unmanifested entries, checksum failures, excessive sizes, and excessive
