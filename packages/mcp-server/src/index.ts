@@ -146,12 +146,10 @@ async function main(): Promise<void> {
     ragQueryService.setReranker(reranker);
     // Non-blocking warm-up: the first query skips the model-load stall, and a
     // broken model surfaces in the startup log instead of at query time.
-    void reranker
-      .initialize()
-      .catch((error) => {
-        rerankerFailure = error instanceof Error ? error.message : String(error);
-        logger.warn("Reranker warm-up failed — queries will fall back to original ranking", rerankerFailure);
-      });
+    void reranker.initialize().catch((error) => {
+      rerankerFailure = error instanceof Error ? error.message : String(error);
+      logger.warn("Reranker warm-up failed — queries will fall back to original ranking", rerankerFailure);
+    });
   }
 
   // Server factory: stdio pins one instance per connection. Every instance

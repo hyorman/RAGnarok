@@ -472,8 +472,7 @@
     "clean": "npm run clean --workspaces && rimraf dist out dist-test && rimraf node_modules",
     "clean:test": "rimraf dist-test",
     "docker:build": "docker build -f packages/mcp-server/Dockerfile -t ragnarok-mcp -t ragnarok-mcp:ci .",
-    "docker:run": "docker run --rm -p 4000:4000 ragnarok-mcp",
-    "docker:compose": "docker compose --env-file .env -f packages/mcp-server/docker-compose.yml up --build",
+    "docker:run": "docker run -i --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:size=256m -v ragnarok-data:/data/ragnarok ragnarok-mcp",
     "publish:npm": "node scripts/publish-release.mjs npm",
     "publish:docker": "node scripts/publish-release.mjs docker",
     "publish:all": "node scripts/publish-release.mjs all"

@@ -1200,21 +1200,19 @@ execFileSync(process.execPath, ["packages/mcp-server/src/ui/graphApp/build.mjs",
   cwd: root,
   stdio: "pipe",
 });
+// Stdio is the only transport, so its binary E2E suite carries the whole
+// end-to-end contract and must fail closed rather than skip.
 const stdioTransportSource = await read("packages/mcp-server/test/stdioTransport.test.ts");
-const httpBinarySource = await read("packages/mcp-server/test/httpBinaryE2E.test.ts");
-// Local stdio still proves the memory-graph tool end to end; shared HTTP proves the opposite
-// contract — the graph UI resource remains while the tool itself is never registered.
-for (const [name, source, graphTest] of [
-  ["stdio", stdioTransportSource, /graph visualization protocol/],
-  ["HTTP", httpBinarySource, /graph UI resource stays while the graph tool is absent from shared deployments/],
-]) {
-  assert.doesNotMatch(
-    source,
-    /existsSync\(SERVER_ENTRY\)|Skipping (?:stdio|HTTP) binary E2E|Skipping stdio E2E/,
-    `${name} binary tests must fail closed`,
-  );
-  assert.match(source, graphTest, `${name} binary graph test must execute in the focused suite`);
-}
+assert.doesNotMatch(
+  stdioTransportSource,
+  /existsSync\(SERVER_ENTRY\)|Skipping stdio binary E2E|Skipping stdio E2E/,
+  "stdio binary tests must fail closed",
+);
+assert.match(
+  stdioTransportSource,
+  /graph visualization protocol/,
+  "stdio binary graph test must execute in the focused suite",
+);
 const mcpReadme = await read("packages/mcp-server/README.md");
 assert.match(mcpReadme, /createMcpHandler/);
 assert.match(mcpReadme, /toNodeHandler/);
@@ -1243,8 +1241,13 @@ for (const obsolete of obsoleteGraphProductionContracts) {
   }
 }
 const mcpIndex = await read("packages/mcp-server/src/index.ts");
-assert.match(mcpIndex, /const shutdownDeadline = Date\.now\(\) \+ drainBudgetMs/);
-assert.match(mcpIndex, /httpHandle\.shutdown\(shutdownDeadline\)/);
+// Shutdown stays bounded: drain in-flight operations against a budget, then
+// close the stdio transport before releasing native handles.
+assert.match(mcpIndex, /const drainBudgetMs = config\.shutdownDrainMs \?\? 10_000/);
+assert.match(mcpIndex, /setTimeout\(resolve, drainBudgetMs\)\.unref\(\)/);
+assert.match(mcpIndex, /await Promise\.race\(\[waitForOperationDrain\(\), drainDeadline\]\)/);
+assert.match(mcpIndex, /await stdioHandle\?\.close\(\)/);
+assert.match(mcpIndex, /process\.stdin\.once\("end", \(\) => void shutdown\("stdio EOF"\)\)/);
 for (const name of ["release", "docker:push"]) {
   assert.match(mcpPackage.scripts[name], /npm --prefix \.\.\/\.\. run publish:/);
   assert.doesNotMatch(mcpPackage.scripts[name], /npm publish|docker push/);
@@ -1255,7 +1258,9 @@ async function executableFiles(directory) {
   const files = await Promise.all(
     entries.map(async (entry) => {
       const relativePath = path.posix.join(directory, entry.name);
-      if (entry.isDirectory()) return executableFiles(relativePath);
+      if (entry.isDirectory()) {
+        return executableFiles(relativePath);
+      }
       return /\.(?:[cm]?[jt]s|[jt]sx)$/.test(entry.name) ? [relativePath] : [];
     }),
   );
@@ -1265,7 +1270,7 @@ async function executableFiles(directory) {
 const executableMcpFiles = [
   ...(await executableFiles("packages/mcp-server/src")),
   ...(await executableFiles("packages/mcp-server/test")),
-  "scripts/docker-smoke.mjs",
+  "scripts/docker-gate.mjs",
   "scripts/pack-smoke.mjs",
   "scripts/shutdown-soak.mjs",
 ];
@@ -1393,12 +1398,9 @@ await rm(emptyNodeModules, { recursive: true, force: true });
 
 const dockerfile = await read("packages/mcp-server/Dockerfile");
 const dockerignore = await read(".dockerignore");
-const compose = await read("packages/mcp-server/docker-compose.yml");
 const dockerGate = await read("scripts/docker-gate.mjs");
-const dockerSmoke = await read("scripts/docker-smoke.mjs");
 assert.match(dockerfile, /USER node/);
 assert.match(dockerfile, /STOPSIGNAL SIGTERM/);
-assert.match(dockerfile, /container-healthcheck\.mjs/);
 assert.match(dockerfile, /FROM node:22-slim AS production-deps/);
 assert.match(dockerfile, /--include-workspace-root=false/);
 assert.match(dockerfile, /--omit=peer/);
@@ -1411,92 +1413,64 @@ assert.match(dockerfile, /COPY --chown=node:node/);
 assert.doesNotMatch(dockerfile, /chown -R node:node \/data\/ragnarok \/app/);
 assert.doesNotMatch(dockerfile, /COPY package\.json \.npmrc \.\//);
 assert.match(dockerignore, /\*\*\/\*\.tsbuildinfo/);
-for (const contract of [
-  /read_only: true/,
-  /no-new-privileges:true/,
-  /cap_drop:\s*\n\s+- ALL/,
-  /stop_grace_period:/,
-  /healthcheck:/,
-]) {
-  assert.match(compose, contract);
-}
-for (const contract of [
-  /RAGNAROK_DEPLOYMENT_MODE=shared/,
-  /RAGNAROK_TLS_CERT_PATH=\/run\/secrets\/ragnarok_tls_cert/,
-  /RAGNAROK_TLS_KEY_PATH=\/run\/secrets\/ragnarok_tls_key/,
-  /RAGNAROK_TLS_CA_PATH=\/run\/secrets\/ragnarok_tls_ca/,
-  /RAGNAROK_ALLOWED_HOSTS=\$\{RAGNAROK_ALLOWED_HOSTS:\?RAGNAROK_ALLOWED_HOSTS is required\}/,
-  /ragnarok_tls_cert:/,
-  /ragnarok_tls_key:/,
-  /ragnarok_tls_ca:/,
-]) {
-  assert.match(compose, contract);
-}
-assert.match(dockerGate, /httpsRequest/);
-assert.match(dockerGate, /RAGNAROK_DEPLOYMENT_MODE=shared/);
-assert.match(dockerGate, /RAGNAROK_TLS_CERT_PATH/);
-assert.match(dockerGate, /RAGNAROK_TLS_KEY_PATH/);
-assert.match(dockerGate, /RAGNAROK_ALLOWED_HOSTS=localhost/);
-assert.match(dockerGate, /nativeTlsArgs\("local"/);
-assert.match(dockerGate, /RAGNAROK_TRUSTED_PROXIES=/);
-assert.match(dockerGate, /RAGNAROK_HEALTHCHECK_HOST=proxy\.example/);
-assert.match(dockerGate, /--cap-drop/);
-assert.match(dockerGate, /assertStorageLock/);
-assert.match(dockerGate, /not-allowed\.example/);
-assert.doesNotMatch(dockerGate, /http:\/\/127\.0\.0\.1:4000/);
-assert.match(dockerSmoke, /https:\/\/localhost:4000\/mcp/);
-assert.match(dockerSmoke, /rag_create_document_upload/);
-assert.match(dockerSmoke, /rag_ingest_upload/);
-assert.match(dockerSmoke, /rag_export_topic/);
-assert.match(dockerSmoke, /createHash\("sha256"\)/);
-assert.match(dockerSmoke, /Single-use Docker download replay/);
 
-const { buildHealthcheckRequest } = await import("./container-healthcheck.mjs");
-const nativeHealthcheck = buildHealthcheckRequest(
-  {
-    RAGNAROK_PORT: "4443",
-    RAGNAROK_ALLOWED_HOSTS: "localhost",
-    RAGNAROK_TLS_CA_PATH: "/fixture/ca.pem",
-    RAGNAROK_TLS_SERVER_NAME: "localhost",
-  },
-  (certificatePath) => {
-    assert.equal(certificatePath, "/fixture/ca.pem");
-    return Buffer.from("fixture CA");
-  },
+// The image ships a stdio-only server: no port, no health endpoint to poll,
+// and no HTTP configuration baked into the layer.
+assert.match(dockerfile, /CMD \["node", "packages\/mcp-server\/dist\/index\.js"\]/);
+for (const forbidden of [
+  /^EXPOSE /m,
+  /^HEALTHCHECK /m,
+  /--http/,
+  /container-healthcheck\.mjs/,
+  /^ENV RAGNAROK_PORT/m,
+  /^ENV RAGNAROK_HTTP_HOST/m,
+]) {
+  assert.doesNotMatch(dockerfile, forbidden, `Stdio-only image must not contain ${forbidden}`);
+}
+await assert.rejects(
+  read("packages/mcp-server/docker-compose.yml"),
+  "compose orchestration cannot describe a stdio server the client must own",
 );
-assert.equal(nativeHealthcheck.protocol, "https");
-assert.equal(nativeHealthcheck.options.port, 4443);
-assert.equal(nativeHealthcheck.options.servername, "localhost");
-assert.equal(nativeHealthcheck.options.headers.host, "localhost");
-const proxyHealthcheck = buildHealthcheckRequest({
-  RAGNAROK_ALLOWED_HOSTS: "proxy.example",
-  RAGNAROK_HEALTHCHECK_HOST: "proxy.example",
-  RAGNAROK_TRUSTED_PROXIES: "10.0.0.1,127.0.0.1",
-});
-assert.equal(proxyHealthcheck.protocol, "http");
-assert.equal(proxyHealthcheck.options.headers.host, "proxy.example");
-assert.equal(proxyHealthcheck.options.headers["x-forwarded-proto"], "https");
-assert.throws(
-  () =>
-    buildHealthcheckRequest({
-      RAGNAROK_ALLOWED_HOSTS: "proxy.example",
-      RAGNAROK_HEALTHCHECK_HOST: "proxy.example",
-      RAGNAROK_TRUSTED_PROXIES: "10.0.0.1",
-    }),
-  /127\.0\.0\.1/,
-);
-assert.throws(
-  () =>
-    buildHealthcheckRequest(
-      {
-        RAGNAROK_ALLOWED_HOSTS: "other.example",
-        RAGNAROK_TLS_CA_PATH: "/fixture/ca.pem",
-        RAGNAROK_TLS_SERVER_NAME: "localhost",
-      },
-      () => Buffer.from("fixture CA"),
-    ),
-  /exact name/,
-);
+await assert.rejects(read("scripts/container-healthcheck.mjs"), "a stdio server has no endpoint to health-check");
+await assert.rejects(read("scripts/docker-smoke.mjs"), "the HTTP docker smoke client was folded into the stdio gate");
+
+// The stdio gate must still prove the hardened runtime posture the deleted
+// compose file used to carry, and must exercise the image over stdio.
+for (const contract of [
+  /"--read-only"/,
+  /"--cap-drop",\s*\n?\s*"ALL"/,
+  /"no-new-privileges"/,
+  /"--init"/,
+  /"\/tmp:size=256m"/,
+  /"--stop-timeout"/,
+  /spawn\("docker"/,
+  /"run",\s*\n?\s*"-i",/,
+  /server\/discover/,
+  /tools\/list/,
+  /expectedToolCount = 24/,
+  /assertStorageLock/,
+  /assertRemovedEnvRejected/,
+  /assertRuntimeHardening/,
+  /closeCleanly/,
+  /ExposedPorts/,
+  /Healthcheck/,
+]) {
+  assert.match(dockerGate, contract, `Docker stdio gate must assert ${contract}`);
+}
+for (const forbidden of [/httpsRequest/, /RAGNAROK_DEPLOYMENT_MODE=shared/, /\/health/, /-p", "4000/]) {
+  assert.doesNotMatch(dockerGate, forbidden, `Docker stdio gate must not probe HTTP: ${forbidden}`);
+}
+
+// The published invocation is a hardened `docker run -i`, not compose.
+const rootPackage = JSON.parse(await read("package.json"));
+assert.ok(!("docker:compose" in rootPackage.scripts), "compose entrypoint must not survive the stdio-only transport");
+for (const flag of ["-i", "--init", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--tmpfs"]) {
+  assert.ok(
+    rootPackage.scripts["docker:run"].includes(flag),
+    `documented docker run must keep the hardened flag ${flag}`,
+  );
+}
+assert.doesNotMatch(rootPackage.scripts["docker:run"], /-p /, "a stdio container publishes no port");
 
 const workflow = await read(".github/workflows/release.yml");
 const workflowDocument = require("yaml").parse(workflow);
@@ -1573,11 +1547,7 @@ for (const requiredBenchmarkFile of [
     `release workload partition must contain ${requiredBenchmarkFile} exactly once`,
   );
 }
-for (const blocker of [
-  "missing_child_peak_rss",
-  "missing_index_time",
-  "missing_exact_package_measurement",
-]) {
+for (const blocker of ["missing_child_peak_rss", "missing_index_time", "missing_exact_package_measurement"]) {
   assert.match(releaseBenchmark, new RegExp(blocker));
 }
 const releasePerformanceBenchmark = await read("packages/core/test/releasePerformanceBenchmark.test.ts");
@@ -1823,7 +1793,9 @@ try {
       journalPath: path.join(attestationFixture, "journal.json"),
       execute(command, commandArgs, options) {
         dockerCommands.push([command, ...commandArgs]);
-        if (options?.encoding === "utf8") return `Name: staging\nDigest: sha256:${"0".repeat(64)}\n`;
+        if (options?.encoding === "utf8") {
+          return `Name: staging\nDigest: sha256:${"0".repeat(64)}\n`;
+        }
         return "";
       },
     }),
@@ -1849,7 +1821,9 @@ try {
     journalPath: successfulJournalPath,
     execute(command, commandArgs, options) {
       successfulCommands.push([command, ...commandArgs]);
-      if (options?.encoding === "utf8") return `Name: verified\nDigest: ${dockerImage.digest}\n`;
+      if (options?.encoding === "utf8") {
+        return `Name: verified\nDigest: ${dockerImage.digest}\n`;
+      }
       return "";
     },
   });

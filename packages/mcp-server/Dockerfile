@@ -84,21 +84,17 @@ COPY --chown=node:node --from=production-deps /app/packages/mcp-server/node_modu
 # Copy bundled models (if present) — shipped inside the core package
 COPY --chown=node:node packages/core/assets/models/ packages/core/assets/models/
 COPY --chown=node:node NOTICE THIRD_PARTY_MODELS.md bom.cdx.json bom.spdx.json /app/
-COPY --chown=node:node scripts/container-healthcheck.mjs /app/scripts/container-healthcheck.mjs
 
 ENV NODE_ENV=production
 ENV RAGNAROK_STORAGE_DIR=/data/ragnarok
-ENV RAGNAROK_HTTP_HOST=0.0.0.0
-ENV RAGNAROK_PORT=4000
 
 RUN mkdir -p /data/ragnarok && chown node:node /data/ragnarok
 USER node
 
-EXPOSE 4000
 STOPSIGNAL SIGTERM
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["node", "/app/scripts/container-healthcheck.mjs"]
-
-CMD ["node", "packages/mcp-server/dist/index.js", "--http"]
+# The server speaks MCP over stdio only. There is no listening socket, so the
+# image publishes no port and declares no HEALTHCHECK: a stdio server's
+# liveness is the client's pipe, and any probe here would be a lie. Run it as
+# `docker run -i --rm ... ragnarok-mcp` and let the MCP client own the stream.
+CMD ["node", "packages/mcp-server/dist/index.js"]
