@@ -4,10 +4,29 @@ import { STORAGE_LOCK_FILENAME } from "./storageLock";
 
 export const STORAGE_FORMAT_VERSION = 2 as const;
 export const STORAGE_FORMAT_FILENAME = "storage-format.json";
+/**
+ * The optional user-facing settings file (@ragnarok/mcp-server's CONFIG_FILE_NAME).
+ * Settings, not corpus data — see isInfrastructureEntry for why that distinction
+ * has to be made here, in the storage layer.
+ */
+export const STORAGE_CONFIG_FILENAME = "config.json";
 
-/** Files that are infrastructure, not managed data — never version-gated, never backed up. */
+/**
+ * Files that are infrastructure, not managed data — never version-gated, never backed up.
+ *
+ * config.json earns its place on both counts. The MCP server generates it on
+ * first run, before storage format validation, so version-gating it would make
+ * every fresh install look like unversioned v0.3 storage and refuse to start.
+ * And it holds the operator's settings rather than their corpus, so resetting
+ * *data* must leave it exactly where it is instead of sweeping it into a backup.
+ */
 function isInfrastructureEntry(entry: string): boolean {
-  return entry === STORAGE_FORMAT_FILENAME || entry === STORAGE_LOCK_FILENAME || entry.startsWith("backup-v1-");
+  return (
+    entry === STORAGE_FORMAT_FILENAME ||
+    entry === STORAGE_LOCK_FILENAME ||
+    entry === STORAGE_CONFIG_FILENAME ||
+    entry.startsWith("backup-v1-")
+  );
 }
 
 export interface StorageFormatMarker {

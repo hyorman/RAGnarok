@@ -144,6 +144,7 @@ export {
 export {
   STORAGE_FORMAT_VERSION,
   STORAGE_FORMAT_FILENAME,
+  STORAGE_CONFIG_FILENAME,
   atomicWriteFile,
   atomicWriteJson,
   ensureStorageFormatV2,

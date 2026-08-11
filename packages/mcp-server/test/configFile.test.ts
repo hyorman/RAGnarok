@@ -2,11 +2,26 @@ import { strict as assert } from "assert";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { FILE_KEYS, buildDefaultsBlock, readConfigFile, CONFIG_FILE_NAME } from "../src/configFile";
+import {
+  FILE_KEYS,
+  buildDefaultsBlock,
+  ensureConfigFile,
+  readConfigFile,
+  CONFIG_FILE_NAME,
+} from "../src/configFile";
+import { loadConfig } from "../src/config";
+import { STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
 
 describe("config file key table", () => {
   it("declares exactly the 23 keys that move to the file", () => {
     assert.equal(FILE_KEYS.length, 23);
+  });
+
+  it("names the same file core exempts from storage-format gating and reset backups", () => {
+    // ensureConfigFile writes into the storage directory before core validates
+    // the storage format. Core's isInfrastructureEntry must recognise that name,
+    // or a fresh install reads as unversioned v0.3 storage and refuses to start.
+    assert.equal(CONFIG_FILE_NAME, STORAGE_CONFIG_FILENAME);
   });
 
   it("maps every key to a distinct McpConfig field", () => {
@@ -22,7 +37,7 @@ describe("config file key table", () => {
   });
 
   it("builds a defaults block covering every key, with exportDir shown as a storage-relative literal", () => {
-    const block = buildDefaultsBlock("/tmp/store") as Record<string, Record<string, unknown>>;
+    const block = buildDefaultsBlock() as Record<string, Record<string, unknown>>;
     for (const key of FILE_KEYS) {
       const [section, name] = key.path;
       assert.ok(section in block, `missing section ${section}`);
@@ -125,4 +140,121 @@ describe("reading the config file", () => {
       assert.throws(() => readConfigFile(dir), /environment-only/i);
     });
   }
+});
+
+describe("generating the config file", () => {
+  let dir: string;
+  const noop = () => {};
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-gen-"));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const read = () => JSON.parse(fs.readFileSync(path.join(dir, CONFIG_FILE_NAME), "utf8"));
+
+  it("creates the file with an empty live section and a full $defaults block", () => {
+    ensureConfigFile(dir, noop);
+    const written = read();
+    assert.deepEqual(written.$defaults, buildDefaultsBlock());
+    assert.ok(written.$envOnly, "must document the env-only settings");
+    for (const key of FILE_KEYS) {
+      assert.equal(written[key.path[0]], undefined, `${key.path[0]} must not be live on generation`);
+    }
+  });
+
+  it("generates a file that reads back as no values", () => {
+    ensureConfigFile(dir, noop);
+    assert.deepEqual(readConfigFile(dir), {});
+  });
+
+  it("is a no-op when the file already exists", () => {
+    fs.writeFileSync(path.join(dir, CONFIG_FILE_NAME), JSON.stringify({ retrieval: { topK: 5 } }));
+    ensureConfigFile(dir, noop);
+    assert.equal(read().retrieval.topK, 5);
+  });
+
+  it("refreshes a stale $defaults block without touching user keys", () => {
+    fs.writeFileSync(
+      path.join(dir, CONFIG_FILE_NAME),
+      JSON.stringify({ "//": "mine", $defaults: { retrieval: { topK: 3 } }, retrieval: { topK: 5 } }),
+    );
+    ensureConfigFile(dir, noop);
+    const written = read();
+    assert.deepEqual(written.$defaults, buildDefaultsBlock(), "$defaults must be refreshed");
+    assert.equal(written.retrieval.topK, 5, "user key must survive byte-identical");
+    assert.equal(written["//"], "mine", "comment key must survive");
+  });
+
+  it("does not overwrite a malformed file", () => {
+    const filePath = path.join(dir, CONFIG_FILE_NAME);
+    fs.writeFileSync(filePath, "{ not json");
+    ensureConfigFile(dir, noop);
+    assert.equal(fs.readFileSync(filePath, "utf8"), "{ not json");
+  });
+
+  it("warns and continues when the directory is not writable", () => {
+    const messages: string[] = [];
+    ensureConfigFile(path.join(dir, "does", "not", "exist"), (m) => messages.push(m));
+    assert.equal(messages.length, 1, "must warn exactly once");
+  });
+});
+
+describe("$defaults accuracy", () => {
+  // The generated file documents a default for every key. Nothing else compares
+  // FILE_KEYS.shown against what loadConfig() actually produces, so without this
+  // guard the two drift apart silently and the generated documentation lies.
+  const saved: Record<string, string | undefined> = {};
+  let tmpStorage: string;
+
+  beforeEach(() => {
+    // Scrub by prefix rather than by a fixed list: a variable added later must
+    // not be able to leak into the comparison just because no one updated a list.
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("RAGNAROK_") || key === "GITHUB_ACCESS_TOKEN") {
+        saved[key] = process.env[key];
+        delete process.env[key];
+      }
+    }
+    // loadConfig() reads config.json from the storage directory. Without one of
+    // our own it resolves to the developer's real ~/.ragnarok and compares
+    // against their personal settings instead of the built-in defaults.
+    tmpStorage = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-defaults-"));
+    process.env.RAGNAROK_STORAGE_DIR = tmpStorage;
+  });
+
+  afterEach(() => {
+    delete process.env.RAGNAROK_STORAGE_DIR;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value !== undefined) {
+        process.env[key] = value;
+      }
+      delete saved[key];
+    }
+    fs.rmSync(tmpStorage, { recursive: true, force: true });
+  });
+
+  it("shows, for every key, the value loadConfig() actually defaults to", () => {
+    const block = buildDefaultsBlock() as Record<string, Record<string, unknown>>;
+    const config = loadConfig();
+    for (const key of FILE_KEYS) {
+      const [section, name] = key.path;
+      // exportDir is the one deliberate exception: its default is derived from
+      // the storage directory, so $defaults shows a literal placeholder. The
+      // test below pins that the placeholder still describes the real default.
+      if (key.field === "exportDir") {
+        continue;
+      }
+      assert.deepEqual(
+        block[section][name],
+        config[key.field],
+        `$defaults shows ${section}.${name} = ${JSON.stringify(block[section][name])}, ` +
+          `but loadConfig() defaults ${key.field} to ${JSON.stringify(config[key.field])}`,
+      );
+    }
+  });
+
+  it("documents exportDir as a placeholder because its default is storage-relative", () => {
+    assert.equal(loadConfig().exportDir, path.join(tmpStorage, "exports"));
+  });
 });

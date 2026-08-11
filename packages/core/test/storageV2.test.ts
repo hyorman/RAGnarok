@@ -7,6 +7,7 @@ import {
   ensureStorageFormatV2,
   resetStorageToV2,
   STORAGE_FORMAT_FILENAME,
+  STORAGE_CONFIG_FILENAME,
 } from "../src/utils/storageV2";
 import { STORAGE_LOCK_FILENAME } from "../src/utils/storageLock";
 
@@ -54,6 +55,41 @@ describe("storage format v2", () => {
     expect(backedUp).to.deep.equal(["database"]);
     // The lock stays in place, still guarding the directory.
     await fs.access(path.join(directory, STORAGE_LOCK_FILENAME));
+  });
+
+  it("ignores the generated config file when judging whether a directory holds data", async () => {
+    // The MCP server writes config.json during startup, before format
+    // validation runs. Treating it as data would make every fresh install look
+    // like unversioned v0.3 storage and refuse to start.
+    await fs.writeFile(path.join(directory, STORAGE_CONFIG_FILENAME), "{}");
+    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+  });
+
+  it("still fails closed when the config file sits alongside real unversioned data", async () => {
+    // The exemption above is narrow: config.json stops being *evidence* of a
+    // legacy install, it does not stop one being detected.
+    await fs.writeFile(path.join(directory, STORAGE_CONFIG_FILENAME), "{}");
+    await fs.mkdir(path.join(directory, "database"));
+    try {
+      await ensureStorageFormatV2(directory);
+      expect.fail("expected format validation to fail");
+    } catch (error) {
+      expect((error as Error).message).to.include("unversioned");
+    }
+  });
+
+  it("does not move the config file into the reset backup", async () => {
+    // Resetting the corpus must not silently discard the operator's settings.
+    await fs.mkdir(path.join(directory, "database"));
+    await fs.writeFile(path.join(directory, STORAGE_CONFIG_FILENAME), '{"retrieval":{"topK":5}}');
+    const backup = await resetStorageToV2(directory);
+    expect(backup).to.be.a("string");
+    expect(await fs.readdir(backup!)).to.deep.equal(["database"]);
+    expect(await fs.readFile(path.join(directory, STORAGE_CONFIG_FILENAME), "utf8")).to.equal(
+      '{"retrieval":{"topK":5}}',
+    );
+    const marker = JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"));
+    expect(marker.formatVersion).to.equal(2);
   });
 
   it("moves legacy data to a timestamped backup before reset", async () => {

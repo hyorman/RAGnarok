@@ -41,6 +41,7 @@ import {
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion, assertNoRemovedEnvVars } from "./config";
+import { ensureConfigFile } from "./configFile";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
@@ -69,6 +70,11 @@ async function main(): Promise<void> {
 
   const logger = new Logger("MCP-Server");
   logger.info("Starting RAGnarōk MCP server");
+
+  // Write the discoverable config.json (and refresh its $defaults) once the
+  // logger exists: a failure here is only ever a warning, and in stdio mode
+  // stdout belongs to the JSON-RPC transport, so console is not an option.
+  ensureConfigFile(config.storageDir, (message) => logger.warn(message));
 
   // Create adapters
   const configProvider = new EnvConfigProvider(config);

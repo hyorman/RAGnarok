@@ -118,7 +118,7 @@ export const configFileSchema = (() => {
 })();
 
 /** The `$defaults` documentation block. Never read as configuration. */
-export function buildDefaultsBlock(_storageDir: string): Record<string, unknown> {
+export function buildDefaultsBlock(): Record<string, unknown> {
   const block: Record<string, Record<string, unknown>> = {};
   for (const key of FILE_KEYS) {
     const [section, name] = key.path;
@@ -227,4 +227,62 @@ export function readConfigFile(storageDir: string): ConfigFileValues {
     }
   }
   return values as ConfigFileValues;
+}
+
+const ENV_ONLY_DOC: Record<string, string> = {
+  RAGNAROK_STORAGE_DIR: "bootstrap — this file's location derives from it",
+  RAGNAROK_WORKING_DIR: "bootstrap",
+  RAGNAROK_LLM_API_KEY: "secret",
+  RAGNAROK_EMBEDDING_API_KEY: "secret",
+  RAGNAROK_GITHUB_TOKEN: "secret",
+  RAGNAROK_RESET_STORAGE: "one-shot; persisting it would reset storage on every launch",
+  RAGNAROK_IGNORE_LOCK: "one-shot; persisting it would disable the single-writer lock permanently",
+};
+
+function scaffold(): Record<string, unknown> {
+  return {
+    "//": "Set a key below to override the default. Delete a key to return to the default.",
+    "//env": "Secrets and bootstrap settings cannot be set here — see $envOnly.",
+    $defaults: buildDefaultsBlock(),
+    $envOnly: ENV_ONLY_DOC,
+  };
+}
+
+/**
+ * Create the config file if absent, or refresh a stale `$defaults` block.
+ *
+ * Never throws: storage may be read-only (a mounted volume, or a container run
+ * with --read-only), and a convenience file must not prevent the server starting.
+ */
+export function ensureConfigFile(storageDir: string, log: (message: string) => void): void {
+  const filePath = path.join(storageDir, CONFIG_FILE_NAME);
+
+  try {
+    fs.writeFileSync(filePath, `${JSON.stringify(scaffold(), null, 2)}\n`, { flag: "wx" });
+    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") {
+      log(`Could not create ${CONFIG_FILE_NAME} at ${filePath}: ${code ?? String(error)}. Using defaults.`);
+      return;
+    }
+  }
+
+  // The file exists. Refresh $defaults only if it has drifted, preserving every
+  // key we did not author. A malformed file is a startup error elsewhere, not
+  // something to overwrite.
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return;
+    }
+    const current = buildDefaultsBlock();
+    if (JSON.stringify(raw.$defaults) === JSON.stringify(current)) {
+      return;
+    }
+    raw.$defaults = current;
+    fs.writeFileSync(filePath, `${JSON.stringify(raw, null, 2)}\n`);
+  } catch {
+    // Malformed or unreadable: leave it exactly as it is.
+  }
 }
