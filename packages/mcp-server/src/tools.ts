@@ -42,13 +42,6 @@ import {
 import type { AvailableModel, GraphVisualizationDocument } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "./uiResource";
 import type { McpConfig } from "./config";
-import { markMcpToolResult } from "./auditContext";
-
-/**
- * Access role. Vestigial: with stdio as the only transport every caller is the
- * machine owner and this is always "admin". Removed entirely in a later change.
- */
-export type AccessRole = "reader" | "curator" | "admin";
 
 export type MutationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
 export type ToolRuntime = {
@@ -97,44 +90,9 @@ function utf8Prefix(value: Buffer, maximumBytes: number): string {
   return value.subarray(0, end).toString("utf8");
 }
 
-const REDACTED_FIELD = /(path|directory|storage|workingdir|modelpath|archivepath|exportdir)/i;
-const TRANSFER_ENDPOINT_FIELD = /^(uploadEndpoint|downloadEndpoint)$/;
-const TRANSFER_ENDPOINT =
-  /^transfer\/(?:uploads|downloads)\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function sanitizeSharedValue(value: unknown, fieldName?: string): unknown {
-  if (Array.isArray(value)) {
-    return value.map((nested) => sanitizeSharedValue(nested));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([key]) => !REDACTED_FIELD.test(key))
-        .map(([key, nested]) => [key, sanitizeSharedValue(nested, key)]),
-    );
-  }
-  if (typeof value === "string") {
-    // Dead since the transfer subsystem was deleted: no tool emits a transfer
-    // endpoint any more. Retained only because it belongs to the shared-mode
-    // sanitizer, which is removed wholesale when shared mode collapses.
-    if (fieldName && TRANSFER_ENDPOINT_FIELD.test(fieldName) && TRANSFER_ENDPOINT.test(value)) {
-      return value;
-    }
-    if (
-      path.isAbsolute(value) ||
-      /^(?:[A-Za-z]:[\\/]|\\\\)/.test(value) ||
-      /[/\\]\.(?:ragnarok|cache)(?:[/\\]|$)/i.test(value)
-    ) {
-      return "[server-managed]";
-    }
-    return value
-      .replace(/(?<![:/])\/(?!\/)[^\s"',;]+/g, "[server-managed]")
-      .replace(/[A-Za-z]:[\\/][^\s"',;]+/g, "[server-managed]");
-  }
-  return value;
-}
-
-function sanitizeToolResult(value: any, deployment: "local" | "shared"): any {
+// Re-serializes JSON text content and mirrors it as structuredContent so
+// clients get a typed payload without the tool handlers building it twice.
+function normalizeToolResult(value: any): any {
   if (!value?.content) {
     return value;
   }
@@ -145,13 +103,10 @@ function sanitizeToolResult(value: any, deployment: "local" | "shared"): any {
     }
     try {
       const parsed = JSON.parse(item.text);
-      const sanitized = deployment === "shared" ? sanitizeSharedValue(parsed) : parsed;
-      structuredContent ??= sanitized;
-      return { ...item, text: JSON.stringify(sanitized, null, 2) };
+      structuredContent ??= parsed;
+      return { ...item, text: JSON.stringify(parsed, null, 2) };
     } catch {
-      return deployment === "shared"
-        ? { ...item, text: item.text.replace(/(?:[A-Za-z]:)?[/\\][^\s"'`]+/g, "[server-managed]") }
-        : item;
+      return item;
     }
   });
   return { ...value, content, ...(structuredContent ? { structuredContent } : {}) };
@@ -189,10 +144,9 @@ function isResponseTooLargeResult(result: any): boolean {
 
 export function measureToolResultForResponse(
   value: any,
-  deployment: "local" | "shared",
   maxResponseBytes: number,
 ): { fits: boolean; responseBytes: number; result: any } {
-  let result = sanitizeToolResult(value, deployment);
+  let result = normalizeToolResult(value);
   let responseBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
   if (responseBytes > maxResponseBytes) {
     result = responseTooLargeResult();
@@ -211,23 +165,9 @@ export function registerTools(
   memoryStore?: MemoryStore,
   reranker?: CrossEncoderReranker | null,
   config?: McpConfig,
-  accessRole: AccessRole | "writer" = "admin",
   runMutation: MutationRunner = (operation) => operation(),
-  deployment: "local" | "shared" = "local",
   runtime: ToolRuntime = { run: (operation) => operation() },
-  principal = "local-owner",
 ): void {
-  const normalizedRole: AccessRole = accessRole === "writer" ? "admin" : accessRole;
-  const curatorOnly = () => {
-    if (normalizedRole === "reader") {
-      throw new Error("Curator token required for this operation");
-    }
-  };
-  const adminOnly = () => {
-    if (normalizedRole !== "admin") {
-      throw new Error("Admin token required for this operation");
-    }
-  };
   const readOnlyAnnotations: ToolAnnotations = {
     readOnlyHint: true,
     destructiveHint: false,
@@ -242,10 +182,6 @@ export function registerTools(
   };
   const destructiveAnnotations = { ...writeAnnotations, destructiveHint: true };
   const networkWriteAnnotations = { ...writeAnnotations, openWorldHint: true };
-  // Shared deployments serve multiple parties; label every tool so an agent
-  // that also sees a local RAGnarōk server can route between them deliberately.
-  const describeTool = (description: string): string =>
-    deployment === "shared" ? `[Team shared KB] ${description}` : description;
   type ToolHandler = (args: any, context: ServerContext) => Promise<any>;
   type PendingTool = {
     name: string;
@@ -274,31 +210,25 @@ export function registerTools(
       }
       pendingTools.push({
         name,
-        config: { description: describeTool(description), inputSchema, annotations, ...(_meta ? { _meta } : {}) },
+        config: { description, inputSchema, annotations, ...(_meta ? { _meta } : {}) },
         handler: (args, context) =>
           runtime.run(async () => {
             const { result } = measureToolResultForResponse(
               await handler(args, context),
-              deployment,
               config?.maxResponseBytes ?? MCP_LIMITS.responseBytes,
             );
-            markMcpToolResult(result);
             return result;
           }),
       });
     };
   const registerTool = makeRegistrar(true);
-  const registerCuratorTool = makeRegistrar(normalizedRole === "curator" || normalizedRole === "admin");
-  const registerAdminTool = makeRegistrar(normalizedRole === "admin");
-  const registerServerPathTool = deployment === "shared" ? makeRegistrar(false) : registerCuratorTool;
-  const registerLocalAdminTool = deployment === "shared" ? makeRegistrar(false) : registerAdminTool;
   const toolJson = (value: unknown, isError = false) => ({
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
     ...(isError ? { isError: true as const } : {}),
   });
   const graphResponseBytes = Math.min(config?.maxResponseBytes ?? MCP_LIMITS.responseBytes, MCP_LIMITS.responseBytes);
   const measureGraphToolResult = (candidate: ReturnType<typeof toolJson>) =>
-    measureToolResultForResponse(candidate, deployment, graphResponseBytes);
+    measureToolResultForResponse(candidate, graphResponseBytes);
   const graphError = (code: string, message: string) => {
     const create = (candidateMessage: string) => toolJson({ error: { code, message: candidateMessage } }, true);
     const full = create(message);
@@ -519,7 +449,7 @@ export function registerTools(
   );
 
   // rag_create_topic — Create a new topic
-  registerCuratorTool(
+  registerTool(
     "rag_create_topic",
     "Create a new RAG topic for organizing documents",
     z.object({
@@ -529,7 +459,6 @@ export function registerTools(
     writeAnnotations,
     async ({ name, description }) => {
       try {
-        curatorOnly();
         const topic = await runMutation(() => topicManager.createTopic({ name, description }));
         return {
           content: [
@@ -612,7 +541,7 @@ export function registerTools(
     return real;
   }
 
-  registerServerPathTool(
+  registerTool(
     "rag_add_documents",
     "Add one or more documents to a RAG topic. Supports PDF, Markdown, HTML, and plain text files. " +
       "Paths must be inside the server's allowed roots (RAGNAROK_ALLOWED_PATHS).",
@@ -627,11 +556,6 @@ export function registerTools(
     writeAnnotations,
     async ({ topic, filePaths }, context) => {
       try {
-        if (deployment === "shared") {
-          adminOnly();
-        } else {
-          curatorOnly();
-        }
         const topicMatch = await topicManager.resolveTopicByName(topic);
         const matchedTopic = topicMatch.topic;
 
@@ -798,7 +722,7 @@ export function registerTools(
   );
 
   // rag_switch_embedding_model — Switch the active embedding model
-  registerAdminTool(
+  registerTool(
     "rag_switch_embedding_model",
     "Switch the active embedding model. The model will be downloaded if not already cached. " +
       "Rejected when standalone memory holds vectors of a different dimension.",
@@ -813,7 +737,6 @@ export function registerTools(
     writeAnnotations,
     async ({ model }) => {
       try {
-        adminOnly();
         const previousModel = embeddingService.getCurrentModel();
         const hasFingerprintGuard = typeof (memoryStore as any)?.validateEmbeddingFingerprint === "function";
         const previousDimension = hasFingerprintGuard ? 0 : (await embeddingService.embed("dimension probe")).length;
@@ -1022,7 +945,7 @@ export function registerTools(
   );
 
   // rag_switch_reranker_model — Switch to a different cross-encoder reranker model
-  registerAdminTool(
+  registerTool(
     "rag_switch_reranker_model",
     "Switch to a different cross-encoder reranker model",
     z.object({
@@ -1035,7 +958,6 @@ export function registerTools(
     writeAnnotations,
     async ({ model }) => {
       try {
-        adminOnly();
         if (!reranker) {
           return {
             content: [{ type: "text" as const, text: JSON.stringify({ error: "Reranker is not available." }) }],
@@ -1096,14 +1018,13 @@ export function registerTools(
     },
   );
 
-  registerCuratorTool(
+  registerTool(
     "rag_delete_topic",
     "Permanently delete a local topic and all of its data",
     z.object({ topic: z.string().min(1).max(MCP_LIMITS.topicName), confirm: z.literal(true) }),
     destructiveAnnotations,
     async ({ topic }) => {
       try {
-        curatorOnly();
         const match = await topicManager.resolveTopicByName(topic);
         await runMutation(() => topicManager.deleteTopic(match.topic.id));
         return toolJson({ success: true, deletedTopic: match.topic.name });
@@ -1113,7 +1034,7 @@ export function registerTools(
     },
   );
 
-  registerCuratorTool(
+  registerTool(
     "rag_remove_document",
     "Permanently remove one indexed source from a topic",
     z.object({
@@ -1124,7 +1045,6 @@ export function registerTools(
     destructiveAnnotations,
     async ({ topic, documentId }) => {
       try {
-        curatorOnly();
         const match = await topicManager.resolveTopicByName(topic);
         const result = await runMutation(() => topicManager.removeDocument(match.topic.id, documentId));
         return toolJson({ success: true, document: result.document, chunksRemoved: result.chunksRemoved });
@@ -1134,7 +1054,7 @@ export function registerTools(
     },
   );
 
-  registerCuratorTool(
+  registerTool(
     "rag_rename_topic",
     "Rename a local topic",
     z.object({
@@ -1144,7 +1064,6 @@ export function registerTools(
     writeAnnotations,
     async ({ topic, newName }) => {
       try {
-        curatorOnly();
         const match = await topicManager.resolveTopicByName(topic);
         const updated = await runMutation(() => topicManager.updateTopic(match.topic.id, { name: newName }));
         return toolJson({ success: true, topic: updated });
@@ -1154,7 +1073,7 @@ export function registerTools(
     },
   );
 
-  registerCuratorTool(
+  registerTool(
     "rag_add_url",
     "Fetch and index one public HTTP(S) page with SSRF and size protections",
     z.object({
@@ -1164,16 +1083,12 @@ export function registerTools(
     networkWriteAnnotations,
     async ({ topic, url }, context) => {
       try {
-        curatorOnly();
         const parsed = new URL(url);
         if (!["http:", "https:"].includes(parsed.protocol)) {
           throw new Error("Only HTTP(S) URLs are supported");
         }
         if (parsed.username || parsed.password) {
           throw new Error("URLs containing credentials are not allowed");
-        }
-        if (deployment === "shared" && parsed.protocol !== "https:") {
-          throw new Error("Shared deployments only ingest HTTPS URLs");
         }
         const match = await topicManager.resolveTopicByName(topic);
         const results = await runMutation(() =>
@@ -1189,7 +1104,7 @@ export function registerTools(
     },
   );
 
-  registerCuratorTool(
+  registerTool(
     "rag_add_github_repo",
     "Index a repository from an allowlisted GitHub or GHES host",
     z.object({
@@ -1200,7 +1115,6 @@ export function registerTools(
     networkWriteAnnotations,
     async ({ topic, url, branch }, context) => {
       try {
-        curatorOnly();
         const parsed = new URL(url);
         if (parsed.username || parsed.password || parsed.protocol !== "https:") {
           throw new Error("GitHub repositories require an HTTPS URL without embedded credentials");
@@ -1226,16 +1140,13 @@ export function registerTools(
     },
   );
 
-  registerAdminTool(
+  registerTool(
     "rag_export_topic",
-    deployment === "shared"
-      ? "Export a topic to a single-use streamed download handle without exposing a server path"
-      : "Export a topic as a storage-v2 .rag archive under the configured export directory",
+    "Export a topic as a storage-v2 .rag archive under the configured export directory",
     z.object({ topic: z.string().min(1).max(MCP_LIMITS.topicName) }),
     writeAnnotations,
     async ({ topic }) => {
       try {
-        adminOnly();
         if (!config) {
           throw new Error("Export configuration unavailable");
         }
@@ -1244,12 +1155,6 @@ export function registerTools(
         const safeName = match.topic.name.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "topic";
         const exportPath = path.join(config.exportDir, `${safeName}-${Date.now()}.rag`);
         await runMutation(() => topicManager.exportTopic(match.topic.id, exportPath));
-        if (deployment === "shared") {
-          // The transfer subsystem is gone, and a shared deployment must never
-          // return a server filesystem path. Fail closed.
-          await fs.rm(exportPath, { force: true });
-          throw new Error("Shared transfer service unavailable");
-        }
         const bytes = await fs.readFile(exportPath);
         return toolJson({
           path: exportPath,
@@ -1262,14 +1167,13 @@ export function registerTools(
     },
   );
 
-  registerLocalAdminTool(
+  registerTool(
     "rag_import_topic",
     "Import a validated storage-v2 .rag archive from an allowlisted path",
     z.object({ archivePath: z.string().min(1).max(MCP_LIMITS.path), confirm: z.literal(true) }),
     destructiveAnnotations,
     async ({ archivePath }) => {
       try {
-        adminOnly();
         const realPath = await assertPathAllowed(archivePath);
         const topic = await runMutation(() => topicManager.importTopic(realPath));
         return toolJson({ success: true, topic });
@@ -1279,17 +1183,15 @@ export function registerTools(
     },
   );
 
-  // Memory is always personal → never served from a shared deployment, so the
-  // memory tools are structurally absent there for every role (P3).
-  if (memoryStore && deployment !== "shared") {
-    registerAdminTool(
+  // The memory tools are structurally absent when no memory store was built.
+  if (memoryStore) {
+    registerTool(
       "rag_reset_memory",
       "Delete all standalone memories before changing embedding space",
       z.object({ confirm: z.literal(true) }),
       destructiveAnnotations,
       async ({ confirm }) => {
         try {
-          adminOnly();
           if (!memoryStore) {
             throw new Error("Memory store is unavailable");
           }
@@ -1320,7 +1222,7 @@ export function registerTools(
   // Memory tools
   // ────────────────────────────────────────────────────────────
 
-  if (memoryStore && deployment !== "shared") {
+  if (memoryStore) {
     registerTool(
       "rag_memory",
       "Store, recall, forget, list, or get stats for project memories. " +
@@ -1416,9 +1318,6 @@ export function registerTools(
         context,
       ) => {
         try {
-          if (["store", "forget", "decay", "promote"].includes(action)) {
-            curatorOnly();
-          }
           // Branch scope explicitly requested but unresolvable must be an
           // error, not a silent fall-back to workspace scope: the caller
           // would store/read memories in a scope they didn't ask for.
@@ -1513,7 +1412,7 @@ export function registerTools(
                 topK: topK ?? 10,
                 includeEntities: includeEntities ?? false,
                 ...(includeAuto ? { includeAuto: true } : {}),
-                ...(normalizedRole === "reader" ? { reinforce: false } : reinforce !== undefined ? { reinforce } : {}),
+                ...(reinforce !== undefined ? { reinforce } : {}),
                 signal: context.mcpReq.signal,
               });
               return {
@@ -1821,12 +1720,12 @@ export function registerTools(
     );
   }
 
-  // rag_graph_visualize — interactive memory graph document for MCP Apps. Memory
-  // is always personal, so the tool is structurally absent in shared deployments
-  // rather than registered as a tool that could only ever error.
-  if (memoryStore && deployment !== "shared") {
+  // rag_graph_visualize — interactive memory graph document for MCP Apps. It
+  // reads the memory graph, so it is absent without a memory store rather than
+  // registered as a tool that could only ever error.
+  if (memoryStore) {
     const graphMemoryStore = memoryStore;
-    registerCuratorTool(
+    registerTool(
       "rag_graph_visualize",
       "Visualize a RAGnarōk workspace-memory or branch-memory graph as a deterministic bounded document.",
       graphVisualizationInput,

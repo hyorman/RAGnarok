@@ -22,8 +22,6 @@ type CapturedTool = {
 
 type RegisterOptions = {
   memoryStore?: any;
-  role?: "reader" | "curator" | "admin";
-  deployment?: "local" | "shared";
   runtime?: { run<T>(operation: () => Promise<T>): Promise<T> };
   maxResponseBytes?: number;
 };
@@ -57,9 +55,7 @@ function register(server: McpServer, topicManager: any, options: RegisterOptions
     options.memoryStore,
     undefined,
     { maxResponseBytes: options.maxResponseBytes ?? MCP_LIMITS.responseBytes } as any,
-    options.role ?? "admin",
     undefined,
-    options.deployment ?? "local",
     options.runtime,
   );
 }
@@ -157,18 +153,13 @@ function expectBoundedGraphError(result: any, code: string): any {
 describe("rag_graph_visualize tool", function () {
   this.timeout(30000);
 
-  it("exposes graph UI resource metadata only for curator and admin", function () {
-    for (const role of ["reader", "curator", "admin"] as const) {
-      const { server, captured } = fakeServer();
-      registerMemorySnapshot(server, [], [], { role });
-      const graph = captured.find((tool) => tool.name === "rag_graph_visualize");
-      expect(Boolean(graph), role).to.equal(role !== "reader");
-      if (graph) {
-        expect(graph.config._meta).to.deep.equal({ ui: { resourceUri: "ui://ragnarok/graph" } });
-        expect(graph.config._meta).not.to.have.property("ui/resourceUri");
-        expect(graph.config.annotations?.readOnlyHint).to.equal(true);
-      }
-    }
+  it("exposes graph UI resource metadata", function () {
+    const { server, captured } = fakeServer();
+    registerMemorySnapshot(server, [], []);
+    const graph = graphTool(captured);
+    expect(graph.config._meta).to.deep.equal({ ui: { resourceUri: "ui://ragnarok/graph" } });
+    expect(graph.config._meta).not.to.have.property("ui/resourceUri");
+    expect(graph.config.annotations?.readOnlyHint).to.equal(true);
   });
 
   it("uses the exact two-branch memory-only input schema", function () {
@@ -210,19 +201,10 @@ describe("rag_graph_visualize tool", function () {
     }
   });
 
-  it("is not registered without local memory", function () {
-    for (const options of [
-      { deployment: "shared" as const, memoryStore: { getGraphSnapshot: sinon.stub() } },
-      { deployment: "shared" as const, memoryStore: undefined },
-      { deployment: "local" as const, memoryStore: undefined },
-    ]) {
-      const { server, captured } = fakeServer();
-      register(server, makeTopicManager(), options);
-      expect(
-        captured.map((tool) => tool.name),
-        `deployment=${options.deployment} memoryStore=${Boolean(options.memoryStore)}`,
-      ).to.not.include("rag_graph_visualize");
-    }
+  it("is not registered without a memory store", function () {
+    const { server, captured } = fakeServer();
+    register(server, makeTopicManager(), { memoryStore: undefined });
+    expect(captured.map((tool) => tool.name)).to.not.include("rag_graph_visualize");
   });
 
   it("uses the common runtime wrapper", async function () {
@@ -357,8 +339,8 @@ describe("rag_graph_visualize tool", function () {
     const wrap = (document: typeof projected) => ({
       content: [{ type: "text" as const, text: JSON.stringify(document, null, 2) }],
     });
-    const retainedMeasurement = measureToolResultForResponse(wrap(retained), "local", MCP_LIMITS.responseBytes);
-    const nextMeasurement = measureToolResultForResponse(wrap(next), "local", MCP_LIMITS.responseBytes);
+    const retainedMeasurement = measureToolResultForResponse(wrap(retained), MCP_LIMITS.responseBytes);
+    const nextMeasurement = measureToolResultForResponse(wrap(next), MCP_LIMITS.responseBytes);
     expect(retainedMeasurement.fits).to.equal(true);
     expect(retainedMeasurement.responseBytes).to.equal(Buffer.byteLength(JSON.stringify(forward.result), "utf8"));
     expect(nextMeasurement.fits).to.equal(false);

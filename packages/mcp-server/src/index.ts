@@ -48,7 +48,6 @@ import { createLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner, ToolRuntime } from "./tools";
-import type { AccessRole } from "./tools";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -114,14 +113,12 @@ async function main(): Promise<void> {
   const ragQueryService = new RAGQueryService(topicManager, configProvider, llmProvider);
   TopicManager.onAgentCacheCleanup.subscribe((topicId) => ragQueryService.clearAgentCache(topicId));
 
-  const deployment: "local" | "shared" = config.deploymentMode ?? "local";
-  const sharedDeployment = deployment === "shared";
   // Create standalone memory store
   // Branch-scoped memory needs the PROJECT's directory, not the server's.
   // Global MCP clients often launch servers from a home/app directory, which
   // would silently mis-scope branch memories without an explicit working dir.
   const workingDir = config.workingDir || process.cwd();
-  if (!config.workingDir && !sharedDeployment) {
+  if (!config.workingDir) {
     logger.warn(
       `RAGNAROK_WORKING_DIR not set — using process.cwd() (${workingDir}) for git branch detection. ` +
         "Set it when the server is launched outside the project directory.",
@@ -129,18 +126,13 @@ async function main(): Promise<void> {
   }
   // Downstream consumers (tools) read the RESOLVED working dir from config.
   config.workingDir = workingDir;
-  const memoryStore = sharedDeployment
-    ? undefined
-    : new MemoryStore({
-        storageDir: config.storageDir,
-        embeddingService,
-        llmProvider,
-        workingDir,
-        markdownPath: path.join(config.storageDir, "memories.md"),
-      });
-  if (sharedDeployment) {
-    logger.info("Shared deployment (auth tokens configured): personal memory tools are disabled");
-  }
+  const memoryStore = new MemoryStore({
+    storageDir: config.storageDir,
+    embeddingService,
+    llmProvider,
+    workingDir,
+    markdownPath: path.join(config.storageDir, "memories.md"),
+  });
 
   // Create reranker (always-on — gracefully degrades if ONNX model unavailable)
   const reranker = config.rerankerEnabled
@@ -161,8 +153,8 @@ async function main(): Promise<void> {
       });
   }
 
-  // Server factory: HTTP creates one instance per request; stdio pins one
-  // instance per modern connection. All instances share the services.
+  // Server factory: stdio pins one instance per connection. Every instance
+  // shares the services created above.
   let acceptingOperations = true;
   let activeOperations = 0;
   const operationDrainWaiters: Array<() => void> = [];
@@ -205,18 +197,12 @@ async function main(): Promise<void> {
     }
   };
 
-  // Self-describing servers: agents that see both a local and a shared
-  // RAGnarōk entry route between them by these instructions (design §4.2).
-  const instructions = sharedDeployment
-    ? "RAGnarōk team shared knowledge base (central, curated). Topics on this server are shared team data: " +
-      "read-only unless your token grants write access. Personal memory tools are not available here — " +
-      "personal knowledge bases and memory belong to a local RAGnarōk server. If a local RAGnarōk server " +
-      "is also configured, prefer it for personal topics and memory; use this server for team-shared topics."
-    : "RAGnarōk personal engine: local knowledge bases and project memory, full read/write on this machine. " +
-      "If a remote team RAGnarōk server is also configured, prefer this local server for personal topics " +
-      "and memory; use the remote one for team-shared topics.";
+  // Self-describing server: the instructions tell an agent what this entry is
+  // for, so it can route between RAGnarōk and its other tools deliberately.
+  const instructions =
+    "RAGnarōk personal engine: local knowledge bases and project memory, full read/write on this machine.";
 
-  const createMcpServer = (role: AccessRole = "admin", principal = "local-owner"): McpServer => {
+  const createMcpServer = (): McpServer => {
     const server = new McpServer(
       {
         name: "ragnarok",
@@ -233,11 +219,8 @@ async function main(): Promise<void> {
       memoryStore,
       reranker,
       config,
-      role,
       runMutation,
-      deployment,
       toolRuntime,
-      principal,
     );
     registerGraphUiResource(server);
     return server;

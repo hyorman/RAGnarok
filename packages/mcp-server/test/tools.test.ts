@@ -113,7 +113,6 @@ function captureHandlers(deps: {
   ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   mcpConfig?: McpConfig;
   memoryStore?: unknown;
-  accessRole?: "reader" | "writer";
 }): Record<string, ToolHandler> {
   const captured: CapturedTool[] = [];
   const server = {
@@ -132,7 +131,6 @@ function captureHandlers(deps: {
     deps.memoryStore as never,
     undefined,
     deps.mcpConfig,
-    deps.accessRole,
   );
 
   expect(captured.map(({ name }) => name)).to.deep.equal(
@@ -160,7 +158,7 @@ describe("common tool response wrapper", () => {
     const input = { content: [{ type: "text", text: JSON.stringify({ message: "ok" }) }] };
     const byteLength = sinon.spy(Buffer, "byteLength");
 
-    const measurement = measureToolResultForResponse(input, "local", 1024);
+    const measurement = measureToolResultForResponse(input, 1024);
 
     expect(measurement.fits).to.equal(true);
     expect(measurement.result.structuredContent).to.deep.equal({ message: "ok" });
@@ -229,9 +227,23 @@ describe("MCP Tools (registerTools)", () => {
   // Registration smoke test
   // -----------------------------------------------------------------------
 
+  /** Every tool name registered with a memory store present. */
+  function listRegisteredToolNames(): string[] {
+    return Object.keys(
+      captureHandlers({
+        topicManager,
+        config,
+        llmProvider,
+        embeddingService,
+        ragQueryService,
+        memoryStore: {},
+      }),
+    );
+  }
+
   it("registers the complete release tool surface", () => {
-    // rag_memory/rag_reset_memory register only when a memory store exists
-    // (and never in shared deployments), so capture with one present.
+    // rag_memory/rag_reset_memory register only when a memory store exists,
+    // so capture with one present.
     const fullHandlers = captureHandlers({
       topicManager,
       config,
@@ -270,21 +282,23 @@ describe("MCP Tools (registerTools)", () => {
     }
   });
 
-  it("omits pure write operations from reader sessions", async () => {
-    const readerHandlers = captureHandlers({
-      topicManager,
-      config,
-      llmProvider,
-      embeddingService,
-      ragQueryService,
-      accessRole: "reader",
-    });
-    expect(readerHandlers.rag_create_topic).to.equal(undefined);
-    expect(readerHandlers.rag_add_documents).to.equal(undefined);
-    expect(readerHandlers.rag_delete_topic).to.equal(undefined);
-    expect(readerHandlers.rag_list_topics).to.be.a("function");
-    expect(readerHandlers.rag_query).to.be.a("function");
-    expect(topicManager.createTopic.called).to.equal(false);
+  it("registers the previously local-only tools with no deployment mode", () => {
+    const names = listRegisteredToolNames();
+    for (const name of ["rag_add_documents", "rag_import_topic", "rag_memory", "rag_reset_memory"]) {
+      expect(names, `${name} must be registered unconditionally`).to.include(name);
+    }
+  });
+
+  it("registers no upload tools", () => {
+    const names = listRegisteredToolNames();
+    for (const name of [
+      "rag_create_document_upload",
+      "rag_ingest_upload",
+      "rag_create_archive_upload",
+      "rag_import_upload",
+    ]) {
+      expect(names, `${name} must not exist`).to.not.include(name);
+    }
   });
 
   // -----------------------------------------------------------------------
@@ -1085,8 +1099,8 @@ describe("MCP Tools (registerTools)", () => {
     });
   });
 
-  describe("deployment-aware tool descriptions", () => {
-    function captureDescriptions(deployment?: "local" | "shared"): Record<string, string> {
+  describe("tool descriptions", () => {
+    function captureDescriptions(): Record<string, string> {
       const descriptions: Record<string, string> = {};
       const server = {
         registerTool(name: string, config: CapturedTool["config"], _handler: CapturedTool["handler"]) {
@@ -1101,26 +1115,12 @@ describe("MCP Tools (registerTools)", () => {
         llmProvider as unknown as ILLMProvider,
         embeddingService as unknown as EmbeddingService,
         ragQueryService as unknown as RAGQueryService,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        deployment,
       );
 
       return descriptions;
     }
 
-    it("prefixes every tool description in a shared deployment", () => {
-      const descriptions = captureDescriptions("shared");
-      expect(Object.keys(descriptions)).to.have.length.greaterThan(0);
-      for (const [name, description] of Object.entries(descriptions)) {
-        expect(description, `description of ${name}`).to.match(/^\[Team shared KB\] /);
-      }
-    });
-
-    it("leaves descriptions unprefixed in a local deployment (default)", () => {
+    it("carries no deployment-mode prefix", () => {
       const descriptions = captureDescriptions();
       expect(Object.keys(descriptions)).to.have.length.greaterThan(0);
       for (const [name, description] of Object.entries(descriptions)) {
@@ -1129,16 +1129,15 @@ describe("MCP Tools (registerTools)", () => {
     });
   });
 
-  describe("structural role facades and shared output hygiene", () => {
-    function captureForRole(
-      role: "reader" | "curator" | "admin",
-      deployment: "local" | "shared",
-      cfg?: McpConfig,
-    ) {
+  describe("read-only tool inertness", () => {
+    /** Capture only the tools annotated read-only. */
+    function captureReadOnlyHandlers(cfg?: McpConfig) {
       const handlers: Record<string, ToolHandler> = {};
       const server = {
-        registerTool(name: string, _config: CapturedTool["config"], handler: CapturedTool["handler"]) {
-          handlers[name] = (args: any, context = makeServerContext()) => handler(args, context);
+        registerTool(name: string, toolConfig: CapturedTool["config"], handler: CapturedTool["handler"]) {
+          if (toolConfig.annotations?.readOnlyHint === true) {
+            handlers[name] = (args: any, context = makeServerContext()) => handler(args, context);
+          }
           return { name };
         },
       } as unknown as McpServer;
@@ -1151,42 +1150,12 @@ describe("MCP Tools (registerTools)", () => {
         undefined,
         undefined,
         cfg,
-        role,
-        undefined,
-        deployment,
-        undefined,
-        `${role}:test`,
       );
       return handlers;
     }
 
-    it("exposes curator content mutations but reserves model, archive, and server-path tools for admin", () => {
-      const reader = Object.keys(captureForRole("reader", "shared"));
-      const curator = Object.keys(captureForRole("curator", "shared"));
-      const admin = Object.keys(captureForRole("admin", "shared"));
-
-      expect(reader).to.not.include.members(["rag_create_topic", "rag_add_url", "rag_switch_embedding_model"]);
-      expect(curator).to.include.members(["rag_create_topic", "rag_add_url", "rag_add_github_repo"]);
-      expect(curator).to.not.include.members([
-        "rag_add_documents",
-        "rag_switch_embedding_model",
-        "rag_switch_reranker_model",
-        "rag_export_topic",
-        "rag_create_archive_upload",
-        "rag_import_upload",
-      ]);
-      expect(admin).to.include.members([
-        "rag_switch_embedding_model",
-        "rag_switch_reranker_model",
-        "rag_export_topic",
-      ]);
-      expect(admin).to.not.include("rag_add_documents");
-      expect(admin).to.not.include("rag_import_topic");
-      expect(admin).to.not.include("rag_memory");
-    });
-
-    it("does not create or alter configured storage while registering and invoking every reader tool", async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-reader-immutability-"));
+    it("does not create or alter configured storage while registering and invoking every read-only tool", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-readonly-immutability-"));
       const marker = path.join(root, "marker.bin");
       const bytes = Buffer.from([0, 1, 2, 3, 254, 255]);
       await fs.writeFile(marker, bytes);
@@ -1197,7 +1166,8 @@ describe("MCP Tools (registerTools)", () => {
         allowedPaths: [root],
       });
       const beforeEntries = await fs.readdir(root);
-      const handlers = captureForRole("reader", "shared", cfg);
+      const handlers = captureReadOnlyHandlers(cfg);
+      expect(Object.keys(handlers)).to.include.members(["rag_query", "rag_list_topics", "rag_embedding_info"]);
       const args: Record<string, any> = {
         rag_query: { topic: "docs", query: "question" },
         rag_topic_stats: { topic: "docs" },
@@ -1209,18 +1179,6 @@ describe("MCP Tools (registerTools)", () => {
       expect(await fs.readdir(root)).to.deep.equal(beforeEntries);
       expect(await fs.readFile(marker)).to.deep.equal(bytes);
       await fs.rm(root, { recursive: true, force: true });
-    });
-
-    it("removes server and model paths from shared structured and text output", async () => {
-      embeddingService.getCurrentModel.returns("model");
-      embeddingService.getActiveBackendType.returns("huggingface");
-      embeddingService.getLocalModelPath.returns("/srv/ragnarok/models/private");
-      const handler = captureForRole("reader", "shared").rag_embedding_info;
-      const result = await handler({});
-      const output = JSON.stringify(result);
-      expect(output).to.not.include("/srv/ragnarok");
-      expect(output).to.not.include("localModelPath");
-      expect(result.structuredContent).to.deep.equal({ currentModel: "model", backend: "huggingface" });
     });
   });
 });
