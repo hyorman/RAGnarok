@@ -1,5 +1,8 @@
 import { strict as assert } from "assert";
-import { FILE_KEYS, buildDefaultsBlock } from "../src/configFile";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { FILE_KEYS, buildDefaultsBlock, readConfigFile, CONFIG_FILE_NAME } from "../src/configFile";
 
 describe("config file key table", () => {
   it("declares exactly the 23 keys that move to the file", () => {
@@ -27,4 +30,80 @@ describe("config file key table", () => {
     }
     assert.equal(block.storage.exportDir, "<storageDir>/exports");
   });
+});
+
+describe("reading the config file", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-cfg-"));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const write = (value: unknown) =>
+    fs.writeFileSync(
+      path.join(dir, CONFIG_FILE_NAME),
+      typeof value === "string" ? value : JSON.stringify(value),
+    );
+
+  it("returns no values when the file is absent", () => {
+    assert.deepEqual(readConfigFile(dir), {});
+  });
+
+  it("flattens nested keys onto McpConfig fields", () => {
+    write({ retrieval: { topK: 42 }, ingestion: { chunkSize: 500 } });
+    const values = readConfigFile(dir);
+    assert.equal(values.topK, 42);
+    assert.equal(values.chunkSize, 500);
+  });
+
+  it("ignores comment keys at both levels", () => {
+    write({ "//": "note", $defaults: { retrieval: { topK: 9999 } }, retrieval: { topK: 7 } });
+    assert.equal(readConfigFile(dir).topK, 7);
+  });
+
+  it("ignores comment keys nested inside a section", () => {
+    write({ retrieval: { "//": "how many chunks to retrieve", $note: "ignored", topK: 7 } });
+    assert.equal(readConfigFile(dir).topK, 7);
+  });
+
+  it("never takes a value from $defaults", () => {
+    write({ $defaults: { retrieval: { topK: 9999 } } });
+    assert.equal(readConfigFile(dir).topK, undefined);
+  });
+
+  it("throws naming the file on malformed JSON", () => {
+    write("{ not json");
+    assert.throws(
+      () => readConfigFile(dir),
+      (e: unknown) => e instanceof Error && e.message.includes(CONFIG_FILE_NAME),
+    );
+  });
+
+  it("throws naming an unknown key", () => {
+    write({ retrieval: { topKk: 5 } });
+    assert.throws(() => readConfigFile(dir), /topKk/);
+  });
+
+  it("throws naming an unknown section", () => {
+    write({ nonsense: { a: 1 } });
+    assert.throws(() => readConfigFile(dir), /nonsense/);
+  });
+
+  it("throws on a wrong type", () => {
+    write({ retrieval: { topK: "ten" } });
+    assert.throws(() => readConfigFile(dir), /topK/);
+  });
+
+  for (const [section, name] of [
+    ["storage", "storageDir"],
+    ["llm", "apiKey"],
+    ["embedding", "apiKey"],
+    ["security", "githubToken"],
+  ] as const) {
+    it(`rejects env-only setting ${section}.${name} and says it is environment-only`, () => {
+      write({ [section]: { [name]: "x" } });
+      assert.throws(() => readConfigFile(dir), /environment-only/i);
+    });
+  }
 });

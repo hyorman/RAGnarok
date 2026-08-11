@@ -1,5 +1,9 @@
+import * as fs from "fs";
+import * as path from "path";
 import { z } from "zod";
 import type { McpConfig } from "./config";
+
+export const CONFIG_FILE_NAME = "config.json";
 
 /** McpConfig fields that may be set from the config file. */
 export type FileField =
@@ -122,4 +126,99 @@ export function buildDefaultsBlock(_storageDir: string): Record<string, unknown>
     block[section][name] = key.shown;
   }
   return block;
+}
+
+/** Section.name pairs that name an env-only setting, for a better error than "unknown key". */
+const ENV_ONLY_HINTS: Record<string, string> = {
+  "storage.storageDir": "RAGNAROK_STORAGE_DIR",
+  "storage.workingDir": "RAGNAROK_WORKING_DIR",
+  "llm.apiKey": "RAGNAROK_LLM_API_KEY",
+  "embedding.apiKey": "RAGNAROK_EMBEDDING_API_KEY",
+  "security.githubToken": "RAGNAROK_GITHUB_TOKEN",
+  "storage.resetStorage": "RAGNAROK_RESET_STORAGE",
+  "storage.ignoreLock": "RAGNAROK_IGNORE_LOCK",
+};
+
+const isCommentKey = (key: string): boolean => key.startsWith("//") || key.startsWith("$");
+
+/** Strip comment keys at the top level and inside each section. */
+function stripComments(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [section, value] of Object.entries(raw)) {
+    if (isCommentKey(section)) {
+      continue;
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const inner: Record<string, unknown> = {};
+      for (const [name, v] of Object.entries(value as Record<string, unknown>)) {
+        if (!isCommentKey(name)) {
+          inner[name] = v;
+        }
+      }
+      out[section] = inner;
+    } else {
+      out[section] = value;
+    }
+  }
+  return out;
+}
+
+export function readConfigFile(storageDir: string): ConfigFileValues {
+  const filePath = path.join(storageDir, CONFIG_FILE_NAME);
+  let text: string;
+  try {
+    text = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return {};
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `${CONFIG_FILE_NAME} is not valid JSON (${filePath}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${CONFIG_FILE_NAME} must contain a JSON object (${filePath})`);
+  }
+
+  // Comment keys ("//", "$defaults", "$envOnly") must go before validation:
+  // configFileSchema is `.strict()`, so a generated file would otherwise be rejected outright.
+  const stripped = stripComments(raw as Record<string, unknown>);
+
+  for (const [section, value] of Object.entries(stripped)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    for (const name of Object.keys(value as Record<string, unknown>)) {
+      const envVar = ENV_ONLY_HINTS[`${section}.${name}`];
+      if (envVar) {
+        throw new Error(
+          `${CONFIG_FILE_NAME}: "${section}.${name}" is environment-only and cannot be set here. ` +
+            `Set ${envVar} in the environment instead. (${filePath})`,
+        );
+      }
+    }
+  }
+
+  const parsed = configFileSchema.safeParse(stripped);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((issue) => `  - ${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("\n");
+    throw new Error(`Invalid ${CONFIG_FILE_NAME} (${filePath}):\n${issues}`);
+  }
+
+  const values: Record<string, unknown> = {};
+  const data = parsed.data as Record<string, Record<string, unknown> | undefined>;
+  for (const key of FILE_KEYS) {
+    const [section, name] = key.path;
+    const sectionValue = data[section];
+    if (sectionValue && sectionValue[name] !== undefined) {
+      values[key.field] = sectionValue[name];
+    }
+  }
+  return values as ConfigFileValues;
 }
