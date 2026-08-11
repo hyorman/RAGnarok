@@ -196,13 +196,16 @@ export function loadConfig(): McpConfig {
     storageDir,
     workingDir: process.env.RAGNAROK_WORKING_DIR || "",
     // An empty RAGNAROK_ALLOWED_PATHS means "no paths", not "unset", so the
-    // file is consulted only when the variable is genuinely absent.
+    // file is consulted only when the variable is genuinely absent. Both
+    // branches trim and drop blanks: tools.ts feeds each root to
+    // path.resolve(), and path.resolve("") is the process cwd, so a stray
+    // empty entry would silently widen the allowlist to the whole cwd.
     allowedPaths:
       process.env.RAGNAROK_ALLOWED_PATHS !== undefined
         ? process.env.RAGNAROK_ALLOWED_PATHS.split(path.delimiter)
             .map((p) => p.trim())
             .filter((p) => p.length > 0)
-        : (file.allowedPaths ?? []),
+        : (file.allowedPaths ?? []).map((p) => p.trim()).filter((p) => p.length > 0),
     embeddingModel: process.env.RAGNAROK_EMBEDDING_MODEL || file.embeddingModel || "Xenova/all-MiniLM-L6-v2",
     chunkSize: parseInt(process.env.RAGNAROK_CHUNK_SIZE || String(file.chunkSize ?? 1000), 10),
     chunkOverlap: parseInt(process.env.RAGNAROK_CHUNK_OVERLAP || String(file.chunkOverlap ?? 200), 10),
@@ -246,13 +249,16 @@ export function loadConfig(): McpConfig {
     ),
     exportDir: process.env.RAGNAROK_EXPORT_DIR || file.exportDir || path.join(storageDir, "exports"),
     // As with allowedPaths, an empty RAGNAROK_GITHUB_HOSTS is a deliberate
-    // "no hosts" rather than an absent setting.
+    // "no hosts" rather than an absent setting - and configSchema's .min(1)
+    // then rejects it loudly. Both branches lower-case: tools.ts matches
+    // against parsed.hostname.toLowerCase(), so a mixed-case entry from the
+    // file would be an allowlist row that could never match.
     githubHosts:
       process.env.RAGNAROK_GITHUB_HOSTS !== undefined
         ? process.env.RAGNAROK_GITHUB_HOSTS.split(",")
             .map((host) => host.trim().toLowerCase())
             .filter(Boolean)
-        : (file.githubHosts ?? ["github.com"]),
+        : (file.githubHosts ?? ["github.com"]).map((host) => host.trim().toLowerCase()).filter(Boolean),
     githubToken: process.env.RAGNAROK_GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || "",
     resetStorage:
       process.argv.includes("--reset-storage") ||

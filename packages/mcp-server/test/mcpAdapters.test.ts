@@ -52,12 +52,20 @@ describe("MCP Server", () => {
     ];
 
     const saved: Record<string, string | undefined> = {};
+    let tmpStorage: string;
 
     beforeEach(() => {
       for (const key of envVars) {
         saved[key] = process.env[key];
         delete process.env[key];
       }
+      // loadConfig() reads config.json from the storage directory. Without a
+      // storage dir of our own it would resolve to the developer's real
+      // ~/.ragnarok and pick up their personal config: a valid one would break
+      // the default assertions below, an invalid one would throw and take the
+      // whole block down. Point every test at an empty temp dir instead.
+      tmpStorage = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-cfg-"));
+      process.env.RAGNAROK_STORAGE_DIR = tmpStorage;
     });
 
     afterEach(() => {
@@ -68,6 +76,7 @@ describe("MCP Server", () => {
           delete process.env[key];
         }
       }
+      fs.rmSync(tmpStorage, { recursive: true, force: true });
     });
 
     it("should return correct defaults when no env vars are set", () => {
@@ -146,8 +155,30 @@ describe("MCP Server", () => {
     });
 
     it("should default storageDir to ~/.ragnarok", () => {
-      const config = loadConfig();
-      expect(config.storageDir).to.equal(path.join(os.homedir(), ".ragnarok"));
+      // The one test that must exercise the homedir fallback. Redirect the
+      // home directory rather than reading the developer's real one, so the
+      // fallback is asserted without loadConfig() reaching their ~/.ragnarok.
+      // os.homedir() consults HOME (USERPROFILE on Windows) before the
+      // password database. sinon cannot stub it here: the compiled namespace
+      // import exposes homedir as a non-configurable getter.
+      delete process.env.RAGNAROK_STORAGE_DIR;
+      const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-home-"));
+      const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+      process.env.HOME = fakeHome;
+      process.env.USERPROFILE = fakeHome;
+      try {
+        const config = loadConfig();
+        expect(config.storageDir).to.equal(path.join(fakeHome, ".ragnarok"));
+      } finally {
+        for (const [key, value] of Object.entries(realHome)) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+        fs.rmSync(fakeHome, { recursive: true, force: true });
+      }
     });
 
     it("should use RAGNAROK_STORAGE_DIR when set", () => {
@@ -592,6 +623,28 @@ describe("MCP Server", () => {
       writeConfig({ retrieval: { topK: 42 } });
       process.env.RAGNAROK_LLM_API_KEY = "from-env";
       expect(loadConfig().llmApiKey).to.equal("from-env");
+    });
+
+    it("normalises githubHosts from the file exactly as it does from the env", () => {
+      // tools.ts matches against parsed.hostname.toLowerCase(), so an entry
+      // left mixed-case here would be an allowlist row that never matches.
+      writeConfig({ security: { githubHosts: ["GHE.Example.COM ", ""] } });
+      expect(loadConfig().githubHosts).to.deep.equal(["ghe.example.com"]);
+    });
+
+    it("trims blank entries out of the file's allowedPaths", () => {
+      // path.resolve("") is the process cwd, so a blank entry reaching
+      // tools.ts would silently widen the allowlist to the whole cwd.
+      writeConfig({ security: { allowedPaths: ["/data ", ""] } });
+      expect(loadConfig().allowedPaths).to.deep.equal(["/data"]);
+    });
+
+    it("rejects an explicitly empty RAGNAROK_GITHUB_HOSTS instead of restoring the default", () => {
+      // Empty means "no hosts". Silently reinstating github.com would hand
+      // back access the operator deliberately revoked.
+      writeConfig({ security: { githubHosts: ["ghe.example.com"] } });
+      process.env.RAGNAROK_GITHUB_HOSTS = "";
+      expect(() => loadConfig()).to.throw(/githubHosts/);
     });
   });
 });
