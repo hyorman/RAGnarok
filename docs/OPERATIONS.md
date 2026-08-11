@@ -169,10 +169,13 @@ when the store must be visible outside Docker.
 
 `--read-only` covers the image's root filesystem, not the data volume, so
 `config.json` is generated and refreshed normally under `/data/ragnarok` and
-persists across `--rm`. If the storage root is genuinely read-only, generation
-and refresh are skipped with a warning on stderr and the server starts anyway —
-a convenience file must never be the reason a server fails to boot. That warning
-is informational, not an incident.
+persists across `--rm`. If the storage root is genuinely read-only the server
+still starts — a convenience file must never be the reason a server fails to
+boot. A file that could not be created is reported as a warning on stderr;
+that warning is informational, not an incident. An existing file whose
+`$defaults` block could not be refreshed is left stale **without** a warning,
+and the settings in it still apply — so do not read a current `$defaults` block
+as evidence that the store is writable.
 
 ## Routine checks
 

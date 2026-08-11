@@ -242,8 +242,12 @@ in your file without disturbing anything you set.
 
 Generating the file and refreshing `$defaults` are conveniences and never fail
 the server. If the storage directory is read-only — a mounted volume, or a
-container run with `--read-only` — the server logs a warning to stderr and
-carries on with environment variables and built-in defaults.
+container run with `--read-only` — the two cases differ. When the file could not
+be **created**, the server logs a warning to stderr and runs on environment
+variables and built-in defaults. When the file exists but its `$defaults` block
+could not be **refreshed**, the stale block is left exactly as it is, silently,
+and every setting in the file still applies — only the documentation is out of
+date. Neither case delays or prevents startup.
 
 ### What is a startup error
 
@@ -317,15 +321,15 @@ startup error that tells you which variable to set instead, which is a better
 failure than an unexplained "unknown key". The same list appears in the
 generated file's `$envOnly` block.
 
-| Variable                     | Why it stays in the environment                                      |
-| ---------------------------- | -------------------------------------------------------------------- |
-| `RAGNAROK_STORAGE_DIR`       | bootstrap — this file's location derives from it                     |
-| `RAGNAROK_WORKING_DIR`       | bootstrap                                                            |
-| `RAGNAROK_LLM_API_KEY`       | secret                                                               |
-| `RAGNAROK_EMBEDDING_API_KEY` | secret                                                               |
-| `RAGNAROK_GITHUB_TOKEN`      | secret                                                               |
-| `RAGNAROK_RESET_STORAGE`     | one-shot; persisting it would reset storage on every launch          |
-| `RAGNAROK_IGNORE_LOCK`       | one-shot; persisting it would disable the single-writer lock forever |
+| Variable                     | Why it stays in the environment                                          |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `RAGNAROK_STORAGE_DIR`       | bootstrap — this file's location derives from it                         |
+| `RAGNAROK_WORKING_DIR`       | bootstrap                                                                |
+| `RAGNAROK_LLM_API_KEY`       | secret                                                                   |
+| `RAGNAROK_EMBEDDING_API_KEY` | secret                                                                   |
+| `RAGNAROK_GITHUB_TOKEN`      | secret                                                                   |
+| `RAGNAROK_RESET_STORAGE`     | one-shot; persisting it would reset storage on every launch              |
+| `RAGNAROK_IGNORE_LOCK`       | one-shot; persisting it would disable the single-writer lock permanently |
 
 The three secrets are the point of the split: `config.json` sits in the storage
 directory, gets copied with backups, and is readable by anything that can read
