@@ -85,11 +85,15 @@ via `storage.exportDir` beneath `RAGNAROK_EXPORT_DIR` — the export root is
 joined into the same ingest allowlist, so widening it widens what can be read.
 GitHub ingestion is restricted to `RAGNAROK_GITHUB_HOSTS`, likewise settable as
 `security.githubHosts`. Write access to the storage root is therefore write
-access to these allowlists: a non-empty environment variable set by the MCP
-client wins, but any of the three left unset — or set empty — is decided by a
-file inside the store. Keep the storage root under the same protection as the
-paths it grants, and pin an allowlist in the client's environment when a file
-in the store must not be able to move it.
+access to these allowlists: an environment variable set by the MCP client wins,
+but any of the three left unset is decided by a file inside the store. What an
+empty value means differs by setting — an empty `RAGNAROK_EXPORT_DIR` is
+treated as unset and falls through to the file, while an empty
+`RAGNAROK_ALLOWED_PATHS` or `RAGNAROK_GITHUB_HOSTS` is meaningful in its own
+right and wins outright, with the file never consulted (an empty host list is
+then rejected at startup). Keep the storage root under the same protection as
+the paths it grants, and pin an allowlist in the client's environment when a
+file in the store must not be able to move it.
 
 URL ingestion rejects unsafe targets. Credentials come from service
 configuration and are never accepted as tool arguments. Review DNS/proxy policy

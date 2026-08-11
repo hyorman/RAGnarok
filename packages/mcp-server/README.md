@@ -173,9 +173,12 @@ A setting is resolved from three places, in this order:
 
 **environment variable → `config.json` → built-in default**
 
-Precedence is one-directional and there is no write-back: a non-empty
-environment variable beats the file, the file beats the built-in default, and
-nothing the server reads is ever copied down into a lower layer. An MCP client
+Precedence is one-directional and there is no write-back: an environment
+variable beats the file, the file beats the built-in default, and nothing the
+server reads is ever copied down into a lower layer. For most settings an empty
+value is treated as unset and the file is consulted; for
+`security.allowedPaths`, `security.githubHosts`, and `reranker.enabled` an
+empty or `false` value is meaningful and wins outright. An MCP client
 that exports variables in its server entry keeps working exactly as before; the
 file is for the settings you would rather not repeat in every client's JSON.
 
