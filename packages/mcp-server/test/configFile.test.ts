@@ -54,18 +54,19 @@ describe("reading the config file", () => {
     assert.deepEqual(readConfigFile(path.join(dir, "nope")), {});
   });
 
-  it("throws naming the path when the file exists but cannot be read", () => {
+  it("throws naming the path when config.json exists but cannot be read", () => {
     const filePath = path.join(dir, CONFIG_FILE_NAME);
-    write({ retrieval: { topK: 7 } });
-    fs.chmodSync(filePath, 0o000);
-    try {
-      assert.throws(
-        () => readConfigFile(dir),
-        (e: unknown) => e instanceof Error && e.message.includes(filePath),
-      );
-    } finally {
-      fs.chmodSync(filePath, 0o600);
-    }
+    // A directory at the config.json path makes readFileSync fail on every platform
+    // (EISDIR), with no dependence on chmod semantics - chmod cannot remove read
+    // permission on Windows, so a 0o000 file would still read fine there.
+    fs.mkdirSync(filePath);
+    assert.throws(
+      () => readConfigFile(dir),
+      // "Cannot read ..." pins this to the read-error branch rather than the JSON
+      // parse branch. The errno itself is left unasserted: it is EISDIR on POSIX,
+      // but the exact code is not worth depending on across platforms.
+      (e: unknown) => e instanceof Error && e.message.startsWith("Cannot read") && e.message.includes(filePath),
+    );
   });
 
   it("flattens nested keys onto McpConfig fields", () => {
