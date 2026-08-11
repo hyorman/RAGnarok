@@ -1,6 +1,6 @@
 # RAGnarōk architecture
 
-This document describes the v0.6 implementation. Future work is identified as
+This document describes the v0.7 implementation. Future work is identified as
 such; passing unit tests is not presented as release evidence.
 
 ## Surfaces

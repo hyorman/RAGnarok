@@ -1,6 +1,6 @@
 {
   "name": "@ragnarok/mcp-server",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "MCP server exposing RAGnarōk tools to any MCP-compatible agent",
   "main": "dist/index.js",
   "bin": {
@@ -27,7 +27,6 @@
     "pretest": "npm run build && npm run compile:tests",
     "test": "mocha",
     "start": "node dist/index.js",
-    "start:http": "node dist/index.js --http",
     "prepack": "node ../../scripts/prepare-package-metadata.mjs && npm run clean && npm run build",
     "release": "npm --prefix ../.. run publish:npm",
     "docker:build": "docker build -f Dockerfile -t ragnarok-mcp ../../",
@@ -41,10 +40,7 @@
     "@anthropic-ai/sdk": "0.39.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "@ragnarok/core": "0.6.0",
-    "cors": "2.8.6",
-    "express": "5.2.1",
-    "express-rate-limit": "8.5.2",
+    "@ragnarok/core": "0.7.0",
     "openai": "4.104.0",
     "zod": "^4.2.0"
   },
@@ -53,10 +49,8 @@
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@types/chai": "^5.2.3",
-    "@types/cors": "^2.8.17",
     "@types/d3-selection": "^3.0.11",
     "@types/d3-zoom": "^3.0.8",
-    "@types/express": "^5.0.0",
     "@types/jsdom": "21.1.7",
     "@types/mocha": "^10.0.10",
     "@types/sinon": "^21.0.0",

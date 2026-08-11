@@ -462,9 +462,9 @@ copilot-rag/
 | **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                |
 | **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio transport only) |
 
-### MCP 0.6.0 protocol
+### MCP 0.7.0 protocol
 
-RAGnarok 0.6.0 serves MCP protocol `2026-07-28` only. Clients must use
+RAGnarok 0.7.0 serves MCP protocol `2026-07-28` only. Clients must use
 `server/discover` or modern version negotiation; legacy `initialize` is
 rejected. There is no compatibility mode and no `Mcp-Session-Id`.
 

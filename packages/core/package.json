@@ -1,6 +1,6 @@
 {
   "name": "@ragnarok/core",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Portable RAG engine - document loading, embedding, vector storage, and retrieval",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
