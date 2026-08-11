@@ -168,8 +168,14 @@ export function readConfigFile(storageDir: string): ConfigFileValues {
   let text: string;
   try {
     text = fs.readFileSync(filePath, "utf8");
-  } catch {
-    return {};
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // An absent file - or an absent storage directory - is not an error. Anything
+    // else (EACCES, EISDIR, ELOOP) means a real file we cannot read: say so.
+    if (code === "ENOENT") {
+      return {};
+    }
+    throw new Error(`Cannot read ${CONFIG_FILE_NAME} (${filePath}): ${code ?? String(error)}`);
   }
 
   let raw: unknown;

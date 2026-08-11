@@ -50,6 +50,24 @@ describe("reading the config file", () => {
     assert.deepEqual(readConfigFile(dir), {});
   });
 
+  it("returns no values when the storage directory does not exist", () => {
+    assert.deepEqual(readConfigFile(path.join(dir, "nope")), {});
+  });
+
+  it("throws naming the path when the file exists but cannot be read", () => {
+    const filePath = path.join(dir, CONFIG_FILE_NAME);
+    write({ retrieval: { topK: 7 } });
+    fs.chmodSync(filePath, 0o000);
+    try {
+      assert.throws(
+        () => readConfigFile(dir),
+        (e: unknown) => e instanceof Error && e.message.includes(filePath),
+      );
+    } finally {
+      fs.chmodSync(filePath, 0o600);
+    }
+  });
+
   it("flattens nested keys onto McpConfig fields", () => {
     write({ retrieval: { topK: 42 }, ingestion: { chunkSize: 500 } });
     const values = readConfigFile(dir);
