@@ -158,6 +158,7 @@ webview remains deferred; current visualization delivery is the MCP App only.
 src/
 ├── index.ts         # Entry point — bootstraps adapters, MCP server, stdio transport
 ├── config.ts        # McpConfig type, loadConfig(), removed-variable rejection
+├── configFile.ts    # <storageDir>/config.json — key table, schema, generation
 ├── adapters.ts      # Console / env adapters for @ragnarok/core interfaces
 ├── llmProviders.ts  # OpenAI, Anthropic, Ollama LLM provider implementations
 ├── uiResource.ts    # ui://ragnarok/graph MCP App resource
@@ -168,47 +169,173 @@ src/
 
 ## Configuration
 
-All settings are read from environment variables at startup:
+A setting is resolved from three places, in this order:
 
-| Variable                                 | Default                         | Description                                                                                                                                                        |
-| ---------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `RAGNAROK_STORAGE_DIR`                   | `~/.ragnarok`                   | Database & topic storage directory                                                                                                                                 |
-| `RAGNAROK_WORKING_DIR`                   | `process.cwd()`                 | Project root for git-branch-scoped memory                                                                                                                          |
-| `RAGNAROK_ALLOWED_PATHS`                 | _(the working dir)_             | Roots `rag_add_documents` may read, path-delimiter separated                                                                                                       |
-| `RAGNAROK_EMBEDDING_MODEL`               | `Xenova/all-MiniLM-L6-v2`       | Embedding model name (HuggingFace or remote)                                                                                                                       |
-| `RAGNAROK_EMBEDDING_PROVIDER`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                                                              |
-| `RAGNAROK_EMBEDDING_BASE_URL`            | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                                                         |
-| `RAGNAROK_EMBEDDING_API_KEY`             | _(empty)_                       | API key for remote embedding API                                                                                                                                   |
-| `RAGNAROK_CHUNK_SIZE`                    | `1000`                          | Document chunk size (characters)                                                                                                                                   |
-| `RAGNAROK_CHUNK_OVERLAP`                 | `200`                           | Overlap between chunks                                                                                                                                             |
-| `RAGNAROK_TOP_K`                         | `10`                            | Default number of results per query                                                                                                                                |
-| `RAGNAROK_RETRIEVAL_STRATEGY`            | `hybrid`                        | Default retrieval strategy                                                                                                                                         |
-| `RAGNAROK_MAX_ITERATIONS`                | `3`                             | Max agentic refinement iterations                                                                                                                                  |
-| `RAGNAROK_CONFIDENCE_THRESHOLD`          | `0.7`                           | Confidence threshold for early stopping                                                                                                                            |
-| `RAGNAROK_LOG_LEVEL`                     | `info`                          | Log level (`debug`, `info`, `warn`, `error`)                                                                                                                       |
-| `RAGNAROK_LLM_PROVIDER`                  | `none`                          | LLM provider: `openai`, `anthropic`, `ollama`, `none`                                                                                                              |
-| `RAGNAROK_LLM_API_KEY`                   | _(empty)_                       | API key for OpenAI or Anthropic                                                                                                                                    |
-| `RAGNAROK_LLM_MODEL`                     | _(per-provider)_                | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`)                                                                                          |
-| `RAGNAROK_LLM_BASE_URL`                  | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set)                                  |
-| `RAGNAROK_RERANKER_MODEL`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model                                                                                                                                       |
-| `RAGNAROK_RERANKER_ENABLED`              | `true`                          | Enable bundled cross-encoder reranking                                                                                                                             |
-| `RAGNAROK_RERANKER_MAX_CANDIDATES`       | `20`                            | Maximum candidates scored by the reranker                                                                                                                          |
-| `RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER` | `4`                             | First-stage over-fetch multiplier                                                                                                                                  |
-| `RAGNAROK_SHUTDOWN_DRAIN_MS`             | `10000`                         | Budget for draining in-flight tool calls on SIGINT/SIGTERM                                                                                                         |
-| `RAGNAROK_LLM_REQUEST_TIMEOUT_MS`        | `30000`                         | Timeout for one configured LLM request                                                                                                                             |
-| `RAGNAROK_MAX_RESPONSE_BYTES`            | `1048576`                       | Maximum serialized tool response size                                                                                                                              |
-| `RAGNAROK_EXPORT_DIR`                    | `<storage>/exports`             | Only directory used for exported archives                                                                                                                          |
-| `RAGNAROK_GITHUB_HOSTS`                  | `github.com`                    | Comma-separated GitHub/GHES host allowlist                                                                                                                         |
-| `RAGNAROK_GITHUB_TOKEN`                  | _(empty)_                       | GitHub credential; never accepted as a tool argument                                                                                                               |
-| `RAGNAROK_RESET_STORAGE`                 | `false`                         | Set to `1` to back up managed data and initialize storage v2                                                                                                       |
-| `RAGNAROK_IGNORE_LOCK`                   | unset                           | Bypass the cross-process storage lock (`<storageDir>/.ragnarok.lock`). Unsafe with concurrent writers — only for advanced setups that serialize access externally. |
+**environment variable → `config.json` → built-in default**
 
+Precedence is one-directional and there is no write-back: an environment
+variable always beats the file, the file always beats the built-in default, and
+nothing the server reads is ever copied down into a lower layer. An MCP client
+that exports variables in its server entry keeps working exactly as before; the
+file is for the settings you would rather not repeat in every client's JSON.
+
+### `config.json`
+
+The file lives at `<storageDir>/config.json` — beside `storage-format.json` in
+the storage directory, so it travels with the store it configures. It is
+**optional**: the server generates it on the first run that finds it absent,
+and an absent file is never an error.
+
+The generated file has no live settings in it at all. It carries a short
+instruction, a `$defaults` block, and an `$envOnly` block:
+
+```json
+{
+  "//": "Set a key below to override the default. Delete a key to return to the default.",
+  "//env": "Secrets and bootstrap settings cannot be set here — see $envOnly.",
+  "$defaults": {
+    "embedding": { "provider": "huggingface", "model": "Xenova/all-MiniLM-L6-v2", "baseUrl": "" },
+    "llm": { "provider": "none", "model": "", "baseUrl": "", "requestTimeoutMs": 30000 },
+    "//": "abridged here — every section below has a row in the table"
+  },
+  "$envOnly": {
+    "RAGNAROK_STORAGE_DIR": "bootstrap — this file's location derives from it",
+    "//": "abridged here — all seven are listed below"
+  }
+}
+```
+
+To change a setting, add the key at the top level of the file, outside
+`$defaults`:
+
+```json
+{
+  "//": "Set a key below to override the default. Delete a key to return to the default.",
+  "llm": { "provider": "ollama", "model": "llama3" },
+  "retrieval": { "topK": 20 }
+}
+```
+
+### Absence is the signal
+
+**A key that is absent from the file uses the current built-in default.** It is
+not pinned to the default that was current when the file was generated, so a
+setting you never touched picks up an improved default when you upgrade. **A key
+that is present pins your value**, and keeps it across every future release
+until you delete the key. Deleting a key is how you return a setting to the
+built-in default — there is no "unset" value.
+
+`$defaults` is documentation, not configuration. It is **never** read as a
+setting: it exists so that you can see the current defaults without consulting
+the table below, and copy a line out of it when you want to pin one. The same is
+true of `$envOnly`, and of any key whose name starts with `//`.
+
+Settings are read before the file is generated or refreshed, so an edit — like
+the first run's generation itself — takes effect on the next start. Restart the
+server after changing the file.
+
+Because `$defaults` is documentation, it must not go stale. On every boot the
+server compares the block against the code's real defaults and, if they have
+drifted, rewrites the block in place — preserving your live keys and your `//`
+comments untouched. Upgrading the server therefore refreshes the documentation
+in your file without disturbing anything you set.
+
+Generating the file and refreshing `$defaults` are conveniences and never fail
+the server. If the storage directory is read-only — a mounted volume, or a
+container run with `--read-only` — the server logs a warning to stderr and
+carries on with environment variables and built-in defaults.
+
+### What is a startup error
+
+Everything below aborts startup with a message naming the file and the offending
+key, rather than being ignored or guessed at:
+
+| Condition                                        | Why it fails                                                                    |
+| ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| An unknown key, or an unknown section            | A typo that was silently ignored would look exactly like a setting that worked  |
+| A value of the wrong type, or out of range       | Same reason; the schema is derived from the same table the server reads         |
+| Malformed JSON                                   | Half a file is not a configuration                                              |
+| The file exists but cannot be read (`EACCES`, …) | An unreadable file is not an absent one; falling back would discard your intent |
+| An environment-only setting written as a key     | Fails with the name of the environment variable to set instead                  |
+
+An **absent** file is the one case that is not an error.
+
+### Settings
+
+The `config.json` key column gives the `section.name` pair to write in the file.
 `GITHUB_ACCESS_TOKEN` is accepted as a fallback for `RAGNAROK_GITHUB_TOKEN`.
 
-That table is the complete surface. Variables belonging to the removed HTTP
-transport are not merely ignored — `assertNoRemovedEnvVars()` aborts startup and
-names every offender, so a stale shared-service configuration fails loudly
-instead of quietly becoming a local pipe. See
+| Variable                                 | `config.json` key               | Default                         | Description                                                                                                                                                        |
+| ---------------------------------------- | ------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RAGNAROK_STORAGE_DIR`                   | _(environment-only)_            | `~/.ragnarok`                   | Database & topic storage directory                                                                                                                                 |
+| `RAGNAROK_WORKING_DIR`                   | _(environment-only)_            | `process.cwd()`                 | Project root for git-branch-scoped memory                                                                                                                          |
+| `RAGNAROK_ALLOWED_PATHS`                 | `security.allowedPaths`         | _(the working dir)_             | Roots `rag_add_documents` may read; path-delimiter separated in the environment, a JSON array of strings in the file                                               |
+| `RAGNAROK_EMBEDDING_MODEL`               | `embedding.model`               | `Xenova/all-MiniLM-L6-v2`       | Default embedding model for newly created topics (HuggingFace or remote)                                                                                           |
+| `RAGNAROK_EMBEDDING_PROVIDER`            | `embedding.provider`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                                                              |
+| `RAGNAROK_EMBEDDING_BASE_URL`            | `embedding.baseUrl`             | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                                                         |
+| `RAGNAROK_EMBEDDING_API_KEY`             | _(environment-only)_            | _(empty)_                       | API key for remote embedding API                                                                                                                                   |
+| `RAGNAROK_CHUNK_SIZE`                    | `ingestion.chunkSize`           | `1000`                          | Document chunk size (characters)                                                                                                                                   |
+| `RAGNAROK_CHUNK_OVERLAP`                 | `ingestion.chunkOverlap`        | `200`                           | Overlap between chunks                                                                                                                                             |
+| `RAGNAROK_TOP_K`                         | `retrieval.topK`                | `10`                            | Default number of results per query                                                                                                                                |
+| `RAGNAROK_RETRIEVAL_STRATEGY`            | `retrieval.strategy`            | `hybrid`                        | Default retrieval strategy                                                                                                                                         |
+| `RAGNAROK_MAX_ITERATIONS`                | `retrieval.maxIterations`       | `3`                             | Max agentic refinement iterations                                                                                                                                  |
+| `RAGNAROK_CONFIDENCE_THRESHOLD`          | `retrieval.confidenceThreshold` | `0.7`                           | Confidence threshold for early stopping                                                                                                                            |
+| `RAGNAROK_LOG_LEVEL`                     | `logging.level`                 | `info`                          | Log level (`debug`, `info`, `warn`, `error`)                                                                                                                       |
+| `RAGNAROK_LLM_PROVIDER`                  | `llm.provider`                  | `none`                          | LLM provider: `openai`, `anthropic`, `ollama`, `none`                                                                                                              |
+| `RAGNAROK_LLM_API_KEY`                   | _(environment-only)_            | _(empty)_                       | API key for OpenAI or Anthropic                                                                                                                                    |
+| `RAGNAROK_LLM_MODEL`                     | `llm.model`                     | _(per-provider)_                | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`)                                                                                          |
+| `RAGNAROK_LLM_BASE_URL`                  | `llm.baseUrl`                   | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set)                                  |
+| `RAGNAROK_RERANKER_MODEL`                | `reranker.model`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model                                                                                                                                       |
+| `RAGNAROK_RERANKER_ENABLED`              | `reranker.enabled`              | `true`                          | Enable bundled cross-encoder reranking (a JSON boolean in the file)                                                                                                |
+| `RAGNAROK_RERANKER_MAX_CANDIDATES`       | `reranker.maxCandidates`        | `20`                            | Maximum candidates scored by the reranker                                                                                                                          |
+| `RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER` | `reranker.candidateMultiplier`  | `4`                             | First-stage over-fetch multiplier                                                                                                                                  |
+| `RAGNAROK_SHUTDOWN_DRAIN_MS`             | `limits.shutdownDrainMs`        | `10000`                         | Budget for draining in-flight tool calls on SIGINT/SIGTERM                                                                                                         |
+| `RAGNAROK_LLM_REQUEST_TIMEOUT_MS`        | `llm.requestTimeoutMs`          | `30000`                         | Timeout for one configured LLM request                                                                                                                             |
+| `RAGNAROK_MAX_RESPONSE_BYTES`            | `limits.maxResponseBytes`       | `1048576`                       | Maximum serialized tool response size                                                                                                                              |
+| `RAGNAROK_EXPORT_DIR`                    | `storage.exportDir`             | `<storage>/exports`             | Only directory used for exported archives                                                                                                                          |
+| `RAGNAROK_GITHUB_HOSTS`                  | `security.githubHosts`          | `github.com`                    | GitHub/GHES host allowlist; comma-separated in the environment, a JSON array of strings in the file. Lower-cased either way, and must not be empty                 |
+| `RAGNAROK_GITHUB_TOKEN`                  | _(environment-only)_            | _(empty)_                       | GitHub credential; never accepted as a tool argument                                                                                                               |
+| `RAGNAROK_RESET_STORAGE`                 | _(environment-only)_            | `false`                         | Set to `1` to back up managed data and initialize storage v2                                                                                                       |
+| `RAGNAROK_IGNORE_LOCK`                   | _(environment-only)_            | unset                           | Bypass the cross-process storage lock (`<storageDir>/.ragnarok.lock`). Unsafe with concurrent writers — only for advanced setups that serialize access externally. |
+
+Two of those rows deserve a sentence each.
+
+`RAGNAROK_EMBEDDING_MODEL` / `embedding.model` is **the default model for newly
+created topics**. It is not a global switch: each topic persists the embedding
+fingerprint it was indexed under, so changing this setting does not re-embed
+anything and does not invalidate existing topics. Use
+`rag_switch_embedding_model` to move a topic, and expect to reindex it.
+
+`RAGNAROK_GITHUB_HOSTS` / `security.githubHosts` must resolve to at least one
+host. An explicitly empty value is rejected at startup rather than quietly
+falling back to `github.com` — see [MIGRATION.md](../../MIGRATION.md).
+
+### Environment-only settings
+
+Seven settings cannot be written to `config.json`. Naming one as a key is a
+startup error that tells you which variable to set instead, which is a better
+failure than an unexplained "unknown key". The same list appears in the
+generated file's `$envOnly` block.
+
+| Variable                     | Why it stays in the environment                                      |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `RAGNAROK_STORAGE_DIR`       | bootstrap — this file's location derives from it                     |
+| `RAGNAROK_WORKING_DIR`       | bootstrap                                                            |
+| `RAGNAROK_LLM_API_KEY`       | secret                                                               |
+| `RAGNAROK_EMBEDDING_API_KEY` | secret                                                               |
+| `RAGNAROK_GITHUB_TOKEN`      | secret                                                               |
+| `RAGNAROK_RESET_STORAGE`     | one-shot; persisting it would reset storage on every launch          |
+| `RAGNAROK_IGNORE_LOCK`       | one-shot; persisting it would disable the single-writer lock forever |
+
+The three secrets are the point of the split: `config.json` sits in the storage
+directory, gets copied with backups, and is readable by anything that can read
+the store. Credentials belong in the process environment, where the MCP client
+that spawns the server owns them.
+
+Between them the two tables are the complete surface. Variables belonging to the
+removed HTTP transport are not merely ignored — `assertNoRemovedEnvVars()`
+aborts startup and names every offender, so a stale shared-service configuration
+fails loudly instead of quietly becoming a local pipe. See
 [MIGRATION.md](../../MIGRATION.md) for the list and the one variable that is
 silently ignored instead.
 
@@ -232,7 +359,7 @@ APIs:
 
 | Adapter                | Core Interface    | Implementation                                                                |
 | ---------------------- | ----------------- | ----------------------------------------------------------------------------- |
-| `EnvConfigProvider`    | `IConfigProvider` | Reads from `McpConfig` (environment variables)                                |
+| `EnvConfigProvider`    | `IConfigProvider` | Reads from the resolved `McpConfig` (environment, then `config.json`)         |
 | `ConsoleLoggerFactory` | `ILoggerFactory`  | Logs to `console.log` / `console.error` with `[LEVEL] [context]` prefix       |
 | `ConsoleNotifier`      | `INotifier`       | Prints notifications and progress to console                                  |
 | `createLLMProvider()`  | `ILLMProvider`    | Factory — creates OpenAI, Anthropic, Ollama, or null provider based on config |
@@ -304,6 +431,11 @@ Add to your Claude Desktop `claude_desktop_config.json`:
 }
 ```
 
+Only the two bootstrap variables really have to be here. Everything else in the
+settings table can live in `<storageDir>/config.json` instead, which keeps one
+copy of the configuration next to the store rather than one per client entry —
+and takes effect for every client pointed at that storage directory.
+
 ### VS Code MCP client
 
 Add to your VS Code `settings.json`:
@@ -363,6 +495,11 @@ docker run -i --rm --init --read-only --cap-drop ALL \
 Never bake secrets into the image or a committed client configuration. Use a
 host directory (`-v /path/on/host:/data/ragnarok`) when the store must be
 visible outside Docker.
+
+Non-secret settings can go in `config.json` on the data volume instead of on the
+command line. `--read-only` applies to the image's root filesystem, not to the
+mounted volume, so the server can still generate and refresh the file there —
+and the settings survive a `--rm` container because the volume does.
 
 ### Wiring the container to an MCP client
 

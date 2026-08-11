@@ -1,5 +1,52 @@
 # Migration guide
 
+## Optional `config.json` for the MCP server
+
+**No action is required.** Environment variables continue to work exactly as
+before and continue to take precedence. If you change nothing, nothing changes.
+
+23 of the MCP server's 30 settings can now also be written to a JSON file at
+`<storageDir>/config.json`, so that configuration can live once beside the store
+instead of being repeated in every MCP client's server entry. The resolution
+order is **environment variable → `config.json` → built-in default**, one
+directional and with no write-back, so an exported variable always wins over the
+file.
+
+The file is optional and is generated on the first run that finds it absent. The
+generated file contains no live settings — only a `$defaults` block documenting
+the current defaults and an `$envOnly` block listing what cannot go in it.
+Neither block is ever read as configuration. A key absent from the file uses the
+current built-in default, so settings you never touch keep picking up improved
+defaults on upgrade; a key you write pins that value until you delete it.
+
+Seven settings stay environment-only, and writing one as a key in the file is a
+startup error naming the variable to use instead: `RAGNAROK_STORAGE_DIR` and
+`RAGNAROK_WORKING_DIR` (bootstrap — the file's own location derives from the
+first), `RAGNAROK_LLM_API_KEY`, `RAGNAROK_EMBEDDING_API_KEY` and
+`RAGNAROK_GITHUB_TOKEN` (secrets, which do not belong in a file that is copied
+with backups), and `RAGNAROK_RESET_STORAGE` and `RAGNAROK_IGNORE_LOCK` (one-shot
+switches that would be ruinous if persisted).
+
+The full key table is in
+[the MCP server guide](packages/mcp-server/README.md#configuration).
+
+### One behavior change: an empty `RAGNAROK_GITHUB_HOSTS`
+
+Setting `RAGNAROK_GITHUB_HOSTS=""` previously fell back to `github.com`. It now
+aborts startup, because the host list must resolve to at least one entry.
+
+This is deliberate. `RAGNAROK_GITHUB_HOSTS` is a security allowlist, and an
+operator who deliberately empties one is telling the server something; silently
+restoring the default would grant access to a host they had just tried to
+remove. Failing loudly is the safer reading of an ambiguous instruction. If you
+were relying on the old fallback, set `RAGNAROK_GITHUB_HOSTS=github.com`
+explicitly or unset the variable.
+
+The asymmetry with `RAGNAROK_ALLOWED_PATHS` is intentional:
+`RAGNAROK_ALLOWED_PATHS=""` is still accepted. Clearing that list narrows the
+ingest roots to the working directory — its documented default — rather than
+widening anything, so there is no dangerous reading to protect against.
+
 ## 0.7.0 stdio-only MCP server
 
 **The HTTP transport is removed.** `@ragnarok/mcp-server` serves stdio and

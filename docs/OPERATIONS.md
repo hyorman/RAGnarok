@@ -13,6 +13,7 @@ The configured `RAGNAROK_STORAGE_DIR` is one atomic administrative unit:
 ```text
 <storage>/
   storage-format.json
+  config.json
   .ragnarok.lock
   database/
     topics.json
@@ -25,6 +26,11 @@ The configured `RAGNAROK_STORAGE_DIR` is one atomic administrative unit:
 
 Feature-specific directories are created lazily. Give the account that spawns
 the server read and write access to the storage root.
+
+`config.json` is the optional settings file described under
+[model configuration](#model-configuration). It is part of the administrative
+unit: back it up with the store, and treat it as readable by anything that can
+read the store — which is why no credential is ever kept in it.
 
 ## The single-writer lock
 
@@ -74,15 +80,29 @@ backup. The exact commands, rollback behavior, and exit codes are in
 
 ## Model configuration
 
-Embedding, reranker, and LLM settings are read from the environment at startup;
-the MCP client that spawns the server owns them. Changing one means editing the
-client's server entry and restarting the process.
+Embedding, reranker, and LLM settings are resolved once at startup, in this
+order: **environment variable → `<storage>/config.json` → built-in default**. An
+environment variable always wins, so the MCP client that spawns the server can
+still own every setting by exporting it. Anything the client does not export
+falls through to the file, and anything absent from the file falls through to
+the built-in default. Either way a change takes effect on the next start, not
+during a run — restart the process.
+
+Prefer the environment for per-client differences and for every credential;
+prefer the file for settings that should hold for whichever client opens this
+store. Deleting a key from the file returns that setting to the current built-in
+default, which is also how an untouched setting picks up an improved default on
+upgrade. An unknown or mistyped key is a startup error, never a silent default.
+The complete key table is in
+[the MCP server guide](../packages/mcp-server/README.md#configuration).
 
 - `RAGNAROK_EMBEDDING_MODEL` and `RAGNAROK_EMBEDDING_PROVIDER` select the
-  embedding backend. Each topic persists its embedding fingerprint, so a
-  mismatch is a hard reindex error rather than a silently degraded result.
-  Switching models at runtime with `rag_switch_embedding_model` has the same
-  consequence: topics indexed under the old model need reindexing.
+  embedding backend. `RAGNAROK_EMBEDDING_MODEL` is the default model for newly
+  created topics, not a global switch — each topic persists its embedding
+  fingerprint, so a mismatch is a hard reindex error rather than a silently
+  degraded result. Switching models at runtime with
+  `rag_switch_embedding_model` has the same consequence: topics indexed under
+  the old model need reindexing.
 - `RAGNAROK_RERANKER_ENABLED` and `RAGNAROK_RERANKER_MODEL` control the bundled
   cross-encoder. A model switch leases the active generation so in-flight work
   drains rather than returning stale first-stage results.
@@ -146,6 +166,13 @@ the MCP client: `-i` keeps stdin open as the transport, `--rm` discards the
 container while the volume keeps the store, and liveness is the client's
 connection, not a probe. Use a host directory (`-v /path/on/host:/data/ragnarok`)
 when the store must be visible outside Docker.
+
+`--read-only` covers the image's root filesystem, not the data volume, so
+`config.json` is generated and refreshed normally under `/data/ragnarok` and
+persists across `--rm`. If the storage root is genuinely read-only, generation
+and refresh are skipped with a warning on stderr and the server starts anyway —
+a convenience file must never be the reason a server fails to boot. That warning
+is informational, not an incident.
 
 ## Routine checks
 
