@@ -79,7 +79,7 @@ describe("EmbeddingServiceRegistry", () => {
       assert.equal(service.initializedForBackend, undefined);
       assert.equal(service.initializedWith, "m");
     }
-    assert.equal(created.length, 2, "an unnamed backend and \"auto\" are distinct keys");
+    assert.equal(created.length, 2, 'an unnamed backend and "auto" are distinct keys');
   });
 
   it("returns the same instance for the same resolution", async () => {

@@ -73,10 +73,7 @@ export { RemoteEmbeddingBackend } from "./embeddings/remoteEmbeddingBackend";
 export type { RemoteEmbeddingFormat } from "./embeddings/remoteEmbeddingBackend";
 export { TransformersEmbeddings } from "./embeddings/langchainEmbeddings";
 export { EmbeddingServiceRegistry, isCapExempt } from "./embeddings/embeddingServiceRegistry";
-export type {
-  EmbeddingResolution,
-  EmbeddingServiceRegistryOptions,
-} from "./embeddings/embeddingServiceRegistry";
+export type { EmbeddingResolution, EmbeddingServiceRegistryOptions } from "./embeddings/embeddingServiceRegistry";
 
 // Vector Store
 export {

@@ -720,14 +720,20 @@ describe("VectorStoreFactory foreign remote endpoint", function () {
     expect(await factory.loadStore("same-endpoint"), "a matching endpoint must not be refused").to.not.equal(null);
   });
 
-  it("does not apply the endpoint check to local topics", async function () {
+  it("does not apply the endpoint check to local topics, and never probes the endpoint", async function () {
     expect(
       await probeFactory.loadStore("local-topic"),
       "local topics carry endpointHash 'local' and must load",
     ).to.not.equal(null);
+    // Asserted HERE, in the test that performs the load, rather than in a test
+    // of its own: standing alone it would pass vacuously whenever no load had
+    // run — under `--grep`, `.only`, or any reordering.
+    // getFingerprint() performs a live embed. Probing it once per store load
+    // for backends that have no endpoint is both wasteful and, offline, fatal.
+    expect(probeService.fingerprintCalls, "loading a local topic must not probe the endpoint").to.equal(0);
   });
 
-  it("does not apply the endpoint check to vscodeLM topics", async function () {
+  it("does not apply the endpoint check to vscodeLM topics, and never probes the endpoint", async function () {
     // vscodeLM is cap-exempt (it holds no weights) but has NO configurable
     // endpoint. Gating the refusal on isCapExempt rather than hasRemoteEndpoint
     // would compare this topic's "local" against the configured endpoint and
@@ -736,12 +742,7 @@ describe("VectorStoreFactory foreign remote endpoint", function () {
       await probeFactory.loadStore("vscode-lm-endpoint-topic"),
       "a vscodeLM topic has no endpoint and must load",
     ).to.not.equal(null);
-  });
-
-  it("never probes the configured endpoint while loading a topic that has no endpoint", async function () {
-    // getFingerprint() performs a live embed. Probing it once per store load
-    // for backends that have no endpoint is both wasteful and, offline, fatal.
-    expect(probeService.fingerprintCalls, "loading endpointless topics must not probe the endpoint").to.equal(0);
+    expect(probeService.fingerprintCalls, "loading a vscodeLM topic must not probe the endpoint").to.equal(0);
   });
 });
 
@@ -844,6 +845,44 @@ describe("VectorStoreFactory embedding-model guard", function () {
     return makeFactory();
   }
 
+  /**
+   * The reindex FLAG alone, with a perfectly valid fingerprint present.
+   *
+   * Pins the first disjunct of the write-path guard on its own: with a
+   * fingerprint recorded, the missing-fingerprint disjunct cannot carry the
+   * refusal, so only the flag can.
+   */
+  async function makeFactoryWithReindexFlagOnly(topicId: string): Promise<VectorStoreFactory> {
+    await writeMetadata(topicId, {
+      embeddingModel: "model-x",
+      embeddingFingerprint: fingerprintOf("model-x", 4),
+      migrationRequiresFingerprintOnReindex: true,
+    });
+    return makeFactory();
+  }
+
+  /**
+   * A MISSING fingerprint alone, with the reindex flag clear.
+   *
+   * Pins the second disjunct on its own: with the flag down, only the absent
+   * fingerprint can carry the refusal.
+   */
+  async function makeFactoryWithMissingFingerprintOnly(topicId: string): Promise<VectorStoreFactory> {
+    await writeMetadata(topicId, {
+      embeddingModel: "model-x",
+      migrationRequiresFingerprintOnReindex: false,
+    });
+    return makeFactory();
+  }
+
+  /** A single document, enough to get past reconcileDocuments' empty-input early return. */
+  const oneDocument = (): LangChainDocument[] => [
+    new LangChainDocument({
+      pageContent: "text",
+      metadata: { documentId: "doc-1", chunkId: "chunk-1", source: "s" },
+    }),
+  ];
+
   const rejectionOf = async (operation: () => Promise<unknown>): Promise<Error | undefined> => {
     try {
       await operation();
@@ -897,6 +936,34 @@ describe("VectorStoreFactory embedding-model guard", function () {
     const factory = await makeFactoryWithUnfingerprintedVectors("t");
     const error = await rejectionOf(() => factory.validateEmbeddingModel("t"));
     expect(error, "unverifiable vectors must still be quarantined").to.be.instanceOf(EmbeddingReindexRequiredError);
+    expect(error?.message).to.match(/reindex/i);
+  });
+
+  // The two tests below pin the write-path guard's disjuncts SEPARATELY.
+  //
+  // A fixture that sets the reindex flag AND omits the fingerprint satisfies
+  // both conditions at once, so removing either one leaves it green and neither
+  // is actually pinned. Each test below satisfies exactly one condition.
+  //
+  // They go through reconcileDocuments — the real mutation entry point —
+  // deliberately: validateEmbeddingModel carries a second, independent
+  // missing-fingerprint throw right after the guard, which would keep a
+  // fingerprint-only test green even with the guard's disjunct deleted.
+  // reconcileDocuments has no such safety net; past the guard it reaches
+  // LanceDB, and these fixtures have no table, so a lapsed guard surfaces as a
+  // different error and the assertion on the error TYPE turns red.
+
+  it("refuses a mutation on a topic flagged for reindex even when its fingerprint is present", async function () {
+    const factory = await makeFactoryWithReindexFlagOnly("t");
+    const error = await rejectionOf(() => factory.reconcileDocuments("t", oneDocument()));
+    expect(error, "the reindex flag alone must refuse the write").to.be.instanceOf(EmbeddingReindexRequiredError);
+    expect(error?.message).to.match(/reindex/i);
+  });
+
+  it("refuses a mutation on a topic with no fingerprint even when the reindex flag is clear", async function () {
+    const factory = await makeFactoryWithMissingFingerprintOnly("t");
+    const error = await rejectionOf(() => factory.reconcileDocuments("t", oneDocument()));
+    expect(error, "an absent fingerprint alone must refuse the write").to.be.instanceOf(EmbeddingReindexRequiredError);
     expect(error?.message).to.match(/reindex/i);
   });
 });
