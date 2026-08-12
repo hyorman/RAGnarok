@@ -28,6 +28,8 @@ import {
   INotifier,
   VectorStoreMetadataCorruptionError,
   EmbeddingEndpointMismatchError,
+  EmbeddingReindexRequiredError,
+  STORAGE_FORMAT_VERSION,
 } from "../src/index";
 
 const mockConfig: IConfigProvider = {
@@ -326,6 +328,117 @@ describe("VectorStoreFactory per-topic embedding model", function () {
 });
 
 /**
+ * A topic must be EXTENDED with the model its existing vectors were built from.
+ *
+ * Reads were fixed first (see above), but writes still went through the
+ * factory's shared service, which is pointed at the CONFIGURED model. Adding a
+ * document to a topic built with another model would then mix two embedding
+ * spaces into one LanceDB table — persisted corruption, not a recoverable
+ * misconfiguration.
+ */
+describe("VectorStoreFactory per-topic embedding model on writes", function () {
+  this.timeout(60000);
+
+  interface WriteFixture {
+    addDocument: (topicId: string, content: string) => Promise<void>;
+    /** The model of the service that actually produced the written vectors. */
+    modelUsedForLastWrite: () => string;
+    dispose: () => Promise<void>;
+  }
+
+  let fixture: WriteFixture | undefined;
+
+  async function makeWriteFixture(options: {
+    topic: string;
+    topicModel: string;
+    configuredModel: string;
+  }): Promise<WriteFixture> {
+    const dir = path.join(os.tmpdir(), `vsf-write-${crypto.randomUUID()}`);
+    await fs.mkdir(dir, { recursive: true });
+
+    // Every service the write could conceivably embed through: the factory's
+    // shared (configured) one, plus every service the registry hands out.
+    const services: RecordingEmbeddingService[] = [];
+    const configuredService = new RecordingEmbeddingService();
+    await configuredService.initialize(options.configuredModel);
+    services.push(configuredService);
+
+    const registry = new EmbeddingServiceRegistry({
+      createService: () => {
+        const service = new RecordingEmbeddingService();
+        services.push(service);
+        return service as unknown as EmbeddingService;
+      },
+      maxResidentLocal: 4,
+    });
+    const factory = new VectorStoreFactory(
+      dir,
+      options.configuredModel,
+      configuredService as unknown as EmbeddingService,
+      registry,
+    );
+    await factory.initialize();
+
+    // The table is stamped with an embedding space this deployment is not
+    // configured for — exactly the state a model change leaves behind.
+    await factory.createStore({ topicId: options.topic, storageDir: dir });
+    await factory.saveStore(options.topic, {
+      embeddingModel: options.topicModel,
+      embeddingBackend: "huggingface",
+      embeddingFingerprint: {
+        backendKind: "huggingface",
+        providerFormat: "huggingface",
+        model: options.topicModel,
+        revision: "test",
+        dimension: 4,
+        endpointHash: "local",
+      },
+    });
+    (factory as any).storeCache.clear();
+
+    let documentCounter = 0;
+    let modelOfLastWrite = "";
+
+    return {
+      addDocument: async (topicId: string, content: string): Promise<void> => {
+        const before = services.map((service) => service.embedLog.length);
+        documentCounter += 1;
+        await factory.reconcileDocuments(topicId, [
+          new LangChainDocument({
+            pageContent: content,
+            metadata: { documentId: `doc-${documentCounter}`, chunkId: `doc-${documentCounter}-0` },
+          }),
+        ]);
+        // Read the model from the service that ACTUALLY embedded. Reading it
+        // from the topic's metadata would report the topic's model whether or
+        // not the write path honoured it — a false green.
+        const embedders = services.filter((service, index) => service.embedLog.length > (before[index] ?? 0));
+        expect(embedders, "exactly one embedding service must have served the write").to.have.length(1);
+        modelOfLastWrite = embedders[0].lastEmbedModel;
+      },
+      modelUsedForLastWrite: () => modelOfLastWrite,
+      dispose: async (): Promise<void> => {
+        factory.dispose();
+        await fs.rm(dir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  afterEach(async function () {
+    await fixture?.dispose();
+    fixture = undefined;
+  });
+
+  it("embeds newly added documents with the topic's own model, not the configured one", async function () {
+    fixture = await makeWriteFixture({ topic: "t", topicModel: "model-x", configuredModel: "model-y" });
+    await fixture.addDocument("t", "some new content");
+    expect(fixture.modelUsedForLastWrite(), "the write must use the topic's model, not the configured one").to.equal(
+      "model-x",
+    );
+  });
+});
+
+/**
  * Stands in for a real backend. Like HuggingFaceBackend, an explicitly named
  * model it does not know is a hard failure with no fallback — that is what
  * turns a mispaired (model, backend) into a thrown error rather than silence.
@@ -383,7 +496,8 @@ describe("VectorStoreFactory on a vscodeLM host", function () {
   let registryBackends: StubBackend[];
 
   const vscodeLmConfig: IConfigProvider = {
-    get: <T>(key: string, defaultValue: T): T => (key === "embeddingBackend" ? ("vscodeLM" as unknown as T) : defaultValue),
+    get: <T>(key: string, defaultValue: T): T =>
+      key === "embeddingBackend" ? ("vscodeLM" as unknown as T) : defaultValue,
   };
 
   // Mirrors the VS Code root: every service gets both backends, vscodeLM first
@@ -628,6 +742,162 @@ describe("VectorStoreFactory foreign remote endpoint", function () {
     // getFingerprint() performs a live embed. Probing it once per store load
     // for backends that have no endpoint is both wasteful and, offline, fatal.
     expect(probeService.fingerprintCalls, "loading endpointless topics must not probe the endpoint").to.equal(0);
+  });
+});
+
+/**
+ * Reports a per-model dimension, so a test can tell "the dimension the TOPIC's
+ * own model produces" apart from "the dimension the CONFIGURED model produces".
+ */
+class DimensionRecordingService extends RecordingEmbeddingService {
+  constructor(private readonly dimensions: Record<string, number>) {
+    super();
+  }
+
+  public override async getFingerprint(): Promise<Record<string, unknown>> {
+    const base = await super.getFingerprint();
+    return { ...base, dimension: this.dimensions[this.currentModel] ?? 4 };
+  }
+}
+
+/**
+ * Now that a topic is both read AND written with the model its metadata
+ * records, "the configured model has a different name" is ordinary
+ * configuration drift, not corruption, and must no longer block ingestion.
+ *
+ * What must still bite are the conditions no per-topic routing can reconcile:
+ * a table whose vectors have a different dimension than its own model now
+ * produces, and migrated vectors whose embedding space cannot be verified at all.
+ */
+describe("VectorStoreFactory embedding-model guard", function () {
+  this.timeout(60000);
+
+  const CONFIGURED_MODEL = "model-y";
+  let storageDir: string;
+  let factories: VectorStoreFactory[];
+
+  /** Fingerprint of a local huggingface topic. */
+  const fingerprintOf = (model: string, dimension: number): Record<string, unknown> => ({
+    backendKind: "huggingface",
+    providerFormat: "huggingface",
+    model,
+    revision: "test",
+    dimension,
+    endpointHash: "local",
+  });
+
+  async function writeMetadata(topicId: string, overrides: Record<string, unknown>): Promise<void> {
+    await fs.writeFile(
+      path.join(storageDir, `vector-${topicId}-metadata.json`),
+      JSON.stringify({
+        schemaVersion: STORAGE_FORMAT_VERSION,
+        topicId,
+        documentCount: 1,
+        chunkCount: 1,
+        embeddingBackend: "huggingface",
+        createdAt: 1,
+        updatedAt: 2,
+        ...overrides,
+      }),
+    );
+  }
+
+  /** A factory configured for CONFIGURED_MODEL, whose services report `dimensions` per model. */
+  async function makeFactory(dimensions: Record<string, number> = {}): Promise<VectorStoreFactory> {
+    const configured = new DimensionRecordingService(dimensions);
+    await configured.initialize(CONFIGURED_MODEL);
+    const factory = new VectorStoreFactory(
+      storageDir,
+      CONFIGURED_MODEL,
+      configured as unknown as EmbeddingService,
+      new EmbeddingServiceRegistry({
+        createService: () => new DimensionRecordingService(dimensions) as unknown as EmbeddingService,
+        maxResidentLocal: 4,
+      }),
+    );
+    await factory.initialize();
+    factories.push(factory);
+    return factory;
+  }
+
+  async function makeFactoryWithTopics(topics: Record<string, string>): Promise<VectorStoreFactory> {
+    for (const [topicId, model] of Object.entries(topics)) {
+      await writeMetadata(topicId, { embeddingModel: model, embeddingFingerprint: fingerprintOf(model, 4) });
+    }
+    return makeFactory();
+  }
+
+  async function makeFactoryWithDimensionMismatch(topicId: string): Promise<VectorStoreFactory> {
+    // The table holds 8-dimensional vectors, but "model-x" now yields 4.
+    await writeMetadata(topicId, {
+      embeddingModel: "model-x",
+      embeddingFingerprint: fingerprintOf("model-x", 8),
+    });
+    return makeFactory();
+  }
+
+  async function makeFactoryWithUnfingerprintedVectors(topicId: string): Promise<VectorStoreFactory> {
+    await writeMetadata(topicId, {
+      embeddingModel: "model-x",
+      migrationRequiresFingerprintOnReindex: true,
+    });
+    return makeFactory();
+  }
+
+  const rejectionOf = async (operation: () => Promise<unknown>): Promise<Error | undefined> => {
+    try {
+      await operation();
+      return undefined;
+    } catch (error) {
+      return error as Error;
+    }
+  };
+
+  beforeEach(async function () {
+    factories = [];
+    storageDir = path.join(os.tmpdir(), `vsf-guard-${crypto.randomUUID()}`);
+    await fs.mkdir(storageDir, { recursive: true });
+  });
+
+  afterEach(async function () {
+    for (const factory of factories) {
+      factory.dispose();
+    }
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("allows adding documents to a topic whose model differs from the configured one", async function () {
+    const factory = await makeFactoryWithTopics({ t: "model-x" });
+    expect(
+      await rejectionOf(() => factory.validateEmbeddingModel("t")),
+      "a differing model name is not corruption",
+    ).to.equal(undefined);
+  });
+
+  it("compares the dimension against the topic's own model, not the configured one", async function () {
+    // The decisive case: two models of DIFFERENT dimension, both correct.
+    // Comparing the table's 8 against the configured model's 4 would refuse
+    // every legitimately different model and re-break the feature.
+    await writeMetadata("big", { embeddingModel: "model-big", embeddingFingerprint: fingerprintOf("model-big", 8) });
+    const factory = await makeFactory({ "model-big": 8, [CONFIGURED_MODEL]: 4 });
+    expect(
+      await rejectionOf(() => factory.validateEmbeddingModel("big")),
+      "the topic's own model produces 8 dimensions, exactly what the table holds",
+    ).to.equal(undefined);
+  });
+
+  it("still throws on a dimension mismatch", async function () {
+    const factory = await makeFactoryWithDimensionMismatch("t");
+    const error = await rejectionOf(() => factory.validateEmbeddingModel("t"));
+    expect(error, "a dimension mismatch is corruption and must still be refused").to.be.instanceOf(Error);
+    expect(error?.message).to.match(/dimension/i);
+  });
+
+  it("still throws on migrated vectors with no verifiable fingerprint", async function () {
+    const factory = await makeFactoryWithUnfingerprintedVectors("t");
+    const error = await rejectionOf(() => factory.validateEmbeddingModel("t"));
+    expect(error, "unverifiable vectors must still be quarantined").to.be.instanceOf(EmbeddingReindexRequiredError);
+    expect(error?.message).to.match(/reindex/i);
   });
 });
 

@@ -482,10 +482,12 @@ export class EmbeddingService {
     backendType: string,
     texts: string[],
     progressCallback?: (progress: number) => void,
+    signal?: AbortSignal,
   ): Promise<number[][]> {
     this.assertNotDisposed();
+    signal?.throwIfAborted();
     const backend = this.getBackendByType(backendType);
-    return this.withScopedBackendLease(backend, () => backend.embedBatch(texts, progressCallback));
+    return this.withScopedBackendLease(backend, () => backend.embedBatch(texts, progressCallback, signal));
   }
 
   /**

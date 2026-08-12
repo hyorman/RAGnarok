@@ -370,7 +370,12 @@ describe("DocumentPipeline", function () {
       }
 
       expect(caught).to.equal(controller.signal.reason);
-      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService, embeddingRegistry);
+      const verifier = new VectorStoreFactory(
+        tempStorageDir,
+        embeddingService.getCurrentModel(),
+        embeddingService,
+        embeddingRegistry,
+      );
       await verifier.initialize();
       expect(await verifier.loadStore(topicId)).to.equal(null);
       verifier.dispose();
@@ -467,7 +472,12 @@ describe("DocumentPipeline", function () {
       const files = ["sample-text.txt", "sample.md", "sample.html", "sample.pdf"].map((name) =>
         path.join(fixturesPath, name),
       );
-      const verifier = new VectorStoreFactory(tempStorageDir, embeddingService.getCurrentModel(), embeddingService, embeddingRegistry);
+      const verifier = new VectorStoreFactory(
+        tempStorageDir,
+        embeddingService.getCurrentModel(),
+        embeddingService,
+        embeddingRegistry,
+      );
       for (let first = 0; first < files.length; first++) {
         const topicId = `mixed-first-${first}`;
         const order = [files[first], ...files.filter((_, index) => index !== first)];
@@ -535,7 +545,14 @@ describe("DocumentPipeline", function () {
       // This test verifies the pipeline can process multiple documents to the same topic
     });
 
-    it("should prevent adding documents with different embedding model", async function () {
+    /**
+     * A topic is now read AND written with the model its own metadata records,
+     * so changing the CONFIGURED model no longer makes an existing topic
+     * unwritable — it is configuration drift, not corruption. What still
+     * refuses a write is an incompatible dimension or an unverifiable
+     * fingerprint (see the VectorStoreFactory guard suite).
+     */
+    it("adds documents to a topic whose model differs from the configured one", async function () {
       const testFile1 = path.join(fixturesPath, "sample.md");
       const testFile2 = path.join(fixturesPath, "sample-text.txt");
       const topicId = "test-topic-model-mismatch";
@@ -543,6 +560,15 @@ describe("DocumentPipeline", function () {
       // Process first document with default model
       const result1 = await pipeline.processDocument(testFile1, topicId);
       expect(result1.success).to.be.true;
+
+      const verifier = new VectorStoreFactory(
+        tempStorageDir,
+        embeddingService.getCurrentModel(),
+        embeddingService,
+        embeddingRegistry,
+      );
+      const metadataBefore = await verifier.getStoreMetadata(topicId);
+      expect(metadataBefore?.embeddingModel, "the topic must have recorded a model").to.be.a("string");
 
       // Save current model state
       const testOriginalModel = embeddingService.getCurrentModel();
@@ -556,15 +582,19 @@ describe("DocumentPipeline", function () {
         const differentPipeline = new DocumentPipeline(mockNotifier, embeddingService, embeddingRegistry, mockConfig);
         await differentPipeline.initialize(tempStorageDir);
 
-        // Try to add document to same topic with different model - should fail
         const result2 = await differentPipeline.processDocument(testFile2, topicId);
 
-        // Should fail due to model mismatch
-        expect(result2.success).to.be.false;
-        expect(result2.errors).to.be.an("array");
-        expect(result2.errors!.length).to.be.greaterThan(0);
-        expect(result2.errors![0]).to.include("Embedding model mismatch");
+        expect(result2.errors ?? [], "a differing configured model must no longer be refused").to.be.empty;
+        expect(result2.success).to.be.true;
+
+        // The topic keeps its own recorded embedding space — the configured
+        // model must never be stamped over it, or the next load would resolve
+        // a model the existing vectors did not come from.
+        const metadataAfter = await verifier.getStoreMetadata(topicId);
+        expect(metadataAfter?.embeddingModel).to.equal(metadataBefore?.embeddingModel);
+        expect(metadataAfter?.embeddingFingerprint).to.deep.equal(metadataBefore?.embeddingFingerprint);
       } finally {
+        verifier.dispose();
         // Always restore original model state in finally block
         if (testOriginalModel) {
           await embeddingService.initialize(testOriginalModel);

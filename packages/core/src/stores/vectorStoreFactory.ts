@@ -385,40 +385,61 @@ export class VectorStoreFactory {
     }
   }
 
+  /**
+   * Refuses a mutation whose target vectors cannot be safely extended.
+   *
+   * A differing model NAME is no longer a refusal. The topic is now read AND
+   * written with the model its own metadata records, so "the configured model
+   * is called something else" is ordinary configuration drift rather than
+   * corruption — refusing it would forbid a perfectly consistent topic.
+   *
+   * What survives are the two conditions no per-topic routing can reconcile:
+   *  - the topic's own model no longer produces the DIMENSION its table holds,
+   *    which no amount of correct routing can make compatible;
+   *  - migrated vectors carrying no verifiable fingerprint, whose embedding
+   *    space is simply unknown.
+   */
   public async validateEmbeddingModel(topicId: string): Promise<void> {
     const metadata = await this.getStoreMetadata(topicId);
     if (!metadata) {
       return;
     }
-    if (metadata.embeddingFingerprint) {
-      const current = await this.embeddingService.getFingerprint();
-      if (JSON.stringify(metadata.embeddingFingerprint) !== JSON.stringify(current)) {
-        throw new EmbeddingFingerprintMismatchError(
-          topicId,
-          `Embedding model mismatch (fingerprint mismatch) for topic ${topicId}. Existing vectors use ` +
-            `${metadata.embeddingFingerprint.backendKind}/${metadata.embeddingFingerprint.model}; current is ` +
-            `${current.backendKind}/${current.model}. Recreate the topic or restore the original embedding configuration.`,
-        );
-      }
+    // Checked first, and before anything is resolved: a topic whose space
+    // cannot be verified must not cause a model to be loaded on its behalf.
+    this.assertMetadataAllowsMutation(topicId, metadata);
+    const recorded = metadata.embeddingFingerprint;
+    if (!recorded) {
+      // Unreachable — assertMetadataAllowsMutation refuses a missing
+      // fingerprint — but the space stays unverifiable either way.
+      throw new EmbeddingReindexRequiredError(topicId);
     }
-    if (metadata.embeddingModel && metadata.embeddingModel !== this.embeddingModel) {
-      const error = new EmbeddingFingerprintMismatchError(
+
+    const backend = metadata.embeddingBackend ?? "";
+    if (hasRemoteEndpoint(backend) && recorded.endpointHash !== (await this.configuredEndpointHash())) {
+      // A foreign endpoint is loadStore's refusal to raise, one step later.
+      // Resolving the topic's service here would first register it — and open a
+      // connection — against an endpoint this topic may not be served from.
+      return;
+    }
+
+    const model = metadata.embeddingModel || this.embeddingModel;
+    const current = await (await this.resolveEmbeddingService(model, backend)).getFingerprint();
+    if (recorded.dimension !== current.dimension) {
+      this.logger.error("Embedding dimension mismatch detected", {
         topicId,
-        `Embedding model mismatch for topic ${topicId}.\n` +
-          `Existing embeddings use: "${metadata.embeddingModel}"\n` +
-          `Current model is: "${this.embeddingModel}"\n\n` +
-          `Cannot add documents with a different embedding model as this would corrupt the vector store.\n` +
-          `Please either:\n` +
-          `1. Change the embedding model back to "${metadata.embeddingModel}" in settings, or\n` +
-          `2. Create a new topic with the current model, or\n` +
-          `3. Delete and recreate this topic with the new model`,
-      );
-      this.logger.error("Embedding model mismatch detected", {
-        topicId,
-        existingModel: metadata.embeddingModel,
-        currentModel: this.embeddingModel,
+        model,
+        existingDimension: recorded.dimension,
+        currentDimension: current.dimension,
       });
-      throw error;
+      throw new EmbeddingFingerprintMismatchError(
+        topicId,
+        `Embedding dimension mismatch for topic ${topicId}.\n` +
+          `Existing vectors have ${recorded.dimension} dimensions, but "${model}" now produces ` +
+          `${current.dimension}.\n\n` +
+          `Vectors of different dimensions cannot share a table, so this is not a setting that can be ` +
+          `changed back — the model itself no longer matches the data.\n` +
+          `Delete and recreate this topic to reindex it.`,
+      );
     }
   }
 
@@ -525,15 +546,15 @@ export class VectorStoreFactory {
     if (documents.length === 0) {
       return;
     }
-    await this.assertMutationAllowed(topicId);
+    const metadata = await this.assertMutationAllowed(topicId);
     const normalized = this.normalizeDocumentMetadata(documents);
     const db = await this.getConnection(this.lanceDbUri);
     const table = await db.openTable(topicId);
     this.tables.add(table);
     signal?.throwIfAborted();
-    const vectors = await this.embeddingService.embedBatch(
+    const vectors = await this.embedForTopic(
+      metadata,
       normalized.map((document) => document.pageContent),
-      undefined,
       signal,
     );
     signal?.throwIfAborted();
@@ -604,8 +625,14 @@ export class VectorStoreFactory {
     return rows.map((row) => String(row.chunkId));
   }
 
-  /** Defense-in-depth for every in-place vector write/upsert entry point. */
-  private async assertMutationAllowed(topicId: string): Promise<void> {
+  /**
+   * Defense-in-depth for every in-place vector write/upsert entry point.
+   *
+   * Returns the metadata it verified, because the caller needs the very same
+   * record to resolve the topic's embedder: re-reading it would open a window
+   * in which the space that was checked is not the space that is written.
+   */
+  private async assertMutationAllowed(topicId: string): Promise<VectorStoreMetadata> {
     const metadata = await this.getStoreMetadata(topicId);
     if (!metadata) {
       if (await this.hasTable(topicId)) {
@@ -614,6 +641,7 @@ export class VectorStoreFactory {
       throw new Error(`Vector store table not found for topic ${topicId}`);
     }
     this.assertMetadataAllowsMutation(topicId, metadata);
+    return metadata;
   }
 
   private assertMetadataAllowsMutation(topicId: string, metadata: VectorStoreMetadata): void {
@@ -907,15 +935,48 @@ export class VectorStoreFactory {
    * a topic keeps embedding with the model its vectors were built from.
    */
   private async createEmbeddings(modelName: string, backendType?: string): Promise<TransformersEmbeddings> {
+    const service = await this.resolveEmbeddingService(modelName, backendType);
+    return new TransformersEmbeddings({ modelName, backendType, embeddingService: service });
+  }
+
+  /**
+   * The registry entry for one embedding space.
+   *
+   * Sole owner of the registry key, so reads (`createEmbeddings`) and writes
+   * (`embedForTopic`) provably resolve the same service for the same topic —
+   * two independent key computations would be free to drift apart, and the
+   * drift would only show up as vectors from two spaces in one table.
+   */
+  private async resolveEmbeddingService(modelName: string, backendType?: string): Promise<EmbeddingService> {
     // "auto" is a configuration request, not a resolved backend: keying on it
     // would occupy a cap slot under a name no store can be identified by.
     const backend = backendType && backendType !== "auto" ? backendType : "huggingface";
-    const service = await this.registry.get({
+    return this.registry.get({
       model: modelName,
       backend,
       endpointHash: hasRemoteEndpoint(backend) ? await this.configuredEndpointHash() : "local",
     });
-    return new TransformersEmbeddings({ modelName, backendType, embeddingService: service });
+  }
+
+  /**
+   * Embeds text into one topic's existing embedding space.
+   *
+   * The model comes from the topic's own metadata, never from the configured
+   * one: a table holds vectors from exactly one space, so extending a topic
+   * built with another model has to re-enter THAT model. Routing mirrors
+   * `TransformersEmbeddings` — scoped to the recorded backend when there is
+   * one — so a topic is written through the same service that reads it.
+   */
+  private async embedForTopic(
+    metadata: VectorStoreMetadata,
+    texts: string[],
+    signal?: AbortSignal,
+  ): Promise<number[][]> {
+    const backendType = metadata.embeddingBackend;
+    const service = await this.resolveEmbeddingService(metadata.embeddingModel || this.embeddingModel, backendType);
+    return backendType
+      ? service.embedBatchWithBackend(backendType, texts, undefined, signal)
+      : service.embedBatch(texts, undefined, signal);
   }
 
   /**
