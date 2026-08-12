@@ -319,9 +319,9 @@ export class RAGQueryService {
    * Lazily imports to avoid loading ONNX at startup.
    */
   private async createReranker(): Promise<Reranker | null> {
-    if (!this.config.get<boolean>(CONFIG.RERANKER_ENABLED, DEFAULTS.RERANKER_ENABLED)) {
-      return null;
-    }
+    // Unconditional: the cross-encoder ONNX model ships inside the package, so
+    // there is no download to opt out of. A model that fails to load still
+    // returns null below, leaving queries on first-stage ranking.
     try {
       const { CrossEncoderReranker } = await import("../rerankers/crossEncoderReranker.js");
       const model = this.config.get<string>(CONFIG.RERANKER_MODEL, "") || undefined;

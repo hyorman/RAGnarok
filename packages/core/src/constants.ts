@@ -30,7 +30,6 @@ export const CONFIG = {
   COMMON_DATABASE_PATH: "commonDatabasePath",
   MEMORY_CONFIDENCE_THRESHOLD: "memoryConfidenceThreshold",
   RERANKER_MODEL: "rerankerModel",
-  RERANKER_ENABLED: "rerankerEnabled",
   RERANKER_MAX_CANDIDATES: "rerankerMaxCandidates",
   RERANKER_CANDIDATE_MULTIPLIER: "rerankerCandidateMultiplier",
 } as const;
@@ -42,7 +41,6 @@ export const DEFAULTS = {
   LOCAL_MODEL_PATH: "",
   EMBEDDING_MODEL: "Xenova/all-MiniLM-L6-v2",
   RERANKER_MODEL: "Xenova/ms-marco-MiniLM-L-6-v2",
-  RERANKER_ENABLED: true,
   RERANKER_MAX_CANDIDATES: 20,
   RERANKER_CANDIDATE_MULTIPLIER: 4,
 } as const;
