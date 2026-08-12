@@ -243,9 +243,13 @@ describe("VectorStoreFactory per-topic embedding model", function () {
   const serviceOf = (store: VectorStore): RecordingEmbeddingService =>
     (store as any).embeddings.embeddingService as RecordingEmbeddingService;
 
-  /** Embeds a query through the store and reports the model that served it. */
-  async function resolvedModelFor(store: VectorStore): Promise<string> {
-    await (store as any).embeddings.embedQuery("which model am I using?");
+  /**
+   * Embeds a query through the store and reports the model that served it.
+   * The query text must differ per call: TransformersEmbeddings memoises query
+   * vectors, so a repeated string would be served from cache without embedding.
+   */
+  async function resolvedModelFor(store: VectorStore, query: string): Promise<string> {
+    await (store as any).embeddings.embedQuery(query);
     const service = serviceOf(store);
     const fingerprint = await service.getFingerprint();
     expect(service.lastEmbedModel, "fingerprint disagrees with the model that served the embed").to.equal(
@@ -300,14 +304,22 @@ describe("VectorStoreFactory per-topic embedding model", function () {
   it("keeps each topic on its own embedding model when another topic is loaded", async function () {
     const storeA = await factory.loadStore("a");
     expect(storeA, "topic a failed to load").to.not.equal(null);
-    expect(await resolvedModelFor(storeA!)).to.equal("model-x");
+    expect(await resolvedModelFor(storeA!, "first query on a")).to.equal("model-x");
 
     const storeB = await factory.loadStore("b");
     expect(storeB, "topic b failed to load").to.not.equal(null);
-    expect(await resolvedModelFor(storeB!), "topic b must use its own recorded model").to.equal("model-y");
+    expect(await resolvedModelFor(storeB!, "first query on b"), "topic b must use its own recorded model").to.equal(
+      "model-y",
+    );
 
-    // The decisive assertion: querying A again, after B has embedded.
-    expect(await resolvedModelFor(storeA!), "loading topic B must not re-point topic A's embedder").to.equal("model-x");
+    // The decisive assertion: a genuinely new query on A, after B has embedded.
+    const modelUsedByA = await resolvedModelFor(storeA!, "second query on a");
+    expect(modelUsedByA, "loading topic B must not re-point topic A's embedder").to.equal("model-x");
+    // Asserted after the verdict so a regression reports the model, not the log.
+    expect(
+      serviceOf(storeA!).embedLog,
+      "the third query must actually re-embed rather than hit the query cache",
+    ).to.deep.equal(["model-x", "model-x"]);
   });
 });
 

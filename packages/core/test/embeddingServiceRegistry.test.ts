@@ -1,11 +1,21 @@
 import { strict as assert } from "assert";
 import { EmbeddingServiceRegistry, isCapExempt } from "../src/embeddings/embeddingServiceRegistry";
 
-/** Minimal stand-in — the registry only ever calls initialize() and dispose(). */
+/** Minimal stand-in — the registry only ever initializes and disposes. */
 class FakeService {
+  /** Model this service was pointed at, by whichever initialization path ran. */
   public initializedWith: string | undefined;
+  /** Backend it was initialized THROUGH, or undefined if the config decided. */
+  public initializedForBackend: string | undefined;
+  /** True only when the config-resolving path ran. */
+  public plainInitializeCalled = false;
   public disposed = false;
   async initialize(modelName?: string): Promise<void> {
+    this.plainInitializeCalled = true;
+    this.initializedWith = modelName;
+  }
+  async initializeForBackend(backendType: string, modelName?: string): Promise<void> {
+    this.initializedForBackend = backendType;
     this.initializedWith = modelName;
   }
   async dispose(): Promise<void> {
@@ -40,6 +50,36 @@ describe("EmbeddingServiceRegistry", () => {
     await registry.get({ model: "model-a", backend: "huggingface", endpointHash: "local" });
     assert.equal(created.length, 1);
     assert.equal(created[0].initializedWith, "model-a");
+  });
+
+  it("initializes through the backend the resolution names", async () => {
+    const { registry, created } = makeRegistry(2);
+    await registry.get({ model: "v-model", backend: "vscodeLM", endpointHash: "local" });
+    assert.equal(created[0].initializedForBackend, "vscodeLM");
+    assert.equal(created[0].initializedWith, "v-model");
+    // The decisive half: plain initialize() resolves the backend from config, so
+    // the entry would be keyed by a backend it was never initialized with — a
+    // cap-exempt key holding a resident local model, and a vscodeLM topic that
+    // fails to load whenever the configured backend is something else.
+    assert.equal(
+      created[0].plainInitializeCalled,
+      false,
+      "must not fall back to the config-resolved backend when the key names one",
+    );
+  });
+
+  it("lets the config decide only when the resolution names no backend", async () => {
+    const { registry, created } = makeRegistry(2);
+    await registry.get({ model: "m", backend: "", endpointHash: "local" });
+    await registry.get({ model: "m", backend: "auto", endpointHash: "local" });
+    for (const service of created) {
+      // "auto" and "" are configuration requests, not backends: initializing
+      // through them would throw as unregistered.
+      assert.equal(service.plainInitializeCalled, true);
+      assert.equal(service.initializedForBackend, undefined);
+      assert.equal(service.initializedWith, "m");
+    }
+    assert.equal(created.length, 2, "an unnamed backend and \"auto\" are distinct keys");
   });
 
   it("returns the same instance for the same resolution", async () => {

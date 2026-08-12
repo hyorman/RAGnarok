@@ -250,8 +250,10 @@ describe("offline v0.3 storage migration", function () {
         normalized: true,
       }),
       // The registry initializes and may dispose the services it hands out, so
-      // a stub standing in for one has to answer both.
+      // a stub standing in for one has to answer both. A resolution naming a
+      // concrete backend initializes through that backend.
       initialize: async () => undefined,
+      initializeForBackend: async () => undefined,
       dispose: async () => undefined,
     } as unknown as EmbeddingService;
     const config: IConfigProvider = { get: <T>(_key: string, fallback: T) => fallback };

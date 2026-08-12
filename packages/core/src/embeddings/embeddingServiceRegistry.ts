@@ -88,7 +88,17 @@ export class EmbeddingServiceRegistry {
     // service that would overwrite ours and leak undisposed.
     const creation = (async () => {
       const service = this.createService();
-      await service.initialize(resolution.model);
+      // Initialise THROUGH the backend the key names, or the entry is keyed by
+      // a backend it was never initialised with: a cap-exempt key could hold a
+      // resident local model, and a topic recorded under one backend would fail
+      // whenever config resolved to another. "auto" and "" are not backends but
+      // requests to let config decide, and are the only cases initialize() is
+      // the honest call — initializeForBackend would reject them as unregistered.
+      if (resolution.backend && resolution.backend !== "auto") {
+        await service.initializeForBackend(resolution.backend, resolution.model);
+      } else {
+        await service.initialize(resolution.model);
+      }
       return service;
     })();
     pool.set(key, creation);
