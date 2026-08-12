@@ -60,7 +60,7 @@ export function assertNoRemovedEnvVars(): void {
   if (present.length > 0) {
     throw new Error(
       `These environment variables were removed with the HTTP transport and are no longer supported: ` +
-        `${present.join(", ")}. RAGnarōk MCP serves stdio only. See MIGRATION.md at the repository root.`,
+        `${present.join(", ")}. RAGnarōk MCP serves stdio only.`,
     );
   }
 }

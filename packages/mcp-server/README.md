@@ -10,8 +10,8 @@ rejected and there is no compatibility mode.
 **Stdio is the only transport.** There is no HTTP mode, no listener, no
 endpoint, and no bearer token. The server is a child process of one MCP client
 on one machine, running as the user who spawned it. Environment variables that
-configured the removed HTTP transport are rejected at startup — see
-[MIGRATION.md](../../MIGRATION.md) for the complete list and how to migrate.
+configured the removed HTTP transport are rejected at startup, with an error
+naming every one that was set.
 
 ---
 

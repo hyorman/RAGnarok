@@ -471,8 +471,8 @@ rejected. There is no compatibility mode and no `Mcp-Session-Id`.
 **Stdio is the only transport.** The HTTP transport, shared deployment mode,
 bearer roles, and upload/download handles were removed; the server is a child
 process of one MCP client, running as the user who spawned it. Environment
-variables belonging to the removed transport are rejected at startup — see
-[MIGRATION.md](MIGRATION.md#070-stdio-only-mcp-server). Cacheable discovery,
+variables belonging to the removed transport are rejected at startup, with an
+error naming every one that was set. Cacheable discovery,
 list, and resource-read results advertise `ttlMs=0` and `cacheScope=private`.
 See the [MCP server guide](packages/mcp-server/README.md) for the complete tool
 surface and configuration.

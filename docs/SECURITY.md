@@ -16,8 +16,7 @@ The variables that once configured a network listener (TLS paths, bind host,
 allowed hosts, CORS origin, bearer tokens, rate limit, trusted proxies,
 transfer limits) are **rejected at startup**. Setting one aborts the process
 with an error naming every offender, so a configuration that promises a
-hardened network service can never quietly become a local pipe. The complete
-list is in [MIGRATION.md](../MIGRATION.md).
+hardened network service can never quietly become a local pipe.
 
 Do not attempt to re-expose the server by wrapping stdio in a network relay. A
 relay would grant every caller the spawning user's full authority — including

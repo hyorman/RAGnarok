@@ -57,9 +57,9 @@ for (const variable of ["RAGNAROK_STORAGE_DIR"]) {
 for (const key of ["security.allowedPaths", "embedding.model", "llm.provider", "limits.maxResponseBytes"]) {
   assert.match(mcp, new RegExp(key.replace(".", "\\.")), `MCP guide must document ${key}`);
 }
-// Variables removed with the HTTP transport are rejected at startup. Naming
-// them here would read as documentation of a supported setting; MIGRATION.md
-// is the single place they are listed.
+// Variables removed with the HTTP transport are rejected at startup by
+// assertNoRemovedEnvVars, whose REMOVED_ENV_VARS array is the list. Naming
+// them here would read as documentation of a supported setting.
 for (const removed of [
   "RAGNAROK_DEPLOYMENT_MODE",
   "RAGNAROK_ADMIN_API_KEY",
