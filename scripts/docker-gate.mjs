@@ -311,6 +311,37 @@ function assertRuntimeHardening(container) {
   ]);
 }
 
+/**
+ * Write config.json into the data volume before the first session.
+ *
+ * This is the only way to configure a container: the 24 operational settings
+ * are file-only, and `-e` does nothing for them. The image sets
+ * RAGNAROK_STORAGE_DIR=/data/ragnarok, so this is exactly where the server
+ * looks. A throwaway container is the way in — the release container's rootfs
+ * is read-only and only the volume is writable.
+ */
+function seedConfigFile(contents) {
+  const result = spawnSync(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "-i",
+      "-v",
+      `${volume}:/data/ragnarok`,
+      "--entrypoint",
+      "sh",
+      image,
+      "-c",
+      "mkdir -p /data/ragnarok && cat > /data/ragnarok/config.json",
+    ],
+    { cwd: root, encoding: "utf8", input: JSON.stringify(contents), timeout: 60_000 },
+  );
+  if (result.status !== 0) {
+    throw new Error(`Could not seed config.json: ${result.stderr || result.stdout}`);
+  }
+}
+
 /** A second container on the same volume must fail fast rather than corrupt it. */
 async function assertStorageLock() {
   const contender = new ContainerSession(lockContainer);
@@ -366,12 +397,24 @@ try {
 
   run("docker", ["volume", "create", volume]);
 
+  // A non-default value the server reports back, so the assertion below proves
+  // the file was read rather than that a built-in default happened to match.
+  seedConfigFile({ retrieval: { topK: 7 }, reranker: { enabled: false } });
+
   // Session 1 — first contact over stdio, on a fresh volume.
   const session = new ContainerSession(sessionContainer);
   await session.request("server/discover");
   assertToolSurface((await session.request("tools/list")).tools);
   assertRuntimeHardening(sessionContainer);
   await assertStorageLock();
+  // config.json on the volume is the only way to configure a container, so the
+  // gate must prove the container actually reads it. The reranker defaults to
+  // enabled; only the seeded file turns it off.
+  const rerankerInfo = await session.callTool("rag_reranker_info", {});
+  if (rerankerInfo.enabled !== false) {
+    throw new Error(`Container ignored the seeded config.json: ${JSON.stringify(rerankerInfo)}`);
+  }
+
   await session.callTool("rag_create_topic", {
     name: topicName,
     description: "Docker restart persistence gate",
