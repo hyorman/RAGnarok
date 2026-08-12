@@ -54,7 +54,7 @@ a guard against an agent's mistake, not an authorization boundary — see
 [security](../../docs/SECURITY.md).
 
 Document ingestion reads paths on the machine running the server, restricted to
-canonical `RAGNAROK_ALLOWED_PATHS` roots. There is no upload handle; place a
+canonical `security.allowedPaths` roots. There is no upload handle; place a
 file where the server can read it.
 
 ## MCP Tools
@@ -65,7 +65,7 @@ file where the server can read it.
 | `rag_list_topics`            | List all available topics with metadata                                                                                                   | _(none)_                                                                                                                                                        |
 | `rag_topic_stats`            | Get statistics for a topic                                                                                                                | `topic` (string)                                                                                                                                                |
 | `rag_create_topic`           | Create a new topic                                                                                                                        | `name` (string), `description?` (string)                                                                                                                        |
-| `rag_add_documents`          | Add documents to a topic (paths must be inside `RAGNAROK_ALLOWED_PATHS`)                                                                  | `topic` (string), `filePaths` (string[])                                                                                                                        |
+| `rag_add_documents`          | Add documents to a topic (paths must be inside `security.allowedPaths`)                                                                   | `topic` (string), `filePaths` (string[])                                                                                                                        |
 | `rag_list_embedding_models`  | List available embedding models                                                                                                           | _(none)_                                                                                                                                                        |
 | `rag_embedding_info`         | Get current embedding model info                                                                                                          | _(none)_                                                                                                                                                        |
 | `rag_switch_embedding_model` | Switch the active embedding model                                                                                                         | `model` (string)                                                                                                                                                |
@@ -169,18 +169,19 @@ src/
 
 ## Configuration
 
-A setting is resolved from three places, in this order:
+A setting is resolved from two places, in this order:
 
-**environment variable → `config.json` → built-in default**
+**`config.json` → built-in default**
 
-Precedence is one-directional and there is no write-back: an environment
-variable beats the file, the file beats the built-in default, and nothing the
-server reads is ever copied down into a lower layer. For most settings an empty
-value is treated as unset and the file is consulted; for
-`security.allowedPaths`, `security.githubHosts`, and `reranker.enabled` an
-empty or `false` value is meaningful and wins outright. An MCP client
-that exports variables in its server entry keeps working exactly as before; the
-file is for the settings you would rather not repeat in every client's JSON.
+`config.json` is the only way to set the 24 operational settings. Seven more —
+three secrets, two bootstrap paths, two one-shot switches — are environment-only,
+because a file inside the storage directory structurally cannot serve them. There
+is no third path and no overlap: an environment variable named after one of the 24
+is not read, so setting it does nothing.
+
+Precedence is one-directional and there is no write-back: the file beats the
+built-in default, and nothing the server reads is ever copied down into a lower
+layer.
 
 ### `config.json`
 
@@ -248,8 +249,8 @@ your file without disturbing anything you set.
 Generating the file and refreshing `$defaults` are conveniences and never fail
 the server. If the storage directory is read-only — a mounted volume, or a
 container run with `--read-only` — the two cases differ. When the file could not
-be **created**, the server logs a warning to stderr and runs on environment
-variables and built-in defaults. When the file exists but its `$defaults` block
+be **created**, the server logs a warning to stderr and runs on the built-in
+defaults. When the file exists but its `$defaults` block
 could not be **refreshed**, the stale block is left exactly as it is, silently,
 and every setting in the file still applies — only the documentation is out of
 date. Neither case delays or prevents startup.
@@ -271,48 +272,41 @@ An **absent** file is the one case that is not an error.
 
 ### Settings
 
-The `config.json` key column gives the `section.name` pair to write in the file.
-`GITHUB_ACCESS_TOKEN` is accepted as a fallback for `RAGNAROK_GITHUB_TOKEN`.
+Each key is a `section.name` pair to write in `config.json`. There is no
+environment variable for any of them.
 
-| Variable                                 | `config.json` key               | Default                         | Description                                                                                                                                                        |
-| ---------------------------------------- | ------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `RAGNAROK_STORAGE_DIR`                   | _(environment-only)_            | `~/.ragnarok`                   | Database & topic storage directory                                                                                                                                 |
-| `RAGNAROK_WORKING_DIR`                   | _(environment-only)_            | `process.cwd()`                 | Project root for git-branch-scoped memory                                                                                                                          |
-| `RAGNAROK_ALLOWED_PATHS`                 | `security.allowedPaths`         | _(the working dir)_             | Roots `rag_add_documents` may read; path-delimiter separated in the environment, a JSON array of strings in the file                                               |
-| `RAGNAROK_EMBEDDING_MODEL`               | `embedding.model`               | `Xenova/all-MiniLM-L6-v2`       | Default embedding model for newly created topics (HuggingFace or remote)                                                                                           |
-| `RAGNAROK_EMBEDDING_PROVIDER`            | `embedding.provider`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                                                              |
-| `RAGNAROK_EMBEDDING_BASE_URL`            | `embedding.baseUrl`             | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                                                         |
-| `RAGNAROK_EMBEDDING_API_KEY`             | _(environment-only)_            | _(empty)_                       | API key for remote embedding API                                                                                                                                   |
-| `RAGNAROK_MAX_RESIDENT_MODELS`           | `embedding.maxResidentModels`   | `2`                             | Maximum embedding models held in memory at once (minimum `1`)                                                                                                      |
-| `RAGNAROK_CHUNK_SIZE`                    | `ingestion.chunkSize`           | `1000`                          | Document chunk size (characters)                                                                                                                                   |
-| `RAGNAROK_CHUNK_OVERLAP`                 | `ingestion.chunkOverlap`        | `200`                           | Overlap between chunks                                                                                                                                             |
-| `RAGNAROK_TOP_K`                         | `retrieval.topK`                | `10`                            | Default number of results per query                                                                                                                                |
-| `RAGNAROK_RETRIEVAL_STRATEGY`            | `retrieval.strategy`            | `hybrid`                        | Default retrieval strategy                                                                                                                                         |
-| `RAGNAROK_MAX_ITERATIONS`                | `retrieval.maxIterations`       | `3`                             | Max agentic refinement iterations                                                                                                                                  |
-| `RAGNAROK_CONFIDENCE_THRESHOLD`          | `retrieval.confidenceThreshold` | `0.7`                           | Confidence threshold for early stopping                                                                                                                            |
-| `RAGNAROK_LOG_LEVEL`                     | `logging.level`                 | `info`                          | Log level (`debug`, `info`, `warn`, `error`)                                                                                                                       |
-| `RAGNAROK_LLM_PROVIDER`                  | `llm.provider`                  | `none`                          | LLM provider: `openai`, `anthropic`, `ollama`, `none`                                                                                                              |
-| `RAGNAROK_LLM_API_KEY`                   | _(environment-only)_            | _(empty)_                       | API key for OpenAI or Anthropic                                                                                                                                    |
-| `RAGNAROK_LLM_MODEL`                     | `llm.model`                     | _(per-provider)_                | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`)                                                                                          |
-| `RAGNAROK_LLM_BASE_URL`                  | `llm.baseUrl`                   | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set)                                  |
-| `RAGNAROK_RERANKER_MODEL`                | `reranker.model`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model                                                                                                                                       |
-| `RAGNAROK_RERANKER_ENABLED`              | `reranker.enabled`              | `true`                          | Enable bundled cross-encoder reranking (a JSON boolean in the file)                                                                                                |
-| `RAGNAROK_RERANKER_MAX_CANDIDATES`       | `reranker.maxCandidates`        | `20`                            | Maximum candidates scored by the reranker                                                                                                                          |
-| `RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER` | `reranker.candidateMultiplier`  | `4`                             | First-stage over-fetch multiplier                                                                                                                                  |
-| `RAGNAROK_SHUTDOWN_DRAIN_MS`             | `limits.shutdownDrainMs`        | `10000`                         | Budget for draining in-flight tool calls on SIGINT/SIGTERM                                                                                                         |
-| `RAGNAROK_LLM_REQUEST_TIMEOUT_MS`        | `llm.requestTimeoutMs`          | `30000`                         | Timeout for one configured LLM request                                                                                                                             |
-| `RAGNAROK_MAX_RESPONSE_BYTES`            | `limits.maxResponseBytes`       | `1048576`                       | Maximum serialized tool response size                                                                                                                              |
-| `RAGNAROK_EXPORT_DIR`                    | `storage.exportDir`             | `<storage>/exports`             | Only directory used for exported archives                                                                                                                          |
-| `RAGNAROK_GITHUB_HOSTS`                  | `security.githubHosts`          | `github.com`                    | GitHub/GHES host allowlist; comma-separated in the environment, a JSON array of strings in the file. Lower-cased either way, and must not be empty                 |
-| `RAGNAROK_GITHUB_TOKEN`                  | _(environment-only)_            | _(empty)_                       | GitHub credential; never accepted as a tool argument                                                                                                               |
-| `RAGNAROK_RESET_STORAGE`                 | _(environment-only)_            | `false`                         | Set to `1` to back up managed data and initialize storage v2                                                                                                       |
-| `RAGNAROK_IGNORE_LOCK`                   | _(environment-only)_            | unset                           | Bypass the cross-process storage lock (`<storageDir>/.ragnarok.lock`). Unsafe with concurrent writers — only for advanced setups that serialize access externally. |
+| `config.json` key               | Default                         | Description                                                                                                                       |
+| ------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `security.allowedPaths`         | _(the working dir)_             | Roots `rag_add_documents` may read, as a JSON array of strings                                                                    |
+| `embedding.model`               | `Xenova/all-MiniLM-L6-v2`       | Default embedding model for newly created topics (HuggingFace or remote)                                                          |
+| `embedding.provider`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                             |
+| `embedding.baseUrl`             | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                        |
+| `embedding.maxResidentModels`   | `2`                             | Maximum embedding models held in memory at once (minimum `1`)                                                                     |
+| `ingestion.chunkSize`           | `1000`                          | Document chunk size (characters)                                                                                                  |
+| `ingestion.chunkOverlap`        | `200`                           | Overlap between chunks                                                                                                            |
+| `retrieval.topK`                | `10`                            | Default number of results per query                                                                                               |
+| `retrieval.strategy`            | `hybrid`                        | Default retrieval strategy                                                                                                        |
+| `retrieval.maxIterations`       | `3`                             | Max agentic refinement iterations                                                                                                 |
+| `retrieval.confidenceThreshold` | `0.7`                           | Confidence threshold for early stopping                                                                                           |
+| `logging.level`                 | `info`                          | Log level (`debug`, `info`, `warn`, `error`)                                                                                      |
+| `llm.provider`                  | `none`                          | LLM provider: `openai`, `anthropic`, `ollama`, `none`                                                                             |
+| `llm.model`                     | _(per-provider)_                | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`)                                                         |
+| `llm.baseUrl`                   | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set) |
+| `llm.requestTimeoutMs`          | `30000`                         | Timeout for one configured LLM request                                                                                            |
+| `reranker.model`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model                                                                                                      |
+| `reranker.enabled`              | `true`                          | Enable bundled cross-encoder reranking (a JSON boolean)                                                                           |
+| `reranker.maxCandidates`        | `20`                            | Maximum candidates scored by the reranker                                                                                         |
+| `reranker.candidateMultiplier`  | `4`                             | First-stage over-fetch multiplier                                                                                                 |
+| `limits.shutdownDrainMs`        | `10000`                         | Budget for draining in-flight tool calls on SIGINT/SIGTERM                                                                        |
+| `limits.maxResponseBytes`       | `1048576`                       | Maximum serialized tool response size                                                                                             |
+| `storage.exportDir`             | `<storage>/exports`             | Only directory used for exported archives                                                                                         |
+| `security.githubHosts`          | `github.com`                    | GitHub/GHES host allowlist, as a JSON array of strings. Lower-cased, and must not be empty                                        |
 
 Three of those rows deserve a paragraph each.
 
 #### Which embedding model gets used
 
-`RAGNAROK_EMBEDDING_MODEL` / `embedding.model` is **the default model for newly
+`embedding.model` is **the default model for newly
 created topics**. It is not a global switch: each topic records the embedding
 model and fingerprint it was indexed under, and is served with that recorded
 model for the rest of its life. Changing this setting re-embeds nothing and
@@ -349,7 +343,7 @@ local model.
 
 #### How many models stay in memory
 
-`RAGNAROK_MAX_RESIDENT_MODELS` / `embedding.maxResidentModels` bounds how many
+`embedding.maxResidentModels` bounds how many
 embedding models are held in memory at once. The default is **2** and the
 minimum is **1**; a lower value is a startup error.
 
@@ -366,9 +360,11 @@ with the load cost paid on each query.
 
 #### The GitHub host allowlist
 
-`RAGNAROK_GITHUB_HOSTS` / `security.githubHosts` must resolve to at least one
-host. An explicitly empty value is rejected at startup rather than quietly
-falling back to `github.com` — see [MIGRATION.md](../../MIGRATION.md).
+`security.githubHosts` must resolve to at least one
+host. An explicitly empty array is rejected at startup rather than quietly
+falling back to `github.com`: emptying a security allowlist is a deliberate
+instruction, and silently restoring the default would grant back access that had
+just been revoked.
 
 ### Environment-only settings
 
@@ -392,12 +388,21 @@ directory, gets copied with backups, and is readable by anything that can read
 the store. Credentials belong in the process environment, where the MCP client
 that spawns the server owns them.
 
-Between them the two tables are the complete surface. Variables belonging to the
-removed HTTP transport are not merely ignored — `assertNoRemovedEnvVars()`
-aborts startup and names every offender, so a stale shared-service configuration
-fails loudly instead of quietly becoming a local pipe. See
-[MIGRATION.md](../../MIGRATION.md) for the list and the one variable that is
-silently ignored instead.
+Between them the two tables are the complete surface: 24 keys in the file, 7
+variables in the environment, nothing else. A variable named after one of the 24
+is simply not read.
+
+Variables belonging to the **removed HTTP transport** are the one exception, and
+they are not merely ignored: `assertNoRemovedEnvVars()` aborts startup and names
+every offender it finds, so a stale shared-service configuration fails loudly
+instead of quietly becoming a local pipe. They are deliberately not listed here —
+naming them in a configuration guide would read as documentation of a supported
+setting, and the startup error already tells you which one you set.
+
+The difference in treatment is deliberate: those variables implied a capability
+the server no longer has — a listening port, TLS termination, bearer auth — and
+believing you have a hardened network service when nothing is listening is
+dangerous. The 24 imply a value, which simply moved into the file.
 
 ---
 
@@ -447,7 +452,7 @@ There is no flag that starts a listener. Cacheable `server/discover`, list, and
 resource-read results advertise `ttlMs=0` and `cacheScope=private`.
 
 Shut down by closing stdin or sending SIGINT/SIGTERM; in-flight tool calls drain
-within `RAGNAROK_SHUTDOWN_DRAIN_MS` and the storage lease is released.
+within `limits.shutdownDrainMs` and the storage lease is released.
 
 ### Storage format v2
 
@@ -483,18 +488,18 @@ Add to your Claude Desktop `claude_desktop_config.json`:
       "args": ["-y", "@ragnarok/mcp-server"],
       "env": {
         "RAGNAROK_STORAGE_DIR": "/path/to/storage",
-        "RAGNAROK_WORKING_DIR": "/path/to/your/project",
-        "RAGNAROK_LOG_LEVEL": "info"
+        "RAGNAROK_WORKING_DIR": "/path/to/your/project"
       }
     }
   }
 }
 ```
 
-Only the two bootstrap variables really have to be here. Everything else in the
-settings table can live in `<storageDir>/config.json` instead, which keeps one
-copy of the configuration next to the store rather than one per client entry —
-and takes effect for every client pointed at that storage directory.
+Only the bootstrap paths and any secrets belong here — those are the whole
+environment surface. Everything in the settings table lives in
+`<storageDir>/config.json`, which keeps one copy of the configuration next to the
+store rather than one per client entry, and takes effect for every client pointed
+at that storage directory.
 
 ### VS Code MCP client
 
@@ -539,27 +544,41 @@ the stdin it needs.
 
 ### Configuration
 
-Pass configuration with `-e`, and point storage at the mounted volume:
+**A container is configured by the `config.json` on its data volume**, not with
+`-e`. Only secrets are passed on the command line:
 
 ```bash
 docker run -i --rm --init --read-only --cap-drop ALL \
   --security-opt no-new-privileges --tmpfs /tmp:size=256m \
   -v ragnarok-data:/data/ragnarok \
-  -e RAGNAROK_STORAGE_DIR=/data/ragnarok \
-  -e RAGNAROK_LLM_PROVIDER=openai \
   -e RAGNAROK_LLM_API_KEY="$OPENAI_API_KEY" \
-  -e RAGNAROK_LLM_MODEL=gpt-4o-mini \
   ragnarok-mcp
 ```
 
-Never bake secrets into the image or a committed client configuration. Use a
-host directory (`-v /path/on/host:/data/ragnarok`) when the store must be
-visible outside Docker.
+The image already sets `RAGNAROK_STORAGE_DIR=/data/ragnarok`, so the server finds
+`/data/ragnarok/config.json` on the mounted volume. Put the rest there:
 
-Non-secret settings can go in `config.json` on the data volume instead of on the
-command line. `--read-only` applies to the image's root filesystem, not to the
-mounted volume, so the server can still generate and refresh the file there —
-and the settings survive a `--rm` container because the volume does.
+```json
+{
+  "llm": { "provider": "openai", "model": "gpt-4o-mini" }
+}
+```
+
+`--read-only` applies to the image's root filesystem, not to the mounted volume,
+so the server can still generate and refresh the file there — and the settings
+survive a `--rm` container because the volume does. Seed the file before the
+first run with a throwaway container over the same volume if you do not want to
+start once and edit:
+
+```bash
+echo '{"llm":{"provider":"openai","model":"gpt-4o-mini"}}' | docker run --rm -i \
+  -v ragnarok-data:/data/ragnarok --entrypoint sh ragnarok-mcp \
+  -c 'mkdir -p /data/ragnarok && cat > /data/ragnarok/config.json'
+```
+
+Never bake secrets into the image, into `config.json`, or into a committed client
+configuration. Use a host directory (`-v /path/on/host:/data/ragnarok`) when the
+store must be visible outside Docker.
 
 ### Wiring the container to an MCP client
 

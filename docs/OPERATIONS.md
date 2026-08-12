@@ -51,7 +51,7 @@ its own root, or accept that only one may run at a time.
 ## Backup and recovery
 
 Stop the server and let in-flight tool calls drain before copying storage
-(`RAGNAROK_SHUTDOWN_DRAIN_MS`, 10 seconds by default, bounds the drain on
+(`limits.shutdownDrainMs`, 10 seconds by default, bounds the drain on
 SIGINT/SIGTERM; the process then exits). Back up the complete storage root,
 including its version marker and feature stores. Filesystem snapshots are
 preferred. A file-by-file copy while the process is writing is not a supported
@@ -70,8 +70,8 @@ To restore:
 
 Archive export/import is for moving individual topics, not for backing up the
 complete service. `rag_export_topic` writes a checksummed `.rag` archive into
-`RAGNAROK_EXPORT_DIR` (`<storage>/exports` by default). `rag_import_topic`
-reads an archive from a canonical `RAGNAROK_ALLOWED_PATHS` root and validates
+`storage.exportDir` (`<storage>/exports` by default). `rag_import_topic`
+reads an archive from a canonical `security.allowedPaths` root and validates
 archive paths, limits, schemas, and checksums before publication.
 
 For a legacy store, first run the dry-run migration and retain its immutable
@@ -81,23 +81,23 @@ backup. The exact commands, rollback behavior, and exit codes are in
 ## Model configuration
 
 Embedding, reranker, and LLM settings are resolved once at startup, in this
-order: **environment variable → `<storage>/config.json` → built-in default**. An
-environment variable always wins, so the MCP client that spawns the server can
-still own every setting by exporting it. Anything the client does not export
-falls through to the file, and anything absent from the file falls through to
-the built-in default. Either way a change takes effect on the next start, not
-during a run — restart the process.
+order: **`<storage>/config.json` → built-in default**. Anything absent from the
+file falls through to the built-in default. A change takes effect on the next
+start, not during a run — restart the process.
 
-Prefer the environment for per-client differences and for every credential;
-prefer the file for settings that should hold for whichever client opens this
-store. Deleting a key from the file returns that setting to the current built-in
-default, which is also how an untouched setting picks up an improved default on
-upgrade. An unknown or mistyped key is a startup error, never a silent default.
+The file is the only place these are set; there is no environment variable for
+any of them, and one named after a setting is not read. The environment carries
+only credentials, the two bootstrap paths, and the two one-shot switches.
+Configuration therefore holds for whichever client opens this store rather than
+being repeated per client entry. Deleting a key from the file returns that
+setting to the current built-in default, which is also how an untouched setting
+picks up an improved default on upgrade. An unknown or mistyped key is a startup
+error, never a silent default.
 The complete key table is in
 [the MCP server guide](../packages/mcp-server/README.md#configuration).
 
-- `RAGNAROK_EMBEDDING_MODEL` and `RAGNAROK_EMBEDDING_PROVIDER` select the
-  embedding backend. `RAGNAROK_EMBEDDING_MODEL` is the default model for newly
+- `embedding.model` and `embedding.provider` select the
+  embedding backend. `embedding.model` is the default model for newly
   created topics, not a global switch. Each topic records the model it was
   indexed under and is served with that model afterwards: a query against it
   uses the recorded model, and adding documents to it embeds the new chunks with
@@ -108,7 +108,7 @@ The complete key table is in
   already indexed; changing a topic's model is a delete-and-recreate. A
   dimension mismatch or a missing fingerprint is still a hard reindex error
   rather than a silently degraded result.
-- `RAGNAROK_MAX_RESIDENT_MODELS` (default `2`, minimum `1`) bounds how many
+- `embedding.maxResidentModels` (default `2`, minimum `1`) bounds how many
   embedding models stay loaded at once. It counts weight-bearing models only —
   `remote` and `vscodeLM` backends hold no weights and never occupy a slot. A
   resident model costs RAM, not CPU, so this is a memory budget and not a
@@ -122,15 +122,15 @@ The complete key table is in
   the same name. Point the deployment at the original endpoint or rebuild the
   topic. Knowledge bases meant to move between machines should be built with the
   bundled local model.
-- `RAGNAROK_RERANKER_ENABLED` and `RAGNAROK_RERANKER_MODEL` control the bundled
+- `reranker.enabled` and `reranker.model` control the bundled
   cross-encoder. A model switch leases the active generation so in-flight work
   drains rather than returning stale first-stage results.
-- `RAGNAROK_LLM_PROVIDER` gates agentic query planning, memory entity
+- `llm.provider` gates agentic query planning, memory entity
   extraction, and `rag_memory` community clustering. With `none`, those degrade
   to documented empty or explanatory results — not failures.
-  `RAGNAROK_LLM_REQUEST_TIMEOUT_MS` (30 seconds by default) bounds one request.
+  `llm.requestTimeoutMs` (30 seconds by default) bounds one request.
 
-`RAGNAROK_MAX_RESPONSE_BYTES` (1 MiB by default) caps one serialized tool
+`limits.maxResponseBytes` (1 MiB by default) caps one serialized tool
 response. A result that cannot be reduced below it returns a stable error
 rather than a truncated document.
 

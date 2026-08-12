@@ -58,7 +58,7 @@ extraction (§6).
 
 ### 2.1 Which embedding model runs
 
-`embedding.model` (`RAGNAROK_EMBEDDING_MODEL`) is **the default model for newly created topics**, not
+`embedding.model` is **the default model for newly created topics**, not
 a global switch. A topic records the model it was created under, and every later read and write of
 that topic resolves through the recorded value rather than the configured one.
 

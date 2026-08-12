@@ -22,7 +22,7 @@ list is in [MIGRATION.md](../MIGRATION.md).
 Do not attempt to re-expose the server by wrapping stdio in a network relay. A
 relay would grant every caller the spawning user's full authority — including
 memory, model switching, storage reset, and read access to every path under
-`RAGNAROK_ALLOWED_PATHS` — with no role, quota, or credential in between. Run a
+`security.allowedPaths` — with no role, quota, or credential in between. Run a
 separate instance per user and per storage root instead.
 
 ## Capabilities
@@ -36,10 +36,9 @@ guard against an agent's mistake, not an authorization boundary.
 
 Treat the decision to add this server to an MCP client as the security
 decision. The meaningful controls are which storage root it uses, which paths
-`RAGNAROK_ALLOWED_PATHS` — or, beneath it, `security.allowedPaths` in
-`<storageRoot>/config.json` — exposes, and which credentials
-(`RAGNAROK_LLM_API_KEY`, `RAGNAROK_GITHUB_TOKEN`) its environment carries.
-Credentials remain environment-only and cannot be set in the file.
+`security.allowedPaths` in `<storageRoot>/config.json` exposes, and which
+credentials (`RAGNAROK_LLM_API_KEY`, `RAGNAROK_GITHUB_TOKEN`) its environment
+carries. Credentials remain environment-only and cannot be set in the file.
 
 ## Memory graph visualization exposure
 
@@ -73,27 +72,31 @@ OAuth/DCR hardening items are therefore not applicable to this server.
 ## File and network boundaries
 
 `rag_add_documents` and archive import accept only paths under canonical
-`RAGNAROK_ALLOWED_PATHS` or the configured export root, resolved on the machine
+`security.allowedPaths` or the configured export root, resolved on the machine
 running the server. There is no upload handle; content is indexed from the
 filesystem the server can already see. That allowlist therefore defines what an
 agent driving this server can read: default it to the project root rather than
 a home directory.
 
-Both halves of that allowlist are also settable from `config.json`:
-`security.allowedPaths` beneath `RAGNAROK_ALLOWED_PATHS`, and the export root
-via `storage.exportDir` beneath `RAGNAROK_EXPORT_DIR` — the export root is
-joined into the same ingest allowlist, so widening it widens what can be read.
-GitHub ingestion is restricted to `RAGNAROK_GITHUB_HOSTS`, likewise settable as
-`security.githubHosts`. Write access to the storage root is therefore write
-access to these allowlists: an environment variable set by the MCP client wins,
-but any of the three left unset is decided by a file inside the store. What an
-empty value means differs by setting — an empty `RAGNAROK_EXPORT_DIR` is
-treated as unset and falls through to the file, while an empty
-`RAGNAROK_ALLOWED_PATHS` or `RAGNAROK_GITHUB_HOSTS` is meaningful in its own
-right and wins outright, with the file never consulted (an empty host list is
-then rejected at startup). Keep the storage root under the same protection as
-the paths it grants, and pin an allowlist in the client's environment when a
-file in the store must not be able to move it.
+All three allowlists live **only** in `<storageRoot>/config.json`:
+`security.allowedPaths` for ingest roots, `storage.exportDir` for the export
+root — which is joined into the same ingest allowlist, so widening it widens
+what can be read — and `security.githubHosts` for GitHub ingestion. There is no
+environment variable for any of them.
+
+**Write access to the storage root is therefore write access to these
+allowlists**, with no way to pin one from outside the store. Whoever can write
+`config.json` decides what the server may read. Keep the storage root under at
+least the same protection as the paths it grants: if the store is on a shared
+volume, a network mount, or a directory another process can write, treat its
+allowlists as controlled by that writer rather than by the MCP client.
+
+An empty value is meaningful rather than absent. An empty `security.allowedPaths`
+narrows the ingest roots to the working directory — its documented default — so
+it widens nothing. An empty `security.githubHosts` is rejected at startup rather
+than falling back to `github.com`: emptying a security allowlist is a deliberate
+instruction, and silently restoring the default would grant back access that had
+just been revoked.
 
 URL ingestion rejects unsafe targets. Credentials come from service
 configuration and are never accepted as tool arguments. Review DNS/proxy policy
@@ -109,7 +112,7 @@ untrusted text that may contain prompt injection.
 
 The server emits no audit ledger, and there is nothing meaningful to audit: one
 local user issues every request. Its stderr log is operational evidence for
-that user, is bounded by `RAGNAROK_LOG_LEVEL`, and must not be relied on as a
+that user, is bounded by `logging.level`, and must not be relied on as a
 tamper-proof or attributable record — a local operator can alter the process,
 its environment, and the storage root.
 

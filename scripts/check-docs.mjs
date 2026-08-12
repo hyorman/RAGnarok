@@ -48,14 +48,14 @@ const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "ut
 assert.doesNotMatch(mcp, /Existing branch-era storage .* intentionally not migrated/);
 // The stdio server has no roles, so the guide must not resurrect a role matrix.
 assert.doesNotMatch(mcp, /Shared reader|Shared curator|Shared admin/);
-for (const variable of [
-  "RAGNAROK_STORAGE_DIR",
-  "RAGNAROK_ALLOWED_PATHS",
-  "RAGNAROK_EMBEDDING_MODEL",
-  "RAGNAROK_LLM_PROVIDER",
-  "RAGNAROK_MAX_RESPONSE_BYTES",
-]) {
+for (const variable of ["RAGNAROK_STORAGE_DIR"]) {
   assert.match(mcp, new RegExp(variable), `MCP guide must document ${variable}`);
+}
+// The settings that moved into config.json must be documented by their key.
+// Asserting on the old variable names would pin the guide to a configuration
+// mechanism the server no longer has.
+for (const key of ["security.allowedPaths", "embedding.model", "llm.provider", "limits.maxResponseBytes"]) {
+  assert.match(mcp, new RegExp(key.replace(".", "\\.")), `MCP guide must document ${key}`);
 }
 // Variables removed with the HTTP transport are rejected at startup. Naming
 // them here would read as documentation of a supported setting; MIGRATION.md

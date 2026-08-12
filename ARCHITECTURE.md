@@ -105,7 +105,7 @@ local user, not an attributable identity record, because every request already
 comes from that user.
 
 File ingestion reads paths on the machine running the server, restricted to
-canonical `RAGNAROK_ALLOWED_PATHS` roots. There is no upload or download
+canonical `security.allowedPaths` roots. There is no upload or download
 handle: a client that needs to index a file places it somewhere the server may
 read.
 
