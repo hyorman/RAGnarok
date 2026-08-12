@@ -18,6 +18,9 @@ describe("MCP Server", () => {
   });
 
   describe("loadConfig()", () => {
+    // Scrubbed, not because loadConfig() reads all of these — after the
+    // config-file-only change it reads six — but because a developer's
+    // exported value must never reach a test either way.
     const envVars = [
       "RAGNAROK_STORAGE_DIR",
       "RAGNAROK_EMBEDDING_MODEL",
@@ -79,6 +82,10 @@ describe("MCP Server", () => {
       fs.rmSync(tmpStorage, { recursive: true, force: true });
     });
 
+    /** Seed <tmpStorage>/config.json. loadConfig() reads it; nothing else does. */
+    const writeConfig = (value: unknown): void =>
+      fs.writeFileSync(path.join(tmpStorage, "config.json"), JSON.stringify(value));
+
     it("should return correct defaults when no env vars are set", () => {
       const config = loadConfig();
       expect(config.embeddingModel).to.equal("Xenova/all-MiniLM-L6-v2");
@@ -106,15 +113,6 @@ describe("MCP Server", () => {
       expect(config.rerankerCandidateMultiplier).to.equal(4);
     });
 
-    it("treats only '0' and 'false' as disabling the reranker", () => {
-      process.env.RAGNAROK_RERANKER_ENABLED = "0";
-      expect(loadConfig().rerankerEnabled).to.be.false;
-      process.env.RAGNAROK_RERANKER_ENABLED = "false";
-      expect(loadConfig().rerankerEnabled).to.be.false;
-      process.env.RAGNAROK_RERANKER_ENABLED = "1";
-      expect(loadConfig().rerankerEnabled).to.be.true;
-    });
-
     it("should default llmProvider to 'none'", () => {
       const config = loadConfig();
       expect(config.llmProvider).to.equal("none");
@@ -137,13 +135,14 @@ describe("MCP Server", () => {
       expect(config.llmBaseUrl).to.equal("");
     });
 
-    it("should read values from environment variables", () => {
-      process.env.RAGNAROK_CHUNK_SIZE = "500";
-      process.env.RAGNAROK_TOP_K = "10";
-      process.env.RAGNAROK_LLM_PROVIDER = "openai";
+    it("should read values from a config file", () => {
+      writeConfig({
+        ingestion: { chunkSize: 500 },
+        retrieval: { topK: 10 },
+        llm: { provider: "openai", model: "gpt-4", baseUrl: "https://api.openai.com" },
+      });
+      // The API key is a secret, so it stays environment-only.
       process.env.RAGNAROK_LLM_API_KEY = "sk-test";
-      process.env.RAGNAROK_LLM_MODEL = "gpt-4";
-      process.env.RAGNAROK_LLM_BASE_URL = "https://api.openai.com";
 
       const config = loadConfig();
       expect(config.chunkSize).to.equal(500);
@@ -187,91 +186,83 @@ describe("MCP Server", () => {
       expect(config.storageDir).to.equal("/tmp/custom-ragnarok");
     });
 
-    it("should use RAGNAROK_EMBEDDING_MODEL when set", () => {
-      process.env.RAGNAROK_EMBEDDING_MODEL = "custom/model-v2";
+    it("should use embedding.model when set", () => {
+      writeConfig({ embedding: { model: "custom/model-v2" } });
       const config = loadConfig();
       expect(config.embeddingModel).to.equal("custom/model-v2");
     });
 
-    it("should reject non-numeric RAGNAROK_CHUNK_SIZE at startup", () => {
-      process.env.RAGNAROK_CHUNK_SIZE = "abc";
+    it("should reject a non-numeric ingestion.chunkSize at startup", () => {
+      writeConfig({ ingestion: { chunkSize: "abc" } });
       expect(() => loadConfig()).to.throw(/chunkSize/);
     });
 
-    it("should reject an invalid RAGNAROK_LLM_PROVIDER at startup", () => {
-      process.env.RAGNAROK_LLM_PROVIDER = "chatgpt";
+    it("should reject an invalid llm.provider at startup", () => {
+      writeConfig({ llm: { provider: "chatgpt" } });
       expect(() => loadConfig()).to.throw(/llmProvider/);
     });
 
     it("should reject openai provider without an API key", () => {
-      process.env.RAGNAROK_LLM_PROVIDER = "openai";
+      writeConfig({ llm: { provider: "openai" } });
       delete process.env.RAGNAROK_LLM_API_KEY;
       expect(() => loadConfig()).to.throw(/RAGNAROK_LLM_API_KEY/);
     });
 
     it("should reject chunk overlap >= chunk size", () => {
-      process.env.RAGNAROK_CHUNK_SIZE = "200";
-      process.env.RAGNAROK_CHUNK_OVERLAP = "200";
+      writeConfig({ ingestion: { chunkSize: 200, chunkOverlap: 200 } });
       expect(() => loadConfig()).to.throw(/chunkOverlap/);
     });
 
-    it("should reject an invalid RAGNAROK_LOG_LEVEL at startup", () => {
-      process.env.RAGNAROK_LOG_LEVEL = "verbose";
+    it("should reject an invalid logging.level at startup", () => {
+      writeConfig({ logging: { level: "verbose" } });
       expect(() => loadConfig()).to.throw(/logLevel/);
     });
 
     it("rejects a shutdown drain budget outside its range", () => {
-      process.env.RAGNAROK_SHUTDOWN_DRAIN_MS = "999";
+      writeConfig({ limits: { shutdownDrainMs: 999 } });
       expect(() => loadConfig()).to.throw(/shutdownDrainMs/);
-      process.env.RAGNAROK_SHUTDOWN_DRAIN_MS = "120001";
+      writeConfig({ limits: { shutdownDrainMs: 120001 } });
       expect(() => loadConfig()).to.throw(/shutdownDrainMs/);
-      process.env.RAGNAROK_SHUTDOWN_DRAIN_MS = "30000";
+      writeConfig({ limits: { shutdownDrainMs: 30000 } });
       expect(loadConfig().shutdownDrainMs).to.equal(30_000);
     });
 
     it("rejects a response ceiling above the protocol maximum", () => {
-      process.env.RAGNAROK_MAX_RESPONSE_BYTES = String(32 * 1024 * 1024);
+      writeConfig({ limits: { maxResponseBytes: 32 * 1024 * 1024 } });
       expect(() => loadConfig()).to.throw(/maxResponseBytes/);
     });
 
     it("requires an embedding base URL for non-huggingface providers", () => {
-      process.env.RAGNAROK_EMBEDDING_PROVIDER = "openai";
-      expect(() => loadConfig()).to.throw(/RAGNAROK_EMBEDDING_BASE_URL/);
-      process.env.RAGNAROK_EMBEDDING_BASE_URL = "https://api.openai.com/v1";
+      writeConfig({ embedding: { provider: "openai" } });
+      expect(() => loadConfig()).to.throw(/embeddingBaseUrl/);
+      writeConfig({ embedding: { provider: "openai", baseUrl: "https://api.openai.com/v1" } });
       expect(loadConfig().embeddingBaseUrl).to.equal("https://api.openai.com/v1");
     });
 
     it("rejects provider base URLs that embed credentials or a non-HTTP scheme", () => {
-      process.env.RAGNAROK_LLM_PROVIDER = "ollama";
-      process.env.RAGNAROK_LLM_BASE_URL = "http://user:secret@ollama.internal:11434";
+      writeConfig({ llm: { provider: "ollama", baseUrl: "http://user:secret@ollama.internal:11434" } });
       expect(() => loadConfig()).to.throw(/llmBaseUrl/);
 
-      process.env.RAGNAROK_LLM_BASE_URL = "file:///etc/passwd";
+      writeConfig({ llm: { provider: "ollama", baseUrl: "file:///etc/passwd" } });
       expect(() => loadConfig()).to.throw(/llmBaseUrl/);
 
-      process.env.RAGNAROK_LLM_BASE_URL = "http://localhost:11434";
+      writeConfig({ llm: { provider: "ollama", baseUrl: "http://localhost:11434" } });
       expect(loadConfig().llmBaseUrl).to.equal("http://localhost:11434");
-    });
-
-    it("splits RAGNAROK_ALLOWED_PATHS on the platform delimiter, trimming blanks", () => {
-      process.env.RAGNAROK_ALLOWED_PATHS = ["/srv/docs", "  /srv/notes  ", ""].join(path.delimiter);
-      expect(loadConfig().allowedPaths).to.deep.equal(["/srv/docs", "/srv/notes"]);
     });
 
     it("defaults allowedPaths to empty so the working directory is the only root", () => {
       expect(loadConfig().allowedPaths).to.deep.equal([]);
     });
 
-    it("derives exportDir from the storage dir unless overridden", () => {
-      process.env.RAGNAROK_STORAGE_DIR = "/tmp/ragnarok-store";
-      expect(loadConfig().exportDir).to.equal(path.join("/tmp/ragnarok-store", "exports"));
-      process.env.RAGNAROK_EXPORT_DIR = "/tmp/elsewhere";
+    it("derives exportDir from the storage dir unless the file overrides it", () => {
+      expect(loadConfig().exportDir).to.equal(path.join(tmpStorage, "exports"));
+      writeConfig({ storage: { exportDir: "/tmp/elsewhere" } });
       expect(loadConfig().exportDir).to.equal("/tmp/elsewhere");
     });
 
-    it("normalises RAGNAROK_GITHUB_HOSTS and defaults to github.com", () => {
+    it("normalises security.githubHosts and defaults to github.com", () => {
       expect(loadConfig().githubHosts).to.deep.equal(["github.com"]);
-      process.env.RAGNAROK_GITHUB_HOSTS = "GitHub.com, ghe.Example.COM ,";
+      writeConfig({ security: { githubHosts: ["GitHub.com", " ghe.Example.COM ", ""] } });
       expect(loadConfig().githubHosts).to.deep.equal(["github.com", "ghe.example.com"]);
     });
 
@@ -599,10 +590,18 @@ describe("MCP Server", () => {
       expect(loadConfig().topK).to.equal(42);
     });
 
-    it("lets env beat the file", () => {
+    it("ignores an environment variable for a file-owned setting", () => {
+      // config.json is the source of truth for these, so an exported variable
+      // is inert. Not an error — inert. Nothing reads it.
+      process.env.RAGNAROK_TOP_K = "5";
+      expect(loadConfig().topK).to.equal(10);
+    });
+
+    it("still lets the file set that same key", () => {
+      // Guards the obvious wrong fix: deleting the read AND the file lookup.
+      process.env.RAGNAROK_TOP_K = "5";
       writeConfig({ retrieval: { topK: 42 } });
-      process.env.RAGNAROK_TOP_K = "7";
-      expect(loadConfig().topK).to.equal(7);
+      expect(loadConfig().topK).to.equal(42);
     });
 
     it("uses the CURRENT default for an absent key even when $defaults records an older one", () => {
@@ -639,23 +638,41 @@ describe("MCP Server", () => {
       expect(loadConfig().allowedPaths).to.deep.equal(["/data"]);
     });
 
-    it("rejects an explicitly empty RAGNAROK_GITHUB_HOSTS instead of restoring the default", () => {
+    it("rejects an explicitly empty security.githubHosts instead of restoring the default", () => {
       // Empty means "no hosts". Silently reinstating github.com would hand
       // back access the operator deliberately revoked.
-      writeConfig({ security: { githubHosts: ["ghe.example.com"] } });
-      process.env.RAGNAROK_GITHUB_HOSTS = "";
+      writeConfig({ security: { githubHosts: [] } });
       expect(() => loadConfig()).to.throw(/githubHosts/);
     });
 
-    it("resolves maxResidentModels from the file, and env beats it", () => {
+    it("resolves maxResidentModels from the file", () => {
       writeConfig({ embedding: { maxResidentModels: 3 } });
       expect(loadConfig().maxResidentModels).to.equal(3);
-      process.env.RAGNAROK_MAX_RESIDENT_MODELS = "1";
-      expect(loadConfig().maxResidentModels).to.equal(1);
     });
 
     it("defaults maxResidentModels to 2", () => {
       expect(loadConfig().maxResidentModels).to.equal(2);
+    });
+  });
+
+  describe("config.ts environment surface", () => {
+    it("reads only the surviving variables", () => {
+      // A grep, deliberately. A behavioural test cannot tell "the read was
+      // deleted" from "the read is there but the file happened to win", and a
+      // RAGNAROK_* read creeping back in is a second configuration path — the
+      // exact thing config-file-only removed. RAGNAROK_IGNORE_LOCK is the
+      // seventh survivor but is read in core's storageLock.ts, never here.
+      // Tests run compiled from dist-test/test, so two levels up is the package root.
+      const source = fs.readFileSync(path.resolve(__dirname, "..", "..", "src", "config.ts"), "utf8");
+      const found = new Set([...source.matchAll(/process\.env\.(RAGNAROK_[A-Z_]+)/g)].map((match) => match[1]));
+      expect([...found].sort()).to.deep.equal([
+        "RAGNAROK_EMBEDDING_API_KEY",
+        "RAGNAROK_GITHUB_TOKEN",
+        "RAGNAROK_LLM_API_KEY",
+        "RAGNAROK_RESET_STORAGE",
+        "RAGNAROK_STORAGE_DIR",
+        "RAGNAROK_WORKING_DIR",
+      ]);
     });
   });
 });

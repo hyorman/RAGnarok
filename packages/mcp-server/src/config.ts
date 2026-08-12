@@ -1,6 +1,8 @@
 /**
- * MCP server configuration: environment variables first, then the optional
- * config.json in the storage directory, then the built-in defaults.
+ * MCP server configuration: config.json in the storage directory, then the
+ * built-in defaults. Seven settings are environment-only — three secrets, two
+ * bootstrap paths, two one-shot switches — and six of them are read here (the
+ * seventh, RAGNAROK_IGNORE_LOCK, is read in core's storageLock).
  */
 
 import * as fs from "fs";
@@ -68,8 +70,8 @@ export interface McpConfig {
   /** Project root for git-branch-scoped memory (empty = fall back to cwd). */
   workingDir: string;
   /**
-   * Roots that rag_add_documents may read from (RAGNAROK_ALLOWED_PATHS,
-   * path-delimiter separated). Empty = default to the working directory.
+   * Roots that rag_add_documents may read from (security.allowedPaths).
+   * Empty = default to the working directory.
    */
   allowedPaths: string[];
   embeddingModel: string;
@@ -152,21 +154,21 @@ const configSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["llmApiKey"],
-        message: `RAGNAROK_LLM_API_KEY is required when RAGNAROK_LLM_PROVIDER=${cfg.llmProvider}`,
+        message: `RAGNAROK_LLM_API_KEY is required when llm.provider=${cfg.llmProvider}`,
       });
     }
     if (cfg.embeddingProvider !== "huggingface" && !cfg.embeddingBaseUrl) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["embeddingBaseUrl"],
-        message: "RAGNAROK_EMBEDDING_BASE_URL is required when RAGNAROK_EMBEDDING_PROVIDER is not huggingface",
+        message: 'config.json: "embedding.baseUrl" is required when "embedding.provider" is not huggingface',
       });
     }
     if (cfg.chunkOverlap >= cfg.chunkSize) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["chunkOverlap"],
-        message: `RAGNAROK_CHUNK_OVERLAP (${cfg.chunkOverlap}) must be smaller than RAGNAROK_CHUNK_SIZE (${cfg.chunkSize})`,
+        message: `config.json: "ingestion.chunkOverlap" (${cfg.chunkOverlap}) must be smaller than "ingestion.chunkSize" (${cfg.chunkSize})`,
       });
     }
     for (const [field, rawUrl] of [
@@ -198,71 +200,43 @@ export function loadConfig(): McpConfig {
   const raw: McpConfig = {
     storageDir,
     workingDir: process.env.RAGNAROK_WORKING_DIR || "",
-    // An empty RAGNAROK_ALLOWED_PATHS means "no paths", not "unset", so the
-    // file is consulted only when the variable is genuinely absent. Both
-    // branches trim and drop blanks: tools.ts feeds each root to
-    // path.resolve(), and path.resolve("") is the process cwd, so a stray
-    // empty entry would silently widen the allowlist to the whole cwd.
-    allowedPaths:
-      process.env.RAGNAROK_ALLOWED_PATHS !== undefined
-        ? process.env.RAGNAROK_ALLOWED_PATHS.split(path.delimiter)
-            .map((p) => p.trim())
-            .filter((p) => p.length > 0)
-        : (file.allowedPaths ?? []).map((p) => p.trim()).filter((p) => p.length > 0),
-    embeddingModel: process.env.RAGNAROK_EMBEDDING_MODEL || file.embeddingModel || "Xenova/all-MiniLM-L6-v2",
-    chunkSize: parseInt(process.env.RAGNAROK_CHUNK_SIZE || String(file.chunkSize ?? 1000), 10),
-    chunkOverlap: parseInt(process.env.RAGNAROK_CHUNK_OVERLAP || String(file.chunkOverlap ?? 200), 10),
-    topK: parseInt(process.env.RAGNAROK_TOP_K || String(file.topK ?? 10), 10),
-    retrievalStrategy: process.env.RAGNAROK_RETRIEVAL_STRATEGY || file.retrievalStrategy || "hybrid",
-    maxIterations: parseInt(process.env.RAGNAROK_MAX_ITERATIONS || String(file.maxIterations ?? 3), 10),
-    confidenceThreshold: parseFloat(
-      process.env.RAGNAROK_CONFIDENCE_THRESHOLD || String(file.confidenceThreshold ?? 0.7),
-    ),
-    logLevel: process.env.RAGNAROK_LOG_LEVEL || file.logLevel || "info",
-    llmProvider: process.env.RAGNAROK_LLM_PROVIDER || file.llmProvider || "none",
+    // Trim and drop blanks: tools.ts feeds each root to path.resolve(), and
+    // path.resolve("") is the process cwd, so a stray empty entry would
+    // silently widen the allowlist to the whole cwd.
+    allowedPaths: (file.allowedPaths ?? []).map((p) => p.trim()).filter((p) => p.length > 0),
+    embeddingModel: file.embeddingModel || "Xenova/all-MiniLM-L6-v2",
+    chunkSize: file.chunkSize ?? 1000,
+    chunkOverlap: file.chunkOverlap ?? 200,
+    topK: file.topK ?? 10,
+    retrievalStrategy: file.retrievalStrategy || "hybrid",
+    maxIterations: file.maxIterations ?? 3,
+    confidenceThreshold: file.confidenceThreshold ?? 0.7,
+    logLevel: file.logLevel || "info",
+    llmProvider: file.llmProvider || "none",
     llmApiKey: process.env.RAGNAROK_LLM_API_KEY || "",
-    llmModel: process.env.RAGNAROK_LLM_MODEL || file.llmModel || "",
+    llmModel: file.llmModel || "",
     // No default here: each provider applies its own (Ollama falls back to
     // http://localhost:11434). A global Ollama default silently routed
     // OpenAI/Anthropic requests to localhost.
-    llmBaseUrl: process.env.RAGNAROK_LLM_BASE_URL || file.llmBaseUrl || "",
-    embeddingProvider: process.env.RAGNAROK_EMBEDDING_PROVIDER || file.embeddingProvider || "huggingface",
-    embeddingBaseUrl: process.env.RAGNAROK_EMBEDDING_BASE_URL || file.embeddingBaseUrl || "",
+    llmBaseUrl: file.llmBaseUrl || "",
+    embeddingProvider: file.embeddingProvider || "huggingface",
+    embeddingBaseUrl: file.embeddingBaseUrl || "",
     embeddingApiKey: process.env.RAGNAROK_EMBEDDING_API_KEY || "",
-    maxResidentModels: parseInt(process.env.RAGNAROK_MAX_RESIDENT_MODELS || String(file.maxResidentModels ?? 2), 10),
-    shutdownDrainMs: parseInt(process.env.RAGNAROK_SHUTDOWN_DRAIN_MS || String(file.shutdownDrainMs ?? 10000), 10),
-    llmRequestTimeoutMs: parseInt(
-      process.env.RAGNAROK_LLM_REQUEST_TIMEOUT_MS || String(file.llmRequestTimeoutMs ?? 30000),
-      10,
-    ),
-    maxResponseBytes: parseInt(process.env.RAGNAROK_MAX_RESPONSE_BYTES || String(file.maxResponseBytes ?? 1048576), 10),
-    rerankerModel: process.env.RAGNAROK_RERANKER_MODEL || file.rerankerModel || "Xenova/ms-marco-MiniLM-L-6-v2",
-    // `false` is a meaningful env value, so absence - not falsiness - is what
-    // hands the decision to the file.
-    rerankerEnabled:
-      process.env.RAGNAROK_RERANKER_ENABLED !== undefined
-        ? process.env.RAGNAROK_RERANKER_ENABLED !== "0" && process.env.RAGNAROK_RERANKER_ENABLED !== "false"
-        : (file.rerankerEnabled ?? true),
-    rerankerMaxCandidates: parseInt(
-      process.env.RAGNAROK_RERANKER_MAX_CANDIDATES || String(file.rerankerMaxCandidates ?? 20),
-      10,
-    ),
-    rerankerCandidateMultiplier: parseInt(
-      process.env.RAGNAROK_RERANKER_CANDIDATE_MULTIPLIER || String(file.rerankerCandidateMultiplier ?? 4),
-      10,
-    ),
-    exportDir: process.env.RAGNAROK_EXPORT_DIR || file.exportDir || path.join(storageDir, "exports"),
-    // As with allowedPaths, an empty RAGNAROK_GITHUB_HOSTS is a deliberate
-    // "no hosts" rather than an absent setting - and configSchema's .min(1)
-    // then rejects it loudly. Both branches lower-case: tools.ts matches
-    // against parsed.hostname.toLowerCase(), so a mixed-case entry from the
-    // file would be an allowlist row that could never match.
-    githubHosts:
-      process.env.RAGNAROK_GITHUB_HOSTS !== undefined
-        ? process.env.RAGNAROK_GITHUB_HOSTS.split(",")
-            .map((host) => host.trim().toLowerCase())
-            .filter(Boolean)
-        : (file.githubHosts ?? ["github.com"]).map((host) => host.trim().toLowerCase()).filter(Boolean),
+    maxResidentModels: file.maxResidentModels ?? 2,
+    shutdownDrainMs: file.shutdownDrainMs ?? 10000,
+    llmRequestTimeoutMs: file.llmRequestTimeoutMs ?? 30000,
+    maxResponseBytes: file.maxResponseBytes ?? 1048576,
+    rerankerModel: file.rerankerModel || "Xenova/ms-marco-MiniLM-L-6-v2",
+    // `??`, not `||`: false is a meaningful value, and `||` would discard it.
+    rerankerEnabled: file.rerankerEnabled ?? true,
+    rerankerMaxCandidates: file.rerankerMaxCandidates ?? 20,
+    rerankerCandidateMultiplier: file.rerankerCandidateMultiplier ?? 4,
+    exportDir: file.exportDir || path.join(storageDir, "exports"),
+    // An empty security.githubHosts is a deliberate "no hosts" rather than an
+    // absent setting, and configSchema's .min(1) rejects it loudly. Lower-case
+    // every entry: tools.ts matches against parsed.hostname.toLowerCase(), so a
+    // mixed-case row could never match.
+    githubHosts: (file.githubHosts ?? ["github.com"]).map((host) => host.trim().toLowerCase()).filter(Boolean),
     githubToken: process.env.RAGNAROK_GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || "",
     resetStorage:
       process.argv.includes("--reset-storage") ||
