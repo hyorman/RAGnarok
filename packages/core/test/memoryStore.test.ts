@@ -5,6 +5,8 @@ import * as os from "os";
 import * as path from "path";
 import { MemoryStore, MemoryStoreOptions } from "../src/memory/memoryStore";
 import { EmbeddingService } from "../src/embeddings/embeddingService";
+import { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
+import { VectorStoreFactory } from "../src/stores/vectorStoreFactory";
 import type { EmbeddingFingerprint } from "../src/embeddings/embeddingBackend";
 import type { ILLMProvider } from "../src/interfaces";
 
@@ -899,5 +901,185 @@ describe("MemoryStore recallCommunities", function () {
     const error = await captureError(store.recallCommunities("branch"));
 
     expect((error as Error).message).to.include("Branch scope requested");
+  });
+});
+
+/**
+ * Records the model it is currently pointed at and which model served each
+ * embed, so a test can ask what memory would ACTUALLY embed with. Mirrors the
+ * shape of the real EmbeddingService closely enough for the property under
+ * test: `initialize`/`initializeForBackend` re-point the service.
+ */
+class ModelRecordingEmbeddingService {
+  public lastEmbedModel = "";
+  public readonly embedLog: string[] = [];
+
+  constructor(public currentModel = "") {}
+
+  public async initialize(modelName?: string): Promise<void> {
+    this.currentModel = modelName ?? this.currentModel;
+  }
+
+  public async initializeForBackend(_backendType: string, modelName?: string): Promise<void> {
+    this.currentModel = modelName ?? this.currentModel;
+  }
+
+  public getCurrentModel(): string {
+    return this.currentModel;
+  }
+
+  public getActiveBackendType(): string {
+    return "huggingface";
+  }
+
+  public async getFingerprint(): Promise<EmbeddingFingerprint> {
+    return {
+      backendKind: "huggingface",
+      providerFormat: "huggingface",
+      model: this.currentModel,
+      revision: "test",
+      dimension: VECTOR_DIM,
+      endpointHash: "local",
+    };
+  }
+
+  public async embed(text: string): Promise<number[]> {
+    return this.record(text);
+  }
+
+  public async embedWithBackend(_backendType: string, text: string): Promise<number[]> {
+    return this.record(text);
+  }
+
+  public async embedBatch(texts: string[]): Promise<number[][]> {
+    return texts.map((text) => this.record(text));
+  }
+
+  public async embedBatchWithBackend(_backendType: string, texts: string[]): Promise<number[][]> {
+    return texts.map((text) => this.record(text));
+  }
+
+  public setProcessing(_processing: boolean): void {}
+
+  public async dispose(): Promise<void> {}
+
+  private record(text: string): number[] {
+    this.lastEmbedModel = this.currentModel;
+    this.embedLog.push(this.currentModel);
+    return textToVector(text);
+  }
+}
+
+/**
+ * Memory must keep embedding with the CONFIGURED model, whatever model the
+ * topics loaded around it were built from.
+ *
+ * MemoryStore is handed the same EmbeddingService instance the vector store
+ * factory holds. When store loads re-pointed that shared service via
+ * `initialize(model)`, the next memory write embedded in the newly loaded
+ * topic's space and persisted the wrong-space vector — silently, because
+ * `ensureEmbeddingFingerprint` memoises its verdict after the first successful
+ * check and never re-runs it for the rest of the session.
+ *
+ * Scope: topic LOADS only. `rag_switch_embedding_model` re-points the shared
+ * service deliberately, and memory is expected to follow it there.
+ */
+describe("MemoryStore embedding model isolation", function () {
+  this.timeout(60000);
+
+  const CONFIGURED_MODEL = "model-x";
+  const TOPIC_MODEL = "model-y";
+
+  let tempDir: string;
+  let memoryDir: string;
+  let topicsDir: string;
+  let sharedService: ModelRecordingEmbeddingService;
+  let factory: VectorStoreFactory;
+  let memoryStore: MemoryStore;
+
+  before(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-model-isolation-"));
+    memoryDir = path.join(tempDir, "memory");
+    topicsDir = path.join(tempDir, "topics");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.mkdir(topicsDir, { recursive: true });
+
+    // Exactly how both composition roots wire it: ONE service shared by the
+    // factory and MemoryStore, plus a registry that mints a fresh service per
+    // embedding space.
+    sharedService = new ModelRecordingEmbeddingService(CONFIGURED_MODEL);
+    const registry = new EmbeddingServiceRegistry({
+      createService: () => new ModelRecordingEmbeddingService() as unknown as EmbeddingService,
+      maxResidentLocal: 4,
+    });
+    factory = new VectorStoreFactory(
+      topicsDir,
+      CONFIGURED_MODEL,
+      sharedService as unknown as EmbeddingService,
+      registry,
+    );
+    await factory.initialize();
+
+    memoryStore = new MemoryStore({
+      storageDir: memoryDir,
+      embeddingService: sharedService as unknown as EmbeddingService,
+      workingDir: memoryDir,
+      markdownPath: null,
+    });
+
+    // A topic recorded against a model that is NOT the configured one.
+    await factory.createStore({ topicId: "foreign", storageDir: topicsDir });
+    await factory.saveStore("foreign", {
+      embeddingModel: TOPIC_MODEL,
+      embeddingBackend: "huggingface",
+      embeddingFingerprint: {
+        backendKind: "huggingface",
+        providerFormat: "huggingface",
+        model: TOPIC_MODEL,
+        revision: "test",
+        dimension: VECTOR_DIM,
+        endpointHash: "local",
+      },
+    });
+    (factory as any).storeCache.clear();
+  });
+
+  after(async function () {
+    await memoryStore?.dispose().catch(() => {});
+    factory?.dispose();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("keeps memory on the configured model after a topic with another model is loaded", async function () {
+    // The write path specifically: wrong-space vectors persist beyond the
+    // session. The first write also stamps the manifest and memoises the
+    // fingerprint guard, which is why the second write is the one at risk.
+    await memoryStore.store({ content: "the first memory, written before any topic is loaded" });
+    expect(sharedService.lastEmbedModel, "memory's first write must use the configured model").to.equal(
+      CONFIGURED_MODEL,
+    );
+
+    const foreign = await factory.loadStore("foreign");
+    expect(foreign, "the foreign-model topic failed to load").to.not.equal(null);
+    // Loading is not enough: the service is re-pointed lazily, on the store's
+    // first embed. Without this the assertion below would pass vacuously.
+    await (foreign as any).embeddings.embedQuery("a query against the foreign topic");
+
+    // Proof that the re-pointing code actually ran: the topic's own service is
+    // now on model-y. Were the topic still sharing memory's service, this is
+    // the call that would have dragged memory into the foreign space.
+    const topicService = (foreign as any).embeddings.embeddingService as ModelRecordingEmbeddingService;
+    expect(topicService, "the topic must not embed through memory's service").to.not.equal(sharedService);
+    expect(topicService.currentModel, "the topic's own service must have been pointed at its model").to.equal(
+      TOPIC_MODEL,
+    );
+
+    await memoryStore.store({ content: "the second memory, written after the foreign topic embedded" });
+
+    expect(sharedService.lastEmbedModel, "memory must not follow a topic's model").to.equal(CONFIGURED_MODEL);
+    const fingerprint = await sharedService.getFingerprint();
+    expect(fingerprint.model, "memory's embedding fingerprint must not follow a topic's model").to.equal(
+      CONFIGURED_MODEL,
+    );
   });
 });
