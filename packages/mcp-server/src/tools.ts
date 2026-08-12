@@ -498,7 +498,7 @@ export function registerTools(
   // rag_add_documents — Add documents to a topic
   //
   // Paths are restricted to the configured allowlist roots
-  // (RAGNAROK_ALLOWED_PATHS, defaulting to the working directory): a remote
+  // (security.allowedPaths, defaulting to the working directory): a remote
   // authenticated client must not be able to index — and thus read back —
   // arbitrary files on the server. Symlinks are resolved before containment
   // checks so a link inside an allowed root can't escape it.
@@ -535,7 +535,7 @@ export function registerTools(
     const contained = roots.some((root) => real === root || real.startsWith(root + path.sep));
     if (!contained) {
       throw new Error(
-        `Path not allowed: ${filePath}. Allowed roots: ${roots.join(", ") || "(none)"} — configure RAGNAROK_ALLOWED_PATHS to widen access.`,
+        `Path not allowed: ${filePath}. Allowed roots: ${roots.join(", ") || "(none)"} — set "security.allowedPaths" in config.json to widen access.`,
       );
     }
     return real;
@@ -544,7 +544,7 @@ export function registerTools(
   registerTool(
     "rag_add_documents",
     "Add one or more documents to a RAG topic. Supports PDF, Markdown, HTML, and plain text files. " +
-      "Paths must be inside the server's allowed roots (RAGNAROK_ALLOWED_PATHS).",
+      'Paths must be inside the server\'s allowed roots ("security.allowedPaths" in config.json).',
     z.object({
       topic: z.string().trim().min(1).max(MCP_LIMITS.topicName).describe("The name of the topic to add documents to"),
       filePaths: z
@@ -840,7 +840,7 @@ export function registerTools(
                   available,
                   model: model ? { id: model.id, family: model.family } : null,
                   hint: !available
-                    ? "Set RAGNAROK_LLM_PROVIDER to 'openai', 'anthropic', or 'ollama' and provide the required API key to enable agentic query planning."
+                    ? "Set \"llm.provider\" in config.json to 'openai', 'anthropic', or 'ollama' and provide the required API key (RAGNAROK_LLM_API_KEY) to enable agentic query planning."
                     : undefined,
                 },
                 null,
@@ -1672,7 +1672,7 @@ export function registerTools(
                           communities: [],
                           count: 0,
                           entityExtractionEnabled: false,
-                          hint: "Memory graph features require an LLM provider (set RAGNAROK_LLM_PROVIDER). Memories are still stored and recalled by vector similarity, but no entities are extracted, so the memory graph is empty and has no communities.",
+                          hint: 'Memory graph features require an LLM provider (set "llm.provider" in config.json). Memories are still stored and recalled by vector similarity, but no entities are extracted, so the memory graph is empty and has no communities.',
                         },
                         null,
                         2,

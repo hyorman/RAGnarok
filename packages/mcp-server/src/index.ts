@@ -8,20 +8,16 @@
  * Usage:
  *   ragnarok-mcp              # stdio (for Claude, Cursor, VS Code, etc.)
  *
- * Environment variables:
- *   RAGNAROK_STORAGE_DIR      — Database storage directory (default: ~/.ragnarok)
- *   RAGNAROK_WORKING_DIR      — Project root for git-branch-scoped memory (default: process.cwd())
- *   RAGNAROK_ALLOWED_PATHS    — Roots rag_add_documents may read, path-delimiter separated (default: the working dir)
- *   RAGNAROK_EMBEDDING_MODEL  — Embedding model (default: Xenova/all-MiniLM-L6-v2)
- *   RAGNAROK_LLM_PROVIDER     — LLM provider: openai, anthropic, ollama, none (default: none)
- *   RAGNAROK_LLM_API_KEY      — API key for OpenAI or Anthropic
- *   RAGNAROK_LLM_MODEL        — LLM model name (default: gpt-4o-mini)
- *   RAGNAROK_LLM_BASE_URL     — LLM API base URL override (Ollama defaults to http://localhost:11434; OpenAI/Anthropic use their official endpoints unless set)
- *   RAGNAROK_EMBEDDING_PROVIDER   — Embedding provider: huggingface, openai, ollama (default: huggingface)
- *   RAGNAROK_EMBEDDING_BASE_URL   — Remote embedding API base URL (required for openai/ollama)
- *   RAGNAROK_EMBEDDING_API_KEY    — API key for remote embedding API (optional)
- *   RAGNAROK_LOG_LEVEL        — Log level: debug, info, warn, error
- *   ... see config.ts for all options
+ * Environment variables — secrets, bootstrap paths and one-shot switches only.
+ * Everything else lives in <storageDir>/config.json, which the server generates
+ * on first run with a $defaults block documenting every setting:
+ *   RAGNAROK_STORAGE_DIR       — Database storage directory (default: ~/.ragnarok)
+ *   RAGNAROK_WORKING_DIR       — Project root for git-branch-scoped memory (default: process.cwd())
+ *   RAGNAROK_LLM_API_KEY       — API key for OpenAI or Anthropic
+ *   RAGNAROK_EMBEDDING_API_KEY — API key for a remote embedding API (optional)
+ *   RAGNAROK_GITHUB_TOKEN      — GitHub token (falls back to GITHUB_ACCESS_TOKEN)
+ *   RAGNAROK_RESET_STORAGE     — One-shot: reset storage on this launch
+ *   RAGNAROK_IGNORE_LOCK       — One-shot: bypass the single-writer lock (unsafe)
  */
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
@@ -87,7 +83,7 @@ async function main(): Promise<void> {
   let remoteEmbeddingOptions: ConstructorParameters<typeof RemoteEmbeddingBackend>[0] | undefined;
   if (config.embeddingProvider !== "huggingface") {
     if (!config.embeddingBaseUrl) {
-      throw new Error("RAGNAROK_EMBEDDING_BASE_URL is required when RAGNAROK_EMBEDDING_PROVIDER is not huggingface");
+      throw new Error('config.json: "embedding.baseUrl" is required when "embedding.provider" is not huggingface');
     }
     remoteEmbeddingOptions = {
       baseUrl: config.embeddingBaseUrl,

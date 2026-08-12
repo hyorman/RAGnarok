@@ -776,7 +776,7 @@ describe("MCP Tools (registerTools)", () => {
       expect(body.available).to.be.false;
       expect(body.model).to.be.null;
       expect(body.hint).to.be.a("string");
-      expect(body.hint).to.include("RAGNAROK_LLM_PROVIDER");
+      expect(body.hint).to.include("llm.provider");
     });
 
     it("returns model info when LLM is available", async () => {
@@ -837,7 +837,7 @@ describe("MCP Tools (registerTools)", () => {
       expect(body.entityExtractionEnabled).to.equal(false);
       expect(body.hint).to.be.a("string");
       expect(body.hint).to.include("require an LLM provider");
-      expect(body.hint).to.include("RAGNAROK_LLM_PROVIDER");
+      expect(body.hint).to.include("llm.provider");
       // The disabled path must not pretend to have consulted the graph.
       expect(recallCommunities.called).to.equal(false);
     });
