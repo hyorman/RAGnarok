@@ -31,6 +31,13 @@ const crypto = require("crypto");
 
 const ROOT = path.resolve(__dirname, "..");
 
+// Windows ships npm and vsce as .cmd shims — there is no extension-less
+// executable. execFileSync does not consult PATHEXT, so spawning "npm" there
+// fails with ENOENT rather than running anything. Resolve the real name once.
+const WINDOWS = process.platform === "win32";
+const NPM = WINDOWS ? "npm.cmd" : "npm";
+const binScript = (name) => path.join(ROOT, "node_modules", ".bin", WINDOWS ? `${name}.cmd` : name);
+
 // ---------------------------------------------------------------------------
 // 1. Parse target platform
 // ---------------------------------------------------------------------------
@@ -192,7 +199,7 @@ function verifyStagedModels(stagingDir) {
 function npmInstallStaging(stagingDir, targetPlatform) {
   console.log("\nInstalling exact production dependency tree from package-lock.json...");
   execFileSync(
-    "npm",
+    NPM,
     [
       "ci",
       "--omit=dev",
@@ -805,34 +812,39 @@ function gutPackage(pkgDir) {
  * negation away from shipping. Assert instead of trusting.
  */
 function assertNoMcpDependencies(stagingDir) {
-  const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
-  if (!vsix) return; // packageVsix throws on this a moment later.
-
-  // The VSIX is a zip; `unzip -Z1` lists entries without extracting.
-  const entries = execFileSync("unzip", ["-Z1", path.join(stagingDir, vsix)], { encoding: "utf8" }).split("\n");
+  // Checked against the staging tree, not the finished archive: vsce can only
+  // package what is here, so a directory that is absent cannot be shipped.
+  // Reading the .vsix would need a zip reader — `unzip` is not a Windows
+  // command, and this build has to work on all six targets.
+  //
   // Only markers unique to the MCP server. `openai` and `@anthropic-ai` are
   // deliberately absent: the MCP server uses them, but so does
   // @langchain/community's own OpenAI integration, which the extension does
   // load — flagging those names would fail the build on a legitimate
   // dependency rather than catch a leak.
-  const forbidden = ["@modelcontextprotocol/", "@hono/", "@ragnarok/mcp"];
-  const leaked = entries.filter((entry) => forbidden.some((name) => entry.includes(name)));
-  if (leaked.length > 0) {
+  const forbidden = [
+    path.join("node_modules", "@modelcontextprotocol"),
+    path.join("node_modules", "@hono"),
+    path.join("packages", "mcp-server"),
+  ];
+  const staged = forbidden.filter((relative) => fs.existsSync(path.join(stagingDir, relative)));
+  if (staged.length > 0) {
     throw new Error(
-      `MCP dependencies leaked into the VSIX (the extension must not ship them):\n  ${leaked.slice(0, 10).join("\n  ")}`,
+      `MCP dependencies are still staged and would ship in the VSIX (the extension must not ` +
+        `include them):\n  ${staged.join("\n  ")}`,
     );
   }
-  console.log("  ✓ No MCP dependencies in the VSIX");
+  console.log("  ✓ No MCP dependencies staged for the VSIX");
 }
 
 function packageVsix(stagingDir, targetPlatform) {
   console.log("\nPackaging VSIX...");
 
-  // Use the root project's vsce binary
-  const vscebin = path.join(ROOT, "node_modules", ".bin", "vsce");
-  execFileSync(vscebin, ["package", "--target", targetPlatform.target], { cwd: stagingDir, stdio: "inherit" });
-
   assertNoMcpDependencies(stagingDir);
+
+  // Use the root project's vsce binary
+  const vscebin = binScript("vsce");
+  execFileSync(vscebin, ["package", "--target", targetPlatform.target], { cwd: stagingDir, stdio: "inherit" });
 
   // Find the generated VSIX and move it to root
   const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
