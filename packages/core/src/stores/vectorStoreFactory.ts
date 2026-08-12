@@ -86,6 +86,31 @@ export class EmbeddingFingerprintMismatchError extends Error {
   }
 }
 
+/**
+ * A topic was indexed against a different embedding endpoint than the one this
+ * deployment is configured with.
+ *
+ * Unlike the model — which IS resolved per topic — the endpoint is never
+ * resolved per topic: it carries credentials and is a deployment-level setting,
+ * so a topic must never be able to make the server authenticate somewhere of
+ * the topic's choosing. A foreign endpoint is therefore refused rather than
+ * honoured, because an endpoint serving a different model under the same name
+ * would silently return vectors from another semantic space.
+ */
+export class EmbeddingEndpointMismatchError extends Error {
+  constructor(
+    public readonly topicId: string,
+    /** endpointHash recorded in the topic's metadata. */
+    public readonly expected: string,
+    /** endpointHash of the endpoint this deployment is configured with. */
+    public readonly actual: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EmbeddingEndpointMismatchError";
+  }
+}
+
 export class VectorStoreFactory {
   private logger: Logger;
   private storageDir: string;
@@ -278,6 +303,25 @@ export class VectorStoreFactory {
         });
       }
 
+      // The model is resolved per topic; the ENDPOINT never is. Refuse before
+      // createEmbeddings so a doomed topic cannot first register a registry
+      // service — and open a connection — against an endpoint it may not use.
+      if (hasRemoteEndpoint(backendToUse)) {
+        const recorded = metadata?.embeddingFingerprint?.endpointHash;
+        const configured = await this.configuredEndpointHash();
+        if (recorded && recorded !== configured) {
+          throw new EmbeddingEndpointMismatchError(
+            topicId,
+            recorded,
+            configured,
+            `Topic ${topicId} was indexed against a different embedding endpoint ` +
+              `(recorded ${recorded}, configured ${configured}). An endpoint carries credentials and ` +
+              `is never chosen by a topic, so this topic cannot be served here. Configure the ` +
+              `endpoint it was built against, or rebuild the topic.`,
+          );
+        }
+      }
+
       // Initialize with specific model and backend for this topic
       const embeddings = await this.createEmbeddings(modelToUse, backendToUse);
 
@@ -298,6 +342,15 @@ export class VectorStoreFactory {
       this.logger.info("Vector store loaded successfully", { topicId });
       return store;
     } catch (error) {
+      // A refusal must ESCAPE this catch-all. Swallowed, it returns null, which
+      // is indistinguishable from an empty topic on the read path — and on the
+      // ingestion path documentPipeline treats null as "no store yet" and calls
+      // createStore, which DROPS the existing table and re-embeds it against
+      // this deployment's endpoint. The silent loss this check exists to
+      // prevent would then be caused by the check itself.
+      if (error instanceof EmbeddingEndpointMismatchError) {
+        throw error;
+      }
       this.logger.error("Failed to load vector store", {
         topicId,
         error: error instanceof Error ? error.message : String(error),
