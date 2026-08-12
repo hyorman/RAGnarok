@@ -1,6 +1,26 @@
-assets/models/** filter=lfs diff=lfs merge=lfs -text
-assets/models/**/onnx/** filter=lfs diff=lfs merge=lfs -text
-assets/models/**/model.onnx filter=lfs diff=lfs merge=lfs -text
-assets/models/**/tokenizer.json filter=lfs diff=lfs merge=lfs -text
-assets/models/**/tokenizer_config.json filter=lfs diff=lfs merge=lfs -text
-assets/models/**/config.json filter=lfs diff=lfs merge=lfs -text
+# Bundled ONNX models are byte-exact artifacts: assets/models/manifest.json
+# records a sha256 for each one, and the VSIX build refuses to package a file
+# that does not match. Git must therefore never rewrite them.
+#
+# `-text` is what does that. Without it, a Windows checkout with the default
+# core.autocrlf=true rewrites LF to CRLF in the JSON files — config.json goes
+# from 650 to 675 bytes and its hash changes — and `npm run package:dev` fails
+# with "Staged model checksum mismatch". The .onnx files are binary and were
+# never affected, which is why only the JSON ones broke.
+#
+# These patterns are anchored to this file's directory because they contain a
+# slash, so they must name the real location. The models live in the core
+# package (they ship inside the npm package); the earlier `assets/models/**`
+# rules matched a repository-root directory that no longer holds them, leaving
+# every model file with no attributes at all.
+#
+# No filter=lfs here, deliberately: the files are committed as ordinary blobs
+# and `git lfs ls-files` is empty, so declaring an LFS filter would convert them
+# to pointers on the next write and hand a broken checkout to anyone without
+# git-lfs installed. Moving them into LFS is a separate decision.
+packages/core/assets/models/** -text
+packages/core/assets/models/manifest.json -text
+
+# Keep the historical root-level location covered too, in case models are ever
+# staged there again.
+assets/models/** -text
