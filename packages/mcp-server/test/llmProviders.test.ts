@@ -4,10 +4,13 @@
  */
 
 import { expect } from "chai";
-import { PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
+import * as os from "os";
+import * as path from "path";
+import { MemoryStore, PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "../src/config";
 import {
   createLLMProvider,
+  isUsableLLMProvider,
   OpenAILLMProvider,
   AnthropicLLMProvider,
   OllamaLLMProvider,
@@ -166,6 +169,58 @@ describe("LLM Providers", function () {
     it("isAvailable always returns false", async function () {
       const provider = createLLMProvider(makeConfig({ llmProvider: "none" }));
       expect(await provider.isAvailable()).to.be.false;
+    });
+  });
+
+  // ─── Usability predicate ─────────────────────────────────
+
+  /**
+   * The factory never returns null, so presence proves nothing. Consumers that
+   * decide synchronously — MemoryStore builds its entity extractor in its
+   * constructor — need this predicate instead of a truthiness check.
+   */
+  describe("isUsableLLMProvider", function () {
+    it('rejects the stand-in for llmProvider "none"', function () {
+      expect(isUsableLLMProvider(createLLMProvider(makeConfig({ llmProvider: "none" })))).to.equal(false);
+    });
+
+    it("rejects the stand-in for an unknown provider name", function () {
+      expect(isUsableLLMProvider(createLLMProvider(makeConfig({ llmProvider: "unknown-vendor" })))).to.equal(false);
+    });
+
+    it("rejects a misconfigured remote provider, which is inert despite being selected", function () {
+      // loadConfig() refuses to start the server in this state, so only a
+      // direct factory call reaches it — but the branch exists and must not
+      // read as a working provider.
+      expect(isUsableLLMProvider(createLLMProvider(makeConfig({ llmProvider: "openai", llmApiKey: "" })))).to.equal(
+        false,
+      );
+      expect(isUsableLLMProvider(createLLMProvider(makeConfig({ llmProvider: "anthropic", llmApiKey: "" })))).to.equal(
+        false,
+      );
+    });
+
+    it("accepts every provider that can reach a backend", function () {
+      expect(
+        isUsableLLMProvider(createLLMProvider(makeConfig({ llmProvider: "openai", llmApiKey: "sk-test-key" }))),
+      ).to.equal(true);
+      expect(
+        isUsableLLMProvider(createLLMProvider(makeConfig({ llmProvider: "anthropic", llmApiKey: "sk-test-key" }))),
+      ).to.equal(true);
+      expect(isUsableLLMProvider(createLLMProvider(makeConfig({ llmProvider: "ollama" })))).to.equal(true);
+    });
+
+    it("composes into a MemoryStore that reports entity extraction disabled", function () {
+      // The composition contract index.ts relies on, at unit speed; the claim
+      // itself is pinned over the real binary in memoryGraphDisabledE2E.
+      const provider = createLLMProvider(makeConfig({ llmProvider: "none" }));
+      const store = new MemoryStore({
+        storageDir: path.join(os.tmpdir(), "ragnarok-usable-provider-unused"),
+        embeddingService: {} as never,
+        llmProvider: isUsableLLMProvider(provider) ? provider : undefined,
+        workingDir: os.tmpdir(),
+      });
+      expect(store.isEntityExtractionEnabled()).to.equal(false);
     });
   });
 

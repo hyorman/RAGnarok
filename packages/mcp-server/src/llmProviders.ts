@@ -438,6 +438,21 @@ export function createLLMProvider(config: McpConfig): ILLMProvider {
   }
 }
 
+/**
+ * True when the configured provider can actually do work.
+ *
+ * `createLLMProvider` never returns null: for `provider: "none"` — and for a
+ * misconfiguration such as OpenAI without an API key — it substitutes a
+ * NullProvider, which is a truthy object that can never answer. Consumers that
+ * merely call `isAvailable()` are fine with that no-op; consumers that decide
+ * something *synchronously* from the provider's presence (MemoryStore builds
+ * its entity extractor in its constructor) must not be handed one, or they
+ * report a capability that can never work.
+ */
+export function isUsableLLMProvider(provider: ILLMProvider): boolean {
+  return !(provider instanceof NullProvider);
+}
+
 /** Inline null provider to avoid circular imports with adapters.ts */
 class NullProvider implements ILLMProvider {
   async selectModel(): Promise<ILLMModel | null> {

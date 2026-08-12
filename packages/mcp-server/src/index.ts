@@ -44,7 +44,7 @@ import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion, assertNoRemovedEnvVars } from "./config";
 import { ensureConfigFile } from "./configFile";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
-import { createLLMProvider } from "./llmProviders";
+import { createLLMProvider, isUsableLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner, ToolRuntime } from "./tools";
@@ -158,10 +158,15 @@ async function main(): Promise<void> {
   }
   // Downstream consumers (tools) read the RESOLVED working dir from config.
   config.workingDir = workingDir;
+  // MemoryStore decides in its constructor whether entity extraction exists, so
+  // it must not receive the NullProvider stand-in: a truthy-but-inert provider
+  // makes `isEntityExtractionEnabled()` report a graph that can never populate,
+  // and an empty result then reads as "nothing known" instead of "disabled".
+  // Every other consumer keeps the no-op and probes it with isAvailable().
   const memoryStore = new MemoryStore({
     storageDir: config.storageDir,
     embeddingService,
-    llmProvider,
+    llmProvider: isUsableLLMProvider(llmProvider) ? llmProvider : undefined,
     workingDir,
     markdownPath: path.join(config.storageDir, "memories.md"),
   });
