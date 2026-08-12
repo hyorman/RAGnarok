@@ -173,10 +173,10 @@ A setting is resolved from two places, in this order:
 
 **`config.json` → built-in default**
 
-`config.json` is the only way to set the 24 operational settings. Seven more —
+`config.json` is the only way to set the 23 operational settings. Seven more —
 three secrets, two bootstrap paths, two one-shot switches — are environment-only,
 because a file inside the storage directory structurally cannot serve them. There
-is no third path and no overlap: an environment variable named after one of the 24
+is no third path and no overlap: an environment variable named after one of the 23
 is not read, so setting it does nothing.
 
 Precedence is one-directional and there is no write-back: the file beats the
@@ -293,8 +293,7 @@ environment variable for any of them.
 | `llm.model`                     | _(per-provider)_                | LLM model name (e.g. `gpt-4o-mini`, `claude-sonnet-4-20250514`, `llama3`)                                                         |
 | `llm.baseUrl`                   | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set) |
 | `llm.requestTimeoutMs`          | `30000`                         | Timeout for one configured LLM request                                                                                            |
-| `reranker.model`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model                                                                                                      |
-| `reranker.enabled`              | `true`                          | Enable bundled cross-encoder reranking (a JSON boolean)                                                                           |
+| `reranker.model`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model. Reranking itself is unconditional — there is no key to disable it                                   |
 | `reranker.maxCandidates`        | `20`                            | Maximum candidates scored by the reranker                                                                                         |
 | `reranker.candidateMultiplier`  | `4`                             | First-stage over-fetch multiplier                                                                                                 |
 | `limits.shutdownDrainMs`        | `10000`                         | Budget for draining in-flight tool calls on SIGINT/SIGTERM                                                                        |
@@ -388,8 +387,8 @@ directory, gets copied with backups, and is readable by anything that can read
 the store. Credentials belong in the process environment, where the MCP client
 that spawns the server owns them.
 
-Between them the two tables are the complete surface: 24 keys in the file, 7
-variables in the environment, nothing else. A variable named after one of the 24
+Between them the two tables are the complete surface: 23 keys in the file, 7
+variables in the environment, nothing else. A variable named after one of the 23
 is simply not read.
 
 Variables belonging to the **removed HTTP transport** are the one exception, and

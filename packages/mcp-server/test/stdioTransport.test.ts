@@ -144,7 +144,7 @@ describe("stdio transport E2E", function () {
 
   it("proves the graph visualization protocol and keeps modern discovery protocol-clean", async function () {
     const fixtureTopic = await withStdioHarness(
-      () => new StdioHarness(storageDir, sourceDir, { reranker: { enabled: false } }),
+      () => new StdioHarness(storageDir, sourceDir),
       async (fixtureHarness) => {
         expect((await fixtureHarness.discover(900)).error).to.equal(undefined);
         const fixtureTopicResponse = await fixtureHarness.callTool(901, "rag_create_topic", {
@@ -158,7 +158,7 @@ describe("stdio transport E2E", function () {
     );
     await seedGraphProtocolFixtures(storageDir);
 
-    harness = new StdioHarness(storageDir, sourceDir, { reranker: { enabled: false } });
+    harness = new StdioHarness(storageDir, sourceDir);
 
     harness.send({
       jsonrpc: "2.0",
@@ -358,7 +358,7 @@ describe("stdio transport E2E", function () {
     expect(harness.nonProtocolLines, "ingestion/query diagnostics leaked onto stdout").to.deep.equal([]);
 
     expect(await harness.close(), "first stdio server did not exit cleanly").to.equal(0);
-    harness = new StdioHarness(storageDir, sourceDir, { reranker: { enabled: false } });
+    harness = new StdioHarness(storageDir, sourceDir);
     const restartDiscover = await harness.discover(20);
     expect(restartDiscover.error, "restart discovery returned an error").to.equal(undefined);
 
@@ -501,10 +501,17 @@ describe("stdio transport E2E", function () {
     expect(rerankerModels.result?.isError, JSON.stringify(rerankerModels.result)).not.to.equal(true);
     const rerankerInfo = await harness.callTool(55, "rag_reranker_info", {});
     expect(rerankerInfo.result?.isError, JSON.stringify(rerankerInfo.result)).not.to.equal(true);
-    const rerankerSwitch = await harness.callTool(56, "rag_switch_reranker_model", {
-      model: "Xenova/ms-marco-MiniLM-L-6-v2",
-    });
-    expect(rerankerSwitch.result?.isError, "disabled reranker must reject model switches").to.equal(true);
+    // Reranking is unconditional, so the reranker always exists and a switch to
+    // the bundled model succeeds. This used to assert the opposite, because the
+    // harness disabled reranking and left nothing to switch.
+    expect(JSON.parse(rerankerInfo.result?.content?.[0]?.text ?? "{}").enabled).to.equal(true);
+    const rerankerSwitch = await harness.callTool(
+      56,
+      "rag_switch_reranker_model",
+      { model: "Xenova/ms-marco-MiniLM-L-6-v2" },
+      60000,
+    );
+    expect(rerankerSwitch.result?.isError, JSON.stringify(rerankerSwitch.result)).not.to.equal(true);
     const unsafeUrl = await harness.callTool(57, "rag_add_url", {
       topic: "restored-flow",
       url: "file:///etc/passwd",
@@ -544,7 +551,7 @@ describe("stdio transport E2E", function () {
       const catalogSourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-stdio-catalog-src-"));
       try {
         await withStdioHarness(
-          () => new StdioHarness(catalogStorageDir, catalogSourceDir, { reranker: { enabled: false } }),
+          () => new StdioHarness(catalogStorageDir, catalogSourceDir),
           async (catalogHarness) => {
             const baseId = 700 + serverIndex * 20;
             expect((await catalogHarness.discover(baseId)).error, "server/discover returned an error").to.equal(

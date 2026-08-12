@@ -85,7 +85,6 @@ function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     embeddingApiKey: "",
     maxResidentModels: 2,
     rerankerModel: "Xenova/ms-marco-MiniLM-L-6-v2",
-    rerankerEnabled: true,
     rerankerMaxCandidates: 20,
     rerankerCandidateMultiplier: 4,
     exportDir: "/tmp/ragnarok-exports",

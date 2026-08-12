@@ -97,7 +97,6 @@ export interface McpConfig {
   /** Ceiling on a serialized tool response, enforced in tools.ts. */
   maxResponseBytes?: number;
   rerankerModel: string;
-  rerankerEnabled: boolean;
   rerankerMaxCandidates: number;
   rerankerCandidateMultiplier: number;
   exportDir: string;
@@ -134,7 +133,6 @@ const configSchema = z
     embeddingApiKey: z.string(),
     maxResidentModels: z.number().int().min(1),
     rerankerModel: z.string().min(1),
-    rerankerEnabled: z.boolean(),
     rerankerMaxCandidates: z.number().int().min(1).max(200),
     rerankerCandidateMultiplier: z.number().int().min(1).max(20),
     exportDir: z.string().min(1),
@@ -227,8 +225,6 @@ export function loadConfig(): McpConfig {
     llmRequestTimeoutMs: file.llmRequestTimeoutMs ?? 30000,
     maxResponseBytes: file.maxResponseBytes ?? 1048576,
     rerankerModel: file.rerankerModel || "Xenova/ms-marco-MiniLM-L-6-v2",
-    // `??`, not `||`: false is a meaningful value, and `||` would discard it.
-    rerankerEnabled: file.rerankerEnabled ?? true,
     rerankerMaxCandidates: file.rerankerMaxCandidates ?? 20,
     rerankerCandidateMultiplier: file.rerankerCandidateMultiplier ?? 4,
     exportDir: file.exportDir || path.join(storageDir, "exports"),

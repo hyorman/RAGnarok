@@ -167,22 +167,23 @@ async function main(): Promise<void> {
     markdownPath: path.join(config.storageDir, "memories.md"),
   });
 
-  // Create reranker (always-on — gracefully degrades if ONNX model unavailable)
-  const reranker = config.rerankerEnabled
-    ? new CrossEncoderReranker(config.rerankerModel, { maxCandidates: config.rerankerMaxCandidates })
-    : null;
+  // Reranking is unconditional: the cross-encoder ONNX model ships inside the
+  // package, so there is no download to opt out of and no configuration to get
+  // wrong. It degrades gracefully — a model that fails to load leaves queries
+  // on first-stage ranking rather than failing them.
+  const reranker = new CrossEncoderReranker(config.rerankerModel, {
+    maxCandidates: config.rerankerMaxCandidates,
+  });
   let rerankerFailure: string | undefined;
   // Share the SAME instance with the query path so rag_switch_reranker_model
   // affects query behaviour, not just the management tools' private copy.
-  if (reranker) {
-    ragQueryService.setReranker(reranker);
-    // Non-blocking warm-up: the first query skips the model-load stall, and a
-    // broken model surfaces in the startup log instead of at query time.
-    void reranker.initialize().catch((error) => {
-      rerankerFailure = error instanceof Error ? error.message : String(error);
-      logger.warn("Reranker warm-up failed — queries will fall back to original ranking", rerankerFailure);
-    });
-  }
+  ragQueryService.setReranker(reranker);
+  // Non-blocking warm-up: the first query skips the model-load stall, and a
+  // broken model surfaces in the startup log instead of at query time.
+  void reranker.initialize().catch((error) => {
+    rerankerFailure = error instanceof Error ? error.message : String(error);
+    logger.warn("Reranker warm-up failed — queries will fall back to original ranking", rerankerFailure);
+  });
 
   // Server factory: stdio pins one instance per connection. Every instance
   // shares the services created above.

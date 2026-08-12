@@ -105,9 +105,8 @@ describe("MCP Server", () => {
       expect(config.maxResponseBytes).to.equal(1_048_576);
     });
 
-    it("defaults the reranker to enabled with its bundled model", () => {
+    it("defaults the reranker to its bundled model", () => {
       const config = loadConfig();
-      expect(config.rerankerEnabled).to.be.true;
       expect(config.rerankerModel).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
       expect(config.rerankerMaxCandidates).to.equal(20);
       expect(config.rerankerCandidateMultiplier).to.equal(4);
@@ -611,11 +610,18 @@ describe("MCP Server", () => {
       expect(loadConfig().topK).to.equal(10);
     });
 
-    it("applies file values for booleans and arrays too", () => {
-      writeConfig({ reranker: { enabled: false }, security: { githubHosts: ["ghe.example.com"] } });
+    it("applies file values for numbers and arrays too", () => {
+      writeConfig({ reranker: { maxCandidates: 7 }, security: { githubHosts: ["ghe.example.com"] } });
       const config = loadConfig();
-      expect(config.rerankerEnabled).to.equal(false);
+      expect(config.rerankerMaxCandidates).to.equal(7);
       expect(config.githubHosts).to.deep.equal(["ghe.example.com"]);
+    });
+
+    it("rejects reranker.enabled, which is no longer a setting", () => {
+      // Reranking is unconditional. A leftover key must fail loudly rather
+      // than read as a disable switch that silently does nothing.
+      writeConfig({ reranker: { enabled: false } });
+      expect(() => loadConfig()).to.throw(/enabled/);
     });
 
     it("keeps env-only settings out of the file's reach", () => {

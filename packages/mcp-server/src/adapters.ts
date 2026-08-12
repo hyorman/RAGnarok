@@ -27,7 +27,10 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.GAP_SCORE_THRESHOLD]: 0.3,
       [CONFIG.COMMON_DATABASE_PATH]: "",
       [CONFIG.RERANKER_MODEL]: this.mcpConfig.rerankerModel,
-      [CONFIG.RERANKER_ENABLED]: this.mcpConfig.rerankerEnabled,
+      // No RERANKER_ENABLED: the MCP server always reranks. Core's own gate
+      // still exists for the VS Code host and defaults to true, so leaving the
+      // key unmapped is the same as mapping it to true — with one fewer place
+      // for the two to disagree.
       [CONFIG.RERANKER_MAX_CANDIDATES]: this.mcpConfig.rerankerMaxCandidates,
       [CONFIG.RERANKER_CANDIDATE_MULTIPLIER]: this.mcpConfig.rerankerCandidateMultiplier,
     };

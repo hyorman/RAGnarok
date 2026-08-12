@@ -122,9 +122,12 @@ The complete key table is in
   the same name. Point the deployment at the original endpoint or rebuild the
   topic. Knowledge bases meant to move between machines should be built with the
   bundled local model.
-- `reranker.enabled` and `reranker.model` control the bundled
-  cross-encoder. A model switch leases the active generation so in-flight work
-  drains rather than returning stale first-stage results.
+- Cross-encoder reranking is **unconditional** — there is no switch to turn it
+  off. The ONNX model ships inside the package, so there is nothing to download
+  and nothing to opt out of, and a model that fails to load degrades queries to
+  first-stage ranking rather than failing them. `reranker.model` selects which
+  model; a switch leases the active generation so in-flight work drains rather
+  than returning stale first-stage results.
 - `llm.provider` gates agentic query planning, memory entity
   extraction, and `rag_memory` community clustering. With `none`, those degrade
   to documented empty or explanatory results — not failures.

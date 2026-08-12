@@ -399,7 +399,7 @@ try {
 
   // A non-default value the server reports back, so the assertion below proves
   // the file was read rather than that a built-in default happened to match.
-  seedConfigFile({ reranker: { enabled: false } });
+  seedConfigFile({ reranker: { maxCandidates: 7 } });
 
   // Session 1 — first contact over stdio, on a fresh volume.
   const session = new ContainerSession(sessionContainer);
@@ -408,10 +408,10 @@ try {
   assertRuntimeHardening(sessionContainer);
   await assertStorageLock();
   // config.json on the volume is the only way to configure a container, so the
-  // gate must prove the container actually reads it. The reranker defaults to
-  // enabled; only the seeded file turns it off.
+  // gate must prove the container actually reads it. maxCandidates defaults to
+  // 20; only the seeded file makes it 7.
   const rerankerInfo = await session.callTool("rag_reranker_info", {});
-  if (rerankerInfo.enabled !== false) {
+  if (rerankerInfo.maxCandidates !== 7) {
     throw new Error(`Container ignored the seeded config.json: ${JSON.stringify(rerankerInfo)}`);
   }
 

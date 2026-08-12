@@ -19,7 +19,6 @@ export type FileField =
   | "topK"
   | "maxIterations"
   | "confidenceThreshold"
-  | "rerankerEnabled"
   | "rerankerModel"
   | "rerankerMaxCandidates"
   | "rerankerCandidateMultiplier"
@@ -73,7 +72,6 @@ export const FILE_KEYS: readonly FileKey[] = [
     shown: 0.7,
   },
 
-  { path: ["reranker", "enabled"], field: "rerankerEnabled", schema: z.boolean(), shown: true },
   {
     path: ["reranker", "model"],
     field: "rerankerModel",

@@ -40,11 +40,7 @@ describe("memory graph disabled without an LLM (E2E)", function () {
 
   it("reports entity extraction as disabled, not merely empty, when no LLM is configured", async function () {
     await withStdioHarness(
-      () =>
-        new StdioHarness(storageDir, workDir, {
-          llm: { provider: "none" },
-          reranker: { enabled: false },
-        }),
+      () => new StdioHarness(storageDir, workDir, { llm: { provider: "none" } }),
       async (harness) => {
         expect((await harness.discover()).error).to.equal(undefined);
 

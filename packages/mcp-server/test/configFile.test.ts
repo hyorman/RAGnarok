@@ -7,8 +7,11 @@ import { loadConfig } from "../src/config";
 import { STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
 
 describe("config file key table", () => {
-  it("declares exactly the 24 keys that move to the file", () => {
-    assert.equal(FILE_KEYS.length, 24);
+  it("declares exactly the 23 file-settable keys", () => {
+    // 23, not 24: reranker.enabled was removed when reranking became
+    // unconditional. The bundled ONNX model means there is no download to opt
+    // out of, so the switch only ever produced a worse search.
+    assert.equal(FILE_KEYS.length, 23);
   });
 
   it("names the same file core exempts from storage-format gating and reset backups", () => {
