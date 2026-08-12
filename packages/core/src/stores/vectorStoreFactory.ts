@@ -181,7 +181,13 @@ export class VectorStoreFactory {
       const table = await db.createEmptyTable(config.topicId, this.createDocumentSchema(fingerprint.dimension));
       signal?.throwIfAborted();
       this.tables.add(table);
-      const store = new LanceDB(await this.createEmbeddings(this.embeddingModel), { table });
+      // The backend must come from the same fingerprint that is about to be
+      // stamped into metadata, not be defaulted: `embeddingModel` may carry a
+      // backend prefix ("vscodeLM:<id>"), which only the backend that produced
+      // it knows how to strip. Pairing it with a defaulted "huggingface" would
+      // hand HuggingFace a model it cannot load, and this is also what makes
+      // createStore and loadStore resolve the same registry entry.
+      const store = new LanceDB(await this.createEmbeddings(this.embeddingModel, fingerprint.backendKind), { table });
       // A freshly-created table is the only case where missing metadata is
       // expected. Establish its semantic-space identity before the first
       // vector write so every public mutation path can fail closed.

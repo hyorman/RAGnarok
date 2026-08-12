@@ -23,6 +23,7 @@ import {
   EmbeddingServiceRegistry,
   ModelRegistry,
   HuggingFaceBackend,
+  EmbeddingBackend,
   IConfigProvider,
   INotifier,
   VectorStoreMetadataCorruptionError,
@@ -320,6 +321,128 @@ describe("VectorStoreFactory per-topic embedding model", function () {
       serviceOf(storeA!).embedLog,
       "the third query must actually re-embed rather than hit the query cache",
     ).to.deep.equal(["model-x", "model-x"]);
+  });
+});
+
+/**
+ * Stands in for a real backend. Like HuggingFaceBackend, an explicitly named
+ * model it does not know is a hard failure with no fallback — that is what
+ * turns a mispaired (model, backend) into a thrown error rather than silence.
+ */
+class StubBackend implements EmbeddingBackend {
+  public initializeCalls: Array<string | undefined> = [];
+
+  constructor(
+    public readonly name: string,
+    private readonly modelId: string,
+  ) {}
+
+  async isAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  async initialize(modelName?: string): Promise<void> {
+    this.initializeCalls.push(modelName);
+    if (modelName && modelName !== this.modelId) {
+      throw new Error(`Backend "${this.name}" cannot load model "${modelName}"`);
+    }
+  }
+
+  async embed(): Promise<number[]> {
+    return [0.1, 0.2, 0.3, 0.4];
+  }
+
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    return texts.map(() => [0.1, 0.2, 0.3, 0.4]);
+  }
+
+  getDimension(): number | null {
+    return 4;
+  }
+
+  getModelId(): string | null {
+    return this.modelId;
+  }
+
+  dispose(): void {}
+}
+
+/**
+ * A VS Code host with the VS Code LM backend active must be able to create a
+ * topic. Its model name carries a backend prefix ("vscodeLM:<id>") that only
+ * that backend knows how to strip, so createStore has to hand the registry a
+ * backend matching the model it passes.
+ */
+describe("VectorStoreFactory on a vscodeLM host", function () {
+  this.timeout(60000);
+
+  const VSCODE_MODEL_ID = "copilot-text-embedding-3-small";
+  let factory: VectorStoreFactory;
+  let storageDir: string;
+  let registryBackends: StubBackend[];
+
+  const vscodeLmConfig: IConfigProvider = {
+    get: <T>(key: string, defaultValue: T): T => (key === "embeddingBackend" ? ("vscodeLM" as unknown as T) : defaultValue),
+  };
+
+  // Mirrors the VS Code root: every service gets both backends, vscodeLM first
+  // and HuggingFace last as the fallback, with fresh backend instances.
+  const buildService = (collect?: StubBackend[]): EmbeddingService => {
+    const service = new EmbeddingService({ config: vscodeLmConfig, notifier: mockNotifier });
+    const vscodeLm = new StubBackend("vscodeLM", VSCODE_MODEL_ID);
+    collect?.push(vscodeLm);
+    service.registerBackend(vscodeLm);
+    service.registerBackend(new StubBackend("huggingface", "Xenova/all-MiniLM-L6-v2"));
+    return service;
+  };
+
+  before(async function () {
+    storageDir = path.join(os.tmpdir(), `vsf-vscode-lm-${crypto.randomUUID()}`);
+    await fs.mkdir(storageDir, { recursive: true });
+
+    const embeddingService = buildService();
+    await embeddingService.initialize();
+    // The prefix is produced by production code, not hard-coded by this test.
+    const embeddingModel = embeddingService.getCurrentModel();
+    expect(embeddingModel, "the host's model name must carry the backend prefix").to.equal(
+      `vscodeLM:${VSCODE_MODEL_ID}`,
+    );
+
+    registryBackends = [];
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => buildService(registryBackends),
+      maxResidentLocal: 2,
+    });
+    factory = new VectorStoreFactory(storageDir, embeddingModel, embeddingService, embeddingRegistry);
+    await factory.initialize();
+  });
+
+  after(async function () {
+    factory?.dispose();
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("creates a topic whose model carries a backend prefix", async function () {
+    await factory.createStore({ topicId: "vscode-lm-topic", storageDir });
+
+    // The prefixed model reached the vscodeLM backend, which stripped it. Had
+    // the backend been defaulted, HuggingFace would have been handed
+    // "vscodeLM:<id>" and thrown, failing createStore outright.
+    expect(registryBackends).to.have.length(1);
+    expect(registryBackends[0].initializeCalls).to.deep.equal([VSCODE_MODEL_ID]);
+
+    const metadata = await factory.getStoreMetadata("vscode-lm-topic");
+    expect(metadata?.embeddingBackend).to.equal("vscodeLM");
+    expect(metadata?.embeddingModel).to.equal(`vscodeLM:${VSCODE_MODEL_ID}`);
+  });
+
+  it("resolves the same embedding service when the topic is loaded again", async function () {
+    (factory as any).storeCache.clear();
+    const store = await factory.loadStore("vscode-lm-topic");
+    expect(store, "topic failed to load").to.not.equal(null);
+    // createStore and loadStore must agree on the key, or one topic would
+    // occupy two cap slots and hold the same model resident twice.
+    expect(registryBackends, "loadStore must reuse the service createStore resolved").to.have.length(1);
   });
 });
 
