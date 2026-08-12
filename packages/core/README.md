@@ -182,9 +182,13 @@ unit-vector cosine score contract. Results identify their effective strategy,
 score kind, and components.
 
 Topic metadata persists the complete embedding fingerprint, not only vector
-dimension. Changing backend, model, revision, normalization, or distance
-contract requires reindexing. Fingerprint mismatch is a hard error and is never
-silently downgraded to a partial result.
+dimension. A topic is served — and extended — with the model recorded in its
+metadata, so the configured model is the default for newly created topics rather
+than a global switch. A dimension mismatch or a missing fingerprint
+requires reindexing; that is a hard error and is never silently downgraded to a
+partial result. A topic recorded against a foreign remote embedding endpoint is refused
+rather than substituted, because an endpoint carries credentials and may serve a
+different model under the same name.
 
 ## Storage compatibility
 

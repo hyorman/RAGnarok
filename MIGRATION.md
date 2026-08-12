@@ -1,11 +1,54 @@
 # Migration guide
 
+## Per-topic embedding models
+
+**No action is required.** Existing topics keep working with the model they were
+built with, nothing is re-embedded, and no stored data changes shape.
+
+`embedding.model` (`RAGNAROK_EMBEDDING_MODEL`) is, as before, **the default model
+for newly created topics**. What changed is that the setting is now honoured per
+topic on every path rather than only at creation:
+
+| Operation                              | Model used                                                   |
+| -------------------------------------- | ------------------------------------------------------------ |
+| Create a **new** topic                 | the configured `embedding.model`, recorded into its metadata |
+| **Query** any topic                    | that topic's recorded model                                  |
+| **Add documents to an existing** topic | that topic's recorded model                                  |
+| Memory (store and recall)              | the **currently configured** model                           |
+
+One behaviour that used to fail now succeeds: **adding documents to a topic whose
+recorded model differs from the configured one.** It previously returned an
+"Embedding model mismatch" error and refused the ingest. It now embeds the new
+chunks with the topic's own recorded model, which keeps the topic in a single
+embedding space — the topic's recorded model and fingerprint are left unchanged.
+If you were working around this by switching the configured model back before
+every ingest, you can stop.
+
+Changing a topic's model is still a delete-and-recreate.
+`rag_switch_embedding_model` changes the default for topics created afterwards
+and re-points memory, which always uses the currently configured model; it
+migrates nothing already indexed. A dimension mismatch or a missing embedding
+fingerprint remains a hard reindex error.
+
+Remote endpoints are the one thing not resolved per topic. A knowledge base built
+against a remote embedding endpoint is readable only by a deployment configured
+with that same endpoint; a topic recorded against a foreign endpoint is refused
+rather than served from a substitute, because an endpoint carries credentials and
+may serve a different model under the same name. Knowledge bases meant to move
+between machines should be built with the bundled local model.
+
+The new optional setting `RAGNAROK_MAX_RESIDENT_MODELS` /
+`embedding.maxResidentModels` (default `2`, minimum `1`) bounds how many
+weight-bearing embedding models stay loaded at once; `remote` and `vscodeLM`
+hold no weights and never occupy a slot. Leaving it unset is correct for almost
+everyone.
+
 ## Optional `config.json` for the MCP server
 
 **No action is required.** Environment variables continue to work exactly as
 before and continue to take precedence. If you change nothing, nothing changes.
 
-23 of the MCP server's 30 settings can now also be written to a JSON file at
+24 of the MCP server's 31 settings can now also be written to a JSON file at
 `<storageDir>/config.json`, so that configuration can live once beside the store
 instead of being repeated in every MCP client's server entry. The resolution
 order is **environment variable → `config.json` → built-in default**, one

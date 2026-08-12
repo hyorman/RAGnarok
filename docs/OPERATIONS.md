@@ -98,11 +98,30 @@ The complete key table is in
 
 - `RAGNAROK_EMBEDDING_MODEL` and `RAGNAROK_EMBEDDING_PROVIDER` select the
   embedding backend. `RAGNAROK_EMBEDDING_MODEL` is the default model for newly
-  created topics, not a global switch — each topic persists its embedding
-  fingerprint, so a mismatch is a hard reindex error rather than a silently
-  degraded result. Switching models at runtime with
-  `rag_switch_embedding_model` has the same consequence: topics indexed under
-  the old model need reindexing.
+  created topics, not a global switch. Each topic records the model it was
+  indexed under and is served with that model afterwards: a query against it
+  uses the recorded model, and adding documents to it embeds the new chunks with
+  the recorded model, so the topic stays one coherent embedding space. Changing
+  this setting — or calling `rag_switch_embedding_model` — changes the default
+  for topics created afterwards and re-points memory, which always uses the
+  currently configured model and follows an explicit switch. It migrates nothing
+  already indexed; changing a topic's model is a delete-and-recreate. A
+  dimension mismatch or a missing fingerprint is still a hard reindex error
+  rather than a silently degraded result.
+- `RAGNAROK_MAX_RESIDENT_MODELS` (default `2`, minimum `1`) bounds how many
+  embedding models stay loaded at once. It counts weight-bearing models only —
+  `remote` and `vscodeLM` backends hold no weights and never occupy a slot. A
+  resident model costs RAM, not CPU, so this is a memory budget and not a
+  throughput knob; a cap of `1` makes alternating between two topics with
+  different models reload a model on every switch.
+- A remote embedding endpoint is **not** resolved per topic the way the model
+  is. A knowledge base built against a remote endpoint is readable only by a
+  deployment configured with that same endpoint; a topic naming a foreign
+  endpoint is refused rather than served from whatever endpoint is configured,
+  because an endpoint carries credentials and may serve a different model under
+  the same name. Point the deployment at the original endpoint or rebuild the
+  topic. Knowledge bases meant to move between machines should be built with the
+  bundled local model.
 - `RAGNAROK_RERANKER_ENABLED` and `RAGNAROK_RERANKER_MODEL` control the bundled
   cross-encoder. A model switch leases the active generation so in-flight work
   drains rather than returning stale first-stage results.

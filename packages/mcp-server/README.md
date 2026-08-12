@@ -283,6 +283,7 @@ The `config.json` key column gives the `section.name` pair to write in the file.
 | `RAGNAROK_EMBEDDING_PROVIDER`            | `embedding.provider`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                                                              |
 | `RAGNAROK_EMBEDDING_BASE_URL`            | `embedding.baseUrl`             | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                                                         |
 | `RAGNAROK_EMBEDDING_API_KEY`             | _(environment-only)_            | _(empty)_                       | API key for remote embedding API                                                                                                                                   |
+| `RAGNAROK_MAX_RESIDENT_MODELS`           | `embedding.maxResidentModels`   | `2`                             | Maximum embedding models held in memory at once (minimum `1`)                                                                                                      |
 | `RAGNAROK_CHUNK_SIZE`                    | `ingestion.chunkSize`           | `1000`                          | Document chunk size (characters)                                                                                                                                   |
 | `RAGNAROK_CHUNK_OVERLAP`                 | `ingestion.chunkOverlap`        | `200`                           | Overlap between chunks                                                                                                                                             |
 | `RAGNAROK_TOP_K`                         | `retrieval.topK`                | `10`                            | Default number of results per query                                                                                                                                |
@@ -307,13 +308,63 @@ The `config.json` key column gives the `section.name` pair to write in the file.
 | `RAGNAROK_RESET_STORAGE`                 | _(environment-only)_            | `false`                         | Set to `1` to back up managed data and initialize storage v2                                                                                                       |
 | `RAGNAROK_IGNORE_LOCK`                   | _(environment-only)_            | unset                           | Bypass the cross-process storage lock (`<storageDir>/.ragnarok.lock`). Unsafe with concurrent writers — only for advanced setups that serialize access externally. |
 
-Two of those rows deserve a sentence each.
+Three of those rows deserve a paragraph each.
+
+#### Which embedding model gets used
 
 `RAGNAROK_EMBEDDING_MODEL` / `embedding.model` is **the default model for newly
-created topics**. It is not a global switch: each topic persists the embedding
-fingerprint it was indexed under, so changing this setting does not re-embed
-anything and does not invalidate existing topics. Use
-`rag_switch_embedding_model` to move a topic, and expect to reindex it.
+created topics**. It is not a global switch: each topic records the embedding
+model and fingerprint it was indexed under, and is served with that recorded
+model for the rest of its life. Changing this setting re-embeds nothing and
+invalidates nothing.
+
+| Operation                              | Model used                                                   |
+| -------------------------------------- | ------------------------------------------------------------ |
+| Create a new topic                     | the configured `embedding.model`, recorded into its metadata |
+| Query any topic                        | that topic's recorded model                                  |
+| Add documents to an existing topic     | that topic's recorded model                                  |
+| Memory (`rag_memory` store and recall) | the currently configured model                               |
+
+Reading the table row by row: a topic built under one model keeps answering
+under that model even while a different one is configured, and adding documents
+to it embeds the new chunks with the topic's own model — so the topic stays one
+coherent embedding space. Memory is the exception, because it is not a topic and
+carries no per-topic metadata: it always uses the currently configured model, and
+it follows an explicit `rag_switch_embedding_model` call, which is why that tool
+rejects a candidate whose dimension memory cannot serve.
+
+Changing a topic's model is therefore a delete-and-recreate, not a setting.
+`rag_switch_embedding_model` changes the default for topics created afterwards
+and re-points memory; it does not migrate anything already indexed.
+
+**A knowledge base built against a remote embedding endpoint is readable only by
+a deployment configured with that same endpoint.** The model is resolved per
+topic, but the endpoint never is: a topic that names a foreign endpoint is
+**refused**, never substituted, because an endpoint carries credentials and a
+topic must not choose one on the server's behalf — and an endpoint serving a
+different model under a familiar name would silently poison results. Point the
+deployment at the endpoint the topic was built against, or rebuild the topic. A
+knowledge base meant to travel between machines should be built with the bundled
+local model.
+
+#### How many models stay in memory
+
+`RAGNAROK_MAX_RESIDENT_MODELS` / `embedding.maxResidentModels` bounds how many
+embedding models are held in memory at once. The default is **2** and the
+minimum is **1**; a lower value is a startup error.
+
+The cap counts **weight-bearing** models only. `remote` and `vscodeLM` backends
+hold no weights — they are HTTP or host calls — so they never occupy a slot and
+are never evicted to make room for anything. Only locally loaded models are
+bounded, evicted least-recently-used first.
+
+A resident model costs RAM, not CPU: an idle model consumes no cycles, so the
+cap is a memory budget rather than a throughput setting. Raising it does not
+make anything slower. Lowering it to `1` means alternating between two topics
+with different models unloads and reloads a model on every switch — correct, but
+with the load cost paid on each query.
+
+#### The GitHub host allowlist
 
 `RAGNAROK_GITHUB_HOSTS` / `security.githubHosts` must resolve to at least one
 host. An explicitly empty value is rejected at startup rather than quietly

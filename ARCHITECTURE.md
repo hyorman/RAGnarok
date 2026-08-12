@@ -65,8 +65,11 @@ document entity extraction, and therefore no graph-derived retrieval.
 
 Results expose `scoreKind`, component scores, and effective strategy.
 
-Topic metadata stores the embedding fingerprint. A fingerprint mismatch is a
-hard reindex error and is not swallowed by a partial result.
+Topic metadata stores the embedding model and its fingerprint, and the topic is
+both queried and extended with that recorded model — the configured model is the
+default for newly created topics, not a global switch. A dimension mismatch or a
+missing fingerprint is a hard reindex error and is not swallowed by a partial
+result. A foreign remote embedding endpoint is refused rather than substituted.
 
 Cross-encoder reranking leases the active model generation so in-flight work
 can drain during a model switch. Cancellation propagates rather than returning

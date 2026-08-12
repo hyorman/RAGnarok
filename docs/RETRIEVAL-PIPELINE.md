@@ -1,6 +1,6 @@
 # How RAGnarōk works: ingestion to retrieval
 
-Traced from source at commit `48a645e`. File and line references are load-bearing — this describes
+Traced from source at commit `87d1985`. File and line references are load-bearing — this describes
 what the code does, not what it intends to do.
 
 There is no document knowledge graph. Entity extraction over ingested documents, the `graph` and
@@ -42,7 +42,7 @@ flowchart LR
   L --> C["SemanticChunker<br/>Markdown- · Code- or Recursive-CharacterTextSplitter"]
   C --> M["chunk metadata<br/>chunkIndex · headingPath · sectionTitle · loc"]
   M --> ID["chunkId = hashId('chunk', docId + index + text)<br/>documentPipeline.ts:289"]
-  ID --> E["EmbeddingService.embed()<br/>Xenova/all-MiniLM-L6-v2 · 384-dim<br/>or VS Code LM / remote backend"]
+  ID --> E["embed with the TOPIC'S recorded model<br/>new topic → configured embedding.model<br/>existing topic → its metadata.embeddingModel"]
   E --> V[("LanceDB table &lt;topicId&gt;<br/>vector + text + metadata")]
 ```
 
@@ -50,8 +50,48 @@ Defaults: `chunkSize` 1000 characters, `chunkOverlap` 200 (`semanticChunker.ts:7
 is content-hashed, so **re-chunking changes every id** — which is why altering chunking is a storage
 migration, not a tweak.
 
+The default embedding model is `Xenova/all-MiniLM-L6-v2` (384-dim), with VS Code LM and remote
+backends as alternatives. Which one actually runs is decided per topic, not per process — see §2.1.
+
 Ingestion needs no LLM. An LLM provider only affects query planning (§3) and memory entity
 extraction (§6).
+
+### 2.1 Which embedding model runs
+
+`embedding.model` (`RAGNAROK_EMBEDDING_MODEL`) is **the default model for newly created topics**, not
+a global switch. A topic records the model it was created under, and every later read and write of
+that topic resolves through the recorded value rather than the configured one.
+
+| Operation                              | Model used                                                   |
+| -------------------------------------- | ------------------------------------------------------------ |
+| Create a **new** topic                 | the configured `embedding.model`, recorded into its metadata |
+| **Query** any topic                    | that topic's recorded model                                  |
+| **Add documents to an existing** topic | that topic's recorded model                                  |
+| Memory (store and recall)              | the **currently configured** model                           |
+
+Two consequences are worth stating explicitly.
+
+**Adding documents to a topic whose model differs from the configured one succeeds.** It used to
+fail. It is coherent because the new chunks are embedded with the topic's own model, so the topic
+never mixes two embedding spaces in one table. Changing a topic's model remains a
+delete-and-recreate; there is no in-place conversion.
+
+**Memory is the one row that follows configuration.** Memory is not a topic and carries no per-topic
+metadata, so it always uses the currently configured model, and it follows an explicit
+`rag_switch_embedding_model` — which is precisely why that tool validates the candidate's dimension
+against memory before accepting it.
+
+`VectorStoreFactory` owns one immutable `EmbeddingService` per `(backend, endpoint, model)` triple in
+an LRU registry (`embeddingServiceRegistry.ts`), bounded by `embedding.maxResidentModels` (default 2,
+minimum 1). The bound counts weight-bearing models only: `remote` and `vscodeLM` hold no weights and
+never occupy a slot.
+
+The **endpoint** is deliberately not resolved per topic. A knowledge base built against a remote
+embedding endpoint is readable only by a deployment configured with that same endpoint; a topic
+recorded against a foreign endpoint is refused rather than substituted
+(`vectorStoreFactory.ts:308-320`), because an endpoint carries credentials and a topic must not
+choose one on the server's behalf. Knowledge bases meant to travel should use the bundled local
+model.
 
 ---
 
@@ -157,8 +197,11 @@ flowchart TB
   SNAP --> DOC["ragnarok.graph.visualization.v1<br/>deterministic bounded document"]
 ```
 
-Two consequences worth stating plainly:
+Three consequences worth stating plainly:
 
+- **Memory uses the currently configured model.** Unlike a topic, memory records no model of its own,
+  so both `store` and `recall` embed with whatever `embedding.model` currently resolves to, and an
+  explicit `rag_switch_embedding_model` moves memory with it (§2.1).
 - **Memory is explicit.** There is no automatic query-time recall and no automatic write-back of
   query insights; that behavior lived in the deleted LangGraph path. Memory changes only through
   `rag_memory` calls.
