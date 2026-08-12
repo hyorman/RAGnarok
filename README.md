@@ -477,13 +477,12 @@ list, and resource-read results advertise `ttlMs=0` and `cacheScope=private`.
 See the [MCP server guide](packages/mcp-server/README.md) for the complete tool
 surface and configuration.
 
-Most MCP server settings can be supplied either as environment variables in the
-client's server entry or as an optional `config.json` in the storage directory,
-which the server generates on first run. Environment variables take precedence
-over the file, the file takes precedence over the built-in defaults, and
-credentials and bootstrap paths stay environment-only. Nothing needs to change
-to keep an existing environment-based setup working. The
-[key table](packages/mcp-server/README.md#configuration) lists both forms.
+MCP server settings live in `config.json` in the storage directory, which the
+server generates on first run. That file is the only place they are set — a key
+present in it pins your value, a key absent uses the current built-in default,
+and there is no environment variable for any of them. The environment carries
+only credentials, the two bootstrap paths, and the two one-shot switches. The
+[key table](packages/mcp-server/README.md#configuration) lists both sets.
 
 _(These are the MCP server's settings. The VS Code extension is configured
 separately through the `ragnarok.*` settings above.)_

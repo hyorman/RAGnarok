@@ -424,7 +424,7 @@ APIs:
 
 | Adapter                | Core Interface    | Implementation                                                                |
 | ---------------------- | ----------------- | ----------------------------------------------------------------------------- |
-| `EnvConfigProvider`    | `IConfigProvider` | Reads from the resolved `McpConfig` (environment, then `config.json`)         |
+| `EnvConfigProvider`    | `IConfigProvider` | Reads from the resolved `McpConfig` (`config.json`, then built-in defaults)   |
 | `ConsoleLoggerFactory` | `ILoggerFactory`  | Logs to `console.log` / `console.error` with `[LEVEL] [context]` prefix       |
 | `ConsoleNotifier`      | `INotifier`       | Prints notifications and progress to console                                  |
 | `createLLMProvider()`  | `ILLMProvider`    | Factory — creates OpenAI, Anthropic, Ollama, or null provider based on config |

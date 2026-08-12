@@ -399,7 +399,7 @@ try {
 
   // A non-default value the server reports back, so the assertion below proves
   // the file was read rather than that a built-in default happened to match.
-  seedConfigFile({ retrieval: { topK: 7 }, reranker: { enabled: false } });
+  seedConfigFile({ reranker: { enabled: false } });
 
   // Session 1 — first contact over stdio, on a fresh volume.
   const session = new ContainerSession(sessionContainer);

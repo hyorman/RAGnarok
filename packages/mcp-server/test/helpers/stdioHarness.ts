@@ -125,6 +125,11 @@ export class StdioHarness {
     // environment. Seed the file before spawning: ensureConfigFile creates it
     // with `wx`, which no-ops on EEXIST, so ours survives and the server only
     // adds the $defaults/$envOnly blocks it authors.
+    //
+    // The merge is shallow by section: a `security` override REPLACES the
+    // seeded allowedPaths rather than extending it, so a caller that needs both
+    // must include allowedDir itself. Losing it costs the harness filesystem
+    // access with nothing naming the cause.
     fs.mkdirSync(storageDir, { recursive: true });
     fs.writeFileSync(
       path.join(storageDir, "config.json"),
