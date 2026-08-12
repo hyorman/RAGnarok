@@ -42,8 +42,8 @@ describe("memory graph disabled without an LLM (E2E)", function () {
     await withStdioHarness(
       () =>
         new StdioHarness(storageDir, workDir, {
-          RAGNAROK_LLM_PROVIDER: "none",
-          RAGNAROK_RERANKER_ENABLED: "false",
+          llm: { provider: "none" },
+          reranker: { enabled: false },
         }),
       async (harness) => {
         expect((await harness.discover()).error).to.equal(undefined);

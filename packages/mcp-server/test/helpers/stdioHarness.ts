@@ -4,6 +4,7 @@
  * JSON-RPC framing over stdio plus process-lifecycle helpers.
  */
 import { spawn, ChildProcess } from "child_process";
+import * as fs from "fs";
 import * as path from "path";
 
 export const PACKAGE_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -117,9 +118,18 @@ export class StdioHarness {
   constructor(
     storageDir: string,
     allowedDir: string,
-    overrides: Record<string, string> = {},
+    configOverrides: Record<string, Record<string, unknown>> = {},
     extraArgs: string[] = [],
   ) {
+    // The server reads these from <storageDir>/config.json, not the
+    // environment. Seed the file before spawning: ensureConfigFile creates it
+    // with `wx`, which no-ops on EEXIST, so ours survives and the server only
+    // adds the $defaults/$envOnly blocks it authors.
+    fs.mkdirSync(storageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(storageDir, "config.json"),
+      `${JSON.stringify({ security: { allowedPaths: [allowedDir] }, ...configOverrides }, null, 2)}\n`,
+    );
     // Scrub developer RAGNAROK_* config so the test is deterministic.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("RAGNAROK_")));
     this.proc = spawn(process.execPath, [SERVER_ENTRY, ...extraArgs], {
@@ -127,8 +137,6 @@ export class StdioHarness {
         ...env,
         RAGNAROK_STORAGE_DIR: storageDir,
         RAGNAROK_WORKING_DIR: allowedDir,
-        RAGNAROK_ALLOWED_PATHS: allowedDir,
-        ...overrides,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

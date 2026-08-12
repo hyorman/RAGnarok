@@ -144,7 +144,7 @@ describe("stdio transport E2E", function () {
 
   it("proves the graph visualization protocol and keeps modern discovery protocol-clean", async function () {
     const fixtureTopic = await withStdioHarness(
-      () => new StdioHarness(storageDir, sourceDir, { RAGNAROK_RERANKER_ENABLED: "false" }),
+      () => new StdioHarness(storageDir, sourceDir, { reranker: { enabled: false } }),
       async (fixtureHarness) => {
         expect((await fixtureHarness.discover(900)).error).to.equal(undefined);
         const fixtureTopicResponse = await fixtureHarness.callTool(901, "rag_create_topic", {
@@ -158,7 +158,7 @@ describe("stdio transport E2E", function () {
     );
     await seedGraphProtocolFixtures(storageDir);
 
-    harness = new StdioHarness(storageDir, sourceDir, { RAGNAROK_RERANKER_ENABLED: "false" });
+    harness = new StdioHarness(storageDir, sourceDir, { reranker: { enabled: false } });
 
     harness.send({
       jsonrpc: "2.0",
@@ -358,7 +358,7 @@ describe("stdio transport E2E", function () {
     expect(harness.nonProtocolLines, "ingestion/query diagnostics leaked onto stdout").to.deep.equal([]);
 
     expect(await harness.close(), "first stdio server did not exit cleanly").to.equal(0);
-    harness = new StdioHarness(storageDir, sourceDir, { RAGNAROK_RERANKER_ENABLED: "false" });
+    harness = new StdioHarness(storageDir, sourceDir, { reranker: { enabled: false } });
     const restartDiscover = await harness.discover(20);
     expect(restartDiscover.error, "restart discovery returned an error").to.equal(undefined);
 
@@ -544,7 +544,7 @@ describe("stdio transport E2E", function () {
       const catalogSourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-stdio-catalog-src-"));
       try {
         await withStdioHarness(
-          () => new StdioHarness(catalogStorageDir, catalogSourceDir, { RAGNAROK_RERANKER_ENABLED: "false" }),
+          () => new StdioHarness(catalogStorageDir, catalogSourceDir, { reranker: { enabled: false } }),
           async (catalogHarness) => {
             const baseId = 700 + serverIndex * 20;
             expect((await catalogHarness.discover(baseId)).error, "server/discover returned an error").to.equal(

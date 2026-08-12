@@ -231,7 +231,7 @@ describe("stdio harness lifecycle", function () {
       try {
         await withStdioHarness(
           () => {
-            first = new StdioHarness(storageDir, workingDir, { RAGNAROK_RERANKER_ENABLED: "false" });
+            first = new StdioHarness(storageDir, workingDir, { reranker: { enabled: false } });
             first.close = async () => {
               throw closeError;
             };
@@ -251,7 +251,7 @@ describe("stdio harness lifecycle", function () {
 
       await withStdioHarness(
         () => {
-          second = new StdioHarness(storageDir, workingDir, { RAGNAROK_RERANKER_ENABLED: "false" });
+          second = new StdioHarness(storageDir, workingDir, { reranker: { enabled: false } });
           return second;
         },
         async (harness) => {
@@ -262,6 +262,31 @@ describe("stdio harness lifecycle", function () {
     } finally {
       await killForTest(first);
       await killForTest(second);
+      fs.rmSync(storageDir, { recursive: true, force: true });
+      fs.rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the live keys a pre-seeded config.json carries across first boot", async () => {
+    // ensureConfigFile refreshes the $defaults/$envOnly blocks it authors by
+    // rewriting the whole file. If that rewrite dropped keys it did not author,
+    // every harness-driven test would silently lose its configuration and the
+    // loss would look like a server bug rather than a harness one.
+    const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-seeded-"));
+    const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-seeded-wd-"));
+    try {
+      await withStdioHarness(
+        () => new StdioHarness(storageDir, workingDir, { reranker: { enabled: false } }),
+        async (harness) => {
+          expect((await harness.discover(720)).error).to.equal(undefined);
+        },
+        "seeded config child",
+      );
+      const written = JSON.parse(fs.readFileSync(path.join(storageDir, "config.json"), "utf8"));
+      expect(written.reranker.enabled).to.equal(false);
+      expect(written.security.allowedPaths).to.deep.equal([workingDir]);
+      expect(written.$defaults, "the server must still author its documentation blocks").to.be.an("object");
+    } finally {
       fs.rmSync(storageDir, { recursive: true, force: true });
       fs.rmSync(workingDir, { recursive: true, force: true });
     }
