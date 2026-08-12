@@ -1324,8 +1324,17 @@ for (const workspace of ["core", "mcp-server", "vscode"]) {
     `VSIX clean build must invalidate ${workspace} TypeScript incremental state`,
   );
 }
-assert.match(builder, /execFileSync\(\s*["']npm["'],\s*\[\s*["']ci["']/);
+// The staging install must be `npm ci` — an exact, reproducible tree from
+// package-lock.json — never `npm install`, which is free to resolve something
+// newer than the lockfile records. The call goes through Node rather than the
+// `npm` launcher because Windows has only an `npm.cmd` shim, which Node refuses
+// to spawn without a shell (CVE-2024-27980); what this pins is the `ci`, not
+// the mechanism used to reach npm.
+assert.match(builder, /runNodeScript\(\s*resolveNpmCli\(\),\s*\[\s*["']ci["']/);
 assert.doesNotMatch(builder, /execSync\('npm install /);
+// Neither shim form may come back: one fails with ENOENT on Windows, the other
+// with EINVAL.
+assert.doesNotMatch(builder, /execFileSync\(\s*["']npm(\.cmd)?["']/);
 assert.match(builder, /verifyIntegrity\(archive, integrity/);
 assert.match(builder, /assertSafeArchiveMember/);
 assert.match(builder, /verifyNativePackages/);
