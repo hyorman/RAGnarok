@@ -411,6 +411,8 @@ function pruneBloat(stagingDir, targetPlatform) {
   // Remove non-target onnxruntime-node platform binaries
   pruneOnnxruntimeNode(nm, targetPlatform);
   prunePlatformNativePackages(nm, targetPlatform);
+  removeMcpWorkspace(stagingDir);
+  relaxUnmetPeerDependencies(nm);
 
   // Remove HuggingFace model cache (shouldn't exist in clean install, but just in case)
   const hfCache = path.join(nm, "@huggingface", "transformers", ".cache");
@@ -576,6 +578,115 @@ function findFiles(dir, ext) {
   return results;
 }
 
+/**
+ * Drop the MCP server workspace from the staged tree.
+ *
+ * The extension and the MCP server are independent products that share only
+ * `@ragnarok/core`. Staging installs every workspace because `npm ci` validates
+ * them all against the lockfile — which drags in the MCP server's dependency
+ * tree (`@modelcontextprotocol/*`, `@hono/node-server`, `@anthropic-ai/sdk`,
+ * `openai`) under `packages/mcp-server/node_modules/`.
+ *
+ * `.vscodeignore` already excludes `packages/**`, so none of it shipped. But it
+ * still sat in the tree `npm list` walks, and `@hono/node-server`'s unmet `hono`
+ * peer failed the whole build — the extension unable to package because of a
+ * dependency belonging to a product it does not include.
+ *
+ * The workspace is removed from the staged manifest *after* `npm ci` (before it,
+ * the lockfile would not validate) and its directory deleted, so nothing
+ * MCP-related remains to walk, ship, or trip over.
+ */
+function removeMcpWorkspace(stagingDir) {
+  const workspacePath = "packages/mcp-server";
+  const manifestPath = path.join(stagingDir, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (!Array.isArray(pkg.workspaces) || !pkg.workspaces.includes(workspacePath)) return;
+
+  pkg.workspaces = pkg.workspaces.filter((workspace) => workspace !== workspacePath);
+  fs.writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + "\n");
+
+  const dir = path.join(stagingDir, workspacePath);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+
+  // npm hoists what it can, so the MCP-only packages may also sit at the root.
+  // The extension loads none of them.
+  for (const name of ["@modelcontextprotocol", "@hono", "@anthropic-ai"]) {
+    const hoisted = path.join(stagingDir, "node_modules", name);
+    if (fs.existsSync(hoisted)) fs.rmSync(hoisted, { recursive: true, force: true });
+  }
+  console.log("  ✓ Removed the MCP server workspace and its dependencies");
+}
+
+/**
+ * Mark peer dependencies that were never installed as optional, in the staged
+ * tree only.
+ *
+ * vsce derives the packaged file list by shelling out to
+ * `npm list --production`, and npm exits non-zero when a *non-optional* peer is
+ * absent. Two packages in this tree declare peers they cannot expect anyone to
+ * install and forget to mark them optional:
+ *
+ *   - @langchain/community (deprecated) requires @browserbasehq/stagehand,
+ *     @ibm-cloud/watsonx-ai and ibm-cloud-sdk-core — vendor integrations for
+ *     services this extension does not touch.
+ *   - @hono/node-server requires hono. It reaches the tree only because staging
+ *     installs every workspace, including the MCP server, which the extension
+ *     does not ship.
+ *
+ * npm is right and the manifests are wrong, so the repair belongs here: the
+ * staging directory is disposable, and "a peer we deliberately did not install
+ * is optional" is exactly what these manifests should have said. Nothing in the
+ * source tree is touched, and no package contents change — only the metadata
+ * npm reads while enumerating.
+ *
+ * Deriving this from the tree rather than a hand-written list means a future
+ * dependency with the same defect is handled without another fix here.
+ */
+function relaxUnmetPeerDependencies(nodeModulesDir) {
+  if (!fs.existsSync(nodeModulesDir)) return;
+
+  const manifests = [];
+  for (const entry of fs.readdirSync(nodeModulesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === ".bin") continue;
+    if (entry.name.startsWith("@")) {
+      const scopeDir = path.join(nodeModulesDir, entry.name);
+      for (const scoped of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+        if (scoped.isDirectory()) manifests.push(path.join(scopeDir, scoped.name, "package.json"));
+      }
+    } else {
+      manifests.push(path.join(nodeModulesDir, entry.name, "package.json"));
+    }
+  }
+
+  let relaxed = 0;
+  for (const manifestPath of manifests) {
+    if (!fs.existsSync(manifestPath)) continue;
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    } catch {
+      continue; // A manifest we cannot read is not one we can repair.
+    }
+    const peers = pkg.peerDependencies;
+    if (!peers) continue;
+
+    let changed = false;
+    for (const peer of Object.keys(peers)) {
+      if (pkg.peerDependenciesMeta?.[peer]?.optional) continue;
+      if (fs.existsSync(path.join(nodeModulesDir, peer, "package.json"))) continue;
+      pkg.peerDependenciesMeta = pkg.peerDependenciesMeta || {};
+      pkg.peerDependenciesMeta[peer] = { ...pkg.peerDependenciesMeta[peer], optional: true };
+      changed = true;
+      relaxed += 1;
+    }
+    if (changed) fs.writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + "\n");
+  }
+
+  if (relaxed > 0) {
+    console.log(`  ✓ Marked ${relaxed} uninstalled peer dependencies optional for packaging`);
+  }
+}
+
 function pruneLangchainCommunityPackage(nodeModulesDir) {
   const communityDir = path.join(nodeModulesDir, "@langchain", "community");
   if (!fs.existsSync(communityDir)) return null;
@@ -663,12 +774,46 @@ function gutPackage(pkgDir) {
 // 7. Package with vsce
 // ---------------------------------------------------------------------------
 
+/**
+ * The extension and the MCP server are independent products that happen to
+ * share `@ragnarok/core`. Nothing MCP-specific may ship inside the VSIX.
+ *
+ * `.vscodeignore` already excludes `node_modules/**` and allowlists only what
+ * the extension loads, so these packages are kept out by construction — but
+ * "by construction" is exactly the kind of guarantee that erodes when someone
+ * adds one allowlist line. Staging installs the MCP server's dependencies
+ * (npm ci installs every workspace), so the material is present and one
+ * negation away from shipping. Assert instead of trusting.
+ */
+function assertNoMcpDependencies(stagingDir) {
+  const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
+  if (!vsix) return; // packageVsix throws on this a moment later.
+
+  // The VSIX is a zip; `unzip -Z1` lists entries without extracting.
+  const entries = execFileSync("unzip", ["-Z1", path.join(stagingDir, vsix)], { encoding: "utf8" }).split("\n");
+  // Only markers unique to the MCP server. `openai` and `@anthropic-ai` are
+  // deliberately absent: the MCP server uses them, but so does
+  // @langchain/community's own OpenAI integration, which the extension does
+  // load — flagging those names would fail the build on a legitimate
+  // dependency rather than catch a leak.
+  const forbidden = ["@modelcontextprotocol/", "@hono/", "@ragnarok/mcp"];
+  const leaked = entries.filter((entry) => forbidden.some((name) => entry.includes(name)));
+  if (leaked.length > 0) {
+    throw new Error(
+      `MCP dependencies leaked into the VSIX (the extension must not ship them):\n  ${leaked.slice(0, 10).join("\n  ")}`,
+    );
+  }
+  console.log("  ✓ No MCP dependencies in the VSIX");
+}
+
 function packageVsix(stagingDir, targetPlatform) {
   console.log("\nPackaging VSIX...");
 
   // Use the root project's vsce binary
   const vscebin = path.join(ROOT, "node_modules", ".bin", "vsce");
   execFileSync(vscebin, ["package", "--target", targetPlatform.target], { cwd: stagingDir, stdio: "inherit" });
+
+  assertNoMcpDependencies(stagingDir);
 
   // Find the generated VSIX and move it to root
   const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
