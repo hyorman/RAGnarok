@@ -31,12 +31,70 @@ const crypto = require("crypto");
 
 const ROOT = path.resolve(__dirname, "..");
 
-// Windows ships npm and vsce as .cmd shims — there is no extension-less
-// executable. execFileSync does not consult PATHEXT, so spawning "npm" there
-// fails with ENOENT rather than running anything. Resolve the real name once.
-const WINDOWS = process.platform === "win32";
-const NPM = WINDOWS ? "npm.cmd" : "npm";
-const binScript = (name) => path.join(ROOT, "node_modules", ".bin", WINDOWS ? `${name}.cmd` : name);
+/**
+ * Run a Node CLI by its JavaScript entry point instead of its launcher script.
+ *
+ * On Windows both npm and vsce exist only as `.cmd` shims, and neither way of
+ * reaching them from Node works:
+ *
+ *   - spawning `npm` fails with ENOENT, because execFileSync does not consult
+ *     PATHEXT and there is no extension-less executable;
+ *   - spawning `npm.cmd` fails with EINVAL, because Node refuses to execute
+ *     `.cmd`/`.bat` files without a shell (the fix for CVE-2024-27980).
+ *
+ * `shell: true` would satisfy both, at the price of putting every argument and
+ * the program path through cmd.exe — where a space in the repository path, or
+ * in the Windows temp directory, becomes a quoting bug. These are Node programs,
+ * so the portable answer is to run them the way Node runs anything: hand the
+ * script to the current interpreter. Same call on all six targets, no shell, no
+ * quoting, and the exact Node already in use.
+ */
+function runNodeScript(scriptPath, args, options = {}) {
+  return execFileSync(process.execPath, [scriptPath, ...args], options);
+}
+
+/** npm's CLI entry, which ships beside the running Node rather than in the project. */
+function resolveNpmCli() {
+  // npm sets npm_execpath to its own CLI when it runs a script, and this build
+  // is always reached through `npm run package*`. It is the only source that
+  // stays correct under nvm-windows, fnm and Volta, where node.exe is a shim
+  // with no npm beside it.
+  const fromNpm = process.env.npm_execpath;
+  if (fromNpm && fromNpm.endsWith(".js") && fs.existsSync(fromNpm)) {
+    return fromNpm;
+  }
+
+  const nodeDir = path.dirname(process.execPath);
+  const candidates = [
+    // Windows: npm sits next to node.exe.
+    path.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"),
+    // POSIX: node lives in bin/, npm one level up in lib/.
+    path.join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  try {
+    return require.resolve("npm/bin/npm-cli.js");
+  } catch {
+    throw new Error(
+      "Could not locate npm's CLI entry point (npm-cli.js) beside " +
+        `${process.execPath}. The VSIX build shells npm through Node to stay portable across ` +
+        "platforms; report this with your Node installation layout.",
+    );
+  }
+}
+
+/** A CLI installed as a project dependency, resolved to its bin script. */
+function resolveDependencyBin(packageName, binName) {
+  const manifestPath = require.resolve(`${packageName}/package.json`, { paths: [ROOT] });
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const relative = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.[binName];
+  if (!relative) {
+    throw new Error(`${packageName} declares no "${binName}" bin`);
+  }
+  return path.join(path.dirname(manifestPath), relative);
+}
 
 // ---------------------------------------------------------------------------
 // 1. Parse target platform
@@ -198,8 +256,8 @@ function verifyStagedModels(stagingDir) {
 
 function npmInstallStaging(stagingDir, targetPlatform) {
   console.log("\nInstalling exact production dependency tree from package-lock.json...");
-  execFileSync(
-    NPM,
+  runNodeScript(
+    resolveNpmCli(),
     [
       "ci",
       "--omit=dev",
@@ -843,8 +901,10 @@ function packageVsix(stagingDir, targetPlatform) {
   assertNoMcpDependencies(stagingDir);
 
   // Use the root project's vsce binary
-  const vscebin = binScript("vsce");
-  execFileSync(vscebin, ["package", "--target", targetPlatform.target], { cwd: stagingDir, stdio: "inherit" });
+  runNodeScript(resolveDependencyBin("@vscode/vsce", "vsce"), ["package", "--target", targetPlatform.target], {
+    cwd: stagingDir,
+    stdio: "inherit",
+  });
 
   // Find the generated VSIX and move it to root
   const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
