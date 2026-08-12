@@ -160,7 +160,26 @@ function verifyStagedModels(stagingDir) {
     }
     const actual = crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
     if (actual !== artifact.sha256) {
-      throw new Error(`Staged model checksum mismatch: ${artifact.filename}`);
+      // Distinguish the two ways this fails, because the fixes are opposite.
+      // A staged copy shorter than its source means the copy was interrupted —
+      // almost always a full disk, since staging also holds a production
+      // node_modules and the ~200 MB VSIX. A staged copy that matches its
+      // source byte-for-byte means the source itself no longer matches the
+      // manifest, which is a real integrity problem.
+      const sourcePath = path.join(ROOT, "packages", "core", "assets", "models", artifact.filename);
+      const stagedBytes = fs.statSync(filePath).size;
+      const sourceBytes = fs.existsSync(sourcePath) ? fs.statSync(sourcePath).size : null;
+      if (sourceBytes !== null && stagedBytes !== sourceBytes) {
+        throw new Error(
+          `Staged model copy is incomplete: ${artifact.filename} ` +
+            `(${stagedBytes} of ${sourceBytes} bytes). The staging directory is on the temp volume — ` +
+            `check free disk space and retry.`,
+        );
+      }
+      throw new Error(
+        `Staged model checksum mismatch: ${artifact.filename}. The staged copy matches its source, so ` +
+          `the source artifact no longer matches assets/models/manifest.json.`,
+      );
     }
   }
   console.log(`Verified ${manifest.artifacts.length} staged model artifacts.`);
