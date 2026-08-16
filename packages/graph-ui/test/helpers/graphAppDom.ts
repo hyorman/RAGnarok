@@ -1,5 +1,5 @@
 import { JSDOM } from "jsdom";
-import type { GraphVisualizationDocument } from "../../src/ui/graphApp/documentTypes";
+import type { GraphVisualizationDocument } from "../../src/documentTypes";
 
 interface TestResizeObserver {
   disconnected: boolean;

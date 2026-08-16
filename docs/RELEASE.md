@@ -18,6 +18,10 @@ platform-specific or container gate.
 - npm tarball smoke results;
 - provenance attestation and final artifact digest manifest.
 
+Graph delivery has three generated inputs that must be current: MCP's
+self-contained TypeScript HTML bundle and VS Code's `media/memoryGraph.js` and
+`media/memoryGraph.css`. The graph-ui `--check` build verifies all three.
+
 ## Gate sequence
 
 1. Install with `npm ci` and run formatting, lint, compile, unit/integration,
@@ -27,10 +31,15 @@ platform-specific or container gate.
 4. Pack core and MCP with lifecycle scripts disabled, inspect contents, install
    them into clean consumers, and run their smoke tests.
 5. Build the VSIX reproducibly. Install and activate it on Linux, macOS, and
-   Windows for the minimum and current supported VS Code versions.
+   Windows for the minimum and current supported VS Code versions. Inspect each
+   archive for `dist/extension.js`, `media/memoryGraph.js`, and
+   `media/memoryGraph.css`; reject graph-ui source, MCP source/SDK/HTML, and any
+   other graph-ui file.
 6. Build the Docker image, start it with a read-only root filesystem, verify
-   readiness, per-request auth, stateless MCP/cache policy, transfer behavior,
-   graceful shutdown, and architecture.
+   stdio discovery/tools, storage locking, removed-variable rejection, runtime
+   hardening, graceful shutdown, and architecture. Graph-ui source is a build
+   input only: the final image contains the compiled MCP bundle, not graph-ui
+   source/dependencies or VS webview assets.
 7. Generate SBOMs and NOTICE evidence from the exact artifact inputs.
 8. Create the release manifest and SLSA-compatible provenance. Verify every
    artifact digest against that manifest.

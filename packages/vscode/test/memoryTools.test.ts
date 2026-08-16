@@ -1,0 +1,456 @@
+import { expect } from "chai";
+import sinon from "sinon";
+import mockVscode from "../../../test/setup";
+import type { MemoryOperationInput, MemoryOperationResult, MemoryService } from "@ragnarok/core";
+import {
+  registerMemoryTools,
+  TOOLS,
+  type ExtensionOperationRunner,
+  type MemoryHostContextHost,
+  type MemoryToolRegistrationHost,
+} from "@ragnarok/vscode";
+
+function token() {
+  const listeners = new Set<() => void>();
+  return {
+    isCancellationRequested: false,
+    onCancellationRequested(listener: () => void) {
+      listeners.add(listener);
+      return { dispose: () => listeners.delete(listener) };
+    },
+    cancel() {
+      this.isCancellationRequested = true;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+  };
+}
+
+function registrationHarness(
+  result: MemoryOperationResult = { action: "forget", forgottenCount: 0 },
+  runOperation: ExtensionOperationRunner = async (_label, operation) => operation(new AbortController().signal),
+) {
+  const tools = new Map<string, any>();
+  const registrations: Array<{ disposed: boolean }> = [];
+  const registrationHost: MemoryToolRegistrationHost = {
+    registerTool(name, tool) {
+      tools.set(name, tool);
+      const state = { disposed: false };
+      registrations.push(state);
+      return { dispose: () => (state.disposed = true) };
+    },
+    createToolResult: (content) => new mockVscode.LanguageModelToolResult(content),
+    createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
+    createMarkdownString: (value) => new mockVscode.MarkdownString(value),
+  };
+  const context = { subscriptions: [] as Array<{ dispose(): unknown }> };
+  const memoryService = {
+    execute: sinon.stub().resolves(result),
+    reset: sinon.stub().resolves({ success: true }),
+  };
+  const contextHost: MemoryHostContextHost = {
+    workspaceFolders: [{ uri: { fsPath: "/workspace" } }],
+    getWorkspaceFolder: () => undefined,
+    getCurrentBranch: async () => "main",
+  };
+  const operationRunner = sinon.spy(runOperation) as sinon.SinonSpy & ExtensionOperationRunner;
+
+  registerMemoryTools(
+    context as any,
+    memoryService as unknown as Pick<MemoryService, "execute" | "reset">,
+    operationRunner,
+    registrationHost,
+    contextHost,
+  );
+  return { tools, registrations, context, memoryService, operationRunner };
+}
+
+function outputJson(result: any): unknown {
+  return JSON.parse(result.content[0].value);
+}
+
+async function caughtError(operation: Promise<unknown>): Promise<Error> {
+  let caught: unknown;
+  try {
+    await operation;
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).to.be.instanceOf(Error);
+  return caught as Error;
+}
+
+describe("VS Code native memory tools", function () {
+  afterEach(() => sinon.restore());
+
+  it("registers both tools and owns both registrations through one context disposable", function () {
+    const harness = registrationHarness();
+
+    expect([...harness.tools.keys()]).to.deep.equal([TOOLS.RAG_MEMORY, TOOLS.RAG_RESET_MEMORY]);
+    expect(harness.context.subscriptions).to.have.lengthOf(1);
+    harness.context.subscriptions[0].dispose();
+    expect(harness.registrations.map(({ disposed }) => disposed)).to.deep.equal([true, true]);
+  });
+
+  it("can leave registration ownership to the ordered extension lifecycle", function () {
+    const tools = new Map<string, unknown>();
+    const context = { subscriptions: [] as Array<{ dispose(): unknown }> };
+    const registrationHost: MemoryToolRegistrationHost = {
+      registerTool(name, tool) {
+        tools.set(name, tool);
+        return { dispose: sinon.spy() };
+      },
+      createToolResult: (content) => new mockVscode.LanguageModelToolResult(content),
+      createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
+      createMarkdownString: (value) => new mockVscode.MarkdownString(value),
+    };
+
+    const registration = registerMemoryTools(
+      context as any,
+      { execute: sinon.stub(), reset: sinon.stub() } as any,
+      async (_label, operation) => operation(new AbortController().signal),
+      registrationHost,
+      undefined,
+      false,
+    );
+
+    expect(tools.size).to.equal(2);
+    expect(context.subscriptions).to.deep.equal([]);
+    registration.dispose();
+  });
+
+  it("disposes the memory registration when reset registration throws", function () {
+    const firstRegistration = { dispose: sinon.spy() };
+    const registrationHost: MemoryToolRegistrationHost = {
+      registerTool: sinon
+        .stub()
+        .onFirstCall()
+        .returns(firstRegistration)
+        .onSecondCall()
+        .throws(new Error("reset failed")),
+      createToolResult: (content) => new mockVscode.LanguageModelToolResult(content),
+      createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
+      createMarkdownString: (value) => new mockVscode.MarkdownString(value),
+    };
+    const context = { subscriptions: [] as Array<{ dispose(): unknown }> };
+
+    expect(() =>
+      registerMemoryTools(
+        context as any,
+        { execute: sinon.stub(), reset: sinon.stub() } as any,
+        async (_label, operation) => operation(new AbortController().signal),
+        registrationHost,
+      ),
+    ).to.throw("reset failed");
+    expect(firstRegistration.dispose.calledOnce).to.equal(true);
+    expect(context.subscriptions).to.deep.equal([]);
+  });
+
+  const cases: Array<{ input: Record<string, unknown>; forwarded: MemoryOperationInput }> = [
+    {
+      input: {
+        action: "store",
+        content: "remember",
+        scope: "branch",
+        branch: "dev",
+        tags: ["x"],
+        ttlDays: 3,
+        query: "ignored",
+      },
+      forwarded: { action: "store", content: "remember", scope: "branch", branch: "dev", tags: ["x"], ttlDays: 3 },
+    },
+    {
+      input: {
+        action: "recall",
+        query: "fact",
+        topK: 8,
+        includeEntities: true,
+        includeAuto: true,
+        reinforce: false,
+        scope: "workspace",
+        branch: "ignored",
+        tags: ["ignored"],
+      },
+      forwarded: {
+        action: "recall",
+        query: "fact",
+        topK: 8,
+        includeEntities: true,
+        includeAuto: true,
+        reinforce: false,
+        scope: "workspace",
+        branch: "ignored",
+      },
+    },
+    {
+      input: { action: "forget", id: "one", olderThan: 2, expired: true, scope: "branch", branch: "dev" },
+      forwarded: { action: "forget", id: "one", olderThan: 2, expired: true, scope: "branch", branch: "dev" },
+    },
+    { input: { action: "stats", content: "ignored" }, forwarded: { action: "stats" } },
+    {
+      input: { action: "list", limit: 20, includeAuto: true, scope: "branch", branch: "dev", query: "ignored" },
+      forwarded: { action: "list", limit: 20, includeAuto: true, scope: "branch", branch: "dev" },
+    },
+    {
+      input: { action: "decay", scope: "branch", branch: "dev", limit: 1 },
+      forwarded: { action: "decay", scope: "branch", branch: "dev" },
+    },
+    { input: { action: "history", id: "one", branch: "ignored" }, forwarded: { action: "history", id: "one" } },
+    {
+      input: { action: "promote", branch: "dev", id: "one", ids: ["two"], scope: "workspace" },
+      forwarded: { action: "promote", branch: "dev", id: "one", ids: ["two"] },
+    },
+    {
+      input: { action: "links", scope: "workspace", branch: "dev", limit: 1 },
+      forwarded: { action: "links", scope: "workspace", branch: "dev" },
+    },
+    {
+      input: { action: "communities", scope: "branch", branch: "dev", includeEntities: true },
+      forwarded: { action: "communities", scope: "branch", branch: "dev" },
+    },
+  ];
+
+  for (const { input, forwarded } of cases) {
+    it(`normalizes ${input.action} input for the core service`, async function () {
+      const harness = registrationHarness();
+      const cancellation = token();
+
+      await harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input }, cancellation);
+
+      expect(harness.memoryService.execute.calledOnce).to.equal(true);
+      expect(harness.memoryService.execute.firstCall.args[0]).to.deep.equal(forwarded);
+      const explicitBranch = "branch" in forwarded ? forwarded.branch : undefined;
+      expect(harness.memoryService.execute.firstCall.args[1]).to.deep.equal({
+        workingDir: explicitBranch ? "" : "/workspace",
+        branchContext: { state: "resolved", branch: explicitBranch ?? "main" },
+      });
+      expect(harness.operationRunner.calledOnce).to.equal(true);
+    });
+  }
+
+  const trimmedCases: Array<{ input: Record<string, unknown>; forwarded: MemoryOperationInput }> = [
+    {
+      input: {
+        action: "store",
+        content: "  remember this  ",
+        branch: "  feature/padded  ",
+        tags: ["  one  ", "two"],
+      },
+      forwarded: {
+        action: "store",
+        content: "remember this",
+        branch: "feature/padded",
+        tags: ["one", "two"],
+      },
+    },
+    {
+      input: { action: "recall", query: "  known facts  " },
+      forwarded: { action: "recall", query: "known facts" },
+    },
+    {
+      input: { action: "forget", id: "  memory-1  ", branch: "  dev  " },
+      forwarded: { action: "forget", id: "memory-1", branch: "dev" },
+    },
+    {
+      input: { action: "promote", branch: "  dev  ", id: "  memory-1  ", ids: ["  memory-2  ", "memory-3"] },
+      forwarded: { action: "promote", branch: "dev", id: "memory-1", ids: ["memory-2", "memory-3"] },
+    },
+  ];
+
+  for (const { input, forwarded } of trimmedCases) {
+    it(`trims MCP-compatible ${input.action} string inputs before mapping to core`, async function () {
+      const harness = registrationHarness();
+
+      await harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input }, token());
+
+      expect(harness.memoryService.execute.calledOnce).to.equal(true);
+      expect(harness.memoryService.execute.firstCall.args[0]).to.deep.equal(forwarded);
+    });
+  }
+
+  const whitespaceCases: Array<{ field: string; input: Record<string, unknown> }> = [
+    { field: "content", input: { action: "store", content: "   " } },
+    { field: "query", input: { action: "recall", query: "   " } },
+    { field: "id", input: { action: "forget", id: "   ", expired: true } },
+    { field: "branch", input: { action: "list", branch: "   " } },
+    { field: "tags", input: { action: "store", content: "valid", tags: ["   "] } },
+    { field: "ids", input: { action: "promote", branch: "dev", ids: ["   "] } },
+  ];
+
+  for (const { field, input } of whitespaceCases) {
+    it(`rejects supplied whitespace-only ${field} like the MCP Zod boundary`, async function () {
+      const harness = registrationHarness();
+
+      const error = await caughtError(harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input }, token()));
+
+      expect(error.message).to.include(field);
+      expect(harness.memoryService.execute.called).to.equal(false);
+    });
+  }
+
+  it("bridges VS Code cancellation into the lifecycle operation signal", async function () {
+    let invocationSignal: AbortSignal | undefined;
+    let admitted!: () => void;
+    const serviceAdmitted = new Promise<void>((resolve) => (admitted = resolve));
+    const harness = registrationHarness();
+    harness.memoryService.execute.callsFake(async (_input, _context, signal) => {
+      invocationSignal = signal;
+      admitted();
+      return await new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    const cancellation = token();
+    const pending = harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input: { action: "stats" } }, cancellation);
+
+    await serviceAdmitted;
+    cancellation.cancel();
+
+    try {
+      await pending;
+      expect.fail("expected cancellation");
+    } catch {
+      expect(invocationSignal?.aborted).to.equal(true);
+    }
+  });
+
+  it("rejects a pre-cancelled token before executing memory", async function () {
+    const harness = registrationHarness();
+    const cancellation = token();
+    cancellation.cancel();
+
+    const error = await caughtError(
+      harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input: { action: "stats" } }, cancellation),
+    );
+
+    expect(error.message).to.include("cancelled");
+    expect(harness.memoryService.execute.called).to.equal(false);
+  });
+
+  it("forwards lifecycle-runner abort before executing memory", async function () {
+    const lifecycleError = new Error("lifecycle stopped");
+    const harness = registrationHarness(undefined, async (_label, operation) => {
+      const controller = new AbortController();
+      controller.abort(lifecycleError);
+      return operation(controller.signal);
+    });
+
+    const error = await caughtError(
+      harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input: { action: "stats" } }, token()),
+    );
+
+    expect(error).to.equal(lifecycleError);
+    expect(harness.memoryService.execute.called).to.equal(false);
+  });
+
+  it("forwards VS Code cancellation to ragResetMemory", async function () {
+    let resetSignal: AbortSignal | undefined;
+    let admitted!: () => void;
+    const resetAdmitted = new Promise<void>((resolve) => (admitted = resolve));
+    const harness = registrationHarness();
+    harness.memoryService.reset.callsFake(async (signal) => {
+      resetSignal = signal;
+      admitted();
+      return await new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    const cancellation = token();
+    const pending = harness.tools.get(TOOLS.RAG_RESET_MEMORY).invoke({ input: {} }, cancellation);
+
+    await resetAdmitted;
+    cancellation.cancel();
+    const error = await caughtError(pending);
+
+    expect(error.message).to.include("cancelled");
+    expect(resetSignal?.aborted).to.equal(true);
+    expect(harness.memoryService.reset.calledOnce).to.equal(true);
+  });
+
+  it("executes once, reduces the completed result to the token budget, and returns pretty JSON", async function () {
+    const result: MemoryOperationResult = {
+      action: "list",
+      memories: [
+        {
+          id: "one",
+          content: "long memory content",
+          scope: "workspace",
+          tags: [],
+          accessCount: 1,
+          createdAt: "2026-08-13T00:00:00.000Z",
+        },
+      ],
+      count: 1,
+    };
+    const harness = registrationHarness(result);
+    const countTokens = sinon.spy(async (text: string) => JSON.parse(text).memories?.[0]?.content.length ?? 0);
+
+    const output = await harness.tools
+      .get(TOOLS.RAG_MEMORY)
+      .invoke({ input: { action: "list" }, tokenizationOptions: { tokenBudget: 4, countTokens } }, token());
+
+    expect(harness.memoryService.execute.calledOnce).to.equal(true);
+    expect(countTokens.callCount).to.be.greaterThan(0);
+    expect(output.content[0].value).to.equal(JSON.stringify(outputJson(output), null, 2));
+    expect(outputJson(output)).to.deep.include({
+      action: "list",
+      count: 1,
+      responseMeta: { truncated: true, returnedCount: 1, totalCount: 1, reason: "tokenBudget" },
+    });
+    expect((outputJson(output) as any).memories[0].content).to.equal("long");
+  });
+
+  it("does not swallow cancellation raised during token measurement", async function () {
+    const result: MemoryOperationResult = {
+      action: "store",
+      memory: {
+        id: "one",
+        content: "remember",
+        scope: "workspace",
+        entityIds: [],
+        tags: [],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      },
+    };
+    const harness = registrationHarness(result);
+    const cancellation = token();
+    const pending = harness.tools.get(TOOLS.RAG_MEMORY).invoke(
+      {
+        input: { action: "store", content: "remember" },
+        tokenizationOptions: {
+          tokenBudget: 1,
+          countTokens: async () => {
+            cancellation.cancel();
+            throw new Error("token counting cancelled");
+          },
+        },
+      },
+      cancellation,
+    );
+
+    try {
+      await pending;
+      expect.fail("expected cancellation");
+    } catch (error) {
+      expect((error as Error).message).to.include("cancelled");
+    }
+    expect(harness.memoryService.execute.calledOnce).to.equal(true);
+  });
+
+  it("always prepares reset confirmation and resets only during invocation", async function () {
+    const harness = registrationHarness();
+    const resetTool = harness.tools.get(TOOLS.RAG_RESET_MEMORY);
+
+    const prepared = await resetTool.prepareInvocation({ input: {} }, token());
+
+    expect(prepared.confirmationMessages.title).to.equal("Reset RAGnarok memory?");
+    expect(prepared.confirmationMessages.message).to.be.instanceOf(mockVscode.MarkdownString);
+    expect(prepared.confirmationMessages.message.value).to.include("all memories");
+    expect(harness.memoryService.reset.called).to.equal(false);
+
+    const output = await resetTool.invoke({ input: {} }, token());
+    expect(harness.memoryService.reset.calledOnce).to.equal(true);
+    expect(outputJson(output)).to.deep.equal({ success: true });
+  });
+});

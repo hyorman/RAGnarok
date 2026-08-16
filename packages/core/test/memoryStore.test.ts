@@ -15,6 +15,14 @@ import type { ILLMProvider } from "../src/interfaces";
 // Identical texts always produce the same vector.
 
 const VECTOR_DIM = 32;
+const TEST_FINGERPRINT: EmbeddingFingerprint = {
+  backendKind: "test",
+  providerFormat: "test",
+  model: "memory-store-test",
+  revision: "1",
+  dimension: VECTOR_DIM,
+  endpointHash: "local",
+};
 
 function textToVector(text: string): number[] {
   const hash = crypto.createHash("sha256").update(text).digest();
@@ -68,6 +76,16 @@ async function captureError(operation: Promise<unknown>): Promise<unknown> {
     throw new Error("Expected operation to reject");
   }
   return captured;
+}
+
+async function expectRejected(promise: Promise<unknown>, message: string): Promise<void> {
+  try {
+    await promise;
+    expect.fail("Expected promise to reject");
+  } catch (error) {
+    expect(error).to.be.instanceOf(Error);
+    expect((error as Error).message).to.contain(message);
+  }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -701,6 +719,165 @@ describe("MemoryStore release contracts", function () {
   });
 });
 
+describe("MemoryStore reset and cancellation safety", function () {
+  this.timeout(30000);
+
+  let tempDir: string;
+  let store: MemoryStore;
+
+  const createStore = (root: string, options: { llmProvider?: ILLMProvider } = {}) =>
+    new MemoryStore({
+      storageDir: root,
+      embeddingService: createFingerprintedEmbeddingService(TEST_FINGERPRINT),
+      workingDir: root,
+      markdownPath: path.join(root, "memories.md"),
+      llmProvider: options.llmProvider,
+    });
+
+  beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-reset-test-"));
+    store = createStore(tempDir);
+  });
+
+  afterEach(async function () {
+    await store.dispose();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("reset clears generated markdown and cannot be undone by deferred writes", async function () {
+    const marker = "reset-secret-marker";
+    await store.store({ content: marker });
+    await store.flushMarkdown();
+    await store.recall({ query: marker, reinforce: true });
+
+    await store.reset(true);
+    await store.dispose();
+
+    const markdown = await fs.readFile(path.join(tempDir, "memories.md"), "utf8");
+    expect(markdown).not.to.contain(marker);
+
+    const reopened = createStore(tempDir);
+    expect(await reopened.list({ includeAuto: true })).to.deep.equal([]);
+    await reopened.dispose();
+  });
+
+  it("forget cannot be undone by a reinforcement flush queued behind deletion", async function () {
+    const marker = "forget-reinforcement-race-marker";
+    const entry = await store.store({ content: marker });
+    await store.recall({ query: marker, reinforce: true });
+
+    const vectorStore = (store as any).vectorStore;
+    const originalSaveEntriesUnlocked = vectorStore.saveEntriesUnlocked.bind(vectorStore);
+    let releaseDeletion!: () => void;
+    const deletionGate = new Promise<void>((resolve) => {
+      releaseDeletion = resolve;
+    });
+    let reportDeletionStarted!: () => void;
+    const deletionStarted = new Promise<void>((resolve) => {
+      reportDeletionStarted = resolve;
+    });
+    let gated = false;
+    vectorStore.saveEntriesUnlocked = async (...args: unknown[]) => {
+      if (!gated) {
+        gated = true;
+        reportDeletionStarted();
+        await deletionGate;
+      }
+      return originalSaveEntriesUnlocked(...args);
+    };
+
+    const forgetting = store.forget({ id: entry.id });
+    await deletionStarted;
+    const flushing = store.flushReinforcement();
+    releaseDeletion();
+    await Promise.all([forgetting, flushing]);
+
+    await store.dispose();
+    store = createStore(tempDir);
+    expect(await store.list({ includeAuto: true })).to.deep.equal([]);
+  });
+
+  it("reset cannot be undone by reinforcement scheduled after deletion begins", async function () {
+    const marker = "reset-concurrent-recall-marker";
+    await store.store({ content: marker });
+
+    const originalGetEntries = (store as any).getEntries.bind(store);
+    let releaseRecall!: () => void;
+    const recallGate = new Promise<void>((resolve) => {
+      releaseRecall = resolve;
+    });
+    let reportRecallPaused!: () => void;
+    const recallPaused = new Promise<void>((resolve) => {
+      reportRecallPaused = resolve;
+    });
+    let gateRecall = true;
+    (store as any).getEntries = async (...args: unknown[]) => {
+      if (gateRecall) {
+        gateRecall = false;
+        reportRecallPaused();
+        await recallGate;
+      }
+      return originalGetEntries(...args);
+    };
+
+    const vectorStore = (store as any).vectorStore;
+    const originalDeleteAllUnlocked = vectorStore.deleteAllUnlocked.bind(vectorStore);
+    let releaseDeletion!: () => void;
+    const deletionGate = new Promise<void>((resolve) => {
+      releaseDeletion = resolve;
+    });
+    let reportDeletionStarted!: () => void;
+    const deletionStarted = new Promise<void>((resolve) => {
+      reportDeletionStarted = resolve;
+    });
+    vectorStore.deleteAllUnlocked = async () => {
+      reportDeletionStarted();
+      await deletionGate;
+      return originalDeleteAllUnlocked();
+    };
+
+    const recalling = store.recall({ query: marker, reinforce: true });
+    await recallPaused;
+    const resetting = store.reset(true);
+    await deletionStarted;
+
+    releaseRecall();
+    await recalling;
+    const flushing = store.flushReinforcement();
+    releaseDeletion();
+    await Promise.all([resetting, flushing]);
+
+    await store.dispose();
+    store = createStore(tempDir);
+    expect(await store.list({ includeAuto: true })).to.deep.equal([]);
+  });
+
+  it("aborts reset before destructive deletion", async function () {
+    await store.store({ content: "keep-before-abort" });
+    const controller = new AbortController();
+    controller.abort(new Error("cancel reset"));
+
+    await expectRejected(store.reset(true, controller.signal), "cancel reset");
+    expect(await store.list()).to.have.length(1);
+  });
+
+  it("aborts forget before persisting deletion", async function () {
+    const entry = await store.store({ content: "keep before forget abort" });
+    const controller = new AbortController();
+    controller.abort(new Error("cancel forget"));
+
+    await expectRejected(store.forget({ id: entry.id }, controller.signal), "cancel forget");
+    expect(await store.list()).to.have.length(1);
+  });
+
+  it("aborts promotion before cross-scope persistence", async function () {
+    const controller = new AbortController();
+    controller.abort(new Error("cancel promote"));
+
+    await expectRejected(store.promoteToWorkspace("feature", undefined, controller.signal), "cancel promote");
+  });
+});
+
 describe("MemoryStore standalone format and markdown privacy", function () {
   this.timeout(30000);
 
@@ -820,16 +997,23 @@ describe("MemoryStore recallCommunities", function () {
     } as unknown as ILLMProvider;
   }
 
-  async function createStore(llmProvider?: ILLMProvider): Promise<MemoryStore> {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-communities-test-"));
-    return new MemoryStore({
-      storageDir: tempDir,
-      embeddingService: createMockEmbeddingService(),
-      llmProvider,
-      workingDir: tempDir,
-      markdownPath: null,
+  const createStore = (root: string, options: { llmProvider?: ILLMProvider } = {}) =>
+    new MemoryStore({
+      storageDir: root,
+      embeddingService: createFingerprintedEmbeddingService(TEST_FINGERPRINT),
+      llmProvider: options.llmProvider,
+      workingDir: root,
+      markdownPath: path.join(root, "memories.md"),
     });
+
+  async function seedConnectedWorkspaceGraph(current: MemoryStore): Promise<void> {
+    await current.store({ content: "Redis is used for caching in the API gateway" });
+    await current.store({ content: "The API gateway routes requests to the billing service" });
   }
+
+  beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-communities-test-"));
+  });
 
   afterEach(async function () {
     await store.dispose();
@@ -837,9 +1021,8 @@ describe("MemoryStore recallCommunities", function () {
   });
 
   it("returns entity clusters for the active scope", async function () {
-    store = await createStore(createExtractingLlmProvider());
-    await store.store({ content: "Redis is used for caching in the API gateway" });
-    await store.store({ content: "The API gateway routes requests to the billing service" });
+    store = createStore(tempDir, { llmProvider: createExtractingLlmProvider() });
+    await seedConnectedWorkspaceGraph(store);
 
     const communities = await store.recallCommunities();
 
@@ -857,7 +1040,7 @@ describe("MemoryStore recallCommunities", function () {
   });
 
   it("resolves names through entity IDs rather than echoing raw IDs", async function () {
-    store = await createStore(createExtractingLlmProvider());
+    store = createStore(tempDir, { llmProvider: createExtractingLlmProvider() });
     await store.store({ content: "Redis is used for caching in the API gateway" });
 
     const communities = await store.recallCommunities("workspace");
@@ -870,7 +1053,7 @@ describe("MemoryStore recallCommunities", function () {
   });
 
   it("returns an empty array when no LLM provider is configured", async function () {
-    store = await createStore(undefined);
+    store = createStore(tempDir);
     await store.store({ content: "Redis is used for caching" });
 
     expect(await store.recallCommunities()).to.deep.equal([]);
@@ -878,12 +1061,12 @@ describe("MemoryStore recallCommunities", function () {
   });
 
   it("reports entity extraction as enabled when an LLM provider is configured", async function () {
-    store = await createStore(createExtractingLlmProvider());
+    store = createStore(tempDir, { llmProvider: createExtractingLlmProvider() });
     expect(store.isEntityExtractionEnabled()).to.equal(true);
   });
 
   it("does not leak a community attribute into the graph snapshot", async function () {
-    store = await createStore(createExtractingLlmProvider());
+    store = createStore(tempDir, { llmProvider: createExtractingLlmProvider() });
     await store.store({ content: "Redis is used for caching in the API gateway" });
 
     await store.recallCommunities();
@@ -896,11 +1079,21 @@ describe("MemoryStore recallCommunities", function () {
   });
 
   it("rejects branch scope when no attached branch can be resolved", async function () {
-    store = await createStore(createExtractingLlmProvider());
+    store = createStore(tempDir, { llmProvider: createExtractingLlmProvider() });
 
     const error = await captureError(store.recallCommunities("branch"));
 
     expect((error as Error).message).to.include("Branch scope requested");
+  });
+
+  it("reads persisted communities without a live entity extractor", async function () {
+    store = createStore(tempDir, { llmProvider: createExtractingLlmProvider() });
+    await seedConnectedWorkspaceGraph(store);
+    await store.dispose();
+
+    store = createStore(tempDir);
+    expect(store.isEntityExtractionEnabled()).to.equal(false);
+    expect(await store.recallCommunities("workspace")).not.to.deep.equal([]);
   });
 });
 

@@ -7,6 +7,12 @@ full retrieval-augmented generation pipeline behind a set of host-agnostic
 interfaces so the same engine can run inside VS Code, an MCP server, or any
 other Node.js host.
 
+Core also owns `MemoryService`, `MemoryOperationCoordinator`, and
+`GraphVisualizationService`. VS Code and MCP call these same services for
+consistent validation, cancellation, reset, and graph documents while each host
+constructs `MemoryStore` with its own storage root. Core does not select or
+expose a host path, so sharing behavior never implies cross-host data sharing.
+
 ---
 
 ## Architecture Overview
@@ -126,7 +132,7 @@ src/
 ├── stores/
 │   └── vectorStoreFactory.ts  # LanceDB store creation, per-topic tables, caching
 │
-├── memory/                    # Scoped memory: vector recall, entity graph, decay/export
+├── memory/                    # MemoryService, scoped vector recall, entity graph, decay/export
 ├── models/                    # Embedding and reranker model registries
 ├── visualization/             # Deterministic memory-graph visualization documents
 │

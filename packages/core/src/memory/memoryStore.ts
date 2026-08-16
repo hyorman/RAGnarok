@@ -12,6 +12,7 @@
 import * as crypto from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { Mutex } from "async-mutex";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { ILLMProvider } from "../interfaces";
 import { Logger } from "../logger";
@@ -104,6 +105,9 @@ export class MemoryStore {
   private storageDir: string;
   private lockPromise: Promise<StorageLockHandle> | null = null;
   private backgroundTasks = new Set<Promise<unknown>>();
+  // Staged destructive writes must not race stores that captured an older
+  // scope snapshot and could otherwise republish deleted entries.
+  private mutationMutex = new Mutex();
   private disposing = false;
   private disposed = false;
 
@@ -131,6 +135,10 @@ export class MemoryStore {
   // ── Store ──────────────────────────────────────────────────────────
 
   async store(options: StoreOptions): Promise<MemoryEntry> {
+    return this.mutationMutex.runExclusive(() => this.storeUnlocked(options));
+  }
+
+  private async storeUnlocked(options: StoreOptions): Promise<MemoryEntry> {
     options.signal?.throwIfAborted();
     await this.ensureEmbeddingFingerprint();
     options.signal?.throwIfAborted();
@@ -323,17 +331,23 @@ export class MemoryStore {
 
   // ── Forget ─────────────────────────────────────────────────────────
 
-  async forget(options: ForgetOptions): Promise<number> {
+  async forget(options: ForgetOptions, signal?: AbortSignal): Promise<number> {
+    return this.mutationMutex.runExclusive(() => this.forgetUnlocked(options, signal));
+  }
+
+  private async forgetUnlocked(options: ForgetOptions, signal?: AbortSignal): Promise<number> {
+    signal?.throwIfAborted();
     options = await this.validateAndResolveForgetOptions(options);
+    signal?.throwIfAborted();
     let count = 0;
 
     if (options.expired) {
-      count += await this.forgetExpired(options);
+      count += await this.forgetExpired(options, signal);
     } else if (options.id) {
       // Forget specific memory by ID
-      count += await this.forgetById(options.id);
+      count += await this.forgetById(options.id, signal);
     } else if (options.scope || options.branch || options.olderThan !== undefined) {
-      count += await this.forgetByFilter(options);
+      count += await this.forgetByFilter(options, signal);
     }
 
     // Regenerate markdown (debounced)
@@ -641,14 +655,33 @@ export class MemoryStore {
   }
 
   /** Confirmed destructive reset used before changing embedding vector spaces. */
-  async reset(confirm: boolean): Promise<void> {
+  async reset(confirm: boolean, signal?: AbortSignal): Promise<void> {
     if (!confirm) {
       throw new Error("Memory reset requires confirm=true");
     }
+    signal?.throwIfAborted();
     await this.ensureStorageLock();
+    signal?.throwIfAborted();
+
+    await this.flushReinforcement();
+    await this.flushMarkdown();
+    await this.drainBackgroundTasks();
+    signal?.throwIfAborted();
+
+    return this.mutationMutex.runExclusive(() => this.resetUnlocked(signal));
+  }
+
+  private async resetUnlocked(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    this.cancelMemoryWriteTimers();
     await this.vectorStore.deleteAll();
+
     this.entryCache.clear();
     this.graphCache.clear();
+    this.reinforcementDirty.clear();
+    this.markdownDirty = false;
+    await this.regenerateMarkdown();
+
     const embeddingFingerprint = await this.embeddingService.getFingerprint();
     await atomicWriteJson(this.memoryManifestPath, { schemaVersion: 2, embeddingFingerprint, updatedAt: Date.now() });
     this.fingerprintCheck = null;
@@ -741,9 +774,15 @@ export class MemoryStore {
    * @param branch — branch name (not scope string)
    * @param entryIds — optional list of specific entry IDs to promote
    */
-  async promoteToWorkspace(branch: string, entryIds?: string[]): Promise<number> {
+  async promoteToWorkspace(branch: string, entryIds?: string[], signal?: AbortSignal): Promise<number> {
+    return this.mutationMutex.runExclusive(() => this.promoteToWorkspaceUnlocked(branch, entryIds, signal));
+  }
+
+  private async promoteToWorkspaceUnlocked(branch: string, entryIds?: string[], signal?: AbortSignal): Promise<number> {
+    signal?.throwIfAborted();
     await this.ensureStorageReady();
-    const count = await this.scopeLinker.promoteToWorkspace(`branch:${branch}`, "workspace", entryIds);
+    signal?.throwIfAborted();
+    const count = await this.scopeLinker.promoteToWorkspace(`branch:${branch}`, "workspace", entryIds, signal);
     // Invalidate workspace caches so next access reloads from store
     this.invalidateCache("workspace");
     return count;
@@ -796,19 +835,14 @@ export class MemoryStore {
    * Cluster the scope's entity graph and return each community's members,
    * largest community first.
    *
-   * Requires an LLM provider: without one no entities are extracted, so the
-   * graph is empty and there is nothing to cluster. The empty result is
-   * therefore ambiguous on its own — callers pair it with
-   * {@link isEntityExtractionEnabled} to distinguish "graph disabled" from
-   * "graph enabled, no communities yet".
+   * Persisted graph data remains readable without an LLM provider. Callers pair
+   * the result with {@link isEntityExtractionEnabled} to report whether new
+   * entities can currently be extracted.
    */
   public async recallCommunities(
     scope: MemoryScope = "workspace",
     branch?: string,
   ): Promise<Array<{ id: number; entityNames: string[] }>> {
-    if (!this.extractor) {
-      return [];
-    }
     const resolved = await this.resolveBranch({ scope, branch });
     const graph = await this.getGraph(resolved.scope, resolved.branch);
     const communities = graph.detectCommunities();
@@ -1127,29 +1161,35 @@ export class MemoryStore {
     return entityIds;
   }
 
-  private async forgetById(id: string): Promise<number> {
+  private async forgetById(id: string, signal?: AbortSignal): Promise<number> {
     // Search all scopes for this entry
+    signal?.throwIfAborted();
     const wsEntries = await this.getEntries("workspace");
     const wsIdx = wsEntries.findIndex((e) => e.id === id);
     if (wsIdx !== -1) {
-      const entry = wsEntries[wsIdx];
-      wsEntries.splice(wsIdx, 1);
-      this.repairVersionChain(wsEntries, entry);
-      await this.cleanupOrphanedEntities(entry, "workspace");
-      await this.persistScopeOrInvalidate("workspace");
+      const entries = this.cloneEntries(wsEntries);
+      const graph = MemoryGraph.fromJSON((await this.getGraph("workspace")).toJSON());
+      const [entry] = entries.splice(wsIdx, 1);
+      this.repairVersionChain(entries, entry);
+      this.cleanupOrphanedEntities(entry, entries, graph);
+      signal?.throwIfAborted();
+      await this.persistStagedScope(entries, graph, "workspace");
       return 1;
     }
 
     const branches = await this.vectorStore.listBranches();
     for (const branch of branches) {
+      signal?.throwIfAborted();
       const entries = await this.getEntries("branch", branch);
       const idx = entries.findIndex((e) => e.id === id);
       if (idx !== -1) {
-        const entry = entries[idx];
-        entries.splice(idx, 1);
-        this.repairVersionChain(entries, entry);
-        await this.cleanupOrphanedEntities(entry, "branch", branch);
-        await this.persistScopeOrInvalidate("branch", branch);
+        const stagedEntries = this.cloneEntries(entries);
+        const graph = MemoryGraph.fromJSON((await this.getGraph("branch", branch)).toJSON());
+        const [entry] = stagedEntries.splice(idx, 1);
+        this.repairVersionChain(stagedEntries, entry);
+        this.cleanupOrphanedEntities(entry, stagedEntries, graph);
+        signal?.throwIfAborted();
+        await this.persistStagedScope(stagedEntries, graph, "branch", branch);
         return 1;
       }
     }
@@ -1157,21 +1197,27 @@ export class MemoryStore {
     return 0;
   }
 
-  private async forgetExpired(options: ForgetOptions): Promise<number> {
-    let count = 0;
+  private async forgetExpired(options: ForgetOptions, signal?: AbortSignal): Promise<number> {
+    const stagedScopes: Array<{
+      entries: MemoryEntry[];
+      graph: MemoryGraph;
+      scope: MemoryScope;
+      branch?: string;
+      removedCount: number;
+    }> = [];
 
     const processScope = async (scope: MemoryScope, branch?: string) => {
-      const entries = await this.getEntries(scope, branch);
-      const graph = await this.getGraph(scope, branch);
+      signal?.throwIfAborted();
+      const entries = this.cloneEntries(await this.getEntries(scope, branch));
+      const graph = MemoryGraph.fromJSON((await this.getGraph(scope, branch)).toJSON());
       const removed = this.decayEngine.expireStale(entries, graph);
 
       if (removed.length > 0) {
         for (const entry of removed) {
           this.repairVersionChain(entries, entry);
-          await this.cleanupOrphanedEntities(entry, scope, branch);
+          this.cleanupOrphanedEntities(entry, entries, graph);
         }
-        await this.persistScopeOrInvalidate(scope, branch);
-        count += removed.length;
+        stagedScopes.push({ entries, graph, scope, branch, removedCount: removed.length });
       }
     };
 
@@ -1190,11 +1236,21 @@ export class MemoryStore {
       }
     }
 
-    return count;
+    signal?.throwIfAborted();
+    for (const staged of stagedScopes) {
+      await this.persistStagedScope(staged.entries, staged.graph, staged.scope, staged.branch);
+    }
+    return stagedScopes.reduce((count, staged) => count + staged.removedCount, 0);
   }
 
-  private async forgetByFilter(options: ForgetOptions): Promise<number> {
-    let count = 0;
+  private async forgetByFilter(options: ForgetOptions, signal?: AbortSignal): Promise<number> {
+    const stagedScopes: Array<{
+      entries: MemoryEntry[];
+      graph: MemoryGraph;
+      scope: MemoryScope;
+      branch?: string;
+      removedCount: number;
+    }> = [];
     const now = Date.now();
     const olderThanMs = options.olderThan !== undefined ? options.olderThan * 24 * 60 * 60 * 1000 : undefined;
 
@@ -1205,7 +1261,9 @@ export class MemoryStore {
     }
 
     const processScope = async (scope: MemoryScope, branch?: string) => {
-      const entries = await this.getEntries(scope, branch);
+      signal?.throwIfAborted();
+      const entries = this.cloneEntries(await this.getEntries(scope, branch));
+      const graph = MemoryGraph.fromJSON((await this.getGraph(scope, branch)).toJSON());
       const toRemove: MemoryEntry[] = [];
 
       for (const entry of entries) {
@@ -1222,10 +1280,9 @@ export class MemoryStore {
             entries.splice(idx, 1);
           }
           this.repairVersionChain(entries, entry);
-          await this.cleanupOrphanedEntities(entry, scope, branch);
+          this.cleanupOrphanedEntities(entry, entries, graph);
         }
-        await this.persistScopeOrInvalidate(scope, branch);
-        count += toRemove.length;
+        stagedScopes.push({ entries, graph, scope, branch, removedCount: toRemove.length });
       }
     };
 
@@ -1244,13 +1301,14 @@ export class MemoryStore {
       }
     }
 
-    return count;
+    signal?.throwIfAborted();
+    for (const staged of stagedScopes) {
+      await this.persistStagedScope(staged.entries, staged.graph, staged.scope, staged.branch);
+    }
+    return stagedScopes.reduce((count, staged) => count + staged.removedCount, 0);
   }
 
-  private async cleanupOrphanedEntities(removedEntry: MemoryEntry, scope: MemoryScope, branch?: string): Promise<void> {
-    const graph = await this.getGraph(scope, branch);
-    const entries = await this.getEntries(scope, branch);
-
+  private cleanupOrphanedEntities(removedEntry: MemoryEntry, entries: MemoryEntry[], graph: MemoryGraph): void {
     for (const entityId of removedEntry.entityIds) {
       const entity = graph.getEntity(entityId);
       if (!entity) {
@@ -1267,6 +1325,26 @@ export class MemoryStore {
         graph.updateEntity(entityId, { sourceMemoryIds: updated });
       }
     }
+  }
+
+  private cloneEntries(entries: MemoryEntry[]): MemoryEntry[] {
+    return entries.map((entry) => ({
+      ...entry,
+      vector: Array.from(entry.vector),
+      tags: [...entry.tags],
+      entityIds: [...entry.entityIds],
+      metadata: this.cloneJsonSafe(entry.metadata),
+    }));
+  }
+
+  private async persistStagedScope(
+    entries: MemoryEntry[],
+    graph: MemoryGraph,
+    scope: MemoryScope,
+    branch?: string,
+  ): Promise<void> {
+    await this.vectorStore.saveScopeAtomic(entries, graph.toJSON(), scope, branch);
+    this.invalidateCache(this.scopeKey(scope, branch));
   }
 
   private repairVersionChain(entries: MemoryEntry[], removed: MemoryEntry): void {
@@ -1304,6 +1382,17 @@ export class MemoryStore {
       void task.catch((err) => this.logger.debug("Markdown regeneration failed", err));
     }, 1_000);
     this.markdownTimer.unref?.();
+  }
+
+  private cancelMemoryWriteTimers(): void {
+    if (this.markdownTimer) {
+      clearTimeout(this.markdownTimer);
+      this.markdownTimer = null;
+    }
+    if (this.reinforcementTimer) {
+      clearTimeout(this.reinforcementTimer);
+      this.reinforcementTimer = null;
+    }
   }
 
   /** Write memories.md if stale. Single-flight; safe to call at shutdown. */
@@ -1402,6 +1491,10 @@ export class MemoryStore {
 
   /** Persist scopes with pending access-counter updates. */
   async flushReinforcement(): Promise<void> {
+    return this.mutationMutex.runExclusive(() => this.flushReinforcementUnlocked());
+  }
+
+  private async flushReinforcementUnlocked(): Promise<void> {
     const dirty = [...this.reinforcementDirty];
     this.reinforcementDirty.clear();
     const failures: unknown[] = [];

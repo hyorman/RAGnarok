@@ -1,11 +1,10 @@
 import { expect } from "chai";
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { zoomTransform } from "d3-zoom";
-import { clearVisualization, renderDocument, showEmpty, showError } from "../src/ui/graphApp/renderer";
-import { createViewport } from "../src/ui/graphApp/viewport";
-import { GRAPH_APP_HTML } from "../src/ui/graphAppBundle";
+import { clearVisualization, renderDocument, showEmpty, showError } from "../src/renderer";
+import { createViewport } from "../src/viewport";
 import { dispatchPointer, graphDocument, installGraphAppDom, type GraphAppDomHarness } from "./helpers/graphAppDom";
 
 describe("graph app renderer", function () {
@@ -21,32 +20,47 @@ describe("graph app renderer", function () {
   });
 
   it("generates exactly one self-contained responsive app shell", function () {
-    expect(GRAPH_APP_HTML.match(/data-ragnarok-graph-app/g)).to.have.length(1);
-    expect(GRAPH_APP_HTML).to.include("width: min(320px, calc(100vw - 24px));");
-    expect(GRAPH_APP_HTML).to.include("env(safe-area-inset-");
-    expect(GRAPH_APP_HTML).to.include("#graph {");
-    expect(GRAPH_APP_HTML).to.include("min-height: 0;");
-    expect(GRAPH_APP_HTML).to.match(/#panel-close\s*{[^}]*min-height:\s*44px;/s);
-    expect(GRAPH_APP_HTML).to.match(
+    const graphAppHtml = generatedMcpHtml();
+    expect(graphAppHtml.match(/data-ragnarok-graph-app/g)).to.have.length(1);
+    expect(graphAppHtml).to.include("width: min(320px, calc(100vw - 24px));");
+    expect(graphAppHtml).to.include("env(safe-area-inset-");
+    expect(graphAppHtml).to.include("#graph {");
+    expect(graphAppHtml).to.include("min-height: 0;");
+    expect(graphAppHtml).to.match(/#panel-close\s*{[^}]*min-height:\s*44px;/s);
+    expect(graphAppHtml).to.match(
       /@media \(max-width: 560px\)[\s\S]*?#panel\s*{[^}]*right:\s*calc\(12px \+ env\(safe-area-inset-right\)\);/,
     );
-    expect(GRAPH_APP_HTML).to.match(
-      /#panel\s*{[^}]*max-height:\s*calc\(100% - 24px - env\(safe-area-inset-bottom\)\);/,
-    );
-    expect(GRAPH_APP_HTML).not.to.match(/<script\s+[^>]*src\s*=/);
+    expect(graphAppHtml).to.match(/#panel\s*{[^}]*max-height:\s*calc\(100% - 24px - env\(safe-area-inset-bottom\)\);/);
+    expect(graphAppHtml).not.to.match(/<script\s+[^>]*src\s*=/);
   });
 
   it("checks generated bundle drift without writing the bundle", function () {
-    const packageRoot = process.cwd().endsWith(path.join("packages", "mcp-server"))
+    const packageRoot = process.cwd().endsWith(path.join("packages", "graph-ui"))
       ? process.cwd()
-      : path.join(process.cwd(), "packages", "mcp-server");
-    const script = path.join(packageRoot, "src", "ui", "graphApp", "build.mjs");
-    const bundle = path.join(packageRoot, "src", "ui", "graphAppBundle.ts");
-    const before = statSync(bundle, { bigint: true }).mtimeNs;
+      : path.join(process.cwd(), "packages", "graph-ui");
+    const script = path.join(packageRoot, "build.mjs");
+    const outputs = [
+      path.join(packageRoot, "..", "mcp-server", "src", "ui", "graphAppBundle.ts"),
+      path.join(packageRoot, "..", "..", "media", "memoryGraph.js"),
+      path.join(packageRoot, "..", "..", "media", "memoryGraph.css"),
+    ];
+    const before = outputs.map((output) => statSync(output, { bigint: true }).mtimeNs);
 
     execFileSync(process.execPath, [script, "--check"], { cwd: packageRoot, stdio: "pipe" });
 
-    expect(statSync(bundle, { bigint: true }).mtimeNs).to.equal(before);
+    expect(outputs.map((output) => statSync(output, { bigint: true }).mtimeNs)).to.deep.equal(before);
+  });
+
+  it("generates a host-specific VS bundle and the unchanged shared stylesheet", function () {
+    const root = repositoryRoot();
+    const script = readFileSync(path.join(root, "media", "memoryGraph.js"), "utf8");
+    const css = readFileSync(path.join(root, "media", "memoryGraph.css"), "utf8");
+
+    expect(script).to.include("graphDocument");
+    expect(script).to.include("ready");
+    expect(script).not.to.include("ontoolresult");
+    expect(script).not.to.include("ui/initialize");
+    expect(css).to.equal(readFileSync(path.join(root, "packages", "graph-ui", "src", "styles.css"), "utf8"));
   });
 
   it("renders resolved edge endpoints and midpoint labels through the real zoom path", function () {
@@ -390,6 +404,20 @@ describe("graph app renderer", function () {
     expect(installed.resizeObservers[1].disconnected).to.equal(true);
   });
 });
+
+function generatedMcpHtml(): string {
+  const root = repositoryRoot();
+  const source = readFileSync(path.join(root, "packages", "mcp-server", "src", "ui", "graphAppBundle.ts"), "utf8");
+  const match = /export const GRAPH_APP_HTML = (.*);\n$/.exec(source);
+  expect(match, "generated MCP graph export").not.to.equal(null);
+  return JSON.parse(match![1]) as string;
+}
+
+function repositoryRoot(): string {
+  return process.cwd().endsWith(path.join("packages", "graph-ui"))
+    ? path.join(process.cwd(), "..", "..")
+    : process.cwd();
+}
 
 function zoomToScale(installed: GraphAppDomHarness, svg: SVGSVGElement, scale: number): void {
   const current = zoomTransform(svg).k;

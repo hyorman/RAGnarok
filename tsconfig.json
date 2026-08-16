@@ -1,5 +1,10 @@
 {
   "extends": "./tsconfig.base.json",
   "files": [],
-  "references": [{ "path": "packages/core" }, { "path": "packages/vscode" }, { "path": "packages/mcp-server" }]
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/graph-ui" },
+    { "path": "packages/vscode" },
+    { "path": "packages/mcp-server" }
+  ]
 }

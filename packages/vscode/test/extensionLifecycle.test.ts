@@ -6,68 +6,90 @@ import { addDocumentsWithLifecycleSignal, NoDocumentsIngestedError } from "../sr
 import { ExtensionLifecycle, ExtensionStoppingError, waitForAbortableUi } from "../src/extensionLifecycle";
 
 describe("extension lifecycle", function () {
-  it("stops admission, aborts and drains active work, then awaits durable resources in order", async function () {
+  it("stops native surfaces and coordinator admission before draining and disposing stores in order", async function () {
     const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-lifecycle-"));
     await fs.writeFile(
       path.join(storageDir, ".ragnarok.lock"),
       JSON.stringify({ version: 1, pid: process.pid, hostname: os.hostname() }),
     );
     const lifecycle = new ExtensionLifecycle(storageDir);
-    const order: string[] = [];
-    let operationAborted = false;
-    lifecycle.addDisposable({
-      dispose: () => {
-        order.push("listener");
-      },
-    });
+    const events: string[] = [];
+    let releaseOperation!: () => void;
     const active = lifecycle.run(
       "active mutation",
-      (signal) =>
+      () =>
         new Promise<void>((resolve) => {
-          const abort = () => {
-            operationAborted = true;
-            order.push("operation");
+          releaseOperation = () => {
+            events.push("operations:drained");
             resolve();
           };
-          if (signal.aborted) {
-            abort();
-          } else {
-            signal.addEventListener("abort", abort, { once: true });
-          }
         }),
     );
     lifecycle.setResources({
-      ragTool: {
-        dispose: () => undefined,
-        disposeAsync: async () => {
-          order.push("tool");
+      memoryTools: {
+        dispose: () => {
+          events.push("memoryTools:dispose");
+        },
+      },
+      graphCommand: {
+        dispose: () => {
+          events.push("graphCommand:dispose");
+        },
+      },
+      graphPanel: {
+        dispose: () => {
+          events.push("graphPanel:dispose");
+        },
+      },
+      memoryCoordinator: {
+        stopAdmission: () => {
+          events.push("memoryCoordinator:stop");
+          releaseOperation();
+        },
+        drain: async () => {
+          events.push("memoryCoordinator:drain");
         },
       },
       memoryStore: {
         dispose: async () => {
-          order.push("memory");
+          events.push("memoryStore:dispose");
         },
       },
       topicManager: {
         dispose: async () => {
-          order.push("topic");
+          events.push("topicManager:dispose");
           await fs.writeFile(
             path.join(storageDir, ".ragnarok.lock"),
             JSON.stringify({ version: 1, pid: process.pid, hostname: os.hostname(), releasedAt: Date.now() }),
           );
         },
       },
+      embeddingRegistry: {
+        disposeAll: async () => {
+          events.push("embeddingRegistry:dispose");
+        },
+      },
       embeddingService: {
         dispose: async () => {
-          order.push("embedding");
+          events.push("embeddingService:dispose");
         },
       },
     });
 
     await lifecycle.dispose();
     await active;
-    expect(operationAborted).to.equal(true);
-    expect(order).to.deep.equal(["operation", "listener", "tool", "memory", "topic", "embedding"]);
+    expect(events).to.deep.equal([
+      "memoryTools:dispose",
+      "graphCommand:dispose",
+      "graphPanel:dispose",
+      "memoryCoordinator:stop",
+      "operations:drained",
+      "memoryCoordinator:drain",
+      "memoryStore:dispose",
+      "topicManager:dispose",
+      "embeddingRegistry:dispose",
+      "embeddingService:dispose",
+    ]);
     expect(lifecycle.activeOperationCount).to.equal(0);
     try {
       await lifecycle.run("late", async () => undefined);

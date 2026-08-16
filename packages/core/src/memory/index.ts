@@ -2,6 +2,30 @@
 
 export { MemoryStore } from "./memoryStore";
 export type { MemoryStoreOptions } from "./memoryStore";
+export { MemoryOperationCoordinator } from "./memoryOperationCoordinator";
+export { MemoryService } from "./memoryService";
+export { MemoryServiceError } from "./memoryServiceError";
+export type { MemoryServiceErrorCode } from "./memoryServiceError";
+export { reduceMemoryOperationResult } from "./memoryResultReducer";
+export type { MemoryResultMeasurement } from "./memoryResultReducer";
+export type {
+  MemoryBranchContext,
+  MemoryHostContext,
+  MemoryOperationInput,
+  MemoryResponseMeta,
+  StoreMemoryResult,
+  RecallMemoryResult,
+  ForgetMemoryResult,
+  MemoryStatsResult,
+  ListMemoryResult,
+  DecayMemoryResult,
+  HistoryMemoryResult,
+  PromoteMemoryResult,
+  LinksMemoryResult,
+  CommunitiesMemoryResult,
+  MemoryOperationResult,
+  MemoryResetResult,
+} from "./memoryServiceTypes";
 export { MemoryVectorStore } from "./memoryVectorStore";
 export { MemoryGraph } from "./memoryGraph";
 export { MemoryEntityExtractor } from "./memoryEntityExtractor";

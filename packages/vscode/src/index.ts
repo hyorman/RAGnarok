@@ -8,7 +8,15 @@
 export { RAGTool } from "./ragTool";
 export { VscodeLmBackend } from "./vscodeLmBackend";
 export { WorkspaceContextProvider } from "./workspaceContext";
-export { VSCODE_CONFIG } from "./constants";
+export { COMMANDS, TOOLS, VSCODE_CONFIG } from "./constants";
+export { resolveMemoryHostContext, type MemoryHostContextHost } from "./memoryHostContext";
+export { registerMemoryTools, type MemoryToolRegistrationHost } from "./memoryTools";
+export {
+  registerMemoryGraphCommand,
+  type MemoryGraphCommandHost,
+  type MemoryGraphWorkspaceFolder,
+} from "./memoryGraphCommand";
+export { MemoryGraphPanel, type MemoryGraphPanelFactory } from "./memoryGraphPanel";
 export {
   ExtensionLifecycle,
   ExtensionShutdownError,
@@ -17,4 +25,10 @@ export {
 } from "./extensionLifecycle";
 export { createDefaultMigrationUx, openTopicManagerWithMigration, type MigrationUxDependencies } from "./migrationUx";
 export { TopicTreeDataProvider, TopicTreeItem, ConfigTreeDataProvider } from "./topicTreeView";
-export { activateWithServiceFactory, type ActivationServiceFactory, type RagnarokExtensionApi } from "./extension";
+export {
+  activateWithServiceFactory,
+  createMemoryServices,
+  type ActivationRuntimeFactory,
+  type ActivationServiceFactory,
+  type RagnarokExtensionApi,
+} from "./extension";

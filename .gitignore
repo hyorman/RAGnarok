@@ -4,6 +4,7 @@ dist/
 dist-test/
 *.js
 !esbuild.js
+!media/memoryGraph.js
 *.js.map
 *.tsbuildinfo
 !test/fixtures/**

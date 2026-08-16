@@ -5,6 +5,12 @@ as the local operating-system user, on that user's data, at that user's
 authority. It is not a multi-tenant service, and it is not designed to be
 exposed to a network.
 
+They share host-neutral core services but use separate storage roots: VS Code
+uses extension global storage and MCP uses `RAGNAROK_STORAGE_DIR`. There is no
+cross-host data sharing. Granting one host access does not grant it access to the
+other host's memories unless an operator explicitly copies data outside these
+interfaces.
+
 ## Process boundary
 
 The MCP server speaks stdio only. It binds no address, accepts no connection,
@@ -59,6 +65,12 @@ external scripts. It renders user-controlled strings through text DOM APIs,
 not HTML interpolation. The tool uses only modern `_meta.ui.resourceUri`, and
 both resource catalog and resource content declare
 `text/html;profile=mcp-app`.
+
+VS Code's **RAGnarok: Show Memory Graph** webview uses separate generated JS/CSS,
+a nonce and restrictive CSP, local resource roots, and the same text-only
+renderer. It reads only VS Code extension memory. The native `ragResetMemory`
+tool requires VS Code invocation confirmation before deleting that root; MCP's
+`rag_reset_memory` separately requires `confirm: true` for MCP storage.
 
 ## Authentication protocol scope
 

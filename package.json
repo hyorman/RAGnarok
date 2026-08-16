@@ -5,6 +5,7 @@
   "version": "0.7.0",
   "workspaces": [
     "packages/core",
+    "packages/graph-ui",
     "packages/vscode",
     "packages/mcp-server"
   ],
@@ -272,6 +273,10 @@
       {
         "command": "ragnarok.selectRerankerModel",
         "title": "RAGnarok: Select Reranker Model"
+      },
+      {
+        "command": "ragnarok.showMemoryGraph",
+        "title": "RAGnarok: Show Memory Graph"
       }
     ],
     "viewsContainers": {
@@ -405,6 +410,149 @@
             "query"
           ]
         }
+      },
+      {
+        "name": "ragMemory",
+        "tags": [
+          "memory",
+          "context",
+          "rag"
+        ],
+        "toolReferenceName": "ragMemory",
+        "displayName": "RAG Memory",
+        "modelDescription": "Store, recall, forget, list, inspect, decay, promote, and organize project memories. Memories can be scoped to the workspace or a Git branch.",
+        "icon": "$(archive)",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "description": "The memory operation to perform",
+              "enum": [
+                "store",
+                "recall",
+                "forget",
+                "stats",
+                "list",
+                "decay",
+                "history",
+                "promote",
+                "links",
+                "communities"
+              ]
+            },
+            "content": {
+              "type": "string",
+              "description": "Memory content to store",
+              "minLength": 1,
+              "maxLength": 50000
+            },
+            "query": {
+              "type": "string",
+              "description": "Search query for recall",
+              "minLength": 1
+            },
+            "topK": {
+              "type": "integer",
+              "description": "Number of recall results",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "includeEntities": {
+              "type": "boolean",
+              "description": "Include related graph entities in recall results"
+            },
+            "id": {
+              "type": "string",
+              "description": "Memory entry ID",
+              "minLength": 1
+            },
+            "olderThan": {
+              "type": "integer",
+              "description": "Forget memories older than this many days",
+              "minimum": 1,
+              "maximum": 3650
+            },
+            "expired": {
+              "type": "boolean",
+              "description": "Forget memories that have expired"
+            },
+            "scope": {
+              "type": "string",
+              "description": "Memory scope",
+              "enum": [
+                "workspace",
+                "branch"
+              ]
+            },
+            "branch": {
+              "type": "string",
+              "description": "Git branch name",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "tags": {
+              "type": "array",
+              "description": "Tags to attach to memory",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "ttlDays": {
+              "type": "number",
+              "description": "Optional memory TTL in days",
+              "exclusiveMinimum": 0,
+              "maximum": 3650
+            },
+            "includeAuto": {
+              "type": "boolean",
+              "description": "Include reserved auto-generated memories"
+            },
+            "reinforce": {
+              "type": "boolean",
+              "description": "Update access counters during recall"
+            },
+            "ids": {
+              "type": "array",
+              "description": "Memory IDs to promote",
+              "maxItems": 500,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Maximum entries to list",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "ragResetMemory",
+        "tags": [
+          "memory",
+          "reset",
+          "rag"
+        ],
+        "toolReferenceName": "ragResetMemory",
+        "displayName": "Reset RAG Memory",
+        "modelDescription": "Permanently delete all memories stored by the RAGnarok extension. Always requires user confirmation.",
+        "icon": "$(trash)",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
       }
     ]
   },
@@ -414,7 +562,7 @@
     "bundle": "node esbuild.mjs",
     "bundle:watch": "node esbuild.mjs --watch",
     "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
-    "compile:tests:all": "npm run compile:tests && npm run compile:tests --workspace=packages/core && npm run compile:tests --workspace=packages/mcp-server",
+    "compile:tests:all": "npm run compile:tests && npm run compile:tests --workspace=packages/core && npm run compile:tests --workspace=packages/graph-ui && npm run compile:tests --workspace=packages/mcp-server",
     "watch": "tsc -b --watch",
     "watch:tests": "tsc -watch -p ./tsconfig.test.json",
     "lint": "npm run lint --workspaces --if-present && eslint test/",
@@ -445,8 +593,9 @@
     "test:vscode:compiled": "node ./dist-test/test/runTest.js",
     "test:mcp": "npm test --workspace=packages/mcp-server",
     "test:mcp:compiled": "npm exec --workspace=packages/mcp-server mocha",
-    "test:all": "npm run compile && npm run bundle && npm run compile:tests:all && npm run test:core:compiled && npm run test:vscode:compiled && npm run test:mcp:compiled",
-    "test:fast": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:mcp:compiled",
+    "test:graph-ui:compiled": "npm test --workspace=packages/graph-ui",
+    "test:all": "npm run compile && npm run bundle && npm run compile:tests:all && npm run test:core:compiled && npm run test:graph-ui:compiled && npm run test:vscode:compiled && npm run test:mcp:compiled",
+    "test:fast": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:graph-ui:compiled && npm run test:mcp:compiled",
     "test:pack": "node scripts/pack-smoke.mjs",
     "test:release-static": "node scripts/test-release-static.mjs",
     "test:docs": "node scripts/check-docs.mjs",

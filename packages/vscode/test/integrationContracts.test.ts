@@ -3,7 +3,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import mockVscode from "../../../test/setup";
 import { RetrievalStrategy } from "@ragnarok/core";
-import { openTopicManagerWithMigration, TopicTreeItem, type MigrationUxDependencies } from "@ragnarok/vscode";
+import { openTopicManagerWithMigration, TOOLS, TopicTreeItem, type MigrationUxDependencies } from "@ragnarok/vscode";
 
 function legacyPlan(): any {
   return {
@@ -48,6 +48,42 @@ function migrationDependencies(overrides: Partial<MigrationUxDependencies> = {})
 }
 
 describe("VS Code contribution and tree contracts", function () {
+  it("keeps native memory tool manifests aligned with runtime names and MCP limits", async function () {
+    const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+    const contributedNames = manifest.contributes.languageModelTools.map((tool: any) => tool.name);
+    const memoryToolNames = [TOOLS.RAG_MEMORY, TOOLS.RAG_RESET_MEMORY];
+    const tools = manifest.contributes.languageModelTools.filter((tool: any) => memoryToolNames.includes(tool.name));
+    const memory = tools.find((tool: any) => tool.name === TOOLS.RAG_MEMORY);
+    const reset = tools.find((tool: any) => tool.name === TOOLS.RAG_RESET_MEMORY);
+
+    expect(contributedNames).to.have.members(Object.values(TOOLS));
+    expect(tools.map((tool: any) => tool.name)).to.have.members(memoryToolNames);
+    expect(memory.inputSchema.required).to.deep.equal(["action"]);
+    expect(memory.inputSchema.properties.action.enum).to.deep.equal([
+      "store",
+      "recall",
+      "forget",
+      "stats",
+      "list",
+      "decay",
+      "history",
+      "promote",
+      "links",
+      "communities",
+    ]);
+    expect(memory.inputSchema.properties.content.maxLength).to.equal(50_000);
+    expect(memory.inputSchema.properties.topK).to.include({ minimum: 1, maximum: 50 });
+    expect(memory.inputSchema.properties.olderThan).to.include({ minimum: 1, maximum: 3650 });
+    expect(memory.inputSchema.properties.branch.maxLength).to.equal(255);
+    expect(memory.inputSchema.properties.tags).to.include({ maxItems: 20 });
+    expect(memory.inputSchema.properties.tags.items.maxLength).to.equal(100);
+    expect(memory.inputSchema.properties.ttlDays.maximum).to.equal(3650);
+    expect(memory.inputSchema.properties.ids.maxItems).to.equal(500);
+    expect(memory.inputSchema.properties.limit).to.include({ minimum: 1, maximum: 500 });
+    expect(reset.inputSchema).to.deep.equal({ type: "object", properties: {} });
+    expect(reset.inputSchema.properties).not.to.have.property("confirm");
+  });
+
   it("declares the same three retrieval strategies in settings, LM tool schema, and tree labels", async function () {
     const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
     const expected = Object.values(RetrievalStrategy);

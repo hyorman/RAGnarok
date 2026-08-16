@@ -15,6 +15,9 @@ import {
   HuggingFaceBackend,
   ModelRegistry,
   MemoryStore,
+  MemoryOperationCoordinator,
+  MemoryService,
+  GraphVisualizationService,
   RetrievalStrategy,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
@@ -29,6 +32,9 @@ import { VIEWS, CONTEXT, COMMANDS, VSCODE_CONFIG } from "./constants";
 import { GitHubTokenManager } from "./githubTokenManager";
 import { ExtensionLifecycle } from "./extensionLifecycle";
 import { createDefaultMigrationUx, openTopicManagerWithMigration } from "./migrationUx";
+import { registerMemoryTools } from "./memoryTools";
+import { MemoryGraphPanel } from "./memoryGraphPanel";
+import { registerMemoryGraphCommand } from "./memoryGraphCommand";
 
 // Install VS Code logger factory before anything else
 setLoggerFactory(new VsCodeLoggerFactory());
@@ -52,13 +58,63 @@ export interface ActivationServiceFactory {
   createEmbeddingService(options: ConstructorParameters<typeof EmbeddingService>[0]): EmbeddingService;
   createTopicManager(options: Parameters<typeof TopicManager.create>[0]): Promise<TopicManager>;
   createMemoryStore(options: ConstructorParameters<typeof MemoryStore>[0]): MemoryStore;
+  createMemoryCoordinator(): MemoryOperationCoordinator;
+  createMemoryService(store: MemoryStore, coordinator: MemoryOperationCoordinator): MemoryService;
+  createGraphVisualizationService(
+    store: MemoryStore,
+    coordinator: MemoryOperationCoordinator,
+  ): GraphVisualizationService;
+}
+
+export interface ActivationRuntimeFactory {
+  registerMemoryTools(
+    context: vscode.ExtensionContext,
+    memoryService: Pick<MemoryService, "execute" | "reset">,
+    operationRunner: ExtensionLifecycle["run"],
+  ): vscode.Disposable;
+  createMemoryGraphPanel(extensionUri: vscode.Uri): Pick<MemoryGraphPanel, "show" | "dispose">;
+  registerMemoryGraphCommand(
+    graphService: Pick<GraphVisualizationService, "generate">,
+    panel: Pick<MemoryGraphPanel, "show">,
+    operationRunner: ExtensionLifecycle["run"],
+  ): vscode.Disposable;
+  afterMemorySurfacesRegistered?(): void | Promise<void>;
 }
 
 const defaultServiceFactory: ActivationServiceFactory = {
   createEmbeddingService: (options) => new EmbeddingService(options),
   createTopicManager: (options) => TopicManager.create(options),
   createMemoryStore: (options) => new MemoryStore(options),
+  createMemoryCoordinator: () => new MemoryOperationCoordinator(),
+  createMemoryService: (store, coordinator) => new MemoryService(store, coordinator),
+  createGraphVisualizationService: (store, coordinator) => new GraphVisualizationService(store, coordinator),
 };
+
+const defaultRuntimeFactory: ActivationRuntimeFactory = {
+  registerMemoryTools: (context, memoryService, operationRunner) =>
+    registerMemoryTools(context, memoryService, operationRunner, undefined, undefined, false),
+  createMemoryGraphPanel: (extensionUri) => new MemoryGraphPanel(extensionUri),
+  registerMemoryGraphCommand,
+};
+
+export function createMemoryServices(
+  store: MemoryStore,
+  factory: Pick<
+    ActivationServiceFactory,
+    "createMemoryCoordinator" | "createMemoryService" | "createGraphVisualizationService"
+  >,
+): {
+  coordinator: MemoryOperationCoordinator;
+  memoryService: MemoryService;
+  graphService: GraphVisualizationService;
+} {
+  const coordinator = factory.createMemoryCoordinator();
+  return {
+    coordinator,
+    memoryService: factory.createMemoryService(store, coordinator),
+    graphService: factory.createGraphVisualizationService(store, coordinator),
+  };
+}
 
 let activeLifecycle: ExtensionLifecycle | undefined;
 
@@ -70,6 +126,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Ragnar
 export async function activateWithServiceFactory(
   context: vscode.ExtensionContext,
   serviceFactory: ActivationServiceFactory,
+  runtimeFactory: ActivationRuntimeFactory = defaultRuntimeFactory,
 ): Promise<RagnarokExtensionApi> {
   logger.info("RAGnarōk extension activating...");
   if (activeLifecycle) {
@@ -132,15 +189,28 @@ export async function activateWithServiceFactory(
       });
     const topicManager = await openTopicManagerWithMigration(storageDir, createDefaultMigrationUx(createTopicManager));
     lifecycle.setResources({ topicManager });
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const memoryStore = serviceFactory.createMemoryStore({
       storageDir,
       embeddingService,
       llmProvider,
-      workingDir: workspaceRoot,
+      workingDir: process.cwd(),
       markdownPath: vscode.Uri.joinPath(context.globalStorageUri, "memories.md").fsPath,
     });
     lifecycle.setResources({ memoryStore });
+    const {
+      coordinator: memoryCoordinator,
+      memoryService,
+      graphService,
+    } = createMemoryServices(memoryStore, serviceFactory);
+    lifecycle.setResources({ memoryCoordinator });
+
+    const memoryTools = runtimeFactory.registerMemoryTools(context, memoryService, lifecycle.run);
+    lifecycle.setResources({ memoryTools });
+    const graphPanel = runtimeFactory.createMemoryGraphPanel(context.extensionUri);
+    lifecycle.setResources({ graphPanel });
+    const graphCommand = runtimeFactory.registerMemoryGraphCommand(graphService, graphPanel, lifecycle.run);
+    lifecycle.setResources({ graphCommand });
+    await runtimeFactory.afterMemorySurfacesRegistered?.();
 
     // Start model initialization in the background — don't block activation
     const embeddingInitialization = lifecycle

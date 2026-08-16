@@ -71,14 +71,21 @@ export class MemoryScopeLinker {
    *
    * Returns count of entries promoted.
    */
-  async promoteToWorkspace(branchScope: string, workspaceScope: string, entryIds?: string[]): Promise<number> {
+  async promoteToWorkspace(
+    branchScope: string,
+    workspaceScope: string,
+    entryIds?: string[],
+    signal?: AbortSignal,
+  ): Promise<number> {
     const branch = this.extractBranch(branchScope);
     if (!branch) {
       this.logger.warn(`Invalid branch scope: "${branchScope}"`);
       return 0;
     }
 
+    signal?.throwIfAborted();
     const branchEntries = await this.vectorStore.loadEntries("branch", branch);
+    signal?.throwIfAborted();
     const workspaceEntries = await this.vectorStore.loadEntries("workspace");
 
     // Filter to requested IDs if provided
@@ -112,6 +119,7 @@ export class MemoryScopeLinker {
       toPromote.flatMap((e) => e.entityIds),
       promotedIds,
     );
+    signal?.throwIfAborted();
 
     // Re-scope entries to workspace, remapping entity references and
     // converting vectors to plain arrays for LanceDB
@@ -132,6 +140,7 @@ export class MemoryScopeLinker {
       vector: Array.from(e.vector),
     }));
     const merged = [...normalized, ...promoted];
+    signal?.throwIfAborted();
     await this.vectorStore.saveScopeAtomic(merged, mergedGraph, "workspace");
 
     this.logger.debug(`Promoted ${promoted.length} entries from branch "${branch}" to workspace`);

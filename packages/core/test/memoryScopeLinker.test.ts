@@ -167,6 +167,28 @@ describe("MemoryScopeLinker", function () {
   // ── promoteToWorkspace ─────────────────────────────────────────────
 
   describe("promoteToWorkspace", function () {
+    it("should abort before loading or persisting either scope", async function () {
+      const controller = new AbortController();
+      controller.abort(new Error("cancel promotion"));
+      let loaded = false;
+      const originalLoadEntries = store.loadEntries.bind(store);
+      store.loadEntries = async (...args) => {
+        loaded = true;
+        return originalLoadEntries(...args);
+      };
+
+      let error: unknown;
+      try {
+        await linker.promoteToWorkspace("branch:feat", "workspace", undefined, controller.signal);
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.contain("cancel promotion");
+      expect(loaded).to.equal(false);
+    });
+
     it("should copy branch entries to workspace scope", async function () {
       const branchEntries = [
         createTestEntry({ content: "branch fact 1", scope: "branch", branch: "feat" }),

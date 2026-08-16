@@ -860,9 +860,10 @@ for (const [name, command] of Object.entries(pkg.scripts).filter(([name]) => nam
 }
 assert.match(pkg.scripts["docker:build"], /-t ragnarok-mcp:ci(?:\s|$)/);
 const mcpPackage = JSON.parse(await read("packages/mcp-server/package.json"));
+const graphUiPackage = JSON.parse(await read("packages/graph-ui/package.json"));
 const extApps = "@modelcontextprotocol/ext-apps";
 const extAppsDevVersion = "^1.7.5";
-assert.doesNotThrow(() => assertDevOnlyDependency(mcpPackage, extApps, extAppsDevVersion));
+assert.doesNotThrow(() => assertDevOnlyDependency(graphUiPackage, extApps, extAppsDevVersion));
 for (const surface of [
   "dependencies",
   "optionalDependencies",
@@ -873,7 +874,7 @@ for (const surface of [
   const value =
     surface === "bundledDependencies" || surface === "bundleDependencies" ? [extApps] : { [extApps]: "1.7.5" };
   assert.throws(
-    () => assertDevOnlyDependency({ ...mcpPackage, [surface]: value }, extApps, extAppsDevVersion),
+    () => assertDevOnlyDependency({ ...graphUiPackage, [surface]: value }, extApps, extAppsDevVersion),
     /must be absent/,
     surface,
   );
@@ -881,7 +882,7 @@ for (const surface of [
 assert.throws(
   () =>
     assertDevOnlyDependency(
-      { ...mcpPackage, devDependencies: { ...mcpPackage.devDependencies, [extApps]: " " } },
+      { ...graphUiPackage, devDependencies: { ...graphUiPackage.devDependencies, [extApps]: " " } },
       extApps,
       extAppsDevVersion,
     ),
@@ -890,7 +891,7 @@ assert.throws(
 assert.throws(
   () =>
     assertDevOnlyDependency(
-      { ...mcpPackage, devDependencies: { ...mcpPackage.devDependencies, [extApps]: "1.7.5" } },
+      { ...graphUiPackage, devDependencies: { ...graphUiPackage.devDependencies, [extApps]: "1.7.5" } },
       extApps,
       extAppsDevVersion,
     ),
@@ -1144,14 +1145,16 @@ assert.match(await read("packages/core/src/embeddings/huggingFaceBackend.ts"), /
 const crossEncoderSource = await read("packages/core/src/rerankers/crossEncoderReranker.ts");
 assert.match(crossEncoderSource, /AutoModelForSequenceClassification/);
 assert.match(crossEncoderSource, /AutoTokenizer/);
-const graphAppBuilder = await read("packages/mcp-server/src/ui/graphApp/build.mjs");
+const graphAppBuilder = await read("packages/graph-ui/build.mjs");
 assert.match(
   graphAppBuilder,
-  /"\/\/ prettier-ignore\\n"\s*\+\s*"export const GRAPH_APP_HTML = "/,
+  /"\/\/ prettier-ignore\\n"\s*\+\s*`export const GRAPH_APP_HTML = /,
   "Graph UI generator must make its generated export stable under Prettier",
 );
 const graphResourceSource = await read("packages/mcp-server/src/uiResource.ts");
 const graphBundleSource = await read(generatedGraphBundle);
+const vscodeGraphScript = await read("media/memoryGraph.js");
+const vscodeGraphStyles = await read("media/memoryGraph.css");
 const assertSingleGraphAppShell = (source) => {
   for (const [marker, pattern] of [
     ["opening html", /<html\b/g],
@@ -1164,14 +1167,9 @@ const assertSingleGraphAppShell = (source) => {
   }
 };
 assert.equal(
-  mcpPackage.scripts["typecheck:ui"],
-  "tsc -p src/ui/graphApp/tsconfig.json",
-  "Graph UI typecheck command must remain exact",
-);
-assert.equal(
   mcpPackage.scripts["build:ui"],
-  "npm run typecheck:ui && node src/ui/graphApp/build.mjs",
-  "Graph UI build must typecheck before bundling",
+  "npm run build --workspace=@ragnarok/graph-ui",
+  "MCP graph UI compatibility script must forward to the shared workspace",
 );
 assert.equal(
   mcpPackage.scripts.pretest,
@@ -1196,7 +1194,29 @@ for (const [name, mutated] of [
   assert.throws(() => assertSingleGraphAppShell(mutated), /must contain one/, name);
 }
 assert.doesNotMatch(graphBundleSource, /<script\s+[^>]*src\s*=/i, "Generated graph app must not load external scripts");
-execFileSync(process.execPath, ["packages/mcp-server/src/ui/graphApp/build.mjs", "--check"], {
+for (const [file, source] of [
+  ["media/memoryGraph.js", vscodeGraphScript],
+  ["media/memoryGraph.css", vscodeGraphStyles],
+]) {
+  assert.ok(source.length > 0, `Generated VS Code graph asset must not be empty: ${file}`);
+  const withoutXmlNamespaces = source.replace(
+    /http:\/\/www\.w3\.org\/(?:1999\/xhtml|2000\/svg|1999\/xlink|XML\/1998\/namespace|2000\/xmlns\/)/g,
+    "",
+  );
+  assert.doesNotMatch(
+    withoutXmlNamespaces,
+    /https?:\/\//i,
+    `VS Code graph asset must not load remote content: ${file}`,
+  );
+  assert.doesNotMatch(
+    source,
+    /ontoolresult|ui\/initialize|@modelcontextprotocol\/ext-apps/i,
+    `VS Code graph asset must not contain MCP Apps markers: ${file}`,
+  );
+}
+assert.match(vscodeGraphScript, /graphDocument/, "VS Code graph asset must receive graph documents from the host");
+assert.match(vscodeGraphScript, /ready/, "VS Code graph asset must announce readiness to the host");
+execFileSync(process.execPath, ["packages/graph-ui/build.mjs", "--check"], {
   cwd: root,
   stdio: "pipe",
 });
@@ -1225,7 +1245,7 @@ for (const [dependency, version] of [
   ["jsdom", "26.1.0"],
   ["@types/jsdom", "21.1.7"],
 ]) {
-  assert.doesNotThrow(() => assertDevOnlyDependency(mcpPackage, dependency, version));
+  assert.doesNotThrow(() => assertDevOnlyDependency(graphUiPackage, dependency, version));
 }
 const obsoleteGraphProductionContracts = [
   "ragnarok.graph.layout.v1",
@@ -1244,12 +1264,23 @@ for (const obsolete of obsoleteGraphProductionContracts) {
   }
 }
 const mcpIndex = await read("packages/mcp-server/src/index.ts");
-// Shutdown stays bounded: drain in-flight operations against a budget, then
-// close the stdio transport before releasing native handles.
+const mcpToolRuntime = await read("packages/mcp-server/src/toolRuntime.ts");
+// Shutdown stays bounded by the hard-exit timer. It first drains admitted tool
+// calls so they can enter memory coordination, then closes memory admission and
+// drains it before releasing native handles.
 assert.match(mcpIndex, /const drainBudgetMs = config\.shutdownDrainMs \?\? 10_000/);
-assert.match(mcpIndex, /setTimeout\(resolve, drainBudgetMs\)\.unref\(\)/);
-assert.match(mcpIndex, /await Promise\.race\(\[waitForOperationDrain\(\), drainDeadline\]\)/);
+assert.match(mcpIndex, /setTimeout\(\(\) => process\.exit\(1\), drainBudgetMs \+ 5_000\)/);
+assert.match(mcpIndex, /await drainToolRuntimeThenMemory\(toolRuntime, memoryCoordinator\)/);
+assert.match(
+  mcpToolRuntime,
+  /runtime\.stopAdmission\(\);\s+await runtime\.drain\(\);\s+coordinator\.stopAdmission\(\);\s+await coordinator\.drain\(\)/,
+);
 assert.match(mcpIndex, /await stdioHandle\?\.close\(\)/);
+assert.ok(
+  mcpIndex.indexOf("await drainToolRuntimeThenMemory(toolRuntime, memoryCoordinator)") <
+    mcpIndex.indexOf("await memoryStore.dispose()"),
+  "Memory store disposal must follow tool-runtime and memory-coordinator drains",
+);
 assert.match(mcpIndex, /process\.stdin\.once\("end", \(\) => void shutdown\("stdio EOF"\)\)/);
 for (const name of ["release", "docker:push"]) {
   assert.match(mcpPackage.scripts[name], /npm --prefix \.\.\/\.\. run publish:/);
@@ -1359,6 +1390,27 @@ assert.match(extensionEntry, /topicManager\.getTopic\(topic\.id\) === null/);
 assert.match(vscodeCommands, /topicManager\.addDocuments\(topicId, sources, \{ \.\.\.options, signal \}\)/);
 
 const packaging = require("./build-vsix.js");
+assert.deepEqual(packaging.VSIX_GRAPH_ASSETS, ["memoryGraph.js", "memoryGraph.css"]);
+assert.equal(typeof packaging.copyGraphAssetsToStaging, "function");
+assert.equal(typeof packaging.removeGraphUiWorkspace, "function");
+const graphAssetStaging = await mkdtemp(path.join(os.tmpdir(), "ragnarok-graph-assets-"));
+packaging.copyGraphAssetsToStaging(graphAssetStaging);
+assert.deepEqual((await readdir(path.join(graphAssetStaging, "media"))).sort(), ["memoryGraph.css", "memoryGraph.js"]);
+await rm(graphAssetStaging, { recursive: true, force: true });
+const graphWorkspaceStaging = await mkdtemp(path.join(os.tmpdir(), "ragnarok-graph-workspace-"));
+await writeFile(
+  path.join(graphWorkspaceStaging, "package.json"),
+  JSON.stringify({ workspaces: ["packages/core", "packages/graph-ui", "packages/vscode"] }),
+);
+await mkdir(path.join(graphWorkspaceStaging, "packages/graph-ui"), { recursive: true });
+await writeFile(path.join(graphWorkspaceStaging, "packages/graph-ui/package.json"), "{}");
+packaging.removeGraphUiWorkspace(graphWorkspaceStaging);
+assert.deepEqual(JSON.parse(await readFile(path.join(graphWorkspaceStaging, "package.json"), "utf8")).workspaces, [
+  "packages/core",
+  "packages/vscode",
+]);
+await assert.rejects(readFile(path.join(graphWorkspaceStaging, "packages/graph-ui/package.json")));
+await rm(graphWorkspaceStaging, { recursive: true, force: true });
 assert.equal(packaging.getNativePackageConfig("@img/sharp-darwin-arm64").description, "Sharp");
 assert.equal(packaging.getNativePackageConfig("@img/sharp-libvips-darwin-arm64").description, "Sharp libvips");
 assert.equal(
@@ -1424,6 +1476,15 @@ assert.match(dockerfile, /--from=production-deps \/app\/node_modules\//);
 assert.match(dockerfile, /COPY --chown=node:node/);
 assert.doesNotMatch(dockerfile, /chown -R node:node \/data\/ragnarok \/app/);
 assert.doesNotMatch(dockerfile, /COPY package\.json \.npmrc \.\//);
+assert.equal(
+  dockerfile.match(/COPY packages\/graph-ui\/package\.json packages\/graph-ui\//g)?.length,
+  2,
+  "Both npm-install stages must include the graph-ui workspace manifest",
+);
+const [, dockerBuildStage, dockerProductionDepsStage, dockerRuntimeStage] = dockerfile.split(/FROM node:22-slim AS /);
+assert.match(dockerBuildStage, /COPY packages\/graph-ui\/ packages\/graph-ui\//);
+assert.doesNotMatch(dockerProductionDepsStage, /COPY packages\/graph-ui\/ packages\/graph-ui\//);
+assert.doesNotMatch(dockerRuntimeStage, /graph-ui|memoryGraph\.(?:js|css)|COPY media/);
 assert.match(dockerignore, /\*\*\/\*\.tsbuildinfo/);
 
 // The image ships a stdio-only server: no port, no health endpoint to poll,

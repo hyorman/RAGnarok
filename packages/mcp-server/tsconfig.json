@@ -6,8 +6,6 @@
     "composite": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "src/ui/graphApp/*"],
-  "references": [
-    { "path": "../core" }
-  ]
+  "exclude": ["node_modules", "dist"],
+  "references": [{ "path": "../core" }]
 }

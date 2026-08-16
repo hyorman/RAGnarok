@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import { clearVisualization, renderDocument, showEmpty, showError } from "../src/ui/graphApp/renderer";
+import { clearVisualization, renderDocument, showEmpty, showError } from "../src/renderer";
 import { graphDocument, installGraphAppDom, type GraphAppDomHarness } from "./helpers/graphAppDom";
 
 describe("graph app accessibility", function () {

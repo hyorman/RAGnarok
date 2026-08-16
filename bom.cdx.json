@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:629a5152-3d35-470d-a4f7-a0007ab1cc1a",
+  "serialNumber": "urn:uuid:e806a809-de87-49e5-af40-87ac6bbbe374",
   "version": 1,
   "metadata": {
     "component": { "type": "application", "name": "ragnarok", "version": "0.7.0" },
@@ -30,7 +30,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40asamuzakjp%2Fcss-color",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40asamuzakjp%2Fcss-color",
       "name": "@asamuzakjp/css-color",
       "version": "3.2.0",
       "purl": "pkg:npm/%40asamuzakjp/css-color@3.2.0",
@@ -45,7 +45,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@asamuzakjp/css-color/-/css-color-3.2.0.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@asamuzakjp/css-color" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@asamuzakjp/css-color" }
       ]
     },
     {
@@ -455,7 +455,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40csstools%2Fcolor-helpers",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40csstools%2Fcolor-helpers",
       "name": "@csstools/color-helpers",
       "version": "5.1.0",
       "purl": "pkg:npm/%40csstools/color-helpers@5.1.0",
@@ -473,15 +473,12 @@
         }
       ],
       "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@csstools/color-helpers"
-        }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@csstools/color-helpers" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40csstools%2Fcss-calc",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40csstools%2Fcss-calc",
       "name": "@csstools/css-calc",
       "version": "2.1.4",
       "purl": "pkg:npm/%40csstools/css-calc@2.1.4",
@@ -496,12 +493,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@csstools/css-calc/-/css-calc-2.1.4.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@csstools/css-calc" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@csstools/css-calc" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40csstools%2Fcss-color-parser",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40csstools%2Fcss-color-parser",
       "name": "@csstools/css-color-parser",
       "version": "3.1.0",
       "purl": "pkg:npm/%40csstools/css-color-parser@3.1.0",
@@ -521,13 +518,13 @@
       "properties": [
         {
           "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@csstools/css-color-parser"
+          "value": "packages/graph-ui/node_modules/@csstools/css-color-parser"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40csstools%2Fcss-parser-algorithms",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40csstools%2Fcss-parser-algorithms",
       "name": "@csstools/css-parser-algorithms",
       "version": "3.0.5",
       "purl": "pkg:npm/%40csstools/css-parser-algorithms@3.0.5",
@@ -547,13 +544,13 @@
       "properties": [
         {
           "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@csstools/css-parser-algorithms"
+          "value": "packages/graph-ui/node_modules/@csstools/css-parser-algorithms"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40csstools%2Fcss-tokenizer",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40csstools%2Fcss-tokenizer",
       "name": "@csstools/css-tokenizer",
       "version": "3.0.4",
       "purl": "pkg:npm/%40csstools/css-tokenizer@3.0.4",
@@ -571,10 +568,7 @@
         }
       ],
       "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@csstools/css-tokenizer"
-        }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@csstools/css-tokenizer" }
       ]
     },
     {
@@ -602,7 +596,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Faix-ppc64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Faix-ppc64",
       "name": "@esbuild/aix-ppc64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/aix-ppc64@0.25.12",
@@ -617,7 +611,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/aix-ppc64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/aix-ppc64" }
       ]
     },
     {
@@ -642,7 +636,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fandroid-arm",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fandroid-arm",
       "name": "@esbuild/android-arm",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/android-arm@0.25.12",
@@ -657,7 +651,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/android-arm" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/android-arm" }
       ]
     },
     {
@@ -682,7 +676,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fandroid-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fandroid-arm64",
       "name": "@esbuild/android-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/android-arm64@0.25.12",
@@ -700,7 +694,7 @@
         }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/android-arm64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/android-arm64" }
       ]
     },
     {
@@ -731,7 +725,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fandroid-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fandroid-x64",
       "name": "@esbuild/android-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/android-x64@0.25.12",
@@ -746,7 +740,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/android-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/android-x64" }
       ]
     },
     {
@@ -771,7 +765,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fdarwin-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fdarwin-arm64",
       "name": "@esbuild/darwin-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/darwin-arm64@0.25.12",
@@ -786,7 +780,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/darwin-arm64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/darwin-arm64" }
       ]
     },
     {
@@ -811,7 +805,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fdarwin-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fdarwin-x64",
       "name": "@esbuild/darwin-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/darwin-x64@0.25.12",
@@ -826,7 +820,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/darwin-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/darwin-x64" }
       ]
     },
     {
@@ -851,7 +845,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Ffreebsd-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Ffreebsd-arm64",
       "name": "@esbuild/freebsd-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/freebsd-arm64@0.25.12",
@@ -869,7 +863,7 @@
         }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/freebsd-arm64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/freebsd-arm64" }
       ]
     },
     {
@@ -900,7 +894,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Ffreebsd-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Ffreebsd-x64",
       "name": "@esbuild/freebsd-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/freebsd-x64@0.25.12",
@@ -915,7 +909,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/freebsd-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/freebsd-x64" }
       ]
     },
     {
@@ -940,7 +934,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-arm",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-arm",
       "name": "@esbuild/linux-arm",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-arm@0.25.12",
@@ -955,7 +949,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-arm" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-arm" }
       ]
     },
     {
@@ -980,7 +974,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-arm64",
       "name": "@esbuild/linux-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-arm64@0.25.12",
@@ -995,7 +989,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-arm64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-arm64" }
       ]
     },
     {
@@ -1020,7 +1014,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-ia32",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-ia32",
       "name": "@esbuild/linux-ia32",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-ia32@0.25.12",
@@ -1035,7 +1029,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-ia32" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-ia32" }
       ]
     },
     {
@@ -1060,7 +1054,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-loong64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-loong64",
       "name": "@esbuild/linux-loong64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-loong64@0.25.12",
@@ -1078,7 +1072,7 @@
         }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-loong64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-loong64" }
       ]
     },
     {
@@ -1109,7 +1103,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-mips64el",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-mips64el",
       "name": "@esbuild/linux-mips64el",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-mips64el@0.25.12",
@@ -1127,10 +1121,7 @@
         }
       ],
       "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@esbuild/linux-mips64el"
-        }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-mips64el" }
       ]
     },
     {
@@ -1161,7 +1152,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-ppc64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-ppc64",
       "name": "@esbuild/linux-ppc64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-ppc64@0.25.12",
@@ -1176,7 +1167,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-ppc64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-ppc64" }
       ]
     },
     {
@@ -1201,7 +1192,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-riscv64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-riscv64",
       "name": "@esbuild/linux-riscv64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-riscv64@0.25.12",
@@ -1219,7 +1210,7 @@
         }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-riscv64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-riscv64" }
       ]
     },
     {
@@ -1250,7 +1241,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-s390x",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-s390x",
       "name": "@esbuild/linux-s390x",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-s390x@0.25.12",
@@ -1265,7 +1256,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-s390x" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-s390x" }
       ]
     },
     {
@@ -1290,7 +1281,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Flinux-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Flinux-x64",
       "name": "@esbuild/linux-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/linux-x64@0.25.12",
@@ -1305,7 +1296,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/linux-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/linux-x64" }
       ]
     },
     {
@@ -1330,7 +1321,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fnetbsd-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fnetbsd-arm64",
       "name": "@esbuild/netbsd-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/netbsd-arm64@0.25.12",
@@ -1345,7 +1336,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/netbsd-arm64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/netbsd-arm64" }
       ]
     },
     {
@@ -1370,7 +1361,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fnetbsd-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fnetbsd-x64",
       "name": "@esbuild/netbsd-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/netbsd-x64@0.25.12",
@@ -1385,7 +1376,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/netbsd-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/netbsd-x64" }
       ]
     },
     {
@@ -1410,7 +1401,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fopenbsd-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fopenbsd-arm64",
       "name": "@esbuild/openbsd-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/openbsd-arm64@0.25.12",
@@ -1428,7 +1419,7 @@
         }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/openbsd-arm64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/openbsd-arm64" }
       ]
     },
     {
@@ -1459,7 +1450,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fopenbsd-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fopenbsd-x64",
       "name": "@esbuild/openbsd-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/openbsd-x64@0.25.12",
@@ -1474,7 +1465,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/openbsd-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/openbsd-x64" }
       ]
     },
     {
@@ -1499,7 +1490,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fopenharmony-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fopenharmony-arm64",
       "name": "@esbuild/openharmony-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/openharmony-arm64@0.25.12",
@@ -1519,7 +1510,7 @@
       "properties": [
         {
           "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@esbuild/openharmony-arm64"
+          "value": "packages/graph-ui/node_modules/@esbuild/openharmony-arm64"
         }
       ]
     },
@@ -1551,7 +1542,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fsunos-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fsunos-x64",
       "name": "@esbuild/sunos-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/sunos-x64@0.25.12",
@@ -1566,7 +1557,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/sunos-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/sunos-x64" }
       ]
     },
     {
@@ -1591,7 +1582,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fwin32-arm64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fwin32-arm64",
       "name": "@esbuild/win32-arm64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/win32-arm64@0.25.12",
@@ -1606,7 +1597,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/win32-arm64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/win32-arm64" }
       ]
     },
     {
@@ -1631,7 +1622,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fwin32-ia32",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fwin32-ia32",
       "name": "@esbuild/win32-ia32",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/win32-ia32@0.25.12",
@@ -1646,7 +1637,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/win32-ia32" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/win32-ia32" }
       ]
     },
     {
@@ -1671,7 +1662,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40esbuild%2Fwin32-x64",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40esbuild%2Fwin32-x64",
       "name": "@esbuild/win32-x64",
       "version": "0.25.12",
       "purl": "pkg:npm/%40esbuild/win32-x64@0.25.12",
@@ -1686,7 +1677,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.25.12.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@esbuild/win32-x64" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@esbuild/win32-x64" }
       ]
     },
     {
@@ -3304,7 +3295,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40modelcontextprotocol%2Fext-apps",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40modelcontextprotocol%2Fext-apps",
       "name": "@modelcontextprotocol/ext-apps",
       "version": "1.7.5",
       "purl": "pkg:npm/%40modelcontextprotocol/ext-apps@1.7.5",
@@ -3324,7 +3315,7 @@
       "properties": [
         {
           "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@modelcontextprotocol/ext-apps"
+          "value": "packages/graph-ui/node_modules/@modelcontextprotocol/ext-apps"
         }
       ]
     },
@@ -4367,7 +4358,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40standard-schema%2Fspec",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40standard-schema%2Fspec",
       "name": "@standard-schema/spec",
       "version": "1.1.0",
       "purl": "pkg:npm/%40standard-schema/spec@1.1.0",
@@ -4382,7 +4373,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@standard-schema/spec/-/spec-1.1.0.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@standard-schema/spec" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@standard-schema/spec" }
       ]
     },
     {
@@ -4616,7 +4607,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40types%2Fd3-color",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40types%2Fd3-color",
       "name": "@types/d3-color",
       "version": "3.1.3",
       "purl": "pkg:npm/%40types/d3-color@3.1.3",
@@ -4631,12 +4622,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@types/d3-color/-/d3-color-3.1.3.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@types/d3-color" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@types/d3-color" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40types%2Fd3-interpolate",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40types%2Fd3-interpolate",
       "name": "@types/d3-interpolate",
       "version": "3.0.4",
       "purl": "pkg:npm/%40types/d3-interpolate@3.0.4",
@@ -4651,12 +4642,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@types/d3-interpolate/-/d3-interpolate-3.0.4.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@types/d3-interpolate" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@types/d3-interpolate" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40types%2Fd3-selection",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40types%2Fd3-selection",
       "name": "@types/d3-selection",
       "version": "3.0.11",
       "purl": "pkg:npm/%40types/d3-selection@3.0.11",
@@ -4671,12 +4662,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@types/d3-selection/-/d3-selection-3.0.11.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@types/d3-selection" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@types/d3-selection" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40types%2Fd3-zoom",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40types%2Fd3-zoom",
       "name": "@types/d3-zoom",
       "version": "3.0.8",
       "purl": "pkg:npm/%40types/d3-zoom@3.0.8",
@@ -4691,7 +4682,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@types/d3-zoom/-/d3-zoom-3.0.8.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@types/d3-zoom" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@types/d3-zoom" }
       ]
     },
     {
@@ -4762,7 +4753,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40types%2Fjsdom",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40types%2Fjsdom",
       "name": "@types/jsdom",
       "version": "21.1.7",
       "purl": "pkg:npm/%40types/jsdom@21.1.7",
@@ -4777,7 +4768,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@types/jsdom/-/jsdom-21.1.7.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@types/jsdom" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@types/jsdom" }
       ]
     },
     {
@@ -5028,7 +5019,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40types%2Ftough-cookie",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2F%40types%2Ftough-cookie",
       "name": "@types/tough-cookie",
       "version": "4.0.5",
       "purl": "pkg:npm/%40types/tough-cookie@4.0.5",
@@ -5043,7 +5034,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/@types/tough-cookie/-/tough-cookie-4.0.5.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@types/tough-cookie" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/@types/tough-cookie" }
       ]
     },
     {
@@ -6148,7 +6139,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fagent-base",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fagent-base",
       "name": "agent-base",
       "version": "7.1.4",
       "purl": "pkg:npm/agent-base@7.1.4",
@@ -6162,9 +6153,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz" }
       ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/agent-base" }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/agent-base" }]
     },
     {
       "type": "library",
@@ -9210,7 +9199,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcssstyle",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fcssstyle",
       "name": "cssstyle",
       "version": "4.6.0",
       "purl": "pkg:npm/cssstyle@4.6.0",
@@ -9224,11 +9213,11 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/cssstyle/-/cssstyle-4.6.0.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/cssstyle" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/cssstyle" }]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-color",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-color",
       "name": "d3-color",
       "version": "3.1.0",
       "purl": "pkg:npm/d3-color@3.1.0",
@@ -9242,11 +9231,11 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-color/-/d3-color-3.1.0.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-color" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-color" }]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-dispatch",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-dispatch",
       "name": "d3-dispatch",
       "version": "3.0.1",
       "purl": "pkg:npm/d3-dispatch@3.0.1",
@@ -9261,12 +9250,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-dispatch/-/d3-dispatch-3.0.1.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-dispatch" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-dispatch" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-drag",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-drag",
       "name": "d3-drag",
       "version": "3.0.0",
       "purl": "pkg:npm/d3-drag@3.0.0",
@@ -9280,11 +9269,11 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-drag/-/d3-drag-3.0.0.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-drag" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-drag" }]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-ease",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-ease",
       "name": "d3-ease",
       "version": "3.0.1",
       "purl": "pkg:npm/d3-ease@3.0.1",
@@ -9298,11 +9287,11 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-ease/-/d3-ease-3.0.1.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-ease" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-ease" }]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-interpolate",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-interpolate",
       "name": "d3-interpolate",
       "version": "3.0.1",
       "purl": "pkg:npm/d3-interpolate@3.0.1",
@@ -9317,12 +9306,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-interpolate/-/d3-interpolate-3.0.1.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-interpolate" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-interpolate" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-selection",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-selection",
       "name": "d3-selection",
       "version": "3.0.0",
       "purl": "pkg:npm/d3-selection@3.0.0",
@@ -9337,12 +9326,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-selection/-/d3-selection-3.0.0.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-selection" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-selection" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-timer",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-timer",
       "name": "d3-timer",
       "version": "3.0.1",
       "purl": "pkg:npm/d3-timer@3.0.1",
@@ -9356,11 +9345,11 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-timer/-/d3-timer-3.0.1.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-timer" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-timer" }]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-transition",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-transition",
       "name": "d3-transition",
       "version": "3.0.1",
       "purl": "pkg:npm/d3-transition@3.0.1",
@@ -9375,12 +9364,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-transition/-/d3-transition-3.0.1.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-transition" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-transition" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fd3-zoom",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fd3-zoom",
       "name": "d3-zoom",
       "version": "3.0.0",
       "purl": "pkg:npm/d3-zoom@3.0.0",
@@ -9394,11 +9383,11 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/d3-zoom/-/d3-zoom-3.0.0.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/d3-zoom" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/d3-zoom" }]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdata-urls",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fdata-urls",
       "name": "data-urls",
       "version": "5.0.0",
       "purl": "pkg:npm/data-urls@5.0.0",
@@ -9412,9 +9401,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/data-urls/-/data-urls-5.0.0.tgz" }
       ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/data-urls" }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/data-urls" }]
     },
     {
       "type": "library",
@@ -9546,6 +9533,22 @@
     },
     {
       "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fdebug",
+      "name": "debug",
+      "version": "4.4.3",
+      "purl": "pkg:npm/debug@4.4.3",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "446c305a7c10be455f6af295b76d8518bc3ec5849dcc04709b4aeee83853540dee994e6165cdbc57790ee2cb6062bcab4e52e9baf808f468a28e5b408cd6dca8"
+        }
+      ],
+      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz" }],
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/debug" }]
+    },
+    {
+      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdebug",
       "name": "debug",
       "version": "4.4.3",
@@ -9582,7 +9585,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdecimal.js",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fdecimal.js",
       "name": "decimal.js",
       "version": "10.6.0",
       "purl": "pkg:npm/decimal.js@10.6.0",
@@ -9596,9 +9599,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/decimal.js/-/decimal.js-10.6.0.tgz" }
       ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/decimal.js" }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/decimal.js" }]
     },
     {
       "type": "library",
@@ -10492,7 +10493,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fentities",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fentities",
       "name": "entities",
       "version": "6.0.1",
       "purl": "pkg:npm/entities@6.0.1",
@@ -10506,7 +10507,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/entities/-/entities-6.0.1.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/entities" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/entities" }]
     },
     {
       "type": "library",
@@ -10889,7 +10890,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fesbuild",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fesbuild",
       "name": "esbuild",
       "version": "0.25.12",
       "purl": "pkg:npm/esbuild@0.25.12",
@@ -10903,7 +10904,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/esbuild/-/esbuild-0.25.12.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/esbuild" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/esbuild" }]
     },
     {
       "type": "library",
@@ -13605,7 +13606,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fhtml-encoding-sniffer",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fhtml-encoding-sniffer",
       "name": "html-encoding-sniffer",
       "version": "4.0.0",
       "purl": "pkg:npm/html-encoding-sniffer@4.0.0",
@@ -13623,7 +13624,7 @@
         }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/html-encoding-sniffer" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/html-encoding-sniffer" }
       ]
     },
     {
@@ -13731,7 +13732,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fhttp-proxy-agent",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fhttp-proxy-agent",
       "name": "http-proxy-agent",
       "version": "7.0.2",
       "purl": "pkg:npm/http-proxy-agent@7.0.2",
@@ -13746,7 +13747,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/http-proxy-agent/-/http-proxy-agent-7.0.2.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/http-proxy-agent" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/http-proxy-agent" }
       ]
     },
     {
@@ -13797,7 +13798,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fhttps-proxy-agent",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fhttps-proxy-agent",
       "name": "https-proxy-agent",
       "version": "7.0.6",
       "purl": "pkg:npm/https-proxy-agent@7.0.6",
@@ -13812,7 +13813,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/https-proxy-agent" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/https-proxy-agent" }
       ]
     },
     {
@@ -13877,7 +13878,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fwhatwg-encoding%2Fnode_modules%2Ficonv-lite",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Ficonv-lite",
       "name": "iconv-lite",
       "version": "0.6.3",
       "purl": "pkg:npm/iconv-lite@0.6.3",
@@ -13891,12 +13892,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.6.3.tgz" }
       ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/whatwg-encoding/node_modules/iconv-lite"
-        }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/iconv-lite" }]
     },
     {
       "type": "library",
@@ -14565,7 +14561,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fis-potential-custom-element-name",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fis-potential-custom-element-name",
       "name": "is-potential-custom-element-name",
       "version": "1.0.1",
       "purl": "pkg:npm/is-potential-custom-element-name@1.0.1",
@@ -14585,7 +14581,7 @@
       "properties": [
         {
           "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/is-potential-custom-element-name"
+          "value": "packages/graph-ui/node_modules/is-potential-custom-element-name"
         }
       ]
     },
@@ -15184,7 +15180,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fjsdom",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fjsdom",
       "name": "jsdom",
       "version": "26.1.0",
       "purl": "pkg:npm/jsdom@26.1.0",
@@ -15196,7 +15192,7 @@
         }
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/jsdom/-/jsdom-26.1.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/jsdom" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/jsdom" }]
     },
     {
       "type": "library",
@@ -16094,7 +16090,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Flru-cache",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Flru-cache",
       "name": "lru-cache",
       "version": "10.4.3",
       "purl": "pkg:npm/lru-cache@10.4.3",
@@ -16108,9 +16104,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/lru-cache/-/lru-cache-10.4.3.tgz" }
       ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/lru-cache" }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/lru-cache" }]
     },
     {
       "type": "library",
@@ -17208,6 +17202,22 @@
     },
     {
       "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fms",
+      "name": "ms",
+      "version": "2.1.3",
+      "purl": "pkg:npm/ms@2.1.3",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e85973b9b4cb646dc9d9afcd542025784863ceae68c601f268253dc985ef70bb2fa1568726afece715c8ebf5d73fab73ed1f7100eb479d23bfb57b45dd645394"
+        }
+      ],
+      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" }],
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/ms" }]
+    },
+    {
+      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fms",
       "name": "ms",
       "version": "2.1.3",
@@ -17585,7 +17595,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fnwsapi",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fnwsapi",
       "name": "nwsapi",
       "version": "2.2.24",
       "purl": "pkg:npm/nwsapi@2.2.24",
@@ -17599,7 +17609,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/nwsapi/-/nwsapi-2.2.24.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/nwsapi" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/nwsapi" }]
     },
     {
       "type": "library",
@@ -18488,7 +18498,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fparse5",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fparse5",
       "name": "parse5",
       "version": "7.3.0",
       "purl": "pkg:npm/parse5@7.3.0",
@@ -18500,7 +18510,7 @@
         }
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/parse5/-/parse5-7.3.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/parse5" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/parse5" }]
     },
     {
       "type": "library",
@@ -19311,7 +19321,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fpunycode",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fpunycode",
       "name": "punycode",
       "version": "2.3.1",
       "purl": "pkg:npm/punycode@2.3.1",
@@ -19325,7 +19335,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/punycode/-/punycode-2.3.1.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/punycode" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/punycode" }]
     },
     {
       "type": "library",
@@ -19805,7 +19815,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Frrweb-cssom",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Frrweb-cssom",
       "name": "rrweb-cssom",
       "version": "0.8.0",
       "purl": "pkg:npm/rrweb-cssom@0.8.0",
@@ -19820,7 +19830,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/rrweb-cssom/-/rrweb-cssom-0.8.0.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/rrweb-cssom" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/rrweb-cssom" }
       ]
     },
     {
@@ -19928,6 +19938,26 @@
     },
     {
       "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fsafer-buffer",
+      "name": "safer-buffer",
+      "version": "2.1.2",
+      "purl": "pkg:npm/safer-buffer@2.1.2",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "619a372bcd920fb462ca2d04d4440fa232f3ee4a5ea6749023d2323db1c78355d75debdbe5d248eeda72376003c467106c71bbbdcc911e4d1c6f0a9c42b894b6"
+        }
+      ],
+      "externalReferences": [
+        { "type": "distribution", "url": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz" }
+      ],
+      "properties": [
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/safer-buffer" }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fsafer-buffer",
       "name": "safer-buffer",
       "version": "2.1.2",
@@ -19966,7 +19996,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fsaxes",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fsaxes",
       "name": "saxes",
       "version": "6.0.0",
       "purl": "pkg:npm/saxes@6.0.0",
@@ -19978,7 +20008,7 @@
         }
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/saxes/-/saxes-6.0.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/saxes" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/saxes" }]
     },
     {
       "type": "library",
@@ -21816,7 +21846,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fsymbol-tree",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fsymbol-tree",
       "name": "symbol-tree",
       "version": "3.2.4",
       "purl": "pkg:npm/symbol-tree@3.2.4",
@@ -21831,7 +21861,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/symbol-tree/-/symbol-tree-3.2.4.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/symbol-tree" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/symbol-tree" }
       ]
     },
     {
@@ -22096,7 +22126,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftldts-core",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Ftldts-core",
       "name": "tldts-core",
       "version": "6.1.86",
       "purl": "pkg:npm/tldts-core@6.1.86",
@@ -22110,13 +22140,11 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/tldts-core/-/tldts-core-6.1.86.tgz" }
       ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/tldts-core" }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/tldts-core" }]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftldts",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Ftldts",
       "name": "tldts",
       "version": "6.1.86",
       "purl": "pkg:npm/tldts@6.1.86",
@@ -22128,7 +22156,7 @@
         }
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/tldts/-/tldts-6.1.86.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/tldts" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/tldts" }]
     },
     {
       "type": "library",
@@ -22213,7 +22241,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftough-cookie",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Ftough-cookie",
       "name": "tough-cookie",
       "version": "5.1.2",
       "purl": "pkg:npm/tough-cookie@5.1.2",
@@ -22228,7 +22256,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/tough-cookie/-/tough-cookie-5.1.2.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/tough-cookie" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/tough-cookie" }
       ]
     },
     {
@@ -22265,7 +22293,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdata-urls%2Fnode_modules%2Ftr46",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Ftr46",
       "name": "tr46",
       "version": "5.1.1",
       "purl": "pkg:npm/tr46@5.1.1",
@@ -22277,33 +22305,7 @@
         }
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/tr46/-/tr46-5.1.1.tgz" }],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/data-urls/node_modules/tr46"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fjsdom%2Fnode_modules%2Ftr46",
-      "name": "tr46",
-      "version": "5.1.1",
-      "purl": "pkg:npm/tr46@5.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "85d1796608d3aa0027b4a924958c34474dcc1b6c7f6d2cd3b64c66211c3fb13355f185ec089d6d7cb017db7961c611c99447f709108e086196c37bc8dc66923f"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/tr46/-/tr46-5.1.1.tgz" }],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/jsdom/node_modules/tr46"
-        }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/tr46" }]
     },
     {
       "type": "library",
@@ -23137,7 +23139,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fw3c-xmlserializer",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fw3c-xmlserializer",
       "name": "w3c-xmlserializer",
       "version": "5.0.0",
       "purl": "pkg:npm/w3c-xmlserializer@5.0.0",
@@ -23152,7 +23154,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/w3c-xmlserializer/-/w3c-xmlserializer-5.0.0.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/w3c-xmlserializer" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/w3c-xmlserializer" }
       ]
     },
     {
@@ -23249,7 +23251,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdata-urls%2Fnode_modules%2Fwebidl-conversions",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fwebidl-conversions",
       "name": "webidl-conversions",
       "version": "7.0.0",
       "purl": "pkg:npm/webidl-conversions@7.0.0",
@@ -23267,36 +23269,7 @@
         }
       ],
       "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/data-urls/node_modules/webidl-conversions"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fjsdom%2Fnode_modules%2Fwebidl-conversions",
-      "name": "webidl-conversions",
-      "version": "7.0.0",
-      "purl": "pkg:npm/webidl-conversions@7.0.0",
-      "licenses": [{ "license": { "id": "BSD-2-Clause" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "57075d06e903ceeef5a1f7c0411f7be6e9c1206a9f299a4cfbc657eb24a4f27621568a39098699cb3b77601bd8b51b4ef9aa0696ac4f83f07cecd19567f7eeea"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-7.0.0.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/jsdom/node_modules/webidl-conversions"
-        }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/webidl-conversions" }
       ]
     },
     {
@@ -23321,7 +23294,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fwhatwg-encoding",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fwhatwg-encoding",
       "name": "whatwg-encoding",
       "version": "3.1.1",
       "purl": "pkg:npm/whatwg-encoding@3.1.1",
@@ -23336,7 +23309,7 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/whatwg-encoding/-/whatwg-encoding-3.1.1.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/whatwg-encoding" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/whatwg-encoding" }
       ]
     },
     {
@@ -23361,7 +23334,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fwhatwg-mimetype",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fwhatwg-mimetype",
       "name": "whatwg-mimetype",
       "version": "4.0.0",
       "purl": "pkg:npm/whatwg-mimetype@4.0.0",
@@ -23376,12 +23349,12 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/whatwg-mimetype/-/whatwg-mimetype-4.0.0.tgz" }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/whatwg-mimetype" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/whatwg-mimetype" }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdata-urls%2Fnode_modules%2Fwhatwg-url",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fwhatwg-url",
       "name": "whatwg-url",
       "version": "14.2.0",
       "purl": "pkg:npm/whatwg-url@14.2.0",
@@ -23395,35 +23368,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/whatwg-url/-/whatwg-url-14.2.0.tgz" }
       ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/data-urls/node_modules/whatwg-url"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fjsdom%2Fnode_modules%2Fwhatwg-url",
-      "name": "whatwg-url",
-      "version": "14.2.0",
-      "purl": "pkg:npm/whatwg-url@14.2.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0deef619d419ccd4d40410a1b17b9e4149cf283920ff9039ce9ee9143b90023e5416810da62002534c250afce90069d3923fbe8a1a4ac0ac987b09ff5cd51b2b"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/whatwg-url/-/whatwg-url-14.2.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/jsdom/node_modules/whatwg-url"
-        }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/whatwg-url" }]
     },
     {
       "type": "library",
@@ -23762,19 +23707,19 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fws",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fws",
       "name": "ws",
-      "version": "8.21.1",
-      "purl": "pkg:npm/ws@8.21.1",
+      "version": "8.21.3",
+      "purl": "pkg:npm/ws@8.21.3",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "fb43539d6efb7c537f0e3422ea4fd2abf62f9384a06a3c3bbab5bc57e6ac8d79d1803b3d8321a475bec4ce07e10388285ec44864a136f1fcc85c11c4ce1ba25b"
+          "content": "db4d5367f90f5b1a0faff38a5a3aae651d5258a5dcbf1747f9ed71af1f3d6f761b9b32cc1422df9da1b51c52205b324e11667b32fa4afbea1d66e7e0611e7447"
         }
       ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/ws/-/ws-8.21.1.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/ws" }]
+      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz" }],
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/ws" }]
     },
     {
       "type": "library",
@@ -23798,7 +23743,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fxml-name-validator",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fxml-name-validator",
       "name": "xml-name-validator",
       "version": "5.0.0",
       "purl": "pkg:npm/xml-name-validator@5.0.0",
@@ -23816,7 +23761,7 @@
         }
       ],
       "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/xml-name-validator" }
+        { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/xml-name-validator" }
       ]
     },
     {
@@ -23859,7 +23804,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fxmlchars",
+      "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Fxmlchars",
       "name": "xmlchars",
       "version": "2.2.0",
       "purl": "pkg:npm/xmlchars@2.2.0",
@@ -23873,7 +23818,7 @@
       "externalReferences": [
         { "type": "distribution", "url": "https://registry.npmjs.org/xmlchars/-/xmlchars-2.2.0.tgz" }
       ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/xmlchars" }]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/xmlchars" }]
     },
     {
       "type": "library",

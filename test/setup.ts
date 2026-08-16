@@ -48,10 +48,12 @@ const mockVscode = {
       has: () => true,
     }),
     workspaceFolders: [],
+    getWorkspaceFolder: () => undefined,
     onDidChangeWorkspaceFolders: () => ({ dispose: () => {} }),
   },
 
   window: {
+    activeTextEditor: undefined,
     showInformationMessage: async (message: string) => {
       console.log(`[INFO] ${message}`);
       return undefined;
@@ -89,13 +91,42 @@ const mockVscode = {
   },
 
   lm: {
+    registerTool: (_name: string, _tool: any) => ({ dispose: () => {} }),
     selectChatModels: async (_options?: any) => {
       // Mock LM model selection (returns empty for unit tests)
       return [];
     },
   },
 
+  LanguageModelToolResult: class {
+    constructor(public content: unknown[]) {}
+  },
+
+  LanguageModelTextPart: class {
+    constructor(public value: string) {}
+  },
+
+  MarkdownString: class {
+    constructor(public value = "") {}
+    appendText(value: string) {
+      this.value += value;
+      return this;
+    }
+    appendMarkdown(value: string) {
+      this.value += value;
+      return this;
+    }
+    appendCodeblock(value: string, language?: string) {
+      this.value += `\n\`\`\`${language ?? ""}\n${value}\n\`\`\``;
+      return this;
+    }
+  },
+
   Uri: class {
+    static joinPath(base: { fsPath: string }, ...parts: string[]) {
+      return this.file([base.fsPath.replace(/\/$/, ""), ...parts].join("/"));
+    }
+
     static file(path: string) {
       return {
         fsPath: path,

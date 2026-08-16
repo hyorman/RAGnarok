@@ -1,16 +1,9 @@
 import { expect } from "chai";
 import { JSDOM } from "jsdom";
-import type { McpServer } from "@modelcontextprotocol/server";
-import { createMcpGraphAppBridge, type GraphAppBridge } from "../src/ui/graphApp/bridge";
-import { startGraphApp } from "../src/ui/graphApp/app";
-import { parseGraphVisualizationResult } from "../src/ui/graphApp/schema";
-import type {
-  GraphVisualizationDocument,
-  GraphVisualizationGroup,
-  GraphVisualizationNode,
-  ToolResultLike,
-} from "../src/ui/graphApp/documentTypes";
-import { registerGraphUiResource } from "../src/uiResource";
+import { createMcpGraphAppBridge } from "../src/bridges/mcpBridge";
+import { startGraphApp, type GraphAppBridge } from "../src/app";
+import { parseGraphVisualizationResult } from "../src/schema";
+import type { GraphVisualizationDocument, GraphVisualizationGroup, GraphVisualizationNode } from "../src/documentTypes";
 
 function graphDocument(): GraphVisualizationDocument {
   return {
@@ -57,13 +50,6 @@ function emptyGraphDocument(): GraphVisualizationDocument {
       truncationReasons: [],
       empty: true,
     },
-  };
-}
-
-function toolResult(document: GraphVisualizationDocument): ToolResultLike {
-  return {
-    structuredContent: document,
-    content: [{ type: "text", text: JSON.stringify(document) }],
   };
 }
 
@@ -134,58 +120,26 @@ function installDom(): { dom: JSDOM; restore(): void } {
   };
 }
 
-describe("graph UI resource", function () {
-  it("registers and reads the exact MCP Apps MIME type", async function () {
-    let registration:
-      | {
-          uri: string;
-          config: { mimeType?: string };
-          read: () => { contents: Array<{ uri: string; mimeType?: string; text?: string }> };
-        }
-      | undefined;
-    const server = {
-      registerResource(
-        _name: string,
-        uri: string,
-        config: { mimeType?: string },
-        read: () => { contents: Array<{ uri: string; mimeType?: string; text?: string }> },
-      ) {
-        registration = { uri, config, read };
-      },
-    } as unknown as McpServer;
-
-    registerGraphUiResource(server);
-
-    expect(registration).not.to.equal(undefined);
-    const resource = registration!;
-    const read = await resource.read();
-    expect(resource.uri).to.equal("ui://ragnarok/graph");
-    expect(resource.config.mimeType).to.equal("text/html;profile=mcp-app");
-    expect(read.contents[0].mimeType).to.equal("text/html;profile=mcp-app");
-    expect(read.contents[0].text).to.be.a("string").and.not.equal("");
-  });
-});
-
 describe("graph app lifecycle", function () {
   it("registers the result handler before connect and processes a synchronous initial result", async function () {
     const installed = installDom();
     const order: string[] = [];
-    let handler: ((result: ToolResultLike) => void) | undefined;
+    let handler: ((document: GraphVisualizationDocument) => void) | undefined;
     const bridge: GraphAppBridge = {
-      setToolResultHandler(next) {
-        order.push("setToolResultHandler");
+      setDocumentHandler(next) {
+        order.push("setDocumentHandler");
         handler = next;
       },
       async connect() {
         order.push("connect");
         expect(handler).not.to.equal(undefined);
-        handler!(toolResult(emptyGraphDocument()));
+        handler!(emptyGraphDocument());
       },
     };
 
     try {
       await startGraphApp(bridge);
-      expect(order).to.deep.equal(["setToolResultHandler", "connect"]);
+      expect(order).to.deep.equal(["setDocumentHandler", "connect"]);
       expect(installed.dom.window.document.querySelector("#graph")?.textContent).to.include(
         "No memories yet in this scope/branch.",
       );
@@ -197,17 +151,17 @@ describe("graph app lifecycle", function () {
 
   it("clears stale graph, panel, banner, and transient state before showing parse failures", async function () {
     const installed = installDom();
-    let handler: ((result: ToolResultLike) => void) | undefined;
+    let errorHandler: ((error: unknown) => void) | undefined;
     const bridge: GraphAppBridge = {
-      setToolResultHandler(next) {
-        handler = next;
+      setDocumentHandler(_next, nextError) {
+        errorHandler = nextError;
       },
       async connect() {},
     };
 
     try {
       await startGraphApp(bridge);
-      handler!({ content: [{ type: "text", text: "not JSON" }] });
+      errorHandler!(new TypeError("Graph tool result text is not valid JSON."));
 
       const document = installed.dom.window.document;
       expect(document.querySelector("#graph")?.children).to.have.length(0);
@@ -223,9 +177,9 @@ describe("graph app lifecycle", function () {
 
   it("resets label visibility and its control for each new result", async function () {
     const installed = installDom();
-    let handler: ((result: ToolResultLike) => void) | undefined;
+    let handler: ((document: GraphVisualizationDocument) => void) | undefined;
     const bridge: GraphAppBridge = {
-      setToolResultHandler(next) {
+      setDocumentHandler(next) {
         handler = next;
       },
       async connect() {},
@@ -233,7 +187,7 @@ describe("graph app lifecycle", function () {
 
     try {
       await startGraphApp(bridge);
-      handler!(toolResult(graphDocument()));
+      handler!(graphDocument());
 
       const document = installed.dom.window.document;
       expect(document.querySelector("#error")?.textContent).to.equal("");
@@ -243,7 +197,7 @@ describe("graph app lifecycle", function () {
 
       const next = cloneDocument();
       next.nodes[0].label = "Node 2";
-      handler!(toolResult(next));
+      handler!(next);
 
       expect(document.querySelector(".node-label")?.textContent).to.equal("Node 2");
       toggle.click();
@@ -256,14 +210,14 @@ describe("graph app lifecycle", function () {
   it("shows a stable visible error when the host connection rejects", async function () {
     const installed = installDom();
     const bridge: GraphAppBridge = {
-      setToolResultHandler() {},
+      setDocumentHandler() {},
       async connect() {
         throw new Error("host unavailable");
       },
     };
 
     try {
-      await startGraphApp(bridge);
+      await startGraphApp(bridge, "Unable to connect to the MCP host.");
       const error = installed.dom.window.document.querySelector("#error") as HTMLElement;
       expect(error.textContent).to.equal("Unable to connect to the MCP host.");
       expect(error.hidden).to.equal(false);

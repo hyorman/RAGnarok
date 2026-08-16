@@ -1,11 +1,13 @@
 {
-  "extends": "../../../../../tsconfig.base.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "composite": true,
     "noEmit": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["./*.ts"]
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../core" }]
 }

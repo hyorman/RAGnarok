@@ -34,6 +34,9 @@ import {
   ModelRegistry,
   RAGQueryService,
   MemoryStore,
+  MemoryOperationCoordinator,
+  MemoryService,
+  GraphVisualizationService,
   CrossEncoderReranker,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
@@ -43,7 +46,8 @@ import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adap
 import { createLLMProvider, isUsableLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
-import type { MutationRunner, ToolRuntime } from "./tools";
+import type { MutationRunner } from "./tools";
+import { createToolRuntime, drainToolRuntimeThenMemory } from "./toolRuntime";
 
 async function main(): Promise<void> {
   // Before anything else: an operator who still supplies HTTP-era settings has
@@ -166,6 +170,9 @@ async function main(): Promise<void> {
     workingDir,
     markdownPath: path.join(config.storageDir, "memories.md"),
   });
+  const memoryCoordinator = new MemoryOperationCoordinator();
+  const memoryService = new MemoryService(memoryStore, memoryCoordinator);
+  const graphVisualizationService = new GraphVisualizationService(memoryStore, memoryCoordinator);
 
   // Reranking is unconditional: the cross-encoder ONNX model ships inside the
   // package, so there is no download to opt out of and no configuration to get
@@ -187,32 +194,7 @@ async function main(): Promise<void> {
 
   // Server factory: stdio pins one instance per connection. Every instance
   // shares the services created above.
-  let acceptingOperations = true;
-  let activeOperations = 0;
-  const operationDrainWaiters: Array<() => void> = [];
-  const toolRuntime: ToolRuntime = {
-    async run<T>(operation: () => Promise<T>): Promise<T> {
-      if (!acceptingOperations) {
-        throw new Error("SERVER_DRAINING: new tool operations are not accepted");
-      }
-      activeOperations++;
-      try {
-        return await operation();
-      } finally {
-        activeOperations--;
-        if (activeOperations === 0) {
-          for (const resolve of operationDrainWaiters.splice(0)) {
-            resolve();
-          }
-        }
-      }
-    },
-  };
-  const closeOperationAdmission = (): void => {
-    acceptingOperations = false;
-  };
-  const waitForOperationDrain = (): Promise<void> =>
-    activeOperations === 0 ? Promise.resolve() : new Promise((resolve) => operationDrainWaiters.push(resolve));
+  const toolRuntime = createToolRuntime();
 
   let mutationTail = Promise.resolve();
   const runMutation: MutationRunner = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -249,10 +231,14 @@ async function main(): Promise<void> {
       embeddingService,
       ragQueryService,
       memoryStore,
+      memoryService,
+      graphVisualizationService,
+      memoryStore,
       reranker,
       config,
       runMutation,
       toolRuntime,
+      (operation) => memoryCoordinator.runMutation(operation),
     );
     registerGraphUiResource(server);
     return server;
@@ -277,15 +263,13 @@ async function main(): Promise<void> {
     }
     shuttingDown = true;
     logger.info(`Received ${signal} — shutting down`);
-    closeOperationAdmission();
     const drainBudgetMs = config.shutdownDrainMs ?? 10_000;
     const hardExit = setTimeout(() => process.exit(1), drainBudgetMs + 5_000);
 
     try {
-      const drainDeadline = new Promise<void>((resolve) => setTimeout(resolve, drainBudgetMs).unref());
-      await Promise.race([waitForOperationDrain(), drainDeadline]);
+      await drainToolRuntimeThenMemory(toolRuntime, memoryCoordinator);
       await stdioHandle?.close();
-      await memoryStore?.dispose();
+      await memoryStore.dispose();
       await ragQueryService.dispose();
       await topicManager.dispose();
       await embeddingRegistry.disposeAll();

@@ -58,7 +58,16 @@ interface DisposableRegistry {
   disposeAll(): Promise<void>;
 }
 
+interface MemoryCoordinatorLifecycle {
+  stopAdmission(reason?: unknown): void;
+  drain(): Promise<void>;
+}
+
 export interface ExtensionLifecycleResources {
+  memoryTools?: AwaitableDisposable;
+  graphCommand?: AwaitableDisposable;
+  graphPanel?: AwaitableDisposable;
+  memoryCoordinator?: MemoryCoordinatorLifecycle;
   memoryStore?: AwaitableDisposable;
   topicManager?: AwaitableDisposable;
   embeddingService?: AwaitableDisposable;
@@ -185,11 +194,31 @@ export class ExtensionLifecycle {
       }
     };
 
+    await close(this.resources.memoryTools);
+    await close(this.resources.graphCommand);
+    await close(this.resources.graphPanel);
+
     for (const disposable of this.ownedDisposables) {
       await close(disposable);
     }
     this.ownedDisposables.clear();
+
+    if (this.resources.memoryCoordinator) {
+      try {
+        this.resources.memoryCoordinator.stopAdmission(new ExtensionStoppingError());
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     await this.drainOperations();
+
+    if (this.resources.memoryCoordinator) {
+      try {
+        await this.resources.memoryCoordinator.drain();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
 
     if (this.resources.ragTool) {
       try {

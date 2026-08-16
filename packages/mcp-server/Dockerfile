@@ -6,8 +6,9 @@ WORKDIR /app
 # Copy workspace root files
 COPY package.json package-lock.json .npmrc tsconfig.base.json ./
 
-# Copy only the packages needed (core + mcp-server + vscode for lockfile validation)
+# Copy workspace manifests for lockfile validation.
 COPY packages/core/package.json packages/core/
+COPY packages/graph-ui/package.json packages/graph-ui/
 COPY packages/mcp-server/package.json packages/mcp-server/
 COPY packages/vscode/package.json packages/vscode/
 
@@ -16,6 +17,7 @@ RUN npm ci --ignore-scripts
 
 # Copy source code
 COPY packages/core/ packages/core/
+COPY packages/graph-ui/ packages/graph-ui/
 COPY packages/mcp-server/ packages/mcp-server/
 
 # Build both packages
@@ -32,6 +34,7 @@ ARG TARGETARCH
 
 COPY package.json package-lock.json .npmrc ./
 COPY packages/core/package.json packages/core/
+COPY packages/graph-ui/package.json packages/graph-ui/
 COPY packages/mcp-server/package.json packages/mcp-server/
 COPY packages/vscode/package.json packages/vscode/
 

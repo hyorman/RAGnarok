@@ -11,6 +11,7 @@ import * as os from "os";
 import * as path from "path";
 import sinon from "sinon";
 import { McpServer } from "@modelcontextprotocol/server";
+import { MemoryOperationCoordinator } from "@ragnarok/core";
 import { measureToolResultForResponse, registerTools } from "../src/tools";
 import type { McpConfig } from "../src/config";
 import type {
@@ -21,6 +22,9 @@ import type {
   ILLMModel,
   Topic,
   RAGQueryService,
+  MemoryService,
+  GraphVisualizationService,
+  MemoryStore,
 } from "@ragnarok/core";
 
 // ---------------------------------------------------------------------------
@@ -106,6 +110,10 @@ function captureHandlers(deps: {
   ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   mcpConfig?: McpConfig;
   memoryStore?: unknown;
+  memoryService?: Pick<MemoryService, "execute" | "reset">;
+  graphVisualizationService?: Pick<GraphVisualizationService, "generate">;
+  memoryBranchProvider?: Pick<MemoryStore, "getCurrentBranch">;
+  runMemoryMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
 }): Record<string, ToolHandler> {
   const captured: CapturedTool[] = [];
   const server = {
@@ -122,8 +130,14 @@ function captureHandlers(deps: {
     deps.embeddingService as unknown as EmbeddingService,
     deps.ragQueryService as unknown as RAGQueryService,
     deps.memoryStore as never,
+    deps.memoryService as MemoryService | undefined,
+    deps.graphVisualizationService as GraphVisualizationService | undefined,
+    deps.memoryBranchProvider,
     undefined,
     deps.mcpConfig,
+    undefined,
+    undefined,
+    deps.runMemoryMutation,
   );
 
   expect(captured.map(({ name }) => name)).to.deep.equal(
@@ -230,6 +244,9 @@ describe("MCP Tools (registerTools)", () => {
         embeddingService,
         ragQueryService,
         memoryStore: {},
+        memoryService: { execute: sinon.stub(), reset: sinon.stub() } as any,
+        graphVisualizationService: { generate: sinon.stub() },
+        memoryBranchProvider: { getCurrentBranch: sinon.stub().resolves(null) },
       }),
     );
   }
@@ -244,6 +261,9 @@ describe("MCP Tools (registerTools)", () => {
       embeddingService,
       ragQueryService,
       memoryStore: {},
+      memoryService: { execute: sinon.stub(), reset: sinon.stub() } as any,
+      graphVisualizationService: { generate: sinon.stub() },
+      memoryBranchProvider: { getCurrentBranch: sinon.stub().resolves(null) },
     });
     const expected = [
       "rag_query",
@@ -269,7 +289,9 @@ describe("MCP Tools (registerTools)", () => {
       "rag_memory",
       "rag_reset_memory",
       "rag_storage_status",
+      "rag_graph_visualize",
     ];
+    expect(Object.keys(fullHandlers)).to.have.lengthOf(24);
     for (const name of expected) {
       expect(fullHandlers[name], `handler for ${name}`).to.be.a("function");
     }
@@ -699,6 +721,61 @@ describe("MCP Tools (registerTools)", () => {
   // -----------------------------------------------------------------------
 
   describe("rag_switch_embedding_model", () => {
+    it("waits for an active memory mutation before switching", async () => {
+      const coordinator = new MemoryOperationCoordinator();
+      const memoryGate = deferred<void>();
+      const activeMemoryMutation = coordinator.runMutation(async () => memoryGate.promise);
+      handlers = captureHandlers({
+        topicManager,
+        config,
+        llmProvider,
+        embeddingService,
+        ragQueryService,
+        runMemoryMutation: (operation) => coordinator.runMutation(operation),
+      });
+      embeddingService.getCurrentModel.onFirstCall().returns("old-model").onSecondCall().returns("new-model");
+
+      const switching = handlers.rag_switch_embedding_model({ model: "new-model" });
+      await tick();
+
+      expect(embeddingService.initialize.called).to.equal(false);
+      memoryGate.resolve();
+      await Promise.all([activeMemoryMutation, switching]);
+      expect(embeddingService.initialize.calledOnceWithExactly("new-model")).to.equal(true);
+    });
+
+    it("blocks a later memory mutation until switching completes", async () => {
+      const coordinator = new MemoryOperationCoordinator();
+      const switchGate = deferred<void>();
+      const switchStarted = deferred<void>();
+      let memoryMutationStarted = false;
+      handlers = captureHandlers({
+        topicManager,
+        config,
+        llmProvider,
+        embeddingService,
+        ragQueryService,
+        runMemoryMutation: (operation) => coordinator.runMutation(operation),
+      });
+      embeddingService.getCurrentModel.onFirstCall().returns("old-model").onSecondCall().returns("new-model");
+      embeddingService.initialize.callsFake(async () => {
+        switchStarted.resolve();
+        await switchGate.promise;
+      });
+
+      const switching = handlers.rag_switch_embedding_model({ model: "new-model" });
+      await switchStarted.promise;
+      const memoryMutation = coordinator.runMutation(async () => {
+        memoryMutationStarted = true;
+      });
+      await tick();
+
+      expect(memoryMutationStarted).to.equal(false);
+      switchGate.resolve();
+      await Promise.all([switching, memoryMutation]);
+      expect(memoryMutationStarted).to.equal(true);
+    });
+
     it("switches model, propagates to topic management, and returns previous/new names", async () => {
       embeddingService.getCurrentModel.onFirstCall().returns("old-model").onSecondCall().returns("new-model");
       embeddingService.initialize.resolves();
@@ -813,77 +890,41 @@ describe("MCP Tools (registerTools)", () => {
   });
 
   // -----------------------------------------------------------------------
-  // rag_memory — communities
+  // rag_memory — service result envelope
   // -----------------------------------------------------------------------
 
-  describe("rag_memory communities", () => {
-    function memoryHandlers(memoryStore: unknown): Record<string, ToolHandler> {
-      return captureHandlers({ topicManager, config, llmProvider, embeddingService, ragQueryService, memoryStore });
+  describe("rag_memory service result", () => {
+    function memoryHandlers(memoryService: Pick<MemoryService, "execute" | "reset">): Record<string, ToolHandler> {
+      return captureHandlers({
+        topicManager,
+        config,
+        llmProvider,
+        embeddingService,
+        ragQueryService,
+        memoryService,
+        memoryBranchProvider: { getCurrentBranch: sinon.stub().resolves(null) },
+      });
     }
 
-    it("states the LLM requirement instead of returning a bare empty result", async () => {
-      const recallCommunities = sinon.stub().resolves([]);
-      const memoryStore = {
-        getCurrentBranch: sinon.stub().resolves(null),
-        isEntityExtractionEnabled: sinon.stub().returns(false),
-        recallCommunities,
+    it("preserves the core communities result unchanged", async () => {
+      const resultFromCore = {
+        action: "communities" as const,
+        scope: "workspace" as const,
+        communities: [],
+        count: 0,
+        entityExtractionEnabled: false,
+        hint: "New memory graph entities require an LLM provider.",
       };
+      const memoryService = {
+        execute: sinon.stub().resolves(resultFromCore),
+        reset: sinon.stub(),
+      } as any;
 
-      const result = await memoryHandlers(memoryStore).rag_memory({ action: "communities" });
+      const result = await memoryHandlers(memoryService).rag_memory({ action: "communities" });
       const body = parseResponse(result);
 
       expect(result.isError).to.not.equal(true);
-      expect(body.entityExtractionEnabled).to.equal(false);
-      expect(body.hint).to.be.a("string");
-      expect(body.hint).to.include("require an LLM provider");
-      expect(body.hint).to.include("llm.provider");
-      // The disabled path must not pretend to have consulted the graph.
-      expect(recallCommunities.called).to.equal(false);
-    });
-
-    it("returns clusters without a hint when entity extraction is enabled", async () => {
-      const memoryStore = {
-        getCurrentBranch: sinon.stub().resolves(null),
-        isEntityExtractionEnabled: sinon.stub().returns(true),
-        recallCommunities: sinon.stub().resolves([{ id: 0, entityNames: ["Redis", "API gateway"] }]),
-      };
-
-      const result = await memoryHandlers(memoryStore).rag_memory({ action: "communities" });
-      const body = parseResponse(result);
-
-      expect(body.hint).to.equal(undefined);
-      expect(body.entityExtractionEnabled).to.equal(true);
-      expect(body.count).to.equal(1);
-      expect(body.communities).to.deep.equal([{ id: 0, entityNames: ["Redis", "API gateway"] }]);
-      expect(memoryStore.recallCommunities.firstCall.args).to.deep.equal(["workspace", undefined]);
-    });
-
-    it("distinguishes an enabled-but-empty graph from a disabled one", async () => {
-      const memoryStore = {
-        getCurrentBranch: sinon.stub().resolves(null),
-        isEntityExtractionEnabled: sinon.stub().returns(true),
-        recallCommunities: sinon.stub().resolves([]),
-      };
-
-      const body = parseResponse(await memoryHandlers(memoryStore).rag_memory({ action: "communities" }));
-
-      expect(body.count).to.equal(0);
-      expect(body.entityExtractionEnabled).to.equal(true);
-      expect(body.hint).to.equal(undefined);
-    });
-
-    it("errors when branch scope is requested but no branch can be detected", async () => {
-      const memoryStore = {
-        getCurrentBranch: sinon.stub().resolves(null),
-        isEntityExtractionEnabled: sinon.stub().returns(true),
-        recallCommunities: sinon.stub().resolves([]),
-      };
-
-      const result = await memoryHandlers(memoryStore).rag_memory({ action: "communities", scope: "branch" });
-
-      expect(result.isError).to.equal(true);
-      expect(parseResponse(result).error).to.include("no git branch could be detected");
-      expect(memoryStore.recallCommunities.called).to.equal(false);
+      expect(body).to.deep.equal(resultFromCore);
     });
   });
 
@@ -920,6 +961,9 @@ describe("MCP Tools (registerTools)", () => {
         deps.embeddingService as unknown as EmbeddingService,
         deps.ragQueryService as unknown as RAGQueryService,
         null as any, // memoryStore
+        undefined,
+        undefined,
+        undefined,
         mockReranker,
         mockConfig,
       );
@@ -1142,6 +1186,9 @@ describe("MCP Tools (registerTools)", () => {
         ragQueryService as unknown as RAGQueryService,
         undefined,
         undefined,
+        undefined,
+        undefined,
+        undefined,
         cfg,
       );
       return handlers;
@@ -1175,3 +1222,18 @@ describe("MCP Tools (registerTools)", () => {
     });
   });
 });
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value?: T | PromiseLike<T>): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function tick(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}

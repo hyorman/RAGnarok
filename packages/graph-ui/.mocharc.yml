@@ -1,0 +1,4 @@
+spec: "dist-test/test/**/*.test.js"
+timeout: 30000
+reporter: spec
+recursive: true

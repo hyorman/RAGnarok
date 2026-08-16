@@ -96,6 +96,8 @@ export type {
   GraphVisualizationDocument,
   GraphVisualizationOptions,
 } from "./visualization/graphVisualization";
+export { GraphVisualizationService } from "./visualization/graphVisualizationService";
+export type { GraphVisualizationRequest } from "./visualization/graphVisualizationService";
 
 // Retrievers
 export { VectorRetriever } from "./retrievers/vectorRetriever";
@@ -128,6 +130,10 @@ export type { PipelineOptions, PipelineProgress, PipelineResult } from "./manage
 // Standalone Memory Module
 export {
   MemoryStore,
+  MemoryOperationCoordinator,
+  MemoryService,
+  MemoryServiceError,
+  reduceMemoryOperationResult,
   MemoryVectorStore,
   MemoryGraph,
   MemoryEntityExtractor,
@@ -183,6 +189,24 @@ export { StorageTransactionCoordinator } from "./utils/storageTransactionCoordin
 export type { StorageTransactionFence, StorageTransactionOperation } from "./utils/storageTransactionCoordinator";
 export type {
   MemoryStoreOptions,
+  MemoryServiceErrorCode,
+  MemoryBranchContext,
+  MemoryHostContext,
+  MemoryOperationInput,
+  MemoryResultMeasurement,
+  MemoryResponseMeta,
+  StoreMemoryResult,
+  RecallMemoryResult,
+  ForgetMemoryResult,
+  MemoryStatsResult,
+  ListMemoryResult,
+  DecayMemoryResult,
+  HistoryMemoryResult,
+  PromoteMemoryResult,
+  LinksMemoryResult,
+  CommunitiesMemoryResult,
+  MemoryOperationResult,
+  MemoryResetResult,
   MemoryScope,
   MemoryEntry,
   MemoryEntity as StandaloneMemoryEntity,

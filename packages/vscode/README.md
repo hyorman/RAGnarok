@@ -10,6 +10,10 @@ requires a compatible VS Code build, explicit proposed-API enablement, and a
 registered provider. The local HuggingFace backend remains the supported
 fallback.
 
+The extension creates memory storage under `context.globalStorageUri` and uses
+core `MemoryService`; it does not open the MCP server's configured storage root.
+There is no cross-host data sharing with MCP.
+
 Release VSIX files are built for Linux, macOS, and Windows on x64 and arm64.
 Each exact VSIX must pass install/activation/native-load smoke testing on its
 target; see the repository [release procedure](../../docs/RELEASE.md).
@@ -36,6 +40,8 @@ flowchart LR
       tree["topicTreeView.ts\n(sidebar)"]
       lmb["vscodeLmBackend.ts\n(proposed embeddings)"]
       ghm["githubTokenManager.ts"]
+      memory["memoryTools.ts\n(ragMemory / ragResetMemory)"]
+      graph["memoryGraphCommand.ts\n(command + webview)"]
     end
   end
 
@@ -49,7 +55,7 @@ flowchart LR
   ntf -- "INotifier" --> core
   llm -- "ILLMProvider" --> core
 
-  ext --> tool & cmd & tree
+  ext --> tool & cmd & tree & memory & graph
   tool --> core
   cmd --> core
 ```
@@ -68,6 +74,9 @@ src/
 ├── topicTreeView.ts        # Topics & config sidebar tree view providers
 ├── vscodeLmBackend.ts      # Proposed vscode.lm.computeEmbeddings backend
 ├── githubTokenManager.ts   # GitHub PAT management via SecretStorage
+├── memoryTools.ts          # Native ragMemory and confirmed ragResetMemory tools
+├── memoryGraphCommand.ts   # RAGnarok: Show Memory Graph command
+├── memoryGraphPanel.ts     # CSP-restricted local graph webview
 ├── workspaceContext.ts      # Workspace file discovery for context enrichment
 │
 └── adapters/
@@ -108,6 +117,20 @@ before any other code runs.
 Registers a Copilot Language Model tool (`ragQuery`) via `vscode.lm.registerTool`.
 Maintains an LRU cache of up to 10 `RAGAgent` instances (one per topic) to
 avoid re-initialising vector stores on every invocation.
+
+### Memory tools and graph
+
+`ragMemory` exposes the shared core memory actions as a native Copilot
+language-model tool. `ragResetMemory` is separate and always uses VS Code's
+invocation confirmation UI before permanently deleting all memory in the
+extension location; a model-generated boolean cannot stand in for approval.
+
+Run **RAGnarok: Show Memory Graph** from the Command Palette to choose workspace
+or current-branch memory and open the interactive webview. The webview receives
+validated graph documents over `postMessage`, announces readiness before the
+host sends data, uses only packaged `media/memoryGraph.js` and
+`media/memoryGraph.css`, and has no network access. It does not invoke MCP or
+read MCP storage.
 
 ### `commands.ts`
 

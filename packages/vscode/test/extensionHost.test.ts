@@ -1,6 +1,15 @@
 import { expect } from "chai";
+import sinon from "sinon";
 import * as vscode from "vscode";
-import type { RagnarokExtensionApi } from "../src/extension";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
+import {
+  activateWithServiceFactory,
+  createMemoryServices,
+  type ActivationRuntimeFactory,
+  type RagnarokExtensionApi,
+} from "../src/extension";
 import { COMMANDS } from "../src/constants";
 
 describe("real VS Code extension host activation", function () {
@@ -27,6 +36,99 @@ describe("real VS Code extension host activation", function () {
       expect(registered, `${command} should be registered`).to.include(command);
     }
     await vscode.commands.executeCommand(COMMANDS.REFRESH_TOPICS);
+  });
+
+  it("constructs memory and graph services with one shared coordinator", function () {
+    const store = {};
+    const coordinator = {};
+    const memoryService = {};
+    const graphService = {};
+    const factory = {
+      createMemoryCoordinator: sinon.spy(() => coordinator),
+      createMemoryService: sinon.spy(() => memoryService),
+      createGraphVisualizationService: sinon.spy(() => graphService),
+    };
+
+    const services = createMemoryServices(store as any, factory as any);
+
+    expect(services).to.deep.equal({ coordinator, memoryService, graphService });
+    expect(factory.createMemoryService.calledOnce).to.equal(true);
+    expect(factory.createMemoryService.firstCall.args).to.deep.equal([store, coordinator]);
+    expect(factory.createGraphVisualizationService.calledOnce).to.equal(true);
+    expect(factory.createGraphVisualizationService.firstCall.args).to.deep.equal([store, coordinator]);
+  });
+
+  it("rolls back all memory graph resources when activation fails after native registration", async function () {
+    const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-activation-rollback-"));
+    const events: string[] = [];
+    const embeddingService = {
+      registerBackend: sinon.spy(),
+      dispose: async () => {
+        events.push("embeddingService:dispose");
+      },
+    };
+    const topicManager = {
+      dispose: async () => {
+        events.push("topicManager:dispose");
+      },
+    };
+    const memoryStore = {
+      dispose: async () => {
+        events.push("memoryStore:dispose");
+      },
+    };
+    const coordinator = {
+      stopAdmission: () => events.push("memoryCoordinator:stop"),
+      drain: async () => {
+        events.push("memoryCoordinator:drain");
+      },
+    };
+    const serviceFactory = {
+      createEmbeddingService: () => embeddingService,
+      createTopicManager: async () => topicManager,
+      createMemoryStore: () => memoryStore,
+      createMemoryCoordinator: () => coordinator,
+      createMemoryService: () => ({ execute: sinon.stub(), reset: sinon.stub() }),
+      createGraphVisualizationService: () => ({ generate: sinon.stub() }),
+    };
+    const runtimeFactory: ActivationRuntimeFactory = {
+      registerMemoryTools: () => ({ dispose: () => events.push("memoryTools:dispose") }),
+      createMemoryGraphPanel: () => ({
+        show: sinon.stub(),
+        dispose: () => events.push("graphPanel:dispose"),
+      }),
+      registerMemoryGraphCommand: () => ({ dispose: () => events.push("graphCommand:dispose") }),
+      afterMemorySurfacesRegistered: () => {
+        throw new Error("post-registration failure");
+      },
+    };
+    const context = {
+      globalStorageUri: vscode.Uri.file(storageDir),
+      extensionUri: vscode.Uri.file("/extension"),
+      subscriptions: [],
+    };
+
+    let caught: unknown;
+    try {
+      await activateWithServiceFactory(context as any, serviceFactory as any, runtimeFactory);
+    } catch (error) {
+      caught = error;
+    } finally {
+      await fs.rm(storageDir, { recursive: true, force: true });
+    }
+
+    expect(caught).to.be.instanceOf(Error);
+    expect((caught as Error).message).to.equal("post-registration failure");
+    expect(events).to.deep.equal([
+      "memoryTools:dispose",
+      "graphCommand:dispose",
+      "graphPanel:dispose",
+      "memoryCoordinator:stop",
+      "memoryCoordinator:drain",
+      "memoryStore:dispose",
+      "topicManager:dispose",
+      "embeddingService:dispose",
+    ]);
   });
 
   it("offers an opt-in native create/query/delete installed-artifact smoke", async function () {

@@ -114,7 +114,7 @@ function source(value: unknown): GraphVisualizationSource {
   return invalid("source has an unsupported discriminant");
 }
 
-function validateDocument(value: unknown): GraphVisualizationDocument {
+export function validateGraphVisualizationDocument(value: unknown): GraphVisualizationDocument {
   const document = record(value, "document");
   exactKeys(document, ["schema", "source", "nodes", "edges", "groups", "viewport", "metadata"], "document");
   if (document.schema !== "ragnarok.graph.visualization.v1") {
@@ -300,8 +300,8 @@ export function parseGraphVisualizationResult(result: ToolResultLike): GraphVisu
   }
 
   const structuredDocument =
-    result.structuredContent === undefined ? undefined : validateDocument(result.structuredContent);
-  const textDocument = textContent === undefined ? undefined : validateDocument(textContent);
+    result.structuredContent === undefined ? undefined : validateGraphVisualizationDocument(result.structuredContent);
+  const textDocument = textContent === undefined ? undefined : validateGraphVisualizationDocument(textContent);
   if (structuredDocument && textDocument && canonical(structuredDocument) !== canonical(textDocument)) {
     throw new TypeError("Graph tool result representations do not match.");
   }

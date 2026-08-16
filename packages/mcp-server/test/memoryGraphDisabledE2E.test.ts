@@ -52,7 +52,7 @@ describe("memory graph disabled without an LLM (E2E)", function () {
           `an unusable LLM provider must not report an enabled graph: ${JSON.stringify(body)}`,
         ).to.equal(false);
         expect(body.count).to.equal(0);
-        expect(String(body.hint ?? ""), JSON.stringify(body)).to.contain("llm.provider");
+        expect(String(body.hint ?? ""), JSON.stringify(body)).to.contain("LLM provider");
       },
       "memory graph disabled E2E",
     );

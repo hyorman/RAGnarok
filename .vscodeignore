@@ -8,6 +8,9 @@ scripts/**
 
 # Source TypeScript and per-package compiled output (bundled into dist/extension.js)
 packages/**
+media/**
+!media/memoryGraph.js
+!media/memoryGraph.css
 **/*.ts
 **/*.map
 esbuild.mjs

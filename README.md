@@ -126,6 +126,8 @@ Notes:
 
 ### 🧠 **Standalone Memory Module**
 
+- **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing or automatic migration.
+- **Native VS Code Tools**: Copilot can invoke `ragMemory` for scoped memory operations and `ragResetMemory` for a full reset. `ragResetMemory` always shows a VS Code confirmation before deleting extension memory.
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
 - **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
@@ -133,7 +135,7 @@ Notes:
 - **Markdown Export**: Automatically generates a `memories.md` file summarizing stored memories for human review
 - **MCP Integration**: Exposed as the `rag_memory` tool with store, recall, forget, stats, list, decay, history, promote, link, and community operations. `communities` clusters the memory entity graph and requires an LLM provider — without one the tool says so instead of returning an empty result. Memory TTL is supported; reserved `auto:` memories are hidden unless explicitly requested. Memory is written and recalled only through explicit `rag_memory` calls — there is no automatic query-time recall or write-back.
 
-#### MCP memory graph visualization
+#### Memory graph visualization
 
 Graphs exist only in the memory subsystem. There is no document knowledge
 graph, no entity extraction over ingested documents, and no `graph` or
@@ -151,11 +153,13 @@ or unknown scope returns an empty document rather than fabricated data.
 
 Documents include full persisted node/edge descriptions, provenance,
 confidence, scope/branch fields, and arbitrary metadata, but never embedding
-vectors. MCP Apps hosts load the self-contained `ui://ragnarok/graph` resource
-as `text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. The app
-provides loading, empty, error, keyboard, screen-reader, touch, detail-panel,
-and viewport reset behavior. The VS Code extension webview remains deferred. See
-the [MCP server graph contract](packages/mcp-server/README.md#memory-graph-visualization).
+vectors. In VS Code, run **RAGnarok: Show Memory Graph** to choose workspace or
+current-branch memory and open the interactive command webview. MCP Apps hosts
+instead load the self-contained `ui://ragnarok/graph` resource as
+`text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. Both surfaces use
+the shared renderer and deterministic graph document, but each reads its own
+host's storage. There is no cross-host data sharing. See the
+[MCP server graph contract](packages/mcp-server/README.md#memory-graph-visualization).
 
 ---
 
@@ -443,12 +447,13 @@ Any models you place under `ragnarok.localModelPath` show up in the tree view al
 
 ## 📦 Project Structure
 
-RAGnarōk is organized as an **npm workspaces monorepo** with three packages:
+RAGnarōk is organized as an **npm workspaces monorepo** with four packages:
 
 ```
 copilot-rag/
 ├── packages/
 │   ├── core/          # @ragnarok/core — portable RAG engine (no VS Code dependency)
+│   ├── graph-ui/      # @ragnarok/graph-ui — private shared graph renderer/build
 │   ├── vscode/        # @ragnarok/vscode — VS Code extension adapters and UI
 │   └── mcp-server/    # @ragnarok/mcp-server — MCP server for CLI/TUI/GUI agents
 ├── test/              # VS Code extension test infrastructure and fixtures
@@ -459,6 +464,7 @@ copilot-rag/
 | Package                    | Description                                                                                                                                                 |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`@ragnarok/core`**       | Loaders, chunkers, embeddings, retrievers, agents, stores — all platform-agnostic with dependency injection                                                 |
+| **`@ragnarok/graph-ui`**   | Private browser source and build that generates the VS Code JS/CSS and self-contained MCP App HTML                                                          |
 | **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                |
 | **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio transport only) |
 

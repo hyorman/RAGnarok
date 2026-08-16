@@ -3,6 +3,7 @@ import sinon from "sinon";
 import { McpServer } from "@modelcontextprotocol/server";
 import {
   EmbeddingService,
+  type GraphVisualizationService,
   TopicManager,
   projectMemoryGraphVisualization,
   reduceGraphVisualizationDocument,
@@ -21,7 +22,7 @@ type CapturedTool = {
 };
 
 type RegisterOptions = {
-  memoryStore?: any;
+  graphService?: Pick<GraphVisualizationService, "generate">;
   runtime?: { run<T>(operation: () => Promise<T>): Promise<T> };
   maxResponseBytes?: number;
 };
@@ -52,7 +53,10 @@ function register(server: McpServer, topicManager: any, options: RegisterOptions
     undefined as any,
     sinon.createStubInstance(EmbeddingService) as any,
     {} as any,
-    options.memoryStore,
+    undefined,
+    undefined,
+    options.graphService as GraphVisualizationService | undefined,
+    options.graphService ? ({ getCurrentBranch: sinon.stub().resolves(null) } as any) : undefined,
     undefined,
     { maxResponseBytes: options.maxResponseBytes ?? MCP_LIMITS.responseBytes } as any,
     undefined,
@@ -101,16 +105,29 @@ function memoryRelationship(id: string, blob: string): any {
   };
 }
 
-/** Registers the tool against a workspace-memory store returning the given snapshot. */
+/** Registers the tool against a graph service returning the projected document. */
 function registerMemorySnapshot(
   server: McpServer,
   entities: any[],
   relationships: any[] = [],
   options: RegisterOptions = {},
 ): void {
+  const snapshot = { entities, relationships };
   register(server, makeTopicManager(), {
     ...options,
-    memoryStore: { getGraphSnapshot: sinon.stub().resolves({ entities, relationships }) },
+    graphService: {
+      generate: sinon
+        .stub()
+        .callsFake(async (request: any) =>
+          projectMemoryGraphVisualization(
+            snapshot,
+            request.scope === "branch"
+              ? { kind: "memory", scope: "branch", branch: request.branch }
+              : { kind: "memory", scope: "workspace" },
+            { maxNodes: request.maxNodes },
+          ),
+        ),
+    },
   });
 }
 
@@ -201,9 +218,9 @@ describe("rag_graph_visualize tool", function () {
     }
   });
 
-  it("is not registered without a memory store", function () {
+  it("is not registered without a graph service", function () {
     const { server, captured } = fakeServer();
-    register(server, makeTopicManager(), { memoryStore: undefined });
+    register(server, makeTopicManager(), { graphService: undefined });
     expect(captured.map((tool) => tool.name)).to.not.include("rag_graph_visualize");
   });
 
@@ -229,8 +246,18 @@ describe("rag_graph_visualize tool", function () {
   ]) {
     it(`projects the ${memoryCase.memoryScope} memory snapshot with exact source identity`, async function () {
       const { server, captured } = fakeServer();
-      const getGraphSnapshot = sinon.stub().resolves(memorySnapshot(memoryCase.memoryScope, memoryCase.branch));
-      register(server, makeTopicManager(), { memoryStore: { getGraphSnapshot } });
+      const generate = sinon
+        .stub()
+        .resolves(
+          projectMemoryGraphVisualization(
+            memorySnapshot(memoryCase.memoryScope, memoryCase.branch),
+            memoryCase.branch
+              ? { kind: "memory", scope: "branch", branch: memoryCase.branch }
+              : { kind: "memory", scope: "workspace" },
+            { maxNodes: 25 },
+          ),
+        );
+      register(server, makeTopicManager(), { graphService: { generate } });
 
       const input = {
         source: "memory" as const,
@@ -238,7 +265,8 @@ describe("rag_graph_visualize tool", function () {
         ...(memoryCase.branch ? { branch: memoryCase.branch } : {}),
         maxNodes: 25,
       };
-      const result = await graphTool(captured).handler(input, makeServerContext());
+      const signal = new AbortController().signal;
+      const result = await graphTool(captured).handler(input, makeServerContext(signal));
       const payload = parseResult(result);
       expect(result.isError).not.to.equal(true);
       expect(payload.source).to.deep.equal(
@@ -246,7 +274,14 @@ describe("rag_graph_visualize tool", function () {
           ? { kind: "memory", scope: "branch", branch: memoryCase.branch }
           : { kind: "memory", scope: "workspace" },
       );
-      expect(getGraphSnapshot.calledOnceWithExactly(memoryCase.memoryScope, memoryCase.branch)).to.equal(true);
+      expect(
+        generate.calledOnceWithExactly(
+          memoryCase.branch
+            ? { scope: "branch", branch: memoryCase.branch, maxNodes: 25 }
+            : { scope: "workspace", maxNodes: 25 },
+          signal,
+        ),
+      ).to.equal(true);
       expect(payload.nodes[0].attributes).to.deep.include({
         description: "CI for the monorepo",
         scope: memoryCase.memoryScope,
@@ -259,8 +294,15 @@ describe("rag_graph_visualize tool", function () {
 
   it("returns a successful empty branch document for an absent branch", async function () {
     const { server, captured } = fakeServer();
-    const getGraphSnapshot = sinon.stub().resolves({ entities: [], relationships: [] });
-    register(server, makeTopicManager(), { memoryStore: { getGraphSnapshot } });
+    const generate = sinon
+      .stub()
+      .resolves(
+        projectMemoryGraphVisualization(
+          { entities: [], relationships: [] },
+          { kind: "memory", scope: "branch", branch: "feature/absent" },
+        ),
+      );
+    register(server, makeTopicManager(), { graphService: { generate } });
 
     const result = await graphTool(captured).handler(
       { source: "memory", memoryScope: "branch", branch: "feature/absent" },
@@ -309,12 +351,20 @@ describe("rag_graph_visualize tool", function () {
 
     const execute = async (orderedRelationships: any[]) => {
       const { server, captured } = fakeServer();
-      const getGraphSnapshot = sinon.stub().resolves({ entities, relationships: orderedRelationships });
-      register(server, makeTopicManager(), { memoryStore: { getGraphSnapshot } });
+      const generate = sinon
+        .stub()
+        .resolves(
+          projectMemoryGraphVisualization(
+            { entities, relationships: orderedRelationships },
+            { kind: "memory", scope: "workspace" },
+            { maxNodes: 2 },
+          ),
+        );
+      register(server, makeTopicManager(), { graphService: { generate } });
 
       const result = await graphTool(captured).handler({ ...WORKSPACE_MEMORY_INPUT, maxNodes: 2 }, makeServerContext());
       expect(result.isError).not.to.equal(true);
-      expect(getGraphSnapshot.calledOnce).to.equal(true);
+      expect(generate.calledOnce).to.equal(true);
       return { result, payload: parseResult(result) };
     };
 
@@ -368,8 +418,8 @@ describe("rag_graph_visualize tool", function () {
     const { server, captured } = fakeServer();
     register(server, makeTopicManager(), {
       maxResponseBytes: 16 * 1024 * 1024,
-      memoryStore: {
-        getGraphSnapshot: sinon.stub().rejects(new Error(`Memory graph storage failed: ${HUGE_UTF8_ERROR_SUFFIX}`)),
+      graphService: {
+        generate: sinon.stub().rejects(new Error(`Memory graph storage failed: ${HUGE_UTF8_ERROR_SUFFIX}`)),
       },
     });
 

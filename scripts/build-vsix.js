@@ -30,6 +30,7 @@ const os = require("os");
 const crypto = require("crypto");
 
 const ROOT = path.resolve(__dirname, "..");
+const VSIX_GRAPH_ASSETS = ["memoryGraph.js", "memoryGraph.css"];
 
 /**
  * Run a Node CLI by its JavaScript entry point instead of its launcher script.
@@ -186,12 +187,26 @@ function copyToStaging(stagingDir) {
     }
   }
 
+  copyGraphAssetsToStaging(stagingDir);
+
   // Bundled ONNX models live in the core package (shipped with the npm
   // package); stage them under assets/models where findAssetsModelsDir()
   // expects them relative to the extension bundle.
   const modelsSrc = path.join(ROOT, "packages", "core", "assets", "models");
   if (fs.existsSync(modelsSrc)) {
     copyDirSync(modelsSrc, path.join(stagingDir, "assets", "models"));
+  }
+}
+
+function copyGraphAssetsToStaging(stagingDir) {
+  const targetDir = path.join(stagingDir, "media");
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const asset of VSIX_GRAPH_ASSETS) {
+    const source = path.join(ROOT, "media", asset);
+    if (!fs.existsSync(source)) {
+      throw new Error(`Missing generated VS Code graph asset: ${source}`);
+    }
+    fs.copyFileSync(source, path.join(targetDir, asset));
   }
 }
 
@@ -496,6 +511,7 @@ function pruneBloat(stagingDir, targetPlatform) {
   pruneOnnxruntimeNode(nm, targetPlatform);
   prunePlatformNativePackages(nm, targetPlatform);
   removeMcpWorkspace(stagingDir);
+  removeGraphUiWorkspace(stagingDir);
   relaxUnmetPeerDependencies(nm);
 
   // Remove HuggingFace model cache (shouldn't exist in clean install, but just in case)
@@ -699,6 +715,20 @@ function removeMcpWorkspace(stagingDir) {
     if (fs.existsSync(hoisted)) fs.rmSync(hoisted, { recursive: true, force: true });
   }
   console.log("  ✓ Removed the MCP server workspace and its dependencies");
+}
+
+function removeGraphUiWorkspace(stagingDir) {
+  const workspacePath = "packages/graph-ui";
+  const manifestPath = path.join(stagingDir, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (Array.isArray(pkg.workspaces)) {
+    pkg.workspaces = pkg.workspaces.filter((workspace) => workspace !== workspacePath);
+    fs.writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + "\n");
+  }
+
+  const dir = path.join(stagingDir, workspacePath);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  console.log("  ✓ Removed the private graph UI workspace from VSIX staging");
 }
 
 /**
@@ -980,11 +1010,14 @@ if (require.main === module) {
   });
 } else {
   module.exports = {
+    VSIX_GRAPH_ASSETS,
     assertSafeArchiveMember,
+    copyGraphAssetsToStaging,
     expectedNativePackageName,
     getNativePackageConfig,
     matchesTargetPlatform,
     prunePlatformNativePackages,
+    removeGraphUiWorkspace,
     verifyIntegrity,
     verifyNativePackages,
   };

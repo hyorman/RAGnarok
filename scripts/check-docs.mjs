@@ -80,6 +80,30 @@ for (const removed of ["GRAPH_HYBRID", "EnsembleRetriever", "LangGraph"]) {
 assert.match(core, /embedding fingerprint/i);
 assert.match(core, /requires reindexing/i);
 
+const rootReadme = await readFile(path.join(root, "README.md"), "utf8");
+const vscodeReadme = await readFile(path.join(root, "packages/vscode/README.md"), "utf8");
+const architecture = await readFile(path.join(root, "ARCHITECTURE.md"), "utf8");
+const operations = await readFile(path.join(root, "docs/OPERATIONS.md"), "utf8");
+const security = await readFile(path.join(root, "docs/SECURITY.md"), "utf8");
+const release = await readFile(path.join(root, "docs/RELEASE.md"), "utf8");
+assert.match(rootReadme, /ragMemory/);
+assert.match(rootReadme, /ragResetMemory/);
+assert.match(vscodeReadme, /RAGnarok: Show Memory Graph/);
+assert.match(architecture, /separate storage/i);
+assert.match(core, /MemoryService/);
+assert.match(vscodeReadme, /confirmation/i);
+assert.match(mcp, /inline MCP App/i);
+for (const [name, contents] of [
+  ["root README", rootReadme],
+  ["architecture", architecture],
+  ["operations", operations],
+  ["security", security],
+]) {
+  assert.match(contents, /no\s+cross-host data sharing/i, `${name} must document host storage isolation`);
+}
+assert.match(release, /media\/memoryGraph\.js/);
+assert.match(release, /media\/memoryGraph\.css/);
+
 for (const relative of staleReports) {
   await access(path.join(root, relative))
     .then(() => {

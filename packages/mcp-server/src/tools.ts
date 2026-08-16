@@ -34,19 +34,20 @@ import {
   RAGQueryService,
   TopicEmptyError,
   MemoryStore,
+  MemoryService,
+  GraphVisualizationService,
   CrossEncoderReranker,
   RerankerModelRegistry,
-  projectMemoryGraphVisualization,
-  reduceGraphVisualizationDocument,
 } from "@ragnarok/core";
-import type { AvailableModel, GraphVisualizationDocument } from "@ragnarok/core";
+import type { AvailableModel } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "./uiResource";
 import type { McpConfig } from "./config";
+import { invokeMemoryResetTool, invokeMemoryTool } from "./memoryToolAdapter";
+import { invokeGraphVisualizationTool } from "./graphVisualizationAdapter";
+import type { ToolRuntime } from "./toolRuntime";
 
 export type MutationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
-export type ToolRuntime = {
-  run<T>(operation: () => Promise<T>): Promise<T>;
-};
+export type { ToolRuntime } from "./toolRuntime";
 
 export const MCP_LIMITS = Object.freeze({
   topicName: 200,
@@ -74,21 +75,6 @@ const graphVisualizationInput = z.discriminatedUnion("memoryScope", [
     })
     .strict(),
 ]);
-
-class GraphVisualizationRecordTooLargeError extends Error {
-  constructor() {
-    super("A graph visualization record exceeds the response byte limit");
-    this.name = "GraphVisualizationRecordTooLargeError";
-  }
-}
-
-function utf8Prefix(value: Buffer, maximumBytes: number): string {
-  let end = Math.min(maximumBytes, value.length);
-  while (end > 0 && end < value.length && (value[end] & 0xc0) === 0x80) {
-    end -= 1;
-  }
-  return value.subarray(0, end).toString("utf8");
-}
 
 // Re-serializes JSON text content and mirrors it as structuredContent so
 // clients get a typed payload without the tool handlers building it twice.
@@ -163,10 +149,14 @@ export function registerTools(
   embeddingService: EmbeddingService,
   ragQueryService: RAGQueryService,
   memoryStore?: MemoryStore,
+  memoryService?: MemoryService,
+  graphVisualizationService?: GraphVisualizationService,
+  memoryBranchProvider?: Pick<MemoryStore, "getCurrentBranch">,
   reranker?: CrossEncoderReranker | null,
   config?: McpConfig,
   runMutation: MutationRunner = (operation) => operation(),
   runtime: ToolRuntime = { run: (operation) => operation() },
+  runMemoryMutation: MutationRunner = (operation) => operation(),
 ): void {
   const readOnlyAnnotations: ToolAnnotations = {
     readOnlyHint: true,
@@ -227,82 +217,6 @@ export function registerTools(
     ...(isError ? { isError: true as const } : {}),
   });
   const graphResponseBytes = Math.min(config?.maxResponseBytes ?? MCP_LIMITS.responseBytes, MCP_LIMITS.responseBytes);
-  const measureGraphToolResult = (candidate: ReturnType<typeof toolJson>) =>
-    measureToolResultForResponse(candidate, graphResponseBytes);
-  const graphError = (code: string, message: string) => {
-    const create = (candidateMessage: string) => toolJson({ error: { code, message: candidateMessage } }, true);
-    const full = create(message);
-    if (measureGraphToolResult(full).fits) {
-      return full;
-    }
-
-    const encoded = Buffer.from(message, "utf8");
-    let fittingBytes = 0;
-    let rejectedBytes = encoded.length;
-    while (rejectedBytes - fittingBytes > 1) {
-      const candidateBytes = Math.floor((fittingBytes + rejectedBytes) / 2);
-      const candidate = create(`${utf8Prefix(encoded, candidateBytes)}...`);
-      if (measureGraphToolResult(candidate).fits) {
-        fittingBytes = candidateBytes;
-      } else {
-        rejectedBytes = candidateBytes;
-      }
-    }
-    return create(`${utf8Prefix(encoded, fittingBytes)}...`);
-  };
-  const fitGraphVisualizationResult = (document: GraphVisualizationDocument): GraphVisualizationDocument => {
-    let measurements = 0;
-    const measure = (candidateDocument: GraphVisualizationDocument): boolean => {
-      measurements += 1;
-      if (measurements > 24) {
-        throw new Error("Graph visualization response reduction exceeded 24 measurements");
-      }
-      return measureGraphToolResult(toolJson(candidateDocument)).fits;
-    };
-
-    if (measure(document)) {
-      return document;
-    }
-
-    const nodeCount = document.nodes.length;
-    const edgeCount = document.edges.length;
-    const zeroEdgeDocument = edgeCount === 0 ? document : reduceGraphVisualizationDocument(document, nodeCount, 0);
-    const zeroEdgesFit = edgeCount === 0 ? false : measure(zeroEdgeDocument);
-    if (zeroEdgesFit) {
-      let fittingEdgeCount = 0;
-      let rejectedEdgeCount = edgeCount;
-      while (rejectedEdgeCount - fittingEdgeCount > 1) {
-        const candidateEdgeCount = Math.floor((fittingEdgeCount + rejectedEdgeCount) / 2);
-        const candidate = reduceGraphVisualizationDocument(document, nodeCount, candidateEdgeCount);
-        if (measure(candidate)) {
-          fittingEdgeCount = candidateEdgeCount;
-        } else {
-          rejectedEdgeCount = candidateEdgeCount;
-        }
-      }
-      return reduceGraphVisualizationDocument(document, nodeCount, fittingEdgeCount);
-    }
-
-    if (nodeCount === 1) {
-      throw new GraphVisualizationRecordTooLargeError();
-    }
-
-    let fittingNodeCount = 0;
-    let rejectedNodeCount = nodeCount;
-    while (rejectedNodeCount - fittingNodeCount > 1) {
-      const candidateNodeCount = Math.floor((fittingNodeCount + rejectedNodeCount) / 2);
-      const candidate = reduceGraphVisualizationDocument(document, candidateNodeCount, 0);
-      if (measure(candidate)) {
-        fittingNodeCount = candidateNodeCount;
-      } else {
-        rejectedNodeCount = candidateNodeCount;
-      }
-    }
-    if (fittingNodeCount === 0) {
-      throw new GraphVisualizationRecordTooLargeError();
-    }
-    return reduceGraphVisualizationDocument(document, fittingNodeCount, 0);
-  };
   const toolError = (error: unknown) => ({
     content: [
       {
@@ -737,69 +651,70 @@ export function registerTools(
     writeAnnotations,
     async ({ model }) => {
       try {
-        const previousModel = embeddingService.getCurrentModel();
-        const hasFingerprintGuard = typeof (memoryStore as any)?.validateEmbeddingFingerprint === "function";
-        const previousDimension = hasFingerprintGuard ? 0 : (await embeddingService.embed("dimension probe")).length;
+        return await runMemoryMutation(() =>
+          runMutation(async () => {
+            const previousModel = embeddingService.getCurrentModel();
+            const hasFingerprintGuard = typeof (memoryStore as any)?.validateEmbeddingFingerprint === "function";
+            const previousDimension = hasFingerprintGuard
+              ? 0
+              : (await embeddingService.embed("dimension probe")).length;
 
-        const validateAndReinitialize = async (): Promise<void> => {
-          if (memoryStore) {
-            if (hasFingerprintGuard) {
-              await memoryStore.validateEmbeddingFingerprint();
+            const validateAndReinitialize = async (): Promise<void> => {
+              if (memoryStore) {
+                if (hasFingerprintGuard) {
+                  await memoryStore.validateEmbeddingFingerprint();
+                } else {
+                  const newDimension = (await embeddingService.embed("dimension probe")).length;
+                  const memStats = await memoryStore.stats();
+                  if (memStats.totalMemories > 0 && newDimension !== previousDimension) {
+                    throw new Error(
+                      `Cannot switch embedding dimension from ${previousDimension} to ${newDimension} while memories exist`,
+                    );
+                  }
+                }
+              }
+              await topicManager.reinitializeWithNewModel();
+            };
+
+            // Hold publication until memory compatibility and dependent managers
+            // have both accepted the candidate model.
+            if (typeof (embeddingService as any).runTransactionalSwitch === "function") {
+              await embeddingService.runTransactionalSwitch(
+                embeddingService.getActiveBackendType() || undefined,
+                model,
+                validateAndReinitialize,
+              );
             } else {
-              const newDimension = (await embeddingService.embed("dimension probe")).length;
-              const memStats = await memoryStore.stats();
-              if (memStats.totalMemories > 0 && newDimension !== previousDimension) {
-                throw new Error(
-                  `Cannot switch embedding dimension from ${previousDimension} to ${newDimension} while memories exist`,
-                );
+              // Compatibility path for externally supplied legacy services.
+              await embeddingService.initialize(model);
+              try {
+                await validateAndReinitialize();
+              } catch (error) {
+                await embeddingService.initialize(previousModel);
+                throw error;
               }
             }
-          }
-          await topicManager.reinitializeWithNewModel();
-        };
 
-        // Hold publication until memory compatibility and dependent managers
-        // have both accepted the candidate model.
-        if (typeof (embeddingService as any).runTransactionalSwitch === "function") {
-          await runMutation(() =>
-            embeddingService.runTransactionalSwitch(
-              embeddingService.getActiveBackendType() || undefined,
-              model,
-              validateAndReinitialize,
-            ),
-          );
-        } else {
-          // Compatibility path for externally supplied legacy services.
-          await runMutation(async () => {
-            await embeddingService.initialize(model);
-            try {
-              await validateAndReinitialize();
-            } catch (error) {
-              await embeddingService.initialize(previousModel);
-              throw error;
-            }
-          });
-        }
-
-        const newModel = embeddingService.getCurrentModel();
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
+            const newModel = embeddingService.getCurrentModel();
+            return {
+              content: [
                 {
-                  success: true,
-                  previousModel,
-                  newModel,
-                  message: `Embedding model switched to ${newModel}`,
+                  type: "text" as const,
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      previousModel,
+                      newModel,
+                      message: `Embedding model switched to ${newModel}`,
+                    },
+                    null,
+                    2,
+                  ),
                 },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+              ],
+            };
+          }),
+        );
       } catch (error) {
         return {
           content: [
@@ -1183,24 +1098,14 @@ export function registerTools(
     },
   );
 
-  // The memory tools are structurally absent when no memory store was built.
-  if (memoryStore) {
+  // The memory tools are structurally absent when their service dependencies were not built.
+  if (memoryService) {
     registerTool(
       "rag_reset_memory",
       "Delete all standalone memories before changing embedding space",
       z.object({ confirm: z.literal(true) }),
       destructiveAnnotations,
-      async ({ confirm }) => {
-        try {
-          if (!memoryStore) {
-            throw new Error("Memory store is unavailable");
-          }
-          await runMutation(() => memoryStore.reset(confirm));
-          return toolJson({ success: true });
-        } catch (error) {
-          return toolError(error);
-        }
-      },
+      async (_input, context) => invokeMemoryResetTool(context, memoryService),
     );
   }
 
@@ -1222,7 +1127,7 @@ export function registerTools(
   // Memory tools
   // ────────────────────────────────────────────────────────────
 
-  if (memoryStore) {
+  if (memoryService && memoryBranchProvider) {
     registerTool(
       "rag_memory",
       "Store, recall, forget, list, or get stats for project memories. " +
@@ -1296,458 +1201,27 @@ export function registerTools(
           .describe("Max entries to return (for 'list' action, default: 50)"),
       }),
       writeAnnotations,
-      async (
-        {
-          action,
-          content,
-          query,
-          topK,
-          includeEntities,
-          id,
-          ids,
-          olderThan,
-          expired,
-          scope,
-          branch,
-          tags,
-          ttlDays,
-          includeAuto,
-          reinforce,
-          limit,
-        },
-        context,
-      ) => {
-        try {
-          // Branch scope explicitly requested but unresolvable must be an
-          // error, not a silent fall-back to workspace scope: the caller
-          // would store/read memories in a scope they didn't ask for.
-          if (
-            scope === "branch" &&
-            !branch &&
-            (action === "store" || action === "recall" || action === "list" || action === "communities")
-          ) {
-            const detected = await memoryStore.getCurrentBranch();
-            if (!detected) {
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify({
-                      error:
-                        "Branch scope requested but no git branch could be detected in the working directory " +
-                        "(not a git repo or detached HEAD). Pass 'branch' explicitly or set RAGNAROK_WORKING_DIR " +
-                        "to the project root.",
-                    }),
-                  },
-                ],
-                isError: true,
-              };
-            }
-          }
-
-          switch (action) {
-            case "store": {
-              if (!content) {
-                return {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text: JSON.stringify({ error: "'content' is required for 'store' action" }),
-                    },
-                  ],
-                  isError: true,
-                };
-              }
-              const entry = await runMutation(() =>
-                memoryStore.store({
-                  content,
-                  scope: scope ?? "workspace",
-                  branch,
-                  tags,
-                  ...(ttlDays !== undefined ? { ttlDays } : {}),
-                  signal: context.mcpReq.signal,
-                }),
-              );
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "store",
-                        memory: {
-                          id: entry.id,
-                          content: entry.content,
-                          scope: entry.scope,
-                          branch: entry.branch,
-                          entityIds: entry.entityIds,
-                          tags: entry.tags,
-                          createdAt: new Date(entry.createdAt).toISOString(),
-                        },
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-
-            case "recall": {
-              if (!query) {
-                return {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text: JSON.stringify({ error: "'query' is required for 'recall' action" }),
-                    },
-                  ],
-                  isError: true,
-                };
-              }
-              const result = await memoryStore.recall({
-                query,
-                scope,
-                branch,
-                topK: topK ?? 10,
-                includeEntities: includeEntities ?? false,
-                ...(includeAuto ? { includeAuto: true } : {}),
-                ...(reinforce !== undefined ? { reinforce } : {}),
-                signal: context.mcpReq.signal,
-              });
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "recall",
-                        memories: result.memories.map(({ entry, score }) => ({
-                          id: entry.id,
-                          content: entry.content,
-                          scope: entry.scope,
-                          branch: entry.branch,
-                          score: Math.round(score * 1000) / 1000,
-                          tags: entry.tags,
-                          createdAt: new Date(entry.createdAt).toISOString(),
-                        })),
-                        entities: result.entities.map(({ entity, score }) => ({
-                          name: entity.name,
-                          type: entity.type,
-                          description: entity.description,
-                          score: Math.round(score * 1000) / 1000,
-                        })),
-                        count: result.memories.length,
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-
-            case "forget": {
-              if (branch && scope === "workspace") {
-                return toolError(new Error("'branch' cannot be combined with workspace scope for 'forget'"));
-              }
-              if (olderThan !== undefined && (!Number.isInteger(olderThan) || olderThan < 1)) {
-                return toolError(new Error("'olderThan' must be a positive whole number of days for 'forget'"));
-              }
-              if (olderThan !== undefined && !scope && !branch) {
-                return toolError(new Error("'olderThan' requires an explicit 'scope' or 'branch' for 'forget'"));
-              }
-              if (olderThan !== undefined && expired) {
-                return toolError(new Error("'olderThan' cannot be combined with 'expired' for 'forget'"));
-              }
-              if (id && (scope || branch || olderThan !== undefined || expired)) {
-                return toolError(
-                  new Error("'id' cannot be combined with scope, branch, olderThan, or expired for 'forget'"),
-                );
-              }
-              if (!id && olderThan === undefined && !expired) {
-                return toolError(new Error("'forget' requires 'id', 'olderThan', or 'expired: true'"));
-              }
-              const count = await runMutation(() =>
-                memoryStore.forget({
-                  id,
-                  scope: branch && !scope ? "branch" : scope,
-                  branch,
-                  olderThan,
-                  expired,
-                }),
-              );
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify({ action: "forget", forgottenCount: count }, null, 2),
-                  },
-                ],
-              };
-            }
-
-            case "stats": {
-              const memStats = await memoryStore.stats();
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "stats",
-                        ...memStats,
-                        // Surface where branch detection actually points so
-                        // mis-scoped setups are visible instead of silent.
-                        workspace: {
-                          workingDir: config?.workingDir || process.cwd(),
-                          detectedBranch: await memoryStore.getCurrentBranch(),
-                        },
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-
-            case "list": {
-              const entries = await memoryStore.list({
-                scope,
-                branch,
-                limit: limit ?? 50,
-                ...(includeAuto ? { includeAuto: true } : {}),
-              });
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "list",
-                        memories: entries.map((e) => ({
-                          id: e.id,
-                          content: e.content.slice(0, 200) + (e.content.length > 200 ? "..." : ""),
-                          scope: e.scope,
-                          branch: e.branch,
-                          tags: e.tags,
-                          accessCount: e.accessCount,
-                          createdAt: new Date(e.createdAt).toISOString(),
-                        })),
-                        count: entries.length,
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-
-            case "decay": {
-              const status = await memoryStore.runDecay(scope, branch);
-              const { expiredCount: belowThresholdCount, ...rest } = status;
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "decay",
-                        ...rest,
-                        belowThresholdCount,
-                        note: "Use the 'forget' action with expired: true to remove expired entries",
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-
-            case "history": {
-              if (!id) {
-                return {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text: JSON.stringify({ error: "'id' is required for 'history' action" }),
-                    },
-                  ],
-                  isError: true,
-                };
-              }
-              const versions = await memoryStore.getVersionHistory(id);
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "history",
-                        entryId: id,
-                        versions: versions.map((v) => ({
-                          id: v.id,
-                          content: v.content.slice(0, 200) + (v.content.length > 200 ? "..." : ""),
-                          version: v.version ?? 1,
-                          isLatest: v.isLatest ?? true,
-                          confidence: v.confidence ?? 1.0,
-                          supersededBy: v.supersededBy ?? null,
-                          createdAt: new Date(v.createdAt).toISOString(),
-                        })),
-                        count: versions.length,
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-
-            case "promote": {
-              if (!branch) {
-                return {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text: JSON.stringify({ error: "'branch' is required for 'promote' action" }),
-                    },
-                  ],
-                  isError: true,
-                };
-              }
-              const entryIds = ids ?? (id ? id.split(",").map((s: string) => s.trim()) : undefined);
-              const promoted = await memoryStore.promoteToWorkspace(branch, entryIds);
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify({ action: "promote", branch, promotedCount: promoted }, null, 2),
-                  },
-                ],
-              };
-            }
-
-            case "links": {
-              const sourceScope = scope ? (scope === "branch" && branch ? `branch:${branch}` : scope) : undefined;
-              const links = await memoryStore.discoverLinks(sourceScope, undefined);
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "links",
-                        links: links.map((l) => ({
-                          sourceScope: l.sourceScope,
-                          targetScope: l.targetScope,
-                          entityName: l.entityName,
-                          entityType: l.entityType,
-                          confidence: Math.round(l.confidence * 1000) / 1000,
-                        })),
-                        count: links.length,
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-
-            case "communities": {
-              // An empty result means one of two very different things. Say
-              // which: a disabled memory graph must not read as "nothing known".
-              if (!memoryStore.isEntityExtractionEnabled()) {
-                return {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text: JSON.stringify(
-                        {
-                          action: "communities",
-                          communities: [],
-                          count: 0,
-                          entityExtractionEnabled: false,
-                          hint: 'Memory graph features require an LLM provider (set "llm.provider" in config.json). Memories are still stored and recalled by vector similarity, but no entities are extracted, so the memory graph is empty and has no communities.',
-                        },
-                        null,
-                        2,
-                      ),
-                    },
-                  ],
-                };
-              }
-              const communities = await memoryStore.recallCommunities(scope ?? "workspace", branch);
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(
-                      {
-                        action: "communities",
-                        scope: scope ?? "workspace",
-                        branch,
-                        communities,
-                        count: communities.length,
-                        entityExtractionEnabled: true,
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-            }
-          }
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  error: error instanceof Error ? error.message : String(error),
-                }),
-              },
-            ],
-            isError: true,
-          };
-        }
-      },
+      async (input, context) => invokeMemoryTool(input, context, memoryService, memoryBranchProvider, config),
     );
   }
 
   // rag_graph_visualize — interactive memory graph document for MCP Apps. It
-  // reads the memory graph, so it is absent without a memory store rather than
+  // reads the memory graph, so it is absent without a graph service rather than
   // registered as a tool that could only ever error.
-  if (memoryStore) {
-    const graphMemoryStore = memoryStore;
+  if (graphVisualizationService) {
     registerTool(
       "rag_graph_visualize",
       "Visualize a RAGnarōk workspace-memory or branch-memory graph as a deterministic bounded document.",
       graphVisualizationInput,
       readOnlyAnnotations,
-      async (input) => {
-        try {
-          const branch = input.memoryScope === "branch" ? input.branch : undefined;
-          const snapshot = await graphMemoryStore.getGraphSnapshot(input.memoryScope, branch);
-          const source =
-            input.memoryScope === "branch"
-              ? ({ kind: "memory", scope: "branch", branch: input.branch } as const)
-              : ({ kind: "memory", scope: "workspace" } as const);
-          const document = projectMemoryGraphVisualization(snapshot, source, { maxNodes: input.maxNodes });
-          return toolJson(fitGraphVisualizationResult(document));
-        } catch (error) {
-          if (error instanceof GraphVisualizationRecordTooLargeError) {
-            return graphError("GRAPH_VISUALIZATION_RECORD_TOO_LARGE", error.message);
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          return graphError("GRAPH_VISUALIZATION_FAILED", message);
-        }
-      },
+      async (input, context) =>
+        invokeGraphVisualizationTool(
+          input,
+          context,
+          graphVisualizationService,
+          graphResponseBytes,
+          measureToolResultForResponse,
+        ),
       { ui: { resourceUri: GRAPH_RESOURCE_URI } },
     );
   }

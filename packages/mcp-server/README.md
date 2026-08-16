@@ -13,6 +13,10 @@ on one machine, running as the user who spawned it. Environment variables that
 configured the removed HTTP transport are rejected at startup, with an error
 naming every one that was set.
 
+MCP and VS Code share core memory behavior, not storage. This process constructs
+the core service over `RAGNAROK_STORAGE_DIR`; VS Code constructs it over extension
+global storage. There is no cross-host data sharing or implicit migration.
+
 ---
 
 ## Architecture
@@ -134,7 +138,8 @@ A record too large to fit the response limit returns
 `GRAPH_VISUALIZATION_FAILED`. Both are stable tool errors in text and structured
 content, never fallback or fabricated graph data.
 
-The tool advertises exactly this modern metadata:
+The tool advertises exactly this modern metadata so a supporting host renders
+the graph as an inline MCP App:
 
 ```json
 { "ui": { "resourceUri": "ui://ragnarok/graph" } }
@@ -148,7 +153,8 @@ state for every result. Its SVG has an accessible name; graph items use roving
 keyboard focus; arrow keys move focus; Enter or Space opens text-only details;
 Escape or Close restores focus. Status and error regions are announced,
 controls are touch-sized, and reset refits the viewport. A VS Code extension
-webview remains deferred; current visualization delivery is the MCP App only.
+uses a separate command webview built from the shared renderer; it does not read
+this server's storage.
 
 ---
 

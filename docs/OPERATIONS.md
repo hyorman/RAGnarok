@@ -6,6 +6,10 @@ or endpoint sections — operating it means operating its storage directory and
 its model configuration. Read [SECURITY.md](SECURITY.md) for the trust boundary
 and [MIGRATION.md](../MIGRATION.md) before opening a pre-v0.4 store.
 
+The VS Code extension uses its own `globalStorageUri`; it does not use
+`RAGNAROK_STORAGE_DIR`. The hosts share core implementation but there is no
+cross-host data sharing. Back up and operate the two roots independently.
+
 ## Storage layout and ownership
 
 The configured `RAGNAROK_STORAGE_DIR` is one atomic administrative unit:
@@ -34,19 +38,20 @@ read the store — which is why no credential is ever kept in it.
 
 ## The single-writer lock
 
-Do not share one storage root between concurrent processes — a VS Code window,
-an MCP server, and the migration CLI all take the same lease. `.ragnarok.lock`
-records the holder's PID and host and is refreshed by heartbeat; a second
-process fails fast with a message naming the holder rather than corrupting the
-store. A crashed holder's lease goes stale after roughly five minutes and is
-then reclaimable, but a live same-host PID is never reclaimed merely for age.
+Do not share one MCP storage root between concurrent MCP servers or migration
+CLI processes. They take the same lease. VS Code uses a separate extension
+storage root and takes its own lease there. `.ragnarok.lock` records the holder's
+PID and host and is refreshed by heartbeat; a second process fails fast with a
+message naming the holder rather than corrupting the store. A crashed holder's
+lease goes stale after roughly five minutes and is then reclaimable, but a live
+same-host PID is never reclaimed merely for age.
 
 Do not set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested single-writer
 mechanism protects the entire root.
 
-The most common operational surprise is a second MCP client — or a VS Code
-window left open — pointed at the same `RAGNAROK_STORAGE_DIR`. Give each client
-its own root, or accept that only one may run at a time.
+The most common operational surprise is a second MCP client pointed at the same
+`RAGNAROK_STORAGE_DIR`. Give each client its own root, or accept that only one
+may run at a time.
 
 ## Backup and recovery
 
@@ -161,11 +166,13 @@ configured LLM provider. Without one the graph stays empty and every
 visualization is an empty document — that is expected, not a failure. Successful
 graph data contains full node/edge details; embedding vectors must never appear.
 
-The app visibly transitions through loading, ready, empty, and accessible error
+The inline MCP App visibly transitions through loading, ready, empty, and accessible error
 states. Keyboard operators can traverse graph items with arrows, open details
 with Enter/Space, close with Escape, and reset the fitted viewport. A missing
 or malformed result must show an alert rather than stale graph content. The VS
-Code webview remains deferred and is not an operational surface in this release.
+Code instead provides **RAGnarok: Show Memory Graph**, a local command webview
+over the extension's separate memory root. Neither UI reads the other host's
+data.
 
 ## Containers
 

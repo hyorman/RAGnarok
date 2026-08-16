@@ -8,7 +8,11 @@ such; passing unit tests is not presented as release evidence.
 `@ragnarok/core` owns ingestion, embedding, retrieval, reranking, memory,
 archives, migration, and LanceDB persistence.
 `@ragnarok/vscode` adapts the core to VS Code. `@ragnarok/mcp-server` exposes
-the same core through a stdio child process.
+the same core through a stdio child process. Both hosts delegate memory behavior
+to core `MemoryService` and graph projection to `GraphVisualizationService`, but
+they intentionally use separate storage roots: VS Code uses its extension
+`globalStorageUri`, while MCP uses configured `RAGNAROK_STORAGE_DIR`. There is
+no cross-host data sharing or automatic migration.
 
 | Surface           | Intended topology      | Authority     |
 | ----------------- | ---------------------- | ------------- |
@@ -88,6 +92,13 @@ requires an LLM provider, and it is exposed read-only through
 `rag_graph_visualize`. Memory is read and written only through explicit
 `rag_memory` operations.
 
+VS Code exposes the core service as native `ragMemory` and confirmed
+`ragResetMemory` language-model tools. Its **RAGnarok: Show Memory Graph**
+command opens a nonce-protected local webview. MCP retains `rag_memory`,
+confirmed `rag_reset_memory`, and `rag_graph_visualize`, whose graph appears as
+an inline MCP App. The private `@ragnarok/graph-ui` workspace supplies shared
+renderer source with separate VS Code and MCP lifecycle bridges.
+
 ## MCP protocol surface
 
 The MCP server registers 24 tools unconditionally. There are no roles, no
@@ -115,6 +126,12 @@ Package creation starts from a clean build and exact lockfile. Native
 artifacts are verified before extraction. NOTICE, model provenance,
 CycloneDX/SPDX SBOMs, budgets, artifact digests, and SLSA-compatible
 provenance are release inputs.
+
+The graph build emits three checked artifacts: the self-contained MCP HTML
+bundle in MCP source and `media/memoryGraph.js` plus `media/memoryGraph.css` for
+VS Code. A VSIX contains only the two generated VS assets, never graph-ui or MCP
+source. Docker uses graph-ui source only while regenerating the MCP bundle and
+does not copy that source or VS webview assets into the runtime image.
 
 The release manifest binds source commit, lockfile, policy, artifacts, gate
 runs, and attestation. Publish commands never rebuild. Docker and six installed
