@@ -49,7 +49,6 @@ function registrationHarness(
     createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
     createMarkdownString: (value) => new mockVscode.MarkdownString(value),
   };
-  const context = { subscriptions: [] as Array<{ dispose(): unknown }> };
   const memoryService = {
     execute: sinon.stub().resolves(result),
     reset: sinon.stub().resolves({ success: true }),
@@ -61,14 +60,12 @@ function registrationHarness(
   };
   const operationRunner = sinon.spy(runOperation) as sinon.SinonSpy & ExtensionOperationRunner;
 
-  registerMemoryTools(
-    context as any,
+  const registration = registerMemoryTools(
     memoryService as unknown as Pick<MemoryService, "execute" | "reset">,
     operationRunner,
-    registrationHost,
-    contextHost,
+    { registrationHost, contextHost },
   );
-  return { tools, registrations, context, memoryService, operationRunner };
+  return { tools, registrations, registration, memoryService, operationRunner };
 }
 
 function outputJson(result: any): unknown {
@@ -89,40 +86,12 @@ async function caughtError(operation: Promise<unknown>): Promise<Error> {
 describe("VS Code native memory tools", function () {
   afterEach(() => sinon.restore());
 
-  it("registers both tools and owns both registrations through one context disposable", function () {
+  it("registers both tools and disposes both through the returned registration", function () {
     const harness = registrationHarness();
 
     expect([...harness.tools.keys()]).to.deep.equal([TOOLS.RAG_MEMORY, TOOLS.RAG_RESET_MEMORY]);
-    expect(harness.context.subscriptions).to.have.lengthOf(1);
-    harness.context.subscriptions[0].dispose();
+    harness.registration.dispose();
     expect(harness.registrations.map(({ disposed }) => disposed)).to.deep.equal([true, true]);
-  });
-
-  it("can leave registration ownership to the ordered extension lifecycle", function () {
-    const tools = new Map<string, unknown>();
-    const context = { subscriptions: [] as Array<{ dispose(): unknown }> };
-    const registrationHost: MemoryToolRegistrationHost = {
-      registerTool(name, tool) {
-        tools.set(name, tool);
-        return { dispose: sinon.spy() };
-      },
-      createToolResult: (content) => new mockVscode.LanguageModelToolResult(content),
-      createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
-      createMarkdownString: (value) => new mockVscode.MarkdownString(value),
-    };
-
-    const registration = registerMemoryTools(
-      context as any,
-      { execute: sinon.stub(), reset: sinon.stub() } as any,
-      async (_label, operation) => operation(new AbortController().signal),
-      registrationHost,
-      undefined,
-      false,
-    );
-
-    expect(tools.size).to.equal(2);
-    expect(context.subscriptions).to.deep.equal([]);
-    registration.dispose();
   });
 
   it("disposes the memory registration when reset registration throws", function () {
@@ -138,18 +107,14 @@ describe("VS Code native memory tools", function () {
       createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
       createMarkdownString: (value) => new mockVscode.MarkdownString(value),
     };
-    const context = { subscriptions: [] as Array<{ dispose(): unknown }> };
-
     expect(() =>
       registerMemoryTools(
-        context as any,
         { execute: sinon.stub(), reset: sinon.stub() } as any,
         async (_label, operation) => operation(new AbortController().signal),
-        registrationHost,
+        { registrationHost },
       ),
     ).to.throw("reset failed");
     expect(firstRegistration.dispose.calledOnce).to.equal(true);
-    expect(context.subscriptions).to.deep.equal([]);
   });
 
   const cases: Array<{ input: Record<string, unknown>; forwarded: MemoryOperationInput }> = [

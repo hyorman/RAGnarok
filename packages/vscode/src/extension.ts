@@ -68,7 +68,6 @@ export interface ActivationServiceFactory {
 
 export interface ActivationRuntimeFactory {
   registerMemoryTools(
-    context: vscode.ExtensionContext,
     memoryService: Pick<MemoryService, "execute" | "reset">,
     operationRunner: ExtensionLifecycle["run"],
   ): vscode.Disposable;
@@ -91,8 +90,7 @@ const defaultServiceFactory: ActivationServiceFactory = {
 };
 
 const defaultRuntimeFactory: ActivationRuntimeFactory = {
-  registerMemoryTools: (context, memoryService, operationRunner) =>
-    registerMemoryTools(context, memoryService, operationRunner, undefined, undefined, false),
+  registerMemoryTools: (memoryService, operationRunner) => registerMemoryTools(memoryService, operationRunner),
   createMemoryGraphPanel: (extensionUri) => new MemoryGraphPanel(extensionUri),
   registerMemoryGraphCommand,
 };
@@ -209,7 +207,7 @@ export async function activateWithServiceFactory(
     } = createMemoryServices(memoryStore, serviceFactory);
     lifecycle.setResources({ memoryCoordinator });
 
-    const memoryTools = runtimeFactory.registerMemoryTools(context, memoryService, lifecycle.run);
+    const memoryTools = runtimeFactory.registerMemoryTools(memoryService, lifecycle.run);
     lifecycle.setResources({ memoryTools });
     const graphPanel = runtimeFactory.createMemoryGraphPanel(context.extensionUri);
     lifecycle.setResources({ graphPanel });

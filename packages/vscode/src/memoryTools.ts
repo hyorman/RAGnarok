@@ -175,14 +175,18 @@ function bridgeCancellation(
   }).finally(() => cancellation.dispose());
 }
 
+export interface RegisterMemoryToolsOptions {
+  registrationHost?: MemoryToolRegistrationHost;
+  contextHost?: MemoryHostContextHost;
+}
+
 export function registerMemoryTools(
-  context: Pick<vscode.ExtensionContext, "subscriptions">,
   memoryService: Pick<MemoryService, "execute" | "reset">,
   operationRunner: ExtensionOperationRunner,
-  registrationHost: MemoryToolRegistrationHost = vscodeMemoryToolRegistrationHost,
-  contextHost?: MemoryHostContextHost,
-  addToContextSubscriptions = true,
+  options: RegisterMemoryToolsOptions = {},
 ): vscode.Disposable {
+  const { registrationHost = vscodeMemoryToolRegistrationHost, contextHost } = options;
+
   const memoryRegistration = registrationHost.registerTool<MemoryToolInput>(TOOLS.RAG_MEMORY, {
     invoke: (options, token) =>
       bridgeCancellation(token, operationRunner, TOOLS.RAG_MEMORY, async (signal) => {
@@ -242,14 +246,10 @@ export function registerMemoryTools(
     throw error;
   }
 
-  const registration: vscode.Disposable = {
+  return {
     dispose: () => {
       memoryRegistration.dispose();
       resetRegistration.dispose();
     },
   };
-  if (addToContextSubscriptions) {
-    context.subscriptions.push(registration);
-  }
-  return registration;
 }

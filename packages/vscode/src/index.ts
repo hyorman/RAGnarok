@@ -10,7 +10,7 @@ export { VscodeLmBackend } from "./vscodeLmBackend";
 export { WorkspaceContextProvider } from "./workspaceContext";
 export { COMMANDS, TOOLS, VSCODE_CONFIG } from "./constants";
 export { resolveMemoryHostContext, type MemoryHostContextHost } from "./memoryHostContext";
-export { registerMemoryTools, type MemoryToolRegistrationHost } from "./memoryTools";
+export { registerMemoryTools, type MemoryToolRegistrationHost, type RegisterMemoryToolsOptions } from "./memoryTools";
 export {
   registerMemoryGraphCommand,
   type MemoryGraphCommandHost,
