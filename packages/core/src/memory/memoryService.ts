@@ -132,7 +132,14 @@ export class MemoryService {
     signal?: AbortSignal,
   ): Promise<RecallMemoryResult> {
     this.requireValue(input.query, "'query' is required for 'recall' action");
-    const { scope, branch } = this.resolveSearchScope(input.scope, input.branch, context);
+    const resolved = this.resolveSearchScope(input.scope, input.branch, context);
+    // With no explicit scope and no resolvable branch, search the workspace
+    // only. Leaving scope undefined would let the store fall back to its own
+    // git detection against the host process's cwd — in the VS Code extension
+    // host that is whatever directory launched the IDE, i.e. possibly a
+    // different repository.
+    const scope = resolved.scope ?? (resolved.branch ? undefined : "workspace");
+    const branch = resolved.branch;
     const operation = async (): Promise<RecallMemoryResult> => {
       const result = await this.store.recall({
         query: input.query,

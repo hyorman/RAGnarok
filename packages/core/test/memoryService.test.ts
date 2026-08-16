@@ -398,20 +398,20 @@ describe("MemoryService", function () {
     expect(store.recallCommunities.called).to.equal(false);
   });
 
-  it("keeps unscoped recall valid when no current branch is detectable", async function () {
+  it("falls back to workspace-only recall when no current branch is detectable", async function () {
     await service.execute(
       { action: "recall", query: "fact" },
       { workingDir: "/workspace", branchContext: { state: "unavailable" } },
     );
-    expect(store.recall.calledWithMatch({ scope: undefined, branch: undefined })).to.equal(true);
+    expect(store.recall.calledWithMatch({ scope: "workspace", branch: undefined })).to.equal(true);
   });
 
-  it("keeps unscoped recall valid when branch context is ambiguous", async function () {
+  it("falls back to workspace-only recall when branch context is ambiguous", async function () {
     await service.execute(
       { action: "recall", query: "fact" },
       { workingDir: "/workspace", branchContext: { state: "ambiguous" } },
     );
-    expect(store.recall.calledWithMatch({ scope: undefined, branch: undefined })).to.equal(true);
+    expect(store.recall.calledWithMatch({ scope: "workspace", branch: undefined })).to.equal(true);
   });
 
   it("passes explicit unscoped branches and discards branches for workspace scope", async function () {
@@ -420,6 +420,27 @@ describe("MemoryService", function () {
 
     expect(store.recall.firstCall.calledWithMatch({ scope: undefined, branch: "explicit" })).to.equal(true);
     expect(store.list.firstCall.calledWithMatch({ scope: "workspace", branch: undefined })).to.equal(true);
+  });
+
+  describe("recall scope fail-closed", function () {
+    it("searches the workspace only when no branch is resolvable", async function () {
+      await service.execute({ action: "recall", query: "fact" }, unavailableContext);
+      expect(store.recall.calledOnce).to.equal(true);
+      expect(store.recall.firstCall.args[0].scope).to.equal("workspace");
+      expect(store.recall.firstCall.args[0].branch).to.equal(undefined);
+    });
+
+    it("keeps dual-scope search when the host resolves a branch", async function () {
+      await service.execute({ action: "recall", query: "fact" }, workspaceContext);
+      expect(store.recall.firstCall.args[0].scope).to.equal(undefined);
+      expect(store.recall.firstCall.args[0].branch).to.equal("feature/shared-memory");
+    });
+
+    it("keeps dual-scope search for an explicit branch without a scope", async function () {
+      await service.execute({ action: "recall", query: "fact", branch: "dev" }, unavailableContext);
+      expect(store.recall.firstCall.args[0].scope).to.equal(undefined);
+      expect(store.recall.firstCall.args[0].branch).to.equal("dev");
+    });
   });
 
   it("resolves branch-scoped recall from host context", async function () {
