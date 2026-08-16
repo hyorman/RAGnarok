@@ -61,7 +61,7 @@ export class MemoryService {
         case "list":
           return await this.executeList(input, context, signal);
         case "decay":
-          return await this.executeDecay(input, signal);
+          return await this.executeDecay(input, context, signal);
         case "history":
           return await this.executeHistory(input, signal);
         case "promote":
@@ -230,10 +230,14 @@ export class MemoryService {
     }, signal);
   }
 
-  private executeDecay(input: DecayInput, signal?: AbortSignal): Promise<DecayMemoryResult> {
-    this.assertScope(input.scope);
+  private executeDecay(
+    input: DecayInput,
+    context: MemoryHostContext,
+    signal?: AbortSignal,
+  ): Promise<DecayMemoryResult> {
+    const { scope, branch } = this.resolveDecayScope(input.scope, input.branch, context);
     return this.coordinator.runRead(async () => {
-      const { expiredCount: belowThresholdCount, ...status } = await this.store.runDecay(input.scope, input.branch);
+      const { expiredCount: belowThresholdCount, ...status } = await this.store.runDecay(scope, branch);
       return {
         action: "decay",
         ...status,
@@ -362,6 +366,30 @@ export class MemoryService {
     this.assertScope(scope);
     if (scope === "workspace") {
       return { scope, branch: undefined };
+    }
+    if (scope === "branch" || branch) {
+      return { scope: "branch", branch: branch || this.requireHostBranch(context) };
+    }
+    return { scope: undefined, branch: undefined };
+  }
+
+  /**
+   * No scope and no branch decays every scope. "branch" (or a bare branch)
+   * requires a resolvable branch: the store's scopeKey treats
+   * ("branch", undefined) as the workspace, so passing it through would
+   * silently decay the wrong scope.
+   */
+  private resolveDecayScope(
+    scope: MemoryScope | undefined,
+    branch: string | undefined,
+    context: MemoryHostContext,
+  ): { scope?: MemoryScope; branch?: string } {
+    this.assertScope(scope);
+    if (scope === "workspace") {
+      if (branch) {
+        this.invalid("'branch' cannot be combined with workspace scope for 'decay'");
+      }
+      return { scope: "workspace", branch: undefined };
     }
     if (scope === "branch" || branch) {
       return { scope: "branch", branch: branch || this.requireHostBranch(context) };

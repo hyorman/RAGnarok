@@ -17,6 +17,11 @@ const workspaceContext: MemoryHostContext = {
   branchContext: { state: "resolved", branch: "feature/shared-memory" },
 };
 
+const unavailableContext: MemoryHostContext = {
+  workingDir: "",
+  branchContext: { state: "unavailable" },
+};
+
 const actionFixtures = [
   { action: "store", content: "fact" },
   { action: "recall", query: "fact" },
@@ -245,6 +250,36 @@ describe("MemoryService", function () {
       note: "Use the 'forget' action with expired: true to remove expired entries",
     });
     expect(store.runDecay.calledOnceWithExactly("branch", "feature")).to.equal(true);
+  });
+
+  describe("decay scope resolution", function () {
+    it("decays the host branch when branch scope is requested without a branch", async function () {
+      await service.execute({ action: "decay", scope: "branch" }, workspaceContext);
+      expect(store.runDecay.calledOnceWithExactly("branch", "feature/shared-memory")).to.equal(true);
+    });
+
+    it("rejects branch-scope decay when no branch is resolvable", async function () {
+      const error = await serviceError(service.execute({ action: "decay", scope: "branch" }, unavailableContext));
+      expect(error.code).to.equal("MEMORY_BRANCH_UNAVAILABLE");
+      expect(store.runDecay.called).to.equal(false);
+    });
+
+    it("treats a bare branch as branch scope", async function () {
+      await service.execute({ action: "decay", branch: "dev" }, unavailableContext);
+      expect(store.runDecay.calledOnceWithExactly("branch", "dev")).to.equal(true);
+    });
+
+    it("still decays every scope when neither scope nor branch is given", async function () {
+      await service.execute({ action: "decay" }, unavailableContext);
+      expect(store.runDecay.calledOnceWithExactly(undefined, undefined)).to.equal(true);
+    });
+
+    it("rejects workspace-scope decay combined with a branch", async function () {
+      const error = await serviceError(
+        service.execute({ action: "decay", scope: "workspace", branch: "dev" }, workspaceContext),
+      );
+      expect(error.code).to.equal("MEMORY_INVALID_INPUT");
+    });
   });
 
   it("formats history summaries, defaults, confidence rounding, and empty history", async function () {
@@ -717,6 +752,17 @@ async function captureError(operation: Promise<unknown>): Promise<unknown> {
     return error;
   }
   throw new Error("Expected operation to reject");
+}
+
+async function serviceError(operation: Promise<unknown>): Promise<MemoryServiceError> {
+  let caught: unknown;
+  try {
+    await operation;
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught, "expected the operation to reject with MemoryServiceError").to.be.instanceOf(MemoryServiceError);
+  return caught as MemoryServiceError;
 }
 
 async function expectServiceError(operation: Promise<unknown>, code: MemoryServiceError["code"]): Promise<void> {
