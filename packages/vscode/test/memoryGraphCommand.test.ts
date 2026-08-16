@@ -159,6 +159,17 @@ describe("memory graph command", function () {
     expect(test.graphService.generate.called).to.equal(false);
   });
 
+  it("surfaces a current-generation failure through the host error message", async function () {
+    const test = harness([folder("one", "/one")]);
+    test.graphService.generate.rejects(new Error("graph exploded"));
+
+    await test.invoke();
+
+    expect((test.host.showErrorMessage as sinon.SinonSpy).calledOnce).to.equal(true);
+    expect((test.host.showErrorMessage as sinon.SinonSpy).firstCall.args[0]).to.include("graph exploded");
+    expect(test.panel.show.called).to.equal(false);
+  });
+
   it("keeps the later graph when an earlier invocation resolves last", async function () {
     const test = harness([folder("one", "/one")]);
     (test.host.showScopeQuickPick as sinon.SinonStub).callsFake(async (items) => items[0]);

@@ -91,7 +91,8 @@ export function registerMemoryGraphCommand(
       });
     } catch (error) {
       if (generation === latestGeneration) {
-        throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        await host.showErrorMessage(`RAGnarok could not show the memory graph: ${message}`);
       }
     }
   });
