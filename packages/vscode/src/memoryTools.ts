@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import { reduceMemoryOperationResult, type MemoryOperationInput, type MemoryService } from "@ragnarok/core";
+import {
+  MemoryServiceError,
+  reduceMemoryOperationResult,
+  type MemoryOperationInput,
+  type MemoryService,
+} from "@ragnarok/core";
 import { TOOLS } from "./constants";
 import type { ExtensionOperationRunner } from "./extensionLifecycle";
 import { resolveMemoryHostContext, type MemoryHostContextHost } from "./memoryHostContext";
@@ -29,14 +34,17 @@ function normalizedString(value: unknown, field: string, maxLength?: number): st
     return undefined;
   }
   if (typeof value !== "string") {
-    throw new Error(`Memory tool '${field}' must be a string`);
+    throw new MemoryServiceError("MEMORY_INVALID_INPUT", `Memory tool '${field}' must be a string`);
   }
   const normalized = value.trim();
   if (!normalized) {
-    throw new Error(`Memory tool '${field}' must not be empty`);
+    throw new MemoryServiceError("MEMORY_INVALID_INPUT", `Memory tool '${field}' must not be empty`);
   }
   if (maxLength !== undefined && normalized.length > maxLength) {
-    throw new Error(`Memory tool '${field}' must not exceed ${maxLength} characters`);
+    throw new MemoryServiceError(
+      "MEMORY_INVALID_INPUT",
+      `Memory tool '${field}' must not exceed ${maxLength} characters`,
+    );
   }
   return normalized;
 }
@@ -46,12 +54,12 @@ function normalizedStringArray(value: unknown, field: string, maxLength?: number
     return undefined;
   }
   if (!Array.isArray(value)) {
-    throw new Error(`Memory tool '${field}' must be an array`);
+    throw new MemoryServiceError("MEMORY_INVALID_INPUT", `Memory tool '${field}' must be an array`);
   }
   return value.map((item) => {
     const normalized = normalizedString(item, field, maxLength);
     if (normalized === undefined) {
-      throw new Error(`Memory tool '${field}' entries must be strings`);
+      throw new MemoryServiceError("MEMORY_INVALID_INPUT", `Memory tool '${field}' entries must be strings`);
     }
     return normalized;
   });
@@ -127,6 +135,17 @@ function normalizeMemoryInput(input: MemoryToolInput): MemoryOperationInput {
   }
 }
 
+function serviceErrorResult(
+  registrationHost: MemoryToolRegistrationHost,
+  error: MemoryServiceError,
+): vscode.LanguageModelToolResult {
+  // Returned, not thrown: a thrown error reaches the model as an opaque tool
+  // failure, while a structured payload lets it correct its arguments.
+  return registrationHost.createToolResult([
+    registrationHost.createTextPart(JSON.stringify({ error: { code: error.code, message: error.message } }, null, 2)),
+  ]);
+}
+
 function bridgeCancellation(
   token: vscode.CancellationToken,
   operationRunner: ExtensionOperationRunner,
@@ -167,21 +186,28 @@ export function registerMemoryTools(
   const memoryRegistration = registrationHost.registerTool<MemoryToolInput>(TOOLS.RAG_MEMORY, {
     invoke: (options, token) =>
       bridgeCancellation(token, operationRunner, TOOLS.RAG_MEMORY, async (signal) => {
-        const input = normalizeMemoryInput(options.input);
-        const hostContext = await resolveMemoryHostContext(input, contextHost);
-        signal.throwIfAborted();
-        const result = await memoryService.execute(input, hostContext, signal);
-        const reduced = await reduceMemoryOperationResult(
-          result,
-          options.tokenizationOptions?.tokenBudget ?? Number.POSITIVE_INFINITY,
-          async (candidate) =>
-            options.tokenizationOptions
-              ? options.tokenizationOptions.countTokens(JSON.stringify(candidate, null, 2), token)
-              : 0,
-          signal,
-        );
-        signal.throwIfAborted();
-        return registrationHost.createToolResult([registrationHost.createTextPart(JSON.stringify(reduced, null, 2))]);
+        try {
+          const input = normalizeMemoryInput(options.input);
+          const hostContext = await resolveMemoryHostContext(input, contextHost);
+          signal.throwIfAborted();
+          const result = await memoryService.execute(input, hostContext, signal);
+          const reduced = await reduceMemoryOperationResult(
+            result,
+            options.tokenizationOptions?.tokenBudget ?? Number.POSITIVE_INFINITY,
+            async (candidate) =>
+              options.tokenizationOptions
+                ? options.tokenizationOptions.countTokens(JSON.stringify(candidate, null, 2), token)
+                : 0,
+            signal,
+          );
+          signal.throwIfAborted();
+          return registrationHost.createToolResult([registrationHost.createTextPart(JSON.stringify(reduced, null, 2))]);
+        } catch (error) {
+          if (error instanceof MemoryServiceError) {
+            return serviceErrorResult(registrationHost, error);
+          }
+          throw error;
+        }
       }),
   });
 
@@ -190,8 +216,17 @@ export function registerMemoryTools(
     resetRegistration = registrationHost.registerTool<Record<string, never>>(TOOLS.RAG_RESET_MEMORY, {
       invoke: (_options, token) =>
         bridgeCancellation(token, operationRunner, TOOLS.RAG_RESET_MEMORY, async (signal) => {
-          const result = await memoryService.reset(signal);
-          return registrationHost.createToolResult([registrationHost.createTextPart(JSON.stringify(result, null, 2))]);
+          try {
+            const result = await memoryService.reset(signal);
+            return registrationHost.createToolResult([
+              registrationHost.createTextPart(JSON.stringify(result, null, 2)),
+            ]);
+          } catch (error) {
+            if (error instanceof MemoryServiceError) {
+              return serviceErrorResult(registrationHost, error);
+            }
+            throw error;
+          }
         }),
       prepareInvocation: () => ({
         confirmationMessages: {

@@ -1,7 +1,12 @@
 import { expect } from "chai";
 import sinon from "sinon";
 import mockVscode from "../../../test/setup";
-import type { MemoryOperationInput, MemoryOperationResult, MemoryService } from "@ragnarok/core";
+import {
+  MemoryServiceError,
+  type MemoryOperationInput,
+  type MemoryOperationResult,
+  type MemoryService,
+} from "@ragnarok/core";
 import {
   registerMemoryTools,
   TOOLS,
@@ -279,15 +284,50 @@ describe("VS Code native memory tools", function () {
   ];
 
   for (const { field, input } of whitespaceCases) {
-    it(`rejects supplied whitespace-only ${field} like the MCP Zod boundary`, async function () {
+    it(`returns a structured invalid-input error for whitespace-only ${field}`, async function () {
       const harness = registrationHarness();
 
-      const error = await caughtError(harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input }, token()));
+      const output = await harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input }, token());
 
-      expect(error.message).to.include(field);
+      const payload = outputJson(output) as { error: { code: string; message: string } };
+      expect(payload.error.code).to.equal("MEMORY_INVALID_INPUT");
+      expect(payload.error.message).to.include(field);
       expect(harness.memoryService.execute.called).to.equal(false);
     });
   }
+
+  it("returns MemoryServiceError rejections as structured tool output", async function () {
+    const harness = registrationHarness();
+    harness.memoryService.execute.rejects(new MemoryServiceError("MEMORY_BRANCH_UNAVAILABLE", "no branch"));
+
+    const output = await harness.tools
+      .get(TOOLS.RAG_MEMORY)
+      .invoke({ input: { action: "recall", query: "q", scope: "branch" } }, token());
+
+    expect(outputJson(output)).to.deep.equal({
+      error: { code: "MEMORY_BRANCH_UNAVAILABLE", message: "no branch" },
+    });
+  });
+
+  it("returns reset failures as structured tool output", async function () {
+    const harness = registrationHarness();
+    harness.memoryService.reset.rejects(new MemoryServiceError("MEMORY_RESET_FAILED", "reset broke"));
+
+    const output = await harness.tools.get(TOOLS.RAG_RESET_MEMORY).invoke({ input: {} }, token());
+
+    expect(outputJson(output)).to.deep.equal({ error: { code: "MEMORY_RESET_FAILED", message: "reset broke" } });
+  });
+
+  it("still rejects unexpected non-service errors", async function () {
+    const harness = registrationHarness();
+    harness.memoryService.execute.rejects(new Error("disk gone"));
+
+    const error = await caughtError(
+      harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input: { action: "stats" } }, token()),
+    );
+
+    expect(error.message).to.equal("disk gone");
+  });
 
   it("bridges VS Code cancellation into the lifecycle operation signal", async function () {
     let invocationSignal: AbortSignal | undefined;
