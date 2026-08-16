@@ -677,6 +677,66 @@ describe("MemoryService", function () {
     expect(store.discoverLinks.called).to.equal(false);
   });
 
+  describe("input bounds validation", function () {
+    const longString = (length: number) => "x".repeat(length);
+    const invalidInputs: Array<{ name: string; input: MemoryOperationInput }> = [
+      { name: "non-numeric topK", input: { action: "recall", query: "q", topK: "8" as unknown as number } },
+      { name: "topK above 50", input: { action: "recall", query: "q", topK: 51 } },
+      { name: "fractional topK", input: { action: "recall", query: "q", topK: 1.5 } },
+      { name: "zero limit", input: { action: "list", limit: 0 } },
+      { name: "limit above 500", input: { action: "list", limit: 501 } },
+      { name: "zero ttlDays", input: { action: "store", content: "x", ttlDays: 0 } },
+      { name: "ttlDays above 3650", input: { action: "store", content: "x", ttlDays: 3651 } },
+      { name: "olderThan above 3650", input: { action: "forget", olderThan: 3651, scope: "workspace" } },
+      {
+        name: "non-boolean reinforce",
+        input: { action: "recall", query: "q", reinforce: "yes" as unknown as boolean },
+      },
+      { name: "non-boolean expired", input: { action: "forget", expired: "true" as unknown as boolean } },
+      {
+        name: "21 tags",
+        input: { action: "store", content: "x", tags: Array.from({ length: 21 }, (_, i) => `t${i}`) },
+      },
+      { name: "tag above 100 chars", input: { action: "store", content: "x", tags: [longString(101)] } },
+      { name: "non-string tag", input: { action: "store", content: "x", tags: [7 as unknown as string] } },
+      {
+        name: "501 ids",
+        input: { action: "promote", branch: "dev", ids: Array.from({ length: 501 }, (_, i) => `m${i}`) },
+      },
+      { name: "content above 50000 chars", input: { action: "store", content: longString(50_001) } },
+      { name: "branch above 255 chars", input: { action: "recall", query: "q", branch: longString(256) } },
+      { name: "blank branch", input: { action: "recall", query: "q", branch: "   " } },
+    ];
+
+    for (const { name, input } of invalidInputs) {
+      it(`rejects ${name} with MEMORY_INVALID_INPUT`, async function () {
+        const error = await serviceError(service.execute(input, workspaceContext));
+        expect(error.code).to.equal("MEMORY_INVALID_INPUT");
+        expect(store.store.called || store.recall.called || store.list.called || store.forget.called).to.equal(false);
+      });
+    }
+
+    it("accepts every documented boundary value", async function () {
+      await service.execute(
+        { action: "recall", query: "q", topK: 50, includeEntities: true, reinforce: false },
+        workspaceContext,
+      );
+      await service.execute(
+        {
+          action: "store",
+          content: longString(50_000),
+          ttlDays: 3650,
+          tags: Array.from({ length: 20 }, (_, i) => `t${i}`),
+        },
+        workspaceContext,
+      );
+      await service.execute({ action: "list", limit: 500 }, workspaceContext);
+      expect(store.recall.calledOnce).to.equal(true);
+      expect(store.store.calledOnce).to.equal(true);
+      expect(store.list.calledOnce).to.equal(true);
+    });
+  });
+
   async function expectAdmission(input: MemoryOperationInput, expected: "read" | "mutation"): Promise<void> {
     const readAdmission = sinon.spy(coordinator, "runRead");
     const mutationAdmission = sinon.spy(coordinator, "runMutation");

@@ -49,6 +49,7 @@ export class MemoryService {
     signal?: AbortSignal,
   ): Promise<MemoryOperationResult> {
     try {
+      this.validateCommonInput(input);
       switch (input.action) {
         case "store":
           return await this.executeStore(input, context, signal);
@@ -424,9 +425,6 @@ export class MemoryService {
     if (input.branch && input.scope === "workspace") {
       this.invalid("'branch' cannot be combined with workspace scope for 'forget'");
     }
-    if (input.olderThan !== undefined && (!Number.isInteger(input.olderThan) || input.olderThan < 1)) {
-      this.invalid("'olderThan' must be a positive whole number of days for 'forget'");
-    }
     if (input.olderThan !== undefined && !input.scope && !input.branch) {
       this.invalid("'olderThan' requires an explicit 'scope' or 'branch' for 'forget'");
     }
@@ -438,6 +436,78 @@ export class MemoryService {
     }
     if (!input.id && input.olderThan === undefined && !input.expired) {
       this.invalid("'forget' requires 'id', 'olderThan', or 'expired: true'");
+    }
+  }
+
+  /**
+   * Runtime enforcement of the bounds the tool manifests advertise. Neither
+   * host validates model-generated input before it reaches the service, so
+   * these are the only checks that actually run.
+   */
+  private validateCommonInput(input: MemoryOperationInput): void {
+    const record = input as Record<string, unknown>;
+    this.optionalInteger(record.topK, "topK", 1, 50);
+    this.optionalInteger(record.limit, "limit", 1, 500);
+    this.optionalInteger(record.olderThan, "olderThan", 1, 3650);
+    this.optionalNumber(record.ttlDays, "ttlDays", 0, 3650);
+    for (const field of ["includeEntities", "includeAuto", "reinforce", "expired"]) {
+      this.optionalBoolean(record[field], field);
+    }
+    this.optionalBoundedString(record.content, "content", 50_000);
+    this.optionalBoundedString(record.query, "query", 10_000);
+    this.optionalBoundedString(record.id, "id", 1_000);
+    this.optionalBoundedString(record.branch, "branch", 255);
+    this.optionalStringArray(record.tags, "tags", 20, 100);
+    this.optionalStringArray(record.ids, "ids", 500, 1_000);
+  }
+
+  private optionalInteger(value: unknown, field: string, min: number, max: number): void {
+    if (value === undefined) {
+      return;
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+      this.invalid(`'${field}' must be an integer between ${min} and ${max}`);
+    }
+  }
+
+  private optionalNumber(value: unknown, field: string, exclusiveMin: number, max: number): void {
+    if (value === undefined) {
+      return;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= exclusiveMin || value > max) {
+      this.invalid(`'${field}' must be a number greater than ${exclusiveMin} and at most ${max}`);
+    }
+  }
+
+  private optionalBoolean(value: unknown, field: string): void {
+    if (value !== undefined && typeof value !== "boolean") {
+      this.invalid(`'${field}' must be a boolean`);
+    }
+  }
+
+  private optionalBoundedString(value: unknown, field: string, maxLength: number): void {
+    if (value === undefined) {
+      return;
+    }
+    if (typeof value !== "string" || value.length > maxLength) {
+      this.invalid(`'${field}' must be a string of at most ${maxLength} characters`);
+    }
+    if (value.length > 0 && value.trim().length === 0) {
+      this.invalid(`'${field}' must not be blank`);
+    }
+  }
+
+  private optionalStringArray(value: unknown, field: string, maxItems: number, maxItemLength: number): void {
+    if (value === undefined) {
+      return;
+    }
+    if (!Array.isArray(value) || value.length > maxItems) {
+      this.invalid(`'${field}' must be an array of at most ${maxItems} strings`);
+    }
+    for (const item of value) {
+      if (typeof item !== "string" || item.trim().length === 0 || item.length > maxItemLength) {
+        this.invalid(`'${field}' entries must be non-blank strings of at most ${maxItemLength} characters`);
+      }
     }
   }
 
