@@ -189,10 +189,12 @@ export async function activateWithServiceFactory(
       });
     const topicManager = await openTopicManagerWithMigration(storageDir, createDefaultMigrationUx(createTopicManager));
     lifecycle.setResources({ topicManager });
-    // No workingDir: branch detection for memory operations flows through
-    // resolveMemoryHostContext (active editor / single workspace folder).
-    // The store's internal detector must not guess from the extension
-    // host's cwd, which is whatever directory launched the IDE.
+    // No workingDir here: branch detection for memory operations flows
+    // through resolveMemoryHostContext (active editor / single workspace
+    // folder), and the service resolves scopes before the store's own
+    // detector is consulted. The store still defaults its detector to
+    // process.cwd(); that fallback is unreachable from this host's memory
+    // tools, but it has not been removed.
     const memoryStore = serviceFactory.createMemoryStore({
       storageDir,
       embeddingService,
