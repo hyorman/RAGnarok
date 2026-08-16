@@ -30,6 +30,7 @@ function harness() {
     createWebviewPanel(viewType, title, column, options) {
       let disposeListener: (() => void) | undefined;
       let messageListener: ((message: unknown) => void) | undefined;
+      let viewStateListener: (() => void) | undefined;
       const listenerDisposals: sinon.SinonSpy[] = [];
       const panel = {
         viewType,
@@ -43,6 +44,17 @@ function harness() {
           const dispose = sinon.spy();
           listenerDisposals.push(dispose);
           return { dispose };
+        },
+        visible: true,
+        onDidChangeViewState(listener: () => void) {
+          viewStateListener = listener;
+          const dispose = sinon.spy();
+          listenerDisposals.push(dispose);
+          return { dispose };
+        },
+        setVisible(visible: boolean) {
+          (panel as { visible: boolean }).visible = visible;
+          viewStateListener?.();
         },
         webview: {
           cspSource: "vscode-webview://memory",
@@ -104,6 +116,26 @@ describe("memory graph panel", function () {
     test.panels[0].send({ type: "ready" });
     await Promise.resolve();
 
+    expect(
+      test.panels[0].webview.postMessage.calledOnceWithExactly({ type: "graphDocument", document: latest }),
+    ).to.equal(true);
+  });
+
+  it("stops posting while hidden and delivers the latest document on the next ready", async function () {
+    const test = harness();
+    await test.manager.show(document("first"));
+    test.panels[0].send({ type: "ready" });
+    await Promise.resolve();
+    test.panels[0].webview.postMessage.resetHistory();
+
+    test.panels[0].setVisible(false);
+    const latest = document("latest");
+    await test.manager.show(latest);
+    expect(test.panels[0].webview.postMessage.called).to.equal(false);
+
+    test.panels[0].setVisible(true);
+    test.panels[0].send({ type: "ready" });
+    await Promise.resolve();
     expect(
       test.panels[0].webview.postMessage.calledOnceWithExactly({ type: "graphDocument", document: latest }),
     ).to.equal(true);

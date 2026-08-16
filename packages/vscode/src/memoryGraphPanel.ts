@@ -84,6 +84,14 @@ export class MemoryGraphPanel implements vscode.Disposable {
           this.latestDocument = undefined;
         }
       }),
+      panel.onDidChangeViewState(() => {
+        if (this.active?.panel === panel && !panel.visible) {
+          // The webview context is torn down while hidden, so a postMessage
+          // would be dropped. The recreated script announces "ready" again on
+          // reveal, which re-delivers the latest document.
+          this.ready = false;
+        }
+      }),
     ];
     this.active = { panel, listeners };
     panel.webview.html = this.createHtml(panel.webview, mediaUri);
