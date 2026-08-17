@@ -578,10 +578,23 @@ export class EmbeddingService {
 
   public async listAvailableModels(): Promise<AvailableModel[]> {
     // A remote backend knows its own catalogue — the local curated HF
-    // registry would be misleading when embeddings come from an API.
-    if (this.activeBackend && this.activeBackendType !== "huggingface" && this.activeBackend.listModels) {
+    // registry would be misleading when embeddings come from an API. Before
+    // the first embed no backend is active yet, so resolve the *configured*
+    // backend type to avoid advertising local models a remote-backed server
+    // cannot load. Only the type is resolved here — initializing the backend
+    // could download a model, which a read-only listing must never do.
+    let backend = this.activeBackend;
+    let backendType = this.activeBackendType;
+    if (!backend) {
+      const candidate = this.registeredBackends.find((b) => b.name !== "huggingface" && b.listModels);
+      if (candidate && (await this.resolveBackend()) === candidate.name) {
+        backend = candidate;
+        backendType = candidate.name;
+      }
+    }
+    if (backend && backendType !== "huggingface" && backend.listModels) {
       try {
-        const remoteModels = await this.activeBackend.listModels();
+        const remoteModels = await backend.listModels();
         return remoteModels.map((m) => ({
           name: m.name || m.id,
           source: "remote" as AvailableModel["source"],
