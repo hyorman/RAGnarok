@@ -18,15 +18,12 @@ import { StdioHarness, withStdioHarness } from "./helpers/stdioHarness";
 
 const LOCAL_ADMIN_TOOLS = [
   "rag_delete_topic",
-  "rag_embedding_info",
   "rag_ingest",
-  "rag_list_embedding_models",
   "rag_memory",
   "rag_memory_visualize",
   "rag_query",
   "rag_remove_document",
   "rag_reset_memory",
-  "rag_switch_embedding_model",
   "rag_topic",
 ];
 
@@ -173,9 +170,7 @@ describe("stdio transport E2E", function () {
       _meta?: Record<string, unknown>;
     }>;
     expect(listedTools.map((tool) => tool.name).sort()).to.deep.equal([...LOCAL_ADMIN_TOOLS].sort());
-    expect(listedTools.find((tool) => tool.name === "rag_list_embedding_models")?.annotations?.readOnlyHint).to.equal(
-      true,
-    );
+    expect(listedTools.find((tool) => tool.name === "rag_query")?.annotations?.readOnlyHint).to.equal(true);
     expect(listedTools.find((tool) => tool.name === "rag_delete_topic")?.annotations?.destructiveHint).to.equal(true);
     expect(listedTools.find((tool) => tool.name === "rag_ingest")?.annotations?.openWorldHint).to.equal(true);
 
@@ -475,13 +470,6 @@ describe("stdio transport E2E", function () {
     expect(
       JSON.parse(listTopics.result?.content?.[0]?.text ?? "{}").topics?.map((topic: { name: string }) => topic.name),
     ).to.include(fixtureTopic.name);
-    const embeddingModels = await harness.callTool(50, "rag_list_embedding_models", {});
-    expect(embeddingModels.result?.isError, JSON.stringify(embeddingModels.result)).not.to.equal(true);
-    const embeddingInfo = await harness.callTool(51, "rag_embedding_info", {});
-    expect(embeddingInfo.result?.isError, JSON.stringify(embeddingInfo.result)).not.to.equal(true);
-    const activeEmbedding = JSON.parse(embeddingInfo.result?.content?.[0]?.text ?? "{}").currentModel;
-    const sameEmbedding = await harness.callTool(52, "rag_switch_embedding_model", { model: activeEmbedding }, 60000);
-    expect(sameEmbedding.result?.isError, JSON.stringify(sameEmbedding.result)).not.to.equal(true);
     // The management tools for the reranker and LLM were removed with the
     // config-file-only decision; the server must reject them as unknown.
     for (const [id, removedTool] of (
@@ -491,6 +479,9 @@ describe("stdio transport E2E", function () {
         [55, "rag_reranker_info"],
         [56, "rag_switch_reranker_model"],
         [62, "rag_storage_status"],
+        [63, "rag_list_embedding_models"],
+        [64, "rag_embedding_info"],
+        [65, "rag_switch_embedding_model"],
       ] as const
     ).values()) {
       const removedResponse = await harness.callTool(id, removedTool, {});
