@@ -23,7 +23,7 @@ const removedEnvContainer = "ragnarok-release-removed-env";
 const containers = [sessionContainer, persistenceContainer, lockContainer, removedEnvContainer];
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
-const expectedToolCount = 11;
+const expectedToolCount = 8;
 // Mirrors REMOVED_ENV_VARS in packages/mcp-server/src/config.ts: the image must
 // neither bake these in nor tolerate an operator supplying one.
 const removedEnvVars = [
@@ -291,6 +291,9 @@ function assertToolSurface(tools) {
     "rag_reranker_info",
     "rag_switch_reranker_model",
     "rag_graph_visualize",
+    "rag_list_embedding_models",
+    "rag_embedding_info",
+    "rag_switch_embedding_model",
   ]) {
     if (names.has(removed)) {
       throw new Error(`Container still exposes the deleted tool ${removed}`);
@@ -419,7 +422,7 @@ try {
 
   // A non-default value the server reports back, so the assertion below proves
   // the file was read rather than that a built-in default happened to match.
-  seedConfigFile({ embedding: { model: "Xenova/all-MiniLM-L12-v2" } });
+  seedConfigFile({ storage: { exportDir: "/data/ragnarok/gate-exports" } });
 
   // Session 1 — first contact over stdio, on a fresh volume.
   const session = new ContainerSession(sessionContainer);
@@ -427,19 +430,21 @@ try {
   assertToolSurface((await session.request("tools/list")).tools);
   assertRuntimeHardening(sessionContainer);
   await assertStorageLock();
-  // config.json on the volume is the only way to configure a container, so the
-  // gate must prove the container actually reads it. embedding.model defaults
-  // to Xenova/all-MiniLM-L6-v2; only the seeded file makes it the L12 variant.
-  const embeddingInfo = await session.callTool("rag_embedding_info", {});
-  if (embeddingInfo.configuredModel !== "Xenova/all-MiniLM-L12-v2") {
-    throw new Error(`Container ignored the seeded config.json: ${JSON.stringify(embeddingInfo)}`);
-  }
 
   await session.callTool("rag_topic", {
     action: "create",
     name: topicName,
     description: "Docker restart persistence gate",
   });
+
+  // config.json on the volume is the only way to configure a container, so the
+  // gate must prove the container actually reads it. exportDir defaults to
+  // <storage>/exports; only the seeded file produces the gate-exports prefix.
+  // A zero-document topic exports successfully, so no model ever loads here.
+  const exported = await session.callTool("rag_topic", { action: "export", topic: topicName });
+  if (typeof exported.path !== "string" || !exported.path.startsWith("/data/ragnarok/gate-exports/")) {
+    throw new Error(`Container ignored the seeded config.json: ${JSON.stringify(exported)}`);
+  }
   await session.closeCleanly();
 
   // Session 2 — a brand-new container on the same volume must still see it.
