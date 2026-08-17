@@ -8,19 +8,15 @@
  * - rag_delete_topic: Permanently delete a topic (kept separate: destructive)
  * - rag_remove_document: Permanently remove one indexed source (kept separate: destructive)
  *
- * Embedding management tools:
- * - rag_list_embedding_models: List available embedding models
- * - rag_embedding_info: Get current embedding model info
- * - rag_switch_embedding_model: Switch the active embedding model
- *
  * Memory tools:
  * - rag_memory: Store, recall, forget, list, stats, decay, history, promote, links, or communities for project
  *   memories
  * - rag_reset_memory: Delete all standalone memories (kept separate: destructive)
  * - rag_memory_visualize: Interactive memory graph document for MCP Apps
  *
- * Reranker and LLM management have no tools: both are configured exclusively
- * through config.json and are internal to the retrieval pipeline.
+ * Embedding models, the reranker, and the LLM have no tools: all three are
+ * configured exclusively through config.json and are internal to the
+ * retrieval pipeline.
  */
 
 import fs from "node:fs/promises";
@@ -31,14 +27,12 @@ import { z } from "zod";
 import {
   TopicManager,
   RetrievalStrategy,
-  EmbeddingService,
   RAGQueryService,
   TopicEmptyError,
   MemoryStore,
   MemoryService,
   GraphVisualizationService,
 } from "@ragnarok/core";
-import type { AvailableModel } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "./uiResource";
 import type { McpConfig } from "./config";
 import { invokeMemoryResetTool, invokeMemoryTool } from "./memoryToolAdapter";
@@ -53,7 +47,6 @@ export const MCP_LIMITS = Object.freeze({
   query: 20_000,
   path: 4_096,
   url: 2_048,
-  modelName: 255,
   responseBytes: 1_048_576,
 });
 
@@ -219,16 +212,13 @@ export function measureToolResultForResponse(
 export function registerTools(
   server: McpServer,
   topicManager: TopicManager,
-  embeddingService: EmbeddingService,
   ragQueryService: RAGQueryService,
-  memoryStore?: MemoryStore,
   memoryService?: MemoryService,
   graphVisualizationService?: GraphVisualizationService,
   memoryBranchProvider?: Pick<MemoryStore, "getCurrentBranch">,
   config?: McpConfig,
   runMutation: MutationRunner = (operation) => operation(),
   runtime: ToolRuntime = { run: (operation) => operation() },
-  runMemoryMutation: MutationRunner = (operation) => operation(),
 ): void {
   const readOnlyAnnotations: ToolAnnotations = {
     readOnlyHint: true,
@@ -508,215 +498,6 @@ export function registerTools(
         }
       } catch (error) {
         return toolError(error);
-      }
-    },
-  );
-
-  // ────────────────────────────────────────────────────────────
-  // Embedding management tools
-  // ────────────────────────────────────────────────────────────
-
-  // rag_list_embedding_models — List all available embedding models
-  registerTool(
-    "rag_list_embedding_models",
-    "List available embedding models (curated, bundled, local, and downloaded)",
-    z.object({}),
-    readOnlyAnnotations,
-    async () => {
-      try {
-        const models = await embeddingService.listAvailableModels();
-        const currentModel = embeddingService.getCurrentModel();
-        // With a remote provider configured, the service returns the remote
-        // catalogue; local registry entries mean the remote listing failed and
-        // the fallback would otherwise impersonate a usable catalogue.
-        const remoteConfigured = Boolean(config && config.embeddingProvider !== "huggingface");
-        const remoteListingFailed = remoteConfigured && !models.some((m: AvailableModel) => m.source === "remote");
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  currentModel,
-                  models: models.map((m: AvailableModel) => ({
-                    name: m.name,
-                    source: m.source,
-                    downloaded: m.downloaded ?? false,
-                    active: m.name === currentModel,
-                  })),
-                  count: models.length,
-                  ...(remoteListingFailed
-                    ? {
-                        remoteListingFailed: true,
-                        warning:
-                          "The configured remote embedding provider could not be queried; the local model catalogue shown here is not usable for switching.",
-                      }
-                    : {}),
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // rag_embedding_info — Get information about the current embedding model
-  registerTool(
-    "rag_embedding_info",
-    "Get information about the currently active embedding model and backend",
-    z.object({}),
-    readOnlyAnnotations,
-    async () => {
-      try {
-        const currentModel = embeddingService.getCurrentModel();
-        const backendType = embeddingService.getActiveBackendType();
-        const localModelPath = embeddingService.getLocalModelPath();
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  currentModel,
-                  backend: backendType,
-                  localModelPath: localModelPath ?? "none",
-                  // From config.json — reported even before the backend is
-                  // initialized, when currentModel still shows the registry
-                  // default rather than the configured value.
-                  configuredModel: config?.embeddingModel ?? null,
-                  configuredProvider: config?.embeddingProvider ?? null,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // rag_switch_embedding_model — Switch the active embedding model
-  registerTool(
-    "rag_switch_embedding_model",
-    "Switch the active embedding model. The model will be downloaded if not already cached. " +
-      "Rejected when standalone memory holds vectors of a different dimension.",
-    z.object({
-      model: z
-        .string()
-        .trim()
-        .min(1)
-        .max(MCP_LIMITS.modelName)
-        .describe("Embedding model identifier (e.g. 'Xenova/all-MiniLM-L6-v2')"),
-    }),
-    writeAnnotations,
-    async ({ model }) => {
-      try {
-        return await runMemoryMutation(() =>
-          runMutation(async () => {
-            const previousModel = embeddingService.getCurrentModel();
-            const hasFingerprintGuard = typeof (memoryStore as any)?.validateEmbeddingFingerprint === "function";
-            const previousDimension = hasFingerprintGuard
-              ? 0
-              : (await embeddingService.embed("dimension probe")).length;
-
-            const validateAndReinitialize = async (): Promise<void> => {
-              if (memoryStore) {
-                if (hasFingerprintGuard) {
-                  await memoryStore.validateEmbeddingFingerprint();
-                } else {
-                  const newDimension = (await embeddingService.embed("dimension probe")).length;
-                  const memStats = await memoryStore.stats();
-                  if (memStats.totalMemories > 0 && newDimension !== previousDimension) {
-                    throw new Error(
-                      `Cannot switch embedding dimension from ${previousDimension} to ${newDimension} while memories exist`,
-                    );
-                  }
-                }
-              }
-              await topicManager.reinitializeWithNewModel();
-            };
-
-            // Hold publication until memory compatibility and dependent managers
-            // have both accepted the candidate model.
-            if (typeof (embeddingService as any).runTransactionalSwitch === "function") {
-              await embeddingService.runTransactionalSwitch(
-                embeddingService.getActiveBackendType() || undefined,
-                model,
-                validateAndReinitialize,
-              );
-            } else {
-              // Compatibility path for externally supplied legacy services.
-              await embeddingService.initialize(model);
-              try {
-                await validateAndReinitialize();
-              } catch (error) {
-                await embeddingService.initialize(previousModel);
-                throw error;
-              }
-            }
-
-            const newModel = embeddingService.getCurrentModel();
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify(
-                    {
-                      success: true,
-                      previousModel,
-                      newModel,
-                      message: `Embedding model switched to ${newModel}`,
-                    },
-                    null,
-                    2,
-                  ),
-                },
-              ],
-            };
-          }),
-        );
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
       }
     },
   );

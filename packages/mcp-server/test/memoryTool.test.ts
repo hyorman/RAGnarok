@@ -2,15 +2,7 @@ import { expect } from "chai";
 import sinon from "sinon";
 import { McpServer } from "@modelcontextprotocol/server";
 import { registerTools } from "../src/tools";
-import type {
-  EmbeddingService,
-
-  MemoryOperationInput,
-  MemoryService,
-  MemoryStore,
-  RAGQueryService,
-  TopicManager,
-} from "@ragnarok/core";
+import type { MemoryOperationInput, MemoryService, MemoryStore, RAGQueryService, TopicManager } from "@ragnarok/core";
 
 type ToolHandler = (...args: any[]) => Promise<any>;
 
@@ -38,18 +30,10 @@ function captureHandlers(options: {
     getAllTopics: sinon.stub().returns([]),
     getVectorStore: sinon.stub().resolves(null),
   } as unknown as TopicManager;
-  const embeddingService = {
-    getCurrentModel: sinon.stub().returns("test-model"),
-    getActiveBackendType: sinon.stub().returns("huggingface"),
-    getLocalModelPath: sinon.stub().returns(null),
-  } as unknown as EmbeddingService;
-
   registerTools(
     server,
     topicManager,
-    embeddingService,
     {} as RAGQueryService,
-    undefined,
     options.memoryService as MemoryService | undefined,
     undefined,
     options.branchProvider,
@@ -219,8 +203,6 @@ describe("MCP memory tools", () => {
       server,
       { getAllTopics: sinon.stub().returns([]) } as any,
       {} as any,
-      {} as any,
-      undefined,
       memoryService as any,
       undefined,
       branchProvider as any,

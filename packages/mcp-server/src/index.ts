@@ -225,16 +225,13 @@ async function main(): Promise<void> {
     registerTools(
       server,
       topicManager,
-      embeddingService,
       ragQueryService,
-      memoryStore,
       memoryService,
       graphVisualizationService,
       memoryStore,
       config,
       runMutation,
       toolRuntime,
-      (operation) => memoryCoordinator.runMutation(operation),
     );
     registerGraphUiResource(server);
     return server;

@@ -11,14 +11,11 @@ import * as os from "os";
 import * as path from "path";
 import sinon from "sinon";
 import { McpServer } from "@modelcontextprotocol/server";
-import { MemoryOperationCoordinator } from "@ragnarok/core";
 import { measureToolResultForResponse, registerTools } from "../src/tools";
 import type { McpConfig } from "../src/config";
 import type {
   TopicManager,
-  EmbeddingService,
   IConfigProvider,
-
   Topic,
   RAGQueryService,
   MemoryService,
@@ -104,14 +101,11 @@ function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
 function captureHandlers(deps: {
   topicManager: sinon.SinonStubbedInstance<TopicManager>;
   config: IConfigProvider;
-  embeddingService: sinon.SinonStubbedInstance<EmbeddingService>;
   ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   mcpConfig?: McpConfig;
-  memoryStore?: unknown;
   memoryService?: Pick<MemoryService, "execute" | "reset">;
   graphVisualizationService?: Pick<GraphVisualizationService, "generate">;
   memoryBranchProvider?: Pick<MemoryStore, "getCurrentBranch">;
-  runMemoryMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
 }): Record<string, ToolHandler> {
   const captured: CapturedTool[] = [];
   const server = {
@@ -124,16 +118,11 @@ function captureHandlers(deps: {
   registerTools(
     server,
     deps.topicManager as unknown as TopicManager,
-    deps.embeddingService as unknown as EmbeddingService,
     deps.ragQueryService as unknown as RAGQueryService,
-    deps.memoryStore as never,
     deps.memoryService as MemoryService | undefined,
     deps.graphVisualizationService as GraphVisualizationService | undefined,
     deps.memoryBranchProvider,
     deps.mcpConfig,
-    undefined,
-    undefined,
-    deps.runMemoryMutation,
   );
 
   expect(captured.map(({ name }) => name)).to.deep.equal(
@@ -172,7 +161,6 @@ describe("common tool response wrapper", () => {
 describe("MCP Tools (registerTools)", () => {
   let topicManager: sinon.SinonStubbedInstance<TopicManager>;
   let config: IConfigProvider;
-  let embeddingService: sinon.SinonStubbedInstance<EmbeddingService>;
   let ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   let handlers: Record<string, ToolHandler>;
 
@@ -195,16 +183,6 @@ describe("MCP Tools (registerTools)", () => {
       },
     };
 
-    // -- EmbeddingService stubs --
-    embeddingService = {
-      getCurrentModel: sinon.stub().returns("Xenova/all-MiniLM-L6-v2"),
-      listAvailableModels: sinon.stub(),
-      getActiveBackendType: sinon.stub().returns("huggingface"),
-      getLocalModelPath: sinon.stub().returns("/models/all-MiniLM-L6-v2"),
-      initialize: sinon.stub().resolves(),
-      embed: sinon.stub().resolves(new Array(384).fill(0)),
-    } as any;
-
     // -- RAGQueryService stub --
     ragQueryService = {
       executeQuery: sinon.stub(),
@@ -212,7 +190,7 @@ describe("MCP Tools (registerTools)", () => {
       dispose: sinon.stub(),
     } as any;
 
-    handlers = captureHandlers({ topicManager, config, embeddingService, ragQueryService });
+    handlers = captureHandlers({ topicManager, config, ragQueryService });
   });
 
   afterEach(() => {
@@ -223,15 +201,13 @@ describe("MCP Tools (registerTools)", () => {
   // Registration smoke test
   // -----------------------------------------------------------------------
 
-  /** Every tool name registered with a memory store present. */
+  /** Every tool name registered with a memory service present. */
   function listRegisteredToolNames(): string[] {
     return Object.keys(
       captureHandlers({
         topicManager,
         config,
-        embeddingService,
         ragQueryService,
-        memoryStore: {},
         memoryService: { execute: sinon.stub(), reset: sinon.stub() } as any,
         graphVisualizationService: { generate: sinon.stub() },
         memoryBranchProvider: { getCurrentBranch: sinon.stub().resolves(null) },
@@ -240,14 +216,12 @@ describe("MCP Tools (registerTools)", () => {
   }
 
   it("registers the complete release tool surface", () => {
-    // rag_memory/rag_reset_memory register only when a memory store exists,
+    // rag_memory/rag_reset_memory register only when a memory service exists,
     // so capture with one present.
     const fullHandlers = captureHandlers({
       topicManager,
       config,
-      embeddingService,
       ragQueryService,
-      memoryStore: {},
       memoryService: { execute: sinon.stub(), reset: sinon.stub() } as any,
       graphVisualizationService: { generate: sinon.stub() },
       memoryBranchProvider: { getCurrentBranch: sinon.stub().resolves(null) },
@@ -258,14 +232,11 @@ describe("MCP Tools (registerTools)", () => {
       "rag_topic",
       "rag_delete_topic",
       "rag_remove_document",
-      "rag_list_embedding_models",
-      "rag_embedding_info",
-      "rag_switch_embedding_model",
       "rag_memory",
       "rag_reset_memory",
       "rag_memory_visualize",
     ];
-    expect(Object.keys(fullHandlers)).to.have.lengthOf(11);
+    expect(Object.keys(fullHandlers)).to.have.lengthOf(8);
     for (const name of expected) {
       expect(fullHandlers[name], `handler for ${name}`).to.be.a("function");
     }
@@ -301,6 +272,9 @@ describe("MCP Tools (registerTools)", () => {
       "rag_reranker_info",
       "rag_switch_reranker_model",
       "rag_graph_visualize",
+      "rag_list_embedding_models",
+      "rag_embedding_info",
+      "rag_switch_embedding_model",
     ]) {
       expect(names, `${name} must not exist`).to.not.include(name);
     }
@@ -481,12 +455,7 @@ describe("MCP Tools (registerTools)", () => {
           return { name };
         },
       } as unknown as McpServer;
-      registerTools(
-        server,
-        topicManager as unknown as TopicManager,
-        embeddingService as unknown as EmbeddingService,
-        ragQueryService as unknown as RAGQueryService,
-      );
+      registerTools(server, topicManager as unknown as TopicManager, ragQueryService as unknown as RAGQueryService);
       const schema: any = captured.find(({ name }) => name === "rag_topic")!.config.inputSchema;
 
       expect(schema.safeParse({ action: "import", archivePath: "/tmp/x.rag", confirm: true }).success).to.equal(true);
@@ -508,7 +477,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ allowedPaths: [allowedDir] }),
         });
@@ -530,7 +498,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ exportDir: path.join(root, "exports") }),
         });
@@ -581,7 +548,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ allowedPaths: [tmpDir] }),
         });
@@ -618,7 +584,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ allowedPaths: [allowedDir] }),
         });
@@ -652,7 +617,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ allowedPaths: [tmpDir] }),
         });
@@ -692,271 +656,6 @@ describe("MCP Tools (registerTools)", () => {
   });
 
   // -----------------------------------------------------------------------
-  // rag_list_embedding_models
-  // -----------------------------------------------------------------------
-
-  describe("rag_list_embedding_models", () => {
-    it("returns model list with active flag", async () => {
-      embeddingService.getCurrentModel.returns("Xenova/all-MiniLM-L6-v2");
-      embeddingService.listAvailableModels.resolves([
-        { name: "Xenova/all-MiniLM-L6-v2", source: "bundled" as any, downloaded: true },
-        { name: "Xenova/bge-small-en-v1.5", source: "curated" as any, downloaded: false },
-      ]);
-
-      const result = await handlers.rag_list_embedding_models({});
-      const body = parseResponse(result);
-
-      expect(body.currentModel).to.equal("Xenova/all-MiniLM-L6-v2");
-      expect(body.count).to.equal(2);
-      expect(body.models[0].active).to.be.true;
-      expect(body.models[1].active).to.be.false;
-      expect(body.models[0].downloaded).to.be.true;
-      expect(body.models[1].downloaded).to.be.false;
-    });
-
-    it("sets isError on exception", async () => {
-      embeddingService.listAvailableModels.rejects(new Error("list models failed"));
-
-      const result = await handlers.rag_list_embedding_models({});
-
-      expect(result.isError).to.equal(true);
-      expect(parseResponse(result).error).to.equal("list models failed");
-    });
-
-    it("flags a local-registry fallback when a remote provider is configured", async () => {
-      handlers = captureHandlers({
-        topicManager,
-        config,
-        embeddingService,
-        ragQueryService,
-        mcpConfig: makeMcpConfig({ embeddingProvider: "ollama" }),
-      });
-      embeddingService.listAvailableModels.resolves([
-        { name: "Xenova/all-MiniLM-L6-v2", source: "curated" as any, downloaded: false },
-      ]);
-
-      const body = parseResponse(await handlers.rag_list_embedding_models({}));
-
-      expect(body.remoteListingFailed).to.equal(true);
-      expect(body.warning).to.include("remote embedding provider");
-    });
-
-    it("does not flag the remote catalogue itself", async () => {
-      handlers = captureHandlers({
-        topicManager,
-        config,
-        embeddingService,
-        ragQueryService,
-        mcpConfig: makeMcpConfig({ embeddingProvider: "ollama" }),
-      });
-      embeddingService.listAvailableModels.resolves([
-        { name: "nomic-embed-text", source: "remote" as any, downloaded: true },
-      ]);
-
-      const body = parseResponse(await handlers.rag_list_embedding_models({}));
-
-      expect(body).to.not.have.property("remoteListingFailed");
-      expect(body).to.not.have.property("warning");
-    });
-
-    it("does not flag local catalogues for the huggingface provider", async () => {
-      handlers = captureHandlers({
-        topicManager,
-        config,
-        embeddingService,
-        ragQueryService,
-        mcpConfig: makeMcpConfig({ embeddingProvider: "huggingface" }),
-      });
-      embeddingService.listAvailableModels.resolves([
-        { name: "Xenova/all-MiniLM-L6-v2", source: "curated" as any, downloaded: false },
-      ]);
-
-      const body = parseResponse(await handlers.rag_list_embedding_models({}));
-
-      expect(body).to.not.have.property("remoteListingFailed");
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // rag_embedding_info
-  // -----------------------------------------------------------------------
-
-  describe("rag_embedding_info", () => {
-    it("returns current model, backend, and local path", async () => {
-      embeddingService.getCurrentModel.returns("Xenova/all-MiniLM-L6-v2");
-      embeddingService.getActiveBackendType.returns("huggingface");
-      embeddingService.getLocalModelPath.returns("/models/all-MiniLM-L6-v2");
-
-      const result = await handlers.rag_embedding_info({});
-      const body = parseResponse(result);
-
-      expect(body.currentModel).to.equal("Xenova/all-MiniLM-L6-v2");
-      expect(body.backend).to.equal("huggingface");
-      expect(body.localModelPath).to.equal("/models/all-MiniLM-L6-v2");
-    });
-
-    it("returns 'none' when local model path is null", async () => {
-      embeddingService.getLocalModelPath.returns(null);
-
-      const result = await handlers.rag_embedding_info({});
-      const body = parseResponse(result);
-
-      expect(body.localModelPath).to.equal("none");
-    });
-
-    it("echoes the configured model and provider from config.json", async () => {
-      handlers = captureHandlers({
-        topicManager,
-        config,
-        embeddingService,
-        ragQueryService,
-        mcpConfig: makeMcpConfig({ embeddingModel: "Xenova/all-MiniLM-L12-v2", embeddingProvider: "huggingface" }),
-      });
-
-      const body = parseResponse(await handlers.rag_embedding_info({}));
-
-      expect(body.configuredModel).to.equal("Xenova/all-MiniLM-L12-v2");
-      expect(body.configuredProvider).to.equal("huggingface");
-    });
-
-    it("reports null configured values without a config", async () => {
-      const body = parseResponse(await handlers.rag_embedding_info({}));
-
-      expect(body.configuredModel).to.equal(null);
-      expect(body.configuredProvider).to.equal(null);
-    });
-
-    it("sets isError on exception", async () => {
-      embeddingService.getCurrentModel.throws(new Error("info boom"));
-
-      const result = await handlers.rag_embedding_info({});
-
-      expect(result.isError).to.equal(true);
-      expect(parseResponse(result).error).to.equal("info boom");
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // rag_switch_embedding_model
-  // -----------------------------------------------------------------------
-
-  describe("rag_switch_embedding_model", () => {
-    it("waits for an active memory mutation before switching", async () => {
-      const coordinator = new MemoryOperationCoordinator();
-      const memoryGate = deferred<void>();
-      const activeMemoryMutation = coordinator.runMutation(async () => memoryGate.promise);
-      handlers = captureHandlers({
-        topicManager,
-        config,
-        embeddingService,
-        ragQueryService,
-        runMemoryMutation: (operation) => coordinator.runMutation(operation),
-      });
-      embeddingService.getCurrentModel.onFirstCall().returns("old-model").onSecondCall().returns("new-model");
-
-      const switching = handlers.rag_switch_embedding_model({ model: "new-model" });
-      await tick();
-
-      expect(embeddingService.initialize.called).to.equal(false);
-      memoryGate.resolve();
-      await Promise.all([activeMemoryMutation, switching]);
-      expect(embeddingService.initialize.calledOnceWithExactly("new-model")).to.equal(true);
-    });
-
-    it("blocks a later memory mutation until switching completes", async () => {
-      const coordinator = new MemoryOperationCoordinator();
-      const switchGate = deferred<void>();
-      const switchStarted = deferred<void>();
-      let memoryMutationStarted = false;
-      handlers = captureHandlers({
-        topicManager,
-        config,
-        embeddingService,
-        ragQueryService,
-        runMemoryMutation: (operation) => coordinator.runMutation(operation),
-      });
-      embeddingService.getCurrentModel.onFirstCall().returns("old-model").onSecondCall().returns("new-model");
-      embeddingService.initialize.callsFake(async () => {
-        switchStarted.resolve();
-        await switchGate.promise;
-      });
-
-      const switching = handlers.rag_switch_embedding_model({ model: "new-model" });
-      await switchStarted.promise;
-      const memoryMutation = coordinator.runMutation(async () => {
-        memoryMutationStarted = true;
-      });
-      await tick();
-
-      expect(memoryMutationStarted).to.equal(false);
-      switchGate.resolve();
-      await Promise.all([switching, memoryMutation]);
-      expect(memoryMutationStarted).to.equal(true);
-    });
-
-    it("switches model, propagates to topic management, and returns previous/new names", async () => {
-      embeddingService.getCurrentModel.onFirstCall().returns("old-model").onSecondCall().returns("new-model");
-      embeddingService.initialize.resolves();
-
-      const result = await handlers.rag_switch_embedding_model({ model: "new-model" });
-      const body = parseResponse(result);
-
-      expect(body.success).to.be.true;
-      expect(body.previousModel).to.equal("old-model");
-      expect(body.newModel).to.equal("new-model");
-      expect(body.message).to.include("new-model");
-      expect(embeddingService.initialize.calledWith("new-model")).to.be.true;
-      // Coordinated switch: the factory/pipeline must be rebuilt, otherwise a
-      // later topic operation silently reverts the shared backend.
-      expect((topicManager.reinitializeWithNewModel as sinon.SinonStub).calledOnce).to.be.true;
-    });
-
-    it("sets isError on exception", async () => {
-      embeddingService.getCurrentModel.returns("current");
-      embeddingService.initialize.rejects(new Error("switch failed"));
-
-      const result = await handlers.rag_switch_embedding_model({ model: "bad" });
-
-      expect(result.isError).to.equal(true);
-      expect(parseResponse(result).error).to.equal("switch failed");
-    });
-
-    it("rejects a dimension-changing switch while memory holds data, and rolls back", async () => {
-      const memoryStore = {
-        stats: sinon.stub().resolves({ totalMemories: 3 }),
-        getCurrentBranch: sinon.stub().returns(null),
-      };
-      handlers = captureHandlers({
-        topicManager,
-        config,
-        embeddingService,
-        ragQueryService,
-        memoryStore,
-      });
-
-      embeddingService.getCurrentModel.returns("old-model");
-      // Probe before switch: 384 dims; probe after switch: 768 dims
-      (embeddingService.embed as sinon.SinonStub)
-        .onFirstCall()
-        .resolves(new Array(384).fill(0))
-        .onSecondCall()
-        .resolves(new Array(768).fill(0));
-
-      const result = await handlers.rag_switch_embedding_model({ model: "bigger-model" });
-      const body = parseResponse(result);
-
-      expect(result.isError).to.equal(true);
-      expect(body.error).to.include("dimension");
-      // Rolled back: initialize called with the new model, then the old one
-      const initCalls = (embeddingService.initialize as sinon.SinonStub).getCalls().map((c) => c.args[0]);
-      expect(initCalls).to.deep.equal(["bigger-model", "old-model"]);
-      // The topic-side reinit must NOT run for a rejected switch
-      expect((topicManager.reinitializeWithNewModel as sinon.SinonStub).called).to.equal(false);
-    });
-  });
-
-
-  // -----------------------------------------------------------------------
   // rag_memory — service result envelope
   // -----------------------------------------------------------------------
 
@@ -965,7 +664,6 @@ describe("MCP Tools (registerTools)", () => {
       return captureHandlers({
         topicManager,
         config,
-        embeddingService,
         ragQueryService,
         memoryService,
         memoryBranchProvider: { getCurrentBranch: sinon.stub().resolves(null) },
@@ -1008,12 +706,7 @@ describe("MCP Tools (registerTools)", () => {
         },
       } as unknown as McpServer;
 
-      registerTools(
-        server,
-        topicManager as unknown as TopicManager,
-        embeddingService as unknown as EmbeddingService,
-        ragQueryService as unknown as RAGQueryService,
-      );
+      registerTools(server, topicManager as unknown as TopicManager, ragQueryService as unknown as RAGQueryService);
 
       return descriptions;
     }
@@ -1042,9 +735,7 @@ describe("MCP Tools (registerTools)", () => {
       registerTools(
         server,
         topicManager as unknown as TopicManager,
-        embeddingService as unknown as EmbeddingService,
         ragQueryService as unknown as RAGQueryService,
-        undefined,
         undefined,
         undefined,
         undefined,
@@ -1066,7 +757,7 @@ describe("MCP Tools (registerTools)", () => {
       });
       const beforeEntries = await fs.readdir(root);
       const handlers = captureReadOnlyHandlers(cfg);
-      expect(Object.keys(handlers)).to.include.members(["rag_query", "rag_list_embedding_models", "rag_embedding_info"]);
+      expect(Object.keys(handlers)).to.include.members(["rag_query"]);
       const args: Record<string, any> = {
         rag_query: { topic: "docs", query: "question" },
       };
@@ -1079,18 +770,3 @@ describe("MCP Tools (registerTools)", () => {
     });
   });
 });
-
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve(value?: T | PromiseLike<T>): void;
-} {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-async function tick(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-}

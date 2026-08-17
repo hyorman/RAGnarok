@@ -2,7 +2,6 @@ import { expect } from "chai";
 import sinon from "sinon";
 import { McpServer } from "@modelcontextprotocol/server";
 import {
-  EmbeddingService,
   type GraphVisualizationService,
   TopicManager,
   projectMemoryGraphVisualization,
@@ -50,9 +49,7 @@ function register(server: McpServer, topicManager: any, options: RegisterOptions
   registerTools(
     server,
     topicManager,
-    sinon.createStubInstance(EmbeddingService) as any,
     {} as any,
-    undefined,
     undefined,
     options.graphService as GraphVisualizationService | undefined,
     options.graphService ? ({ getCurrentBranch: sinon.stub().resolves(null) } as any) : undefined,
