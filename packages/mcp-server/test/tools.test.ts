@@ -18,8 +18,7 @@ import type {
   TopicManager,
   EmbeddingService,
   IConfigProvider,
-  ILLMProvider,
-  ILLMModel,
+
   Topic,
   RAGQueryService,
   MemoryService,
@@ -105,7 +104,6 @@ function makeMcpConfig(overrides: Partial<McpConfig> = {}): McpConfig {
 function captureHandlers(deps: {
   topicManager: sinon.SinonStubbedInstance<TopicManager>;
   config: IConfigProvider;
-  llmProvider: sinon.SinonStubbedInstance<ILLMProvider>;
   embeddingService: sinon.SinonStubbedInstance<EmbeddingService>;
   ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   mcpConfig?: McpConfig;
@@ -126,14 +124,12 @@ function captureHandlers(deps: {
   registerTools(
     server,
     deps.topicManager as unknown as TopicManager,
-    deps.llmProvider as unknown as ILLMProvider,
     deps.embeddingService as unknown as EmbeddingService,
     deps.ragQueryService as unknown as RAGQueryService,
     deps.memoryStore as never,
     deps.memoryService as MemoryService | undefined,
     deps.graphVisualizationService as GraphVisualizationService | undefined,
     deps.memoryBranchProvider,
-    undefined,
     deps.mcpConfig,
     undefined,
     undefined,
@@ -176,7 +172,6 @@ describe("common tool response wrapper", () => {
 describe("MCP Tools (registerTools)", () => {
   let topicManager: sinon.SinonStubbedInstance<TopicManager>;
   let config: IConfigProvider;
-  let llmProvider: sinon.SinonStubbedInstance<ILLMProvider>;
   let embeddingService: sinon.SinonStubbedInstance<EmbeddingService>;
   let ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
   let handlers: Record<string, ToolHandler>;
@@ -200,12 +195,6 @@ describe("MCP Tools (registerTools)", () => {
       },
     };
 
-    // -- ILLMProvider stubs --
-    llmProvider = {
-      isAvailable: sinon.stub(),
-      selectModel: sinon.stub(),
-    } as any;
-
     // -- EmbeddingService stubs --
     embeddingService = {
       getCurrentModel: sinon.stub().returns("Xenova/all-MiniLM-L6-v2"),
@@ -223,7 +212,7 @@ describe("MCP Tools (registerTools)", () => {
       dispose: sinon.stub(),
     } as any;
 
-    handlers = captureHandlers({ topicManager, config, llmProvider, embeddingService, ragQueryService });
+    handlers = captureHandlers({ topicManager, config, embeddingService, ragQueryService });
   });
 
   afterEach(() => {
@@ -240,7 +229,6 @@ describe("MCP Tools (registerTools)", () => {
       captureHandlers({
         topicManager,
         config,
-        llmProvider,
         embeddingService,
         ragQueryService,
         memoryStore: {},
@@ -257,7 +245,6 @@ describe("MCP Tools (registerTools)", () => {
     const fullHandlers = captureHandlers({
       topicManager,
       config,
-      llmProvider,
       embeddingService,
       ragQueryService,
       memoryStore: {},
@@ -267,31 +254,18 @@ describe("MCP Tools (registerTools)", () => {
     });
     const expected = [
       "rag_query",
-      "rag_list_topics",
-      "rag_topic_stats",
-      "rag_create_topic",
-      "rag_add_documents",
+      "rag_ingest",
+      "rag_topic",
+      "rag_delete_topic",
+      "rag_remove_document",
       "rag_list_embedding_models",
       "rag_embedding_info",
       "rag_switch_embedding_model",
-      "rag_llm_status",
-      "rag_list_reranker_models",
-      "rag_reranker_info",
-      "rag_switch_reranker_model",
-      "rag_list_documents",
-      "rag_delete_topic",
-      "rag_remove_document",
-      "rag_rename_topic",
-      "rag_add_url",
-      "rag_add_github_repo",
-      "rag_export_topic",
-      "rag_import_topic",
       "rag_memory",
       "rag_reset_memory",
-      "rag_storage_status",
-      "rag_graph_visualize",
+      "rag_memory_visualize",
     ];
-    expect(Object.keys(fullHandlers)).to.have.lengthOf(24);
+    expect(Object.keys(fullHandlers)).to.have.lengthOf(11);
     for (const name of expected) {
       expect(fullHandlers[name], `handler for ${name}`).to.be.a("function");
     }
@@ -299,18 +273,34 @@ describe("MCP Tools (registerTools)", () => {
 
   it("registers the previously local-only tools with no deployment mode", () => {
     const names = listRegisteredToolNames();
-    for (const name of ["rag_add_documents", "rag_import_topic", "rag_memory", "rag_reset_memory"]) {
+    for (const name of ["rag_ingest", "rag_topic", "rag_memory", "rag_reset_memory"]) {
       expect(names, `${name} must be registered unconditionally`).to.include(name);
     }
   });
 
-  it("registers no upload tools", () => {
+  it("registers no removed or upload tools", () => {
     const names = listRegisteredToolNames();
     for (const name of [
       "rag_create_document_upload",
       "rag_ingest_upload",
       "rag_create_archive_upload",
       "rag_import_upload",
+      "rag_list_topics",
+      "rag_topic_stats",
+      "rag_create_topic",
+      "rag_add_documents",
+      "rag_add_url",
+      "rag_add_github_repo",
+      "rag_rename_topic",
+      "rag_export_topic",
+      "rag_import_topic",
+      "rag_list_documents",
+      "rag_llm_status",
+      "rag_storage_status",
+      "rag_list_reranker_models",
+      "rag_reranker_info",
+      "rag_switch_reranker_model",
+      "rag_graph_visualize",
     ]) {
       expect(names, `${name} must not exist`).to.not.include(name);
     }
@@ -375,13 +365,13 @@ describe("MCP Tools (registerTools)", () => {
   // rag_list_topics
   // -----------------------------------------------------------------------
 
-  describe("rag_list_topics", () => {
-    it("returns formatted topic list", async () => {
+  describe("rag_topic", () => {
+    it("list returns formatted topic list", async () => {
       const t1 = makeTopic({ name: "alpha", description: "A", documentCount: 3 });
       const t2 = makeTopic({ name: "beta", description: "B", documentCount: 7 });
       topicManager.getAllTopics.returns([t1, t2]);
 
-      const result = await handlers.rag_list_topics({});
+      const result = await handlers.rag_topic({ action: "list" });
       const body = parseResponse(result);
 
       expect(body.count).to.equal(2);
@@ -391,60 +381,46 @@ describe("MCP Tools (registerTools)", () => {
       expect(body.topics[0].documentCount).to.equal(3);
     });
 
-    it("returns empty list when no topics exist", async () => {
+    it("list returns empty list when no topics exist", async () => {
       topicManager.getAllTopics.returns([]);
 
-      const result = await handlers.rag_list_topics({});
+      const result = await handlers.rag_topic({ action: "list" });
       const body = parseResponse(result);
 
       expect(body.count).to.equal(0);
       expect(body.topics).to.deep.equal([]);
     });
 
-    it("includes source field defaulting to 'local'", async () => {
-      topicManager.getAllTopics.returns([makeTopic({ source: undefined })]);
+    it("list includes source field defaulting to 'local' and ISO dates", async () => {
+      topicManager.getAllTopics.returns([makeTopic({ source: undefined, createdAt: 0, updatedAt: 0 })]);
 
-      const result = await handlers.rag_list_topics({});
+      const result = await handlers.rag_topic({ action: "list" });
       const body = parseResponse(result);
 
       expect(body.topics[0].source).to.equal("local");
-    });
-
-    it("formats dates as ISO strings", async () => {
-      topicManager.getAllTopics.returns([makeTopic({ createdAt: 0, updatedAt: 0 })]);
-
-      const result = await handlers.rag_list_topics({});
-      const body = parseResponse(result);
-
       expect(body.topics[0].createdAt).to.equal(new Date(0).toISOString());
       expect(body.topics[0].updatedAt).to.equal(new Date(0).toISOString());
     });
 
-    it("sets isError on exception", async () => {
+    it("list sets isError on exception", async () => {
       topicManager.getAllTopics.throws(new Error("list failed"));
 
-      const result = await handlers.rag_list_topics({});
+      const result = await handlers.rag_topic({ action: "list" });
 
       expect(result.isError).to.equal(true);
       expect(parseResponse(result).error).to.equal("list failed");
     });
-  });
 
-  // -----------------------------------------------------------------------
-  // rag_topic_stats
-  // -----------------------------------------------------------------------
-
-  describe("rag_topic_stats", () => {
-    it("sets isError when topic is not found", async () => {
+    it("stats sets isError when topic is not found", async () => {
       topicManager.resolveTopicByName.rejects(new Error('Topic "nope" not found'));
 
-      const result = await handlers.rag_topic_stats({ topic: "nope" });
+      const result = await handlers.rag_topic({ action: "stats", topic: "nope" });
 
       expect(result.isError).to.equal(true);
       expect(parseResponse(result).error).to.include("not found");
     });
 
-    it("returns stats for a matched topic", async () => {
+    it("stats returns stats plus the topic's documents", async () => {
       topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
       topicManager.getTopicStats.resolves({
         documentCount: 10,
@@ -452,71 +428,139 @@ describe("MCP Tools (registerTools)", () => {
         lastUpdated: 9999,
         embeddingModel: "Xenova/all-MiniLM-L6-v2",
       });
+      (topicManager as any).listDocuments = sinon.stub().returns([{ id: "doc-1", name: "a.md" }]);
 
-      const result = await handlers.rag_topic_stats({ topic: "docs" });
+      const result = await handlers.rag_topic({ action: "stats", topic: "docs" });
       const body = parseResponse(result);
 
       expect(body.documentCount).to.equal(10);
       expect(body.chunkCount).to.equal(200);
+      expect(body.documents).to.deep.equal([{ id: "doc-1", name: "a.md", documentId: "doc-1" }]);
       expect(topicManager.getTopicStats.calledWith("t1")).to.be.true;
     });
 
-    it("sets isError on exception", async () => {
-      topicManager.resolveTopicByName.rejects(new Error("stats boom"));
-
-      const result = await handlers.rag_topic_stats({ topic: "x" });
-
-      expect(result.isError).to.equal(true);
-      expect(parseResponse(result).error).to.equal("stats boom");
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // rag_create_topic
-  // -----------------------------------------------------------------------
-
-  describe("rag_create_topic", () => {
-    it("returns created topic details", async () => {
+    it("create returns created topic details", async () => {
       topicManager.createTopic.resolves(makeTopic({ id: "new-id", name: "my-topic", description: "desc" }));
 
-      const result = await handlers.rag_create_topic({ name: "my-topic", description: "desc" });
+      const result = await handlers.rag_topic({ action: "create", name: "my-topic", description: "desc" });
       const body = parseResponse(result);
 
       expect(body.success).to.be.true;
       expect(body.topic.id).to.equal("new-id");
       expect(body.topic.name).to.equal("my-topic");
       expect(body.topic.description).to.equal("desc");
+      expect(topicManager.createTopic.firstCall.args[0]).to.deep.equal({ name: "my-topic", description: "desc" });
     });
 
-    it("passes name and description to topicManager.createTopic", async () => {
-      topicManager.createTopic.resolves(makeTopic());
-
-      await handlers.rag_create_topic({ name: "n", description: "d" });
-
-      expect(topicManager.createTopic.calledOnce).to.be.true;
-      const arg = topicManager.createTopic.firstCall.args[0];
-      expect(arg).to.deep.equal({ name: "n", description: "d" });
-    });
-
-    it("sets isError on exception", async () => {
+    it("create sets isError on exception", async () => {
       topicManager.createTopic.rejects(new Error("create failed"));
 
-      const result = await handlers.rag_create_topic({ name: "x" });
+      const result = await handlers.rag_topic({ action: "create", name: "x" });
 
       expect(result.isError).to.equal(true);
       expect(parseResponse(result).error).to.equal("create failed");
     });
+
+    it("rename delegates to updateTopic", async () => {
+      topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
+      (topicManager as any).updateTopic = sinon.stub().resolves(makeTopic({ id: "t1", name: "renamed" }));
+
+      const result = await handlers.rag_topic({ action: "rename", topic: "docs", newName: "renamed" });
+      const body = parseResponse(result);
+
+      expect(body.success).to.be.true;
+      expect(body.topic.name).to.equal("renamed");
+      expect((topicManager as any).updateTopic.calledWith("t1", { name: "renamed" })).to.be.true;
+    });
+
+    it("import requires confirm true in the schema", () => {
+      const captured: CapturedTool[] = [];
+      const server = {
+        registerTool(name: string, config: CapturedTool["config"], handler: CapturedTool["handler"]) {
+          captured.push({ name, config, handler });
+          return { name };
+        },
+      } as unknown as McpServer;
+      registerTools(
+        server,
+        topicManager as unknown as TopicManager,
+        embeddingService as unknown as EmbeddingService,
+        ragQueryService as unknown as RAGQueryService,
+      );
+      const schema: any = captured.find(({ name }) => name === "rag_topic")!.config.inputSchema;
+
+      expect(schema.safeParse({ action: "import", archivePath: "/tmp/x.rag", confirm: true }).success).to.equal(true);
+      expect(schema.safeParse({ action: "import", archivePath: "/tmp/x.rag", confirm: false }).success).to.equal(false);
+      expect(schema.safeParse({ action: "import", archivePath: "/tmp/x.rag" }).success).to.equal(false);
+      expect(schema.safeParse({ action: "list" }).success).to.equal(true);
+      expect(schema.safeParse({ action: "stats" }).success, "stats requires topic").to.equal(false);
+      expect(schema.safeParse({ action: "create" }).success, "create requires name").to.equal(false);
+      expect(schema.safeParse({ action: "rename", topic: "docs" }).success, "rename requires newName").to.equal(false);
+    });
+
+    it("import rejects archives outside the allowed roots", async () => {
+      const allowedDir = await fs.mkdtemp(path.join(os.tmpdir(), "topic-allowed-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "topic-outside-"));
+      const outsideArchive = path.join(outsideDir, "topic.rag");
+      await fs.writeFile(outsideArchive, "archive");
+
+      try {
+        handlers = captureHandlers({
+          topicManager,
+          config,
+          embeddingService,
+          ragQueryService,
+          mcpConfig: makeMcpConfig({ allowedPaths: [allowedDir] }),
+        });
+
+        const result = await handlers.rag_topic({ action: "import", archivePath: outsideArchive, confirm: true });
+
+        expect(result.isError).to.equal(true);
+        expect(parseResponse(result).error).to.include("Path not allowed");
+        expect((topicManager as any).importTopic?.called ?? false).to.equal(false);
+      } finally {
+        await fs.rm(allowedDir, { recursive: true, force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it("export writes under the configured export directory", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "topic-export-"));
+      try {
+        handlers = captureHandlers({
+          topicManager,
+          config,
+          embeddingService,
+          ragQueryService,
+          mcpConfig: makeMcpConfig({ exportDir: path.join(root, "exports") }),
+        });
+        topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
+        (topicManager as any).exportTopic = sinon
+          .stub()
+          .callsFake(async (_id: string, exportPath: string) => fs.writeFile(exportPath, "archive-bytes"));
+
+        const result = await handlers.rag_topic({ action: "export", topic: "docs" });
+        const body = parseResponse(result);
+
+        expect(body.path.startsWith(path.join(root, "exports"))).to.equal(true);
+        expect(body.size).to.be.greaterThan(0);
+        expect(body.sha256).to.match(/^[0-9a-f]{64}$/);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   // -----------------------------------------------------------------------
-  // rag_add_documents
+  // rag_ingest
   // -----------------------------------------------------------------------
 
-  describe("rag_add_documents", () => {
+  describe("rag_ingest (files)", () => {
     it("sets isError when topic is not found", async () => {
       topicManager.resolveTopicByName.rejects(new Error('Topic "nope" not found'));
 
-      const result = await handlers.rag_add_documents({
+      const result = await handlers.rag_ingest({
+        source: "files",
         topic: "nope",
         filePaths: ["/a.md"],
       });
@@ -537,7 +581,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          llmProvider,
           embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ allowedPaths: [tmpDir] }),
@@ -546,7 +589,8 @@ describe("MCP Tools (registerTools)", () => {
         topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
         topicManager.addDocuments.resolves([{ pipelineResult: { metadata: { chunksStored: 3 } } }] as any);
 
-        const result = await handlers.rag_add_documents({
+        const result = await handlers.rag_ingest({
+          source: "files",
           topic: "docs",
           filePaths: [fileA, fileB],
         });
@@ -574,7 +618,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          llmProvider,
           embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ allowedPaths: [allowedDir] }),
@@ -582,7 +625,8 @@ describe("MCP Tools (registerTools)", () => {
 
         topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
 
-        const result = await handlers.rag_add_documents({
+        const result = await handlers.rag_ingest({
+          source: "files",
           topic: "docs",
           filePaths: [outsideFile],
         });
@@ -608,7 +652,6 @@ describe("MCP Tools (registerTools)", () => {
         handlers = captureHandlers({
           topicManager,
           config,
-          llmProvider,
           embeddingService,
           ragQueryService,
           mcpConfig: makeMcpConfig({ allowedPaths: [tmpDir] }),
@@ -617,7 +660,8 @@ describe("MCP Tools (registerTools)", () => {
         topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
         topicManager.addDocuments.resolves([{ pipelineResult: { metadata: { chunksStored: 1 } } }] as any);
 
-        const result = await handlers.rag_add_documents({
+        const result = await handlers.rag_ingest({
+          source: "files",
           topic: "docs",
           filePaths: [goodFile, path.join(tmpDir, "missing.md")],
         });
@@ -636,7 +680,8 @@ describe("MCP Tools (registerTools)", () => {
     it("sets isError on exception", async () => {
       topicManager.resolveTopicByName.rejects(new Error("add failed"));
 
-      const result = await handlers.rag_add_documents({
+      const result = await handlers.rag_ingest({
+        source: "files",
         topic: "x",
         filePaths: ["/a"],
       });
@@ -677,6 +722,59 @@ describe("MCP Tools (registerTools)", () => {
       expect(result.isError).to.equal(true);
       expect(parseResponse(result).error).to.equal("list models failed");
     });
+
+    it("flags a local-registry fallback when a remote provider is configured", async () => {
+      handlers = captureHandlers({
+        topicManager,
+        config,
+        embeddingService,
+        ragQueryService,
+        mcpConfig: makeMcpConfig({ embeddingProvider: "ollama" }),
+      });
+      embeddingService.listAvailableModels.resolves([
+        { name: "Xenova/all-MiniLM-L6-v2", source: "curated" as any, downloaded: false },
+      ]);
+
+      const body = parseResponse(await handlers.rag_list_embedding_models({}));
+
+      expect(body.remoteListingFailed).to.equal(true);
+      expect(body.warning).to.include("remote embedding provider");
+    });
+
+    it("does not flag the remote catalogue itself", async () => {
+      handlers = captureHandlers({
+        topicManager,
+        config,
+        embeddingService,
+        ragQueryService,
+        mcpConfig: makeMcpConfig({ embeddingProvider: "ollama" }),
+      });
+      embeddingService.listAvailableModels.resolves([
+        { name: "nomic-embed-text", source: "remote" as any, downloaded: true },
+      ]);
+
+      const body = parseResponse(await handlers.rag_list_embedding_models({}));
+
+      expect(body).to.not.have.property("remoteListingFailed");
+      expect(body).to.not.have.property("warning");
+    });
+
+    it("does not flag local catalogues for the huggingface provider", async () => {
+      handlers = captureHandlers({
+        topicManager,
+        config,
+        embeddingService,
+        ragQueryService,
+        mcpConfig: makeMcpConfig({ embeddingProvider: "huggingface" }),
+      });
+      embeddingService.listAvailableModels.resolves([
+        { name: "Xenova/all-MiniLM-L6-v2", source: "curated" as any, downloaded: false },
+      ]);
+
+      const body = parseResponse(await handlers.rag_list_embedding_models({}));
+
+      expect(body).to.not.have.property("remoteListingFailed");
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -706,6 +804,28 @@ describe("MCP Tools (registerTools)", () => {
       expect(body.localModelPath).to.equal("none");
     });
 
+    it("echoes the configured model and provider from config.json", async () => {
+      handlers = captureHandlers({
+        topicManager,
+        config,
+        embeddingService,
+        ragQueryService,
+        mcpConfig: makeMcpConfig({ embeddingModel: "Xenova/all-MiniLM-L12-v2", embeddingProvider: "huggingface" }),
+      });
+
+      const body = parseResponse(await handlers.rag_embedding_info({}));
+
+      expect(body.configuredModel).to.equal("Xenova/all-MiniLM-L12-v2");
+      expect(body.configuredProvider).to.equal("huggingface");
+    });
+
+    it("reports null configured values without a config", async () => {
+      const body = parseResponse(await handlers.rag_embedding_info({}));
+
+      expect(body.configuredModel).to.equal(null);
+      expect(body.configuredProvider).to.equal(null);
+    });
+
     it("sets isError on exception", async () => {
       embeddingService.getCurrentModel.throws(new Error("info boom"));
 
@@ -728,7 +848,6 @@ describe("MCP Tools (registerTools)", () => {
       handlers = captureHandlers({
         topicManager,
         config,
-        llmProvider,
         embeddingService,
         ragQueryService,
         runMemoryMutation: (operation) => coordinator.runMutation(operation),
@@ -752,7 +871,6 @@ describe("MCP Tools (registerTools)", () => {
       handlers = captureHandlers({
         topicManager,
         config,
-        llmProvider,
         embeddingService,
         ragQueryService,
         runMemoryMutation: (operation) => coordinator.runMutation(operation),
@@ -811,7 +929,6 @@ describe("MCP Tools (registerTools)", () => {
       handlers = captureHandlers({
         topicManager,
         config,
-        llmProvider,
         embeddingService,
         ragQueryService,
         memoryStore,
@@ -838,56 +955,6 @@ describe("MCP Tools (registerTools)", () => {
     });
   });
 
-  // -----------------------------------------------------------------------
-  // rag_llm_status
-  // -----------------------------------------------------------------------
-
-  describe("rag_llm_status", () => {
-    it("returns unavailable status with hint when LLM is not configured", async () => {
-      llmProvider.isAvailable.resolves(false);
-
-      const result = await handlers.rag_llm_status({});
-      const body = parseResponse(result);
-
-      expect(body.available).to.be.false;
-      expect(body.model).to.be.null;
-      expect(body.hint).to.be.a("string");
-      expect(body.hint).to.include("llm.provider");
-    });
-
-    it("returns model info when LLM is available", async () => {
-      llmProvider.isAvailable.resolves(true);
-      llmProvider.selectModel.resolves({
-        id: "gpt-4o",
-        family: "gpt-4o",
-        sendRequest: sinon.stub(),
-      } as unknown as ILLMModel);
-
-      const result = await handlers.rag_llm_status({});
-      const body = parseResponse(result);
-
-      expect(body.available).to.be.true;
-      expect(body.model).to.deep.equal({ id: "gpt-4o", family: "gpt-4o" });
-      expect(body.hint).to.be.undefined;
-    });
-
-    it("does not call selectModel when LLM is unavailable", async () => {
-      llmProvider.isAvailable.resolves(false);
-
-      await handlers.rag_llm_status({});
-
-      expect(llmProvider.selectModel.called).to.be.false;
-    });
-
-    it("sets isError on exception", async () => {
-      llmProvider.isAvailable.rejects(new Error("llm boom"));
-
-      const result = await handlers.rag_llm_status({});
-
-      expect(result.isError).to.equal(true);
-      expect(parseResponse(result).error).to.equal("llm boom");
-    });
-  });
 
   // -----------------------------------------------------------------------
   // rag_memory — service result envelope
@@ -898,7 +965,6 @@ describe("MCP Tools (registerTools)", () => {
       return captureHandlers({
         topicManager,
         config,
-        llmProvider,
         embeddingService,
         ragQueryService,
         memoryService,
@@ -932,210 +998,6 @@ describe("MCP Tools (registerTools)", () => {
   // Reranker tools
   // -----------------------------------------------------------------------
 
-  describe("reranker tools", () => {
-    let rerankerHandlers: Record<string, ToolHandler>;
-
-    function captureHandlersWithReranker(
-      deps: {
-        topicManager: sinon.SinonStubbedInstance<TopicManager>;
-        config: IConfigProvider;
-        llmProvider: sinon.SinonStubbedInstance<ILLMProvider>;
-        embeddingService: sinon.SinonStubbedInstance<EmbeddingService>;
-        ragQueryService: sinon.SinonStubbedInstance<RAGQueryService>;
-      },
-      mockReranker: any,
-      mockConfig: any,
-    ): Record<string, ToolHandler> {
-      const captured: CapturedTool[] = [];
-      const server = {
-        registerTool(name: string, config: CapturedTool["config"], handler: CapturedTool["handler"]) {
-          captured.push({ name, config, handler });
-          return { name };
-        },
-      } as unknown as McpServer;
-
-      registerTools(
-        server,
-        deps.topicManager as unknown as TopicManager,
-        deps.llmProvider as unknown as ILLMProvider,
-        deps.embeddingService as unknown as EmbeddingService,
-        deps.ragQueryService as unknown as RAGQueryService,
-        null as any, // memoryStore
-        undefined,
-        undefined,
-        undefined,
-        mockReranker,
-        mockConfig,
-      );
-
-      return Object.fromEntries(
-        captured.map(({ name, handler }) => [
-          name,
-          (args: any, context = makeServerContext()) => handler(args, context),
-        ]),
-      );
-    }
-
-    describe("rag_list_reranker_models", () => {
-      it("returns model list when reranker is available", async () => {
-        const mockReranker = {
-          getCurrentModel: sinon.stub().returns("Xenova/ms-marco-MiniLM-L-6-v2"),
-          isAvailable: sinon.stub().returns(true),
-        };
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          mockReranker,
-          {} as any,
-        );
-
-        const result = await rerankerHandlers.rag_list_reranker_models({});
-        const body = parseResponse(result);
-
-        expect(body.enabled).to.be.true;
-        expect(body.isAvailable).to.be.true;
-        expect(body.currentModel).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
-        expect(body.models).to.be.an("array");
-      });
-
-      it("returns enabled: false when reranker is null", async () => {
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          null,
-          {} as any,
-        );
-
-        const result = await rerankerHandlers.rag_list_reranker_models({});
-        const body = parseResponse(result);
-
-        expect(body.enabled).to.be.false;
-        expect(body.currentModel).to.be.null;
-        expect(body.isAvailable).to.be.false;
-      });
-    });
-
-    describe("rag_reranker_info", () => {
-      it("returns correct status when reranker is available", async () => {
-        const mockReranker = {
-          getCurrentModel: sinon.stub().returns("Xenova/ms-marco-MiniLM-L-6-v2"),
-          isAvailable: sinon.stub().returns(true),
-        };
-        const mockConfig = {
-          rerankerMaxCandidates: 20,
-          rerankerCandidateMultiplier: 4,
-        };
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          mockReranker,
-          mockConfig as any,
-        );
-
-        const result = await rerankerHandlers.rag_reranker_info({});
-        const body = parseResponse(result);
-
-        expect(body.enabled).to.be.true;
-        expect(body.currentModel).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
-        expect(body.isAvailable).to.be.true;
-        expect(body.maxCandidates).to.equal(20);
-        expect(body.candidateMultiplier).to.equal(4);
-      });
-
-      it("returns correct status when reranker is null", async () => {
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          null,
-          {} as any,
-        );
-
-        const result = await rerankerHandlers.rag_reranker_info({});
-        const body = parseResponse(result);
-
-        expect(body.enabled).to.be.false;
-        expect(body.currentModel).to.be.null;
-        expect(body.isAvailable).to.be.false;
-      });
-
-      it("returns maxCandidates and candidateMultiplier from config", async () => {
-        const mockConfig = {
-          rerankerMaxCandidates: 30,
-          rerankerCandidateMultiplier: 6,
-        };
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          null,
-          mockConfig as any,
-        );
-
-        const result = await rerankerHandlers.rag_reranker_info({});
-        const body = parseResponse(result);
-
-        expect(body.maxCandidates).to.equal(30);
-        expect(body.candidateMultiplier).to.equal(6);
-      });
-    });
-
-    describe("rag_switch_reranker_model", () => {
-      it("returns error when reranker is null", async () => {
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          null,
-          {} as any,
-        );
-
-        const result = await rerankerHandlers.rag_switch_reranker_model({ model: "some/model" });
-
-        expect(result.isError).to.equal(true);
-        expect(parseResponse(result).error).to.include("not available");
-      });
-
-      it("calls switchModel on the reranker", async () => {
-        const mockReranker = {
-          getCurrentModel: sinon
-            .stub()
-            .onFirstCall()
-            .returns("Xenova/ms-marco-MiniLM-L-6-v2")
-            .onSecondCall()
-            .returns("Xenova/ms-marco-MiniLM-L-12-v2"),
-          switchModel: sinon.stub().resolves(),
-        };
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          mockReranker,
-          {} as any,
-        );
-
-        await rerankerHandlers.rag_switch_reranker_model({ model: "Xenova/ms-marco-MiniLM-L-12-v2" });
-
-        expect(mockReranker.switchModel.calledOnce).to.be.true;
-        expect(mockReranker.switchModel.firstCall.args[0]).to.equal("Xenova/ms-marco-MiniLM-L-12-v2");
-      });
-
-      it("returns previous and new model names on success", async () => {
-        const mockReranker = {
-          getCurrentModel: sinon
-            .stub()
-            .onFirstCall()
-            .returns("Xenova/ms-marco-MiniLM-L-6-v2")
-            .onSecondCall()
-            .returns("Xenova/ms-marco-MiniLM-L-12-v2"),
-          switchModel: sinon.stub().resolves(),
-        };
-        rerankerHandlers = captureHandlersWithReranker(
-          { topicManager, config, llmProvider, embeddingService, ragQueryService },
-          mockReranker,
-          {} as any,
-        );
-
-        const result = await rerankerHandlers.rag_switch_reranker_model({ model: "Xenova/ms-marco-MiniLM-L-12-v2" });
-        const body = parseResponse(result);
-
-        expect(body.success).to.be.true;
-        expect(body.previousModel).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
-        expect(body.newModel).to.equal("Xenova/ms-marco-MiniLM-L-12-v2");
-        expect(body.message).to.include("Switched");
-      });
-    });
-  });
-
   describe("tool descriptions", () => {
     function captureDescriptions(): Record<string, string> {
       const descriptions: Record<string, string> = {};
@@ -1149,7 +1011,6 @@ describe("MCP Tools (registerTools)", () => {
       registerTools(
         server,
         topicManager as unknown as TopicManager,
-        llmProvider as unknown as ILLMProvider,
         embeddingService as unknown as EmbeddingService,
         ragQueryService as unknown as RAGQueryService,
       );
@@ -1181,10 +1042,8 @@ describe("MCP Tools (registerTools)", () => {
       registerTools(
         server,
         topicManager as unknown as TopicManager,
-        llmProvider as unknown as ILLMProvider,
         embeddingService as unknown as EmbeddingService,
         ragQueryService as unknown as RAGQueryService,
-        undefined,
         undefined,
         undefined,
         undefined,
@@ -1207,11 +1066,9 @@ describe("MCP Tools (registerTools)", () => {
       });
       const beforeEntries = await fs.readdir(root);
       const handlers = captureReadOnlyHandlers(cfg);
-      expect(Object.keys(handlers)).to.include.members(["rag_query", "rag_list_topics", "rag_embedding_info"]);
+      expect(Object.keys(handlers)).to.include.members(["rag_query", "rag_list_embedding_models", "rag_embedding_info"]);
       const args: Record<string, any> = {
         rag_query: { topic: "docs", query: "question" },
-        rag_topic_stats: { topic: "docs" },
-        rag_list_documents: { topic: "docs" },
       };
       for (const [name, handler] of Object.entries(handlers)) {
         await handler(args[name] ?? {}, {});

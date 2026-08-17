@@ -1520,7 +1520,7 @@ for (const contract of [
   /"run",\s*\n?\s*"-i",/,
   /server\/discover/,
   /tools\/list/,
-  /expectedToolCount = 24/,
+  /expectedToolCount = 11/,
   /assertStorageLock/,
   /assertRemovedEnvRejected/,
   /assertRuntimeHardening/,

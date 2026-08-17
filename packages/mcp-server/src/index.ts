@@ -182,8 +182,6 @@ async function main(): Promise<void> {
     maxCandidates: config.rerankerMaxCandidates,
   });
   let rerankerFailure: string | undefined;
-  // Share the SAME instance with the query path so rag_switch_reranker_model
-  // affects query behaviour, not just the management tools' private copy.
   ragQueryService.setReranker(reranker);
   // Non-blocking warm-up: the first query skips the model-load stall, and a
   // broken model surfaces in the startup log instead of at query time.
@@ -227,14 +225,12 @@ async function main(): Promise<void> {
     registerTools(
       server,
       topicManager,
-      llmProvider,
       embeddingService,
       ragQueryService,
       memoryStore,
       memoryService,
       graphVisualizationService,
       memoryStore,
-      reranker,
       config,
       runMutation,
       toolRuntime,

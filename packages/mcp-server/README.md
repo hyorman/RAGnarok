@@ -47,10 +47,11 @@ Logs go to stderr so they never corrupt the JSON-RPC framing on stdout.
 
 ## Tool surface
 
-The server registers **24 tools**, unconditionally. There are no roles and no
+The server registers **11 tools**, unconditionally. There are no roles and no
 capability tiers: the client already runs with the owner's authority, so a
 second authorization model inside the process would protect nothing. Every tool
-below appears in `tools/list` on every connection.
+below appears in `tools/list` on every connection. The reranker and the LLM
+provider are configured exclusively through `config.json` and expose no tools.
 
 Destructive tools (`rag_delete_topic`, `rag_remove_document`,
 `rag_reset_memory`, archive import) require an explicit `confirm: true`. That is
@@ -66,36 +67,23 @@ file where the server can read it.
 | Tool                         | Description                                                                                                                               | Parameters                                                                                                                                                      |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rag_query`                  | Query a topic with RAG (supports agentic multi-step planning)                                                                             | `topic` (string), `query` (string), `topK?` (number), `retrievalStrategy?` (`"vector"` \| `"hybrid"` \| `"bm25"`)                                               |
-| `rag_list_topics`            | List all available topics with metadata                                                                                                   | _(none)_                                                                                                                                                        |
-| `rag_topic_stats`            | Get statistics for a topic                                                                                                                | `topic` (string)                                                                                                                                                |
-| `rag_create_topic`           | Create a new topic                                                                                                                        | `name` (string), `description?` (string)                                                                                                                        |
-| `rag_add_documents`          | Add documents to a topic (paths must be inside `security.allowedPaths`)                                                                   | `topic` (string), `filePaths` (string[])                                                                                                                        |
-| `rag_list_embedding_models`  | List available embedding models                                                                                                           | _(none)_                                                                                                                                                        |
-| `rag_embedding_info`         | Get current embedding model info                                                                                                          | _(none)_                                                                                                                                                        |
-| `rag_switch_embedding_model` | Switch the active embedding model                                                                                                         | `model` (string)                                                                                                                                                |
-| `rag_llm_status`             | Get LLM provider status and configuration                                                                                                 | _(none)_                                                                                                                                                        |
-| `rag_list_reranker_models`   | List available cross-encoder reranker models                                                                                              | _(none)_                                                                                                                                                        |
-| `rag_reranker_info`          | Get current reranker configuration and status                                                                                             | _(none)_                                                                                                                                                        |
-| `rag_switch_reranker_model`  | Switch the cross-encoder reranker model                                                                                                   | `model` (string)                                                                                                                                                |
-| `rag_memory`                 | Project memory: store, recall, forget (incl. `expired`), stats, list, decay, history, promote, links, communities (needs an LLM provider) | `action` (string) plus action-specific fields (`content`, `query`, `id`, `scope`, `branch`, `tags`, `topK`, `olderThan`, `expired`, `limit`, `includeEntities`) |
-| `rag_list_documents`         | List a topic's indexed source documents                                                                                                   | `topic` (string)                                                                                                                                                |
+| `rag_ingest`                 | Add content to a topic from one discriminated source                                                                                      | `source: "files"` with `topic`, `filePaths` (inside `security.allowedPaths`); `source: "url"` with `topic`, `url`; `source: "github"` with `topic`, `url`, `branch?` |
+| `rag_topic`                  | Manage topics through one discriminated action                                                                                            | `action: "list"`; `"stats"` with `topic` (returns statistics plus the topic's documents); `"create"` with `name`, `description?`; `"rename"` with `topic`, `newName`; `"export"` with `topic`; `"import"` with `archivePath`, `confirm` (`true`) |
 | `rag_delete_topic`           | Delete a topic and all managed data                                                                                                       | `topic` (string), `confirm` (`true`)                                                                                                                            |
 | `rag_remove_document`        | Remove one document and its chunks                                                                                                        | `topic` (string), `documentId` (string), `confirm` (`true`)                                                                                                     |
-| `rag_rename_topic`           | Rename a topic                                                                                                                            | `topic` (string), `newName` (string)                                                                                                                            |
-| `rag_graph_visualize`        | Return a deterministic memory graph and associate the MCP App                                                                             | One exact input shape from [Memory graph visualization](#memory-graph-visualization)                                                                            |
-| `rag_add_url`                | Securely ingest a public HTTP(S) URL                                                                                                      | `topic` (string), `url` (string)                                                                                                                                |
-| `rag_add_github_repo`        | Ingest an allowlisted GitHub/GHES repository                                                                                              | `topic` (string), `url` (string), `branch?` (string)                                                                                                            |
-| `rag_export_topic`           | Export a checksummed storage-format-v2 `.rag` archive                                                                                     | `topic` (string)                                                                                                                                                |
-| `rag_import_topic`           | Import a validated `.rag` archive from an allowlisted path                                                                                | `archivePath` (string), `confirm` (`true`)                                                                                                                      |
+| `rag_list_embedding_models`  | List available embedding models (flags `remoteListingFailed` when a configured remote catalogue cannot be fetched)                        | _(none)_                                                                                                                                                        |
+| `rag_embedding_info`         | Get current embedding model info plus `configuredModel`/`configuredProvider` from `config.json`                                           | _(none)_                                                                                                                                                        |
+| `rag_switch_embedding_model` | Switch the active embedding model                                                                                                         | `model` (string)                                                                                                                                                |
+| `rag_memory`                 | Project memory: store, recall, forget (incl. `expired`), stats, list, decay, history, promote, links, communities (needs an LLM provider) | `action` (string) plus action-specific fields (`content`, `query`, `id`, `scope`, `branch`, `tags`, `topK`, `olderThan`, `expired`, `limit`, `includeEntities`) |
 | `rag_reset_memory`           | Delete standalone memory after explicit confirmation                                                                                      | `confirm` (`true`)                                                                                                                                              |
-| `rag_storage_status`         | Report storage format, location, and reset requirements                                                                                   | _(none)_                                                                                                                                                        |
+| `rag_memory_visualize`       | Return a deterministic memory graph and associate the MCP App                                                                             | One exact input shape from [Memory graph visualization](#memory-graph-visualization)                                                                            |
 
 ---
 
 ## Memory graph visualization
 
 Graphs exist only in the memory subsystem. There is no document knowledge
-graph, and `rag_graph_visualize` has no knowledge input.
+graph, and `rag_memory_visualize` has no knowledge input.
 
 The tool is registered on every connection and exports the local user's own
 memory. It accepts exactly one of these discriminated inputs; fields from the
@@ -283,7 +271,7 @@ environment variable for any of them.
 
 | `config.json` key               | Default                         | Description                                                                                                                       |
 | ------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `security.allowedPaths`         | _(the working dir)_             | Roots `rag_add_documents` may read, as a JSON array of strings                                                                    |
+| `security.allowedPaths`         | _(the working dir)_             | Roots `rag_ingest` (files) may read, as a JSON array of strings                                                                    |
 | `embedding.model`               | `Xenova/all-MiniLM-L6-v2`       | Default embedding model for newly created topics (HuggingFace or remote)                                                          |
 | `embedding.provider`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                             |
 | `embedding.baseUrl`             | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                        |
@@ -479,7 +467,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_me
 ```
 
 A successful reply advertises protocol `2026-07-28`. Follow it with a
-`tools/list` request on the same connection to see all 24 tools.
+`tools/list` request on the same connection to see all 11 tools.
 
 ### Claude Desktop configuration
 

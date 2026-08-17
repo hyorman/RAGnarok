@@ -70,7 +70,7 @@ export interface McpConfig {
   /** Project root for git-branch-scoped memory (empty = fall back to cwd). */
   workingDir: string;
   /**
-   * Roots that rag_add_documents may read from (security.allowedPaths).
+   * Roots that rag_ingest (files) may read from (security.allowedPaths).
    * Empty = default to the working directory.
    */
   allowedPaths: string[];

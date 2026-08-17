@@ -3,22 +3,24 @@
  *
  * RAG tools:
  * - rag_query: Query a topic with RAG
- * - rag_list_topics: List available topics
- * - rag_topic_stats: Get statistics for a topic
- * - rag_create_topic: Create a new topic
- * - rag_add_documents: Add documents to a topic
+ * - rag_ingest: Add local files, a web page, or a GitHub repository to a topic
+ * - rag_topic: List, create, rename, export, import, or get stats (incl. documents) for topics
+ * - rag_delete_topic: Permanently delete a topic (kept separate: destructive)
+ * - rag_remove_document: Permanently remove one indexed source (kept separate: destructive)
  *
  * Embedding management tools:
  * - rag_list_embedding_models: List available embedding models
  * - rag_embedding_info: Get current embedding model info
  * - rag_switch_embedding_model: Switch the active embedding model
  *
- * LLM management tools:
- * - rag_llm_status: Get current LLM provider status
- *
  * Memory tools:
  * - rag_memory: Store, recall, forget, list, stats, decay, history, promote, links, or communities for project
  *   memories
+ * - rag_reset_memory: Delete all standalone memories (kept separate: destructive)
+ * - rag_memory_visualize: Interactive memory graph document for MCP Apps
+ *
+ * Reranker and LLM management have no tools: both are configured exclusively
+ * through config.json and are internal to the retrieval pipeline.
  */
 
 import fs from "node:fs/promises";
@@ -29,15 +31,12 @@ import { z } from "zod";
 import {
   TopicManager,
   RetrievalStrategy,
-  ILLMProvider,
   EmbeddingService,
   RAGQueryService,
   TopicEmptyError,
   MemoryStore,
   MemoryService,
   GraphVisualizationService,
-  CrossEncoderReranker,
-  RerankerModelRegistry,
 } from "@ragnarok/core";
 import type { AvailableModel } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "./uiResource";
@@ -57,6 +56,81 @@ export const MCP_LIMITS = Object.freeze({
   modelName: 255,
   responseBytes: 1_048_576,
 });
+
+const ingestInput = z.discriminatedUnion("source", [
+  z
+    .object({
+      source: z.literal("files"),
+      topic: z.string().trim().min(1).max(MCP_LIMITS.topicName).describe("The name of the topic to add documents to"),
+      filePaths: z
+        .array(z.string().trim().min(1).max(MCP_LIMITS.path))
+        .min(1)
+        .max(100)
+        .describe("Array of file paths to add"),
+    })
+    .strict(),
+  z
+    .object({
+      source: z.literal("url"),
+      topic: z.string().trim().min(1).max(MCP_LIMITS.topicName).describe("The name of the topic to add the page to"),
+      url: z.string().url().max(MCP_LIMITS.url).describe("Public HTTP(S) page URL"),
+    })
+    .strict(),
+  z
+    .object({
+      source: z.literal("github"),
+      topic: z
+        .string()
+        .trim()
+        .min(1)
+        .max(MCP_LIMITS.topicName)
+        .describe("The name of the topic to add the repository to"),
+      url: z.string().url().max(MCP_LIMITS.url).describe("HTTPS URL of an allowlisted GitHub or GHES repository"),
+      branch: z.string().min(1).max(255).optional().describe("Branch to index (default branch if omitted)"),
+    })
+    .strict(),
+]);
+
+const topicInput = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("list") }).strict(),
+  z
+    .object({
+      action: z.literal("stats"),
+      topic: z.string().min(1).max(MCP_LIMITS.topicName).describe("The name of the topic to get stats for"),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("create"),
+      name: z.string().trim().min(1).max(100).describe("Name for the new topic"),
+      description: z.string().max(2000).optional().describe("Description of the topic"),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("rename"),
+      topic: z.string().min(1).max(MCP_LIMITS.topicName).describe("The topic to rename"),
+      newName: z.string().trim().min(1).max(MCP_LIMITS.topicName).describe("The new topic name"),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("export"),
+      topic: z.string().min(1).max(MCP_LIMITS.topicName).describe("The topic to export"),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("import"),
+      archivePath: z
+        .string()
+        .min(1)
+        .max(MCP_LIMITS.path)
+        .describe("Path to a storage-v2 .rag archive inside the allowed roots"),
+      confirm: z.literal(true),
+    })
+    .strict(),
+]);
 
 const graphVisualizationInput = z.discriminatedUnion("memoryScope", [
   z
@@ -145,14 +219,12 @@ export function measureToolResultForResponse(
 export function registerTools(
   server: McpServer,
   topicManager: TopicManager,
-  llmProvider: ILLMProvider,
   embeddingService: EmbeddingService,
   ragQueryService: RAGQueryService,
   memoryStore?: MemoryStore,
   memoryService?: MemoryService,
   graphVisualizationService?: GraphVisualizationService,
   memoryBranchProvider?: Pick<MemoryStore, "getCurrentBranch">,
-  reranker?: CrossEncoderReranker | null,
   config?: McpConfig,
   runMutation: MutationRunner = (operation) => operation(),
   runtime: ToolRuntime = { run: (operation) => operation() },
@@ -282,134 +354,7 @@ export function registerTools(
     },
   );
 
-  // rag_list_topics — List available topics
-  registerTool(
-    "rag_list_topics",
-    "List all available RAG topics with their metadata",
-    z.object({}),
-    readOnlyAnnotations,
-    async () => {
-      try {
-        const topics = topicManager.getAllTopics();
-        const topicList = topics.map((t) => ({
-          name: t.name,
-          description: t.description,
-          documentCount: t.documentCount,
-          createdAt: new Date(t.createdAt).toISOString(),
-          updatedAt: new Date(t.updatedAt).toISOString(),
-          source: t.source || "local",
-        }));
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ topics: topicList, count: topicList.length }, null, 2),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // rag_topic_stats — Get statistics for a topic
-  registerTool(
-    "rag_topic_stats",
-    "Get detailed statistics for a specific RAG topic",
-    z.object({
-      topic: z.string().min(1).max(MCP_LIMITS.topicName).describe("The name of the topic to get stats for"),
-    }),
-    readOnlyAnnotations,
-    async ({ topic }) => {
-      try {
-        const topicMatch = await topicManager.resolveTopicByName(topic);
-        const matchedTopic = topicMatch.topic;
-
-        const stats = await topicManager.getTopicStats(matchedTopic.id);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(stats, null, 2),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // rag_create_topic — Create a new topic
-  registerTool(
-    "rag_create_topic",
-    "Create a new RAG topic for organizing documents",
-    z.object({
-      name: z.string().trim().min(1).max(100).describe("Name for the new topic"),
-      description: z.string().max(2000).optional().describe("Description of the topic"),
-    }),
-    writeAnnotations,
-    async ({ name, description }) => {
-      try {
-        const topic = await runMutation(() => topicManager.createTopic({ name, description }));
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  success: true,
-                  topic: {
-                    id: topic.id,
-                    name: topic.name,
-                    description: topic.description,
-                  },
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // rag_add_documents — Add documents to a topic
+  // rag_ingest (files variant) — Add documents to a topic
   //
   // Paths are restricted to the configured allowlist roots
   // (security.allowedPaths, defaulting to the working directory): a remote
@@ -455,86 +400,114 @@ export function registerTools(
     return real;
   }
 
-  registerTool(
-    "rag_add_documents",
-    "Add one or more documents to a RAG topic. Supports PDF, Markdown, HTML, and plain text files. " +
-      'Paths must be inside the server\'s allowed roots ("security.allowedPaths" in config.json).',
-    z.object({
-      topic: z.string().trim().min(1).max(MCP_LIMITS.topicName).describe("The name of the topic to add documents to"),
-      filePaths: z
-        .array(z.string().trim().min(1).max(MCP_LIMITS.path))
-        .min(1)
-        .max(100)
-        .describe("Array of file paths to add"),
-    }),
-    writeAnnotations,
-    async ({ topic, filePaths }, context) => {
+  type IngestInput = z.infer<typeof ingestInput>;
+
+  async function ingestFiles(input: Extract<IngestInput, { source: "files" }>, context: ServerContext): Promise<any> {
+    const topicMatch = await topicManager.resolveTopicByName(input.topic);
+    const matchedTopic = topicMatch.topic;
+
+    // Per-file processing so the response reports the actual outcome of
+    // every file instead of claiming blanket success.
+    const files: Array<{ path: string; status: "added" | "failed"; chunkCount?: number; error?: string }> = [];
+    for (const filePath of input.filePaths) {
       try {
-        const topicMatch = await topicManager.resolveTopicByName(topic);
-        const matchedTopic = topicMatch.topic;
-
-        // Per-file processing so the response reports the actual outcome of
-        // every file instead of claiming blanket success.
-        const files: Array<{ path: string; status: "added" | "failed"; chunkCount?: number; error?: string }> = [];
-        for (const filePath of filePaths) {
-          try {
-            const realPath = await assertPathAllowed(filePath);
-            const results = await runMutation(() =>
-              topicManager.addDocuments(matchedTopic.id, [realPath], {
-                signal: context.mcpReq.signal,
-              }),
-            );
-            if (results.length > 0) {
-              files.push({
-                path: filePath,
-                status: "added",
-                chunkCount: results.reduce((sum, r) => sum + r.pipelineResult.metadata.chunksStored, 0),
-              });
-            } else {
-              files.push({ path: filePath, status: "failed", error: "document processing failed (see server logs)" });
-            }
-          } catch (error) {
-            files.push({
-              path: filePath,
-              status: "failed",
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
+        const realPath = await assertPathAllowed(filePath);
+        const results = await runMutation(() =>
+          topicManager.addDocuments(matchedTopic.id, [realPath], {
+            signal: context.mcpReq.signal,
+          }),
+        );
+        if (results.length > 0) {
+          files.push({
+            path: filePath,
+            status: "added",
+            chunkCount: results.reduce((sum, r) => sum + r.pipelineResult.metadata.chunksStored, 0),
+          });
+        } else {
+          files.push({ path: filePath, status: "failed", error: "document processing failed (see server logs)" });
         }
-
-        const added = files.filter((f) => f.status === "added");
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  success: added.length > 0,
-                  partial: added.length > 0 && added.length < files.length,
-                  topic: matchedTopic.name,
-                  documentsAdded: added.length,
-                  documentsFailed: files.length - added.length,
-                  files,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-          isError: added.length === 0,
-        };
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
+        files.push({
+          path: filePath,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const added = files.filter((f) => f.status === "added");
+    return {
+      ...toolJson({
+        success: added.length > 0,
+        partial: added.length > 0 && added.length < files.length,
+        topic: matchedTopic.name,
+        documentsAdded: added.length,
+        documentsFailed: files.length - added.length,
+        files,
+      }),
+      isError: added.length === 0,
+    };
+  }
+
+  async function ingestUrl(input: Extract<IngestInput, { source: "url" }>, context: ServerContext): Promise<any> {
+    const parsed = new URL(input.url);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error("Only HTTP(S) URLs are supported");
+    }
+    if (parsed.username || parsed.password) {
+      throw new Error("URLs containing credentials are not allowed");
+    }
+    const match = await topicManager.resolveTopicByName(input.topic);
+    const results = await runMutation(() =>
+      topicManager.addDocuments(match.topic.id, [input.url], {
+        loaderOptions: { fileType: "web" },
+        signal: context.mcpReq.signal,
+      }),
+    );
+    return toolJson({ success: results.length > 0, outcomes: results });
+  }
+
+  async function ingestGithub(input: Extract<IngestInput, { source: "github" }>, context: ServerContext): Promise<any> {
+    const parsed = new URL(input.url);
+    if (parsed.username || parsed.password || parsed.protocol !== "https:") {
+      throw new Error("GitHub repositories require an HTTPS URL without embedded credentials");
+    }
+    if (!config?.githubHosts.includes(parsed.hostname.toLowerCase())) {
+      throw new Error("GitHub host is not allowlisted");
+    }
+    const match = await topicManager.resolveTopicByName(input.topic);
+    const results = await runMutation(() =>
+      topicManager.addDocuments(match.topic.id, [input.url], {
+        loaderOptions: {
+          fileType: "github",
+          branch: input.branch,
+          accessToken: config?.githubToken || undefined,
+        },
+        signal: context.mcpReq.signal,
+      }),
+    );
+    return toolJson({ success: results.length > 0, outcomes: results });
+  }
+
+  registerTool(
+    "rag_ingest",
+    "Add content to a RAG topic from one of three sources: 'files' (local paths inside the server's allowed roots, " +
+      "PDF/Markdown/HTML/plain text), 'url' (one public HTTP(S) page, with SSRF and size protections), or " +
+      "'github' (a repository from an allowlisted GitHub or GHES host).",
+    ingestInput,
+    networkWriteAnnotations,
+    async (input: IngestInput, context) => {
+      try {
+        switch (input.source) {
+          case "files":
+            return await ingestFiles(input, context);
+          case "url":
+            return await ingestUrl(input, context);
+          case "github":
+            return await ingestGithub(input, context);
+        }
+      } catch (error) {
+        return toolError(error);
       }
     },
   );
@@ -553,6 +526,11 @@ export function registerTools(
       try {
         const models = await embeddingService.listAvailableModels();
         const currentModel = embeddingService.getCurrentModel();
+        // With a remote provider configured, the service returns the remote
+        // catalogue; local registry entries mean the remote listing failed and
+        // the fallback would otherwise impersonate a usable catalogue.
+        const remoteConfigured = Boolean(config && config.embeddingProvider !== "huggingface");
+        const remoteListingFailed = remoteConfigured && !models.some((m: AvailableModel) => m.source === "remote");
 
         return {
           content: [
@@ -568,6 +546,13 @@ export function registerTools(
                     active: m.name === currentModel,
                   })),
                   count: models.length,
+                  ...(remoteListingFailed
+                    ? {
+                        remoteListingFailed: true,
+                        warning:
+                          "The configured remote embedding provider could not be queried; the local model catalogue shown here is not usable for switching.",
+                      }
+                    : {}),
                 },
                 null,
                 2,
@@ -612,6 +597,11 @@ export function registerTools(
                   currentModel,
                   backend: backendType,
                   localModelPath: localModelPath ?? "none",
+                  // From config.json — reported even before the backend is
+                  // initialized, when currentModel still shows the registry
+                  // default rather than the configured value.
+                  configuredModel: config?.embeddingModel ?? null,
+                  configuredProvider: config?.embeddingProvider ?? null,
                 },
                 null,
                 2,
@@ -731,208 +721,6 @@ export function registerTools(
     },
   );
 
-  // ────────────────────────────────────────────────────────────
-  // LLM management tools
-  // ────────────────────────────────────────────────────────────
-
-  // rag_llm_status — Get current LLM provider status
-  registerTool(
-    "rag_llm_status",
-    "Get the current LLM provider status and configuration",
-    z.object({}),
-    readOnlyAnnotations,
-    async () => {
-      try {
-        const available = await llmProvider.isAvailable();
-        const model = available ? await llmProvider.selectModel() : null;
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  available,
-                  model: model ? { id: model.id, family: model.family } : null,
-                  hint: !available
-                    ? "Set \"llm.provider\" in config.json to 'openai', 'anthropic', or 'ollama' and provide the required API key (RAGNAROK_LLM_API_KEY) to enable agentic query planning."
-                    : undefined,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // ────────────────────────────────────────────────────────────
-  // Reranker management tools
-  // ────────────────────────────────────────────────────────────
-
-  // rag_list_reranker_models — List available cross-encoder reranker models
-  registerTool(
-    "rag_list_reranker_models",
-    "List available cross-encoder reranker models with their status",
-    z.object({}),
-    readOnlyAnnotations,
-    async () => {
-      try {
-        const registry = RerankerModelRegistry.getInstance();
-        const models = await registry.listAvailableModels();
-        const currentModel = reranker?.getCurrentModel() ?? null;
-
-        const result = {
-          currentModel,
-          enabled: reranker !== null && reranker !== undefined,
-          isAvailable: reranker?.isAvailable() ?? false,
-          models: models.map((m) => ({
-            name: m.name,
-            source: m.source,
-            downloaded: m.downloaded ?? false,
-            active: m.name === currentModel,
-          })),
-          count: models.length,
-        };
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // rag_reranker_info — Get current reranker configuration and status
-  registerTool(
-    "rag_reranker_info",
-    "Get current reranker configuration and status",
-    z.object({}),
-    readOnlyAnnotations,
-    async () => {
-      try {
-        const result = {
-          enabled: reranker !== null && reranker !== undefined,
-          currentModel: reranker?.getCurrentModel() ?? null,
-          isAvailable: reranker?.isAvailable() ?? false,
-          maxCandidates: config?.rerankerMaxCandidates ?? null,
-          candidateMultiplier: config?.rerankerCandidateMultiplier ?? null,
-        };
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // rag_switch_reranker_model — Switch to a different cross-encoder reranker model
-  registerTool(
-    "rag_switch_reranker_model",
-    "Switch to a different cross-encoder reranker model",
-    z.object({
-      model: z
-        .string()
-        .min(1)
-        .max(MCP_LIMITS.modelName)
-        .describe("The reranker model identifier (e.g., 'Xenova/ms-marco-MiniLM-L-6-v2')"),
-    }),
-    writeAnnotations,
-    async ({ model }) => {
-      try {
-        if (!reranker) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: "Reranker is not available." }) }],
-            isError: true,
-          };
-        }
-
-        const previousModel = reranker.getCurrentModel();
-        await runMutation(() => reranker.switchModel(model));
-        const newModel = reranker.getCurrentModel();
-
-        const result = {
-          success: true,
-          previousModel,
-          newModel,
-          message: `Switched reranker model from ${previousModel} to ${newModel}`,
-        };
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  registerTool(
-    "rag_list_documents",
-    "List indexed sources for a topic",
-    z.object({ topic: z.string().min(1).max(MCP_LIMITS.topicName) }),
-    readOnlyAnnotations,
-    async ({ topic }) => {
-      try {
-        const match = await topicManager.resolveTopicByName(topic);
-        const documents = topicManager
-          .listDocuments(match.topic.id)
-          .map((document) => ({ ...document, documentId: document.id }));
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ topic: match.topic.name, documents, count: documents.length }, null, 2),
-            },
-          ],
-        };
-      } catch (error) {
-        return toolError(error);
-      }
-    },
-  );
-
   registerTool(
     "rag_delete_topic",
     "Permanently delete a local topic and all of its data",
@@ -969,129 +757,73 @@ export function registerTools(
     },
   );
 
+  type TopicInput = z.infer<typeof topicInput>;
+
   registerTool(
-    "rag_rename_topic",
-    "Rename a local topic",
-    z.object({
-      topic: z.string().min(1).max(MCP_LIMITS.topicName),
-      newName: z.string().trim().min(1).max(MCP_LIMITS.topicName),
-    }),
+    "rag_topic",
+    "Manage RAG topics: 'list' all topics, 'stats' for one topic (statistics plus its indexed documents), " +
+      "'create' a new topic, 'rename' a topic, 'export' a topic as a storage-v2 .rag archive under the configured " +
+      "export directory, or 'import' a .rag archive from an allowlisted path (requires confirm: true).",
+    topicInput,
     writeAnnotations,
-    async ({ topic, newName }) => {
+    async (input: TopicInput) => {
       try {
-        const match = await topicManager.resolveTopicByName(topic);
-        const updated = await runMutation(() => topicManager.updateTopic(match.topic.id, { name: newName }));
-        return toolJson({ success: true, topic: updated });
-      } catch (error) {
-        return toolError(error);
-      }
-    },
-  );
-
-  registerTool(
-    "rag_add_url",
-    "Fetch and index one public HTTP(S) page with SSRF and size protections",
-    z.object({
-      topic: z.string().min(1).max(MCP_LIMITS.topicName),
-      url: z.string().url().max(MCP_LIMITS.url),
-    }),
-    networkWriteAnnotations,
-    async ({ topic, url }, context) => {
-      try {
-        const parsed = new URL(url);
-        if (!["http:", "https:"].includes(parsed.protocol)) {
-          throw new Error("Only HTTP(S) URLs are supported");
+        switch (input.action) {
+          case "list": {
+            const topics = topicManager.getAllTopics().map((t) => ({
+              name: t.name,
+              description: t.description,
+              documentCount: t.documentCount,
+              createdAt: new Date(t.createdAt).toISOString(),
+              updatedAt: new Date(t.updatedAt).toISOString(),
+              source: t.source || "local",
+            }));
+            return toolJson({ topics, count: topics.length });
+          }
+          case "stats": {
+            const match = await topicManager.resolveTopicByName(input.topic);
+            const stats = await topicManager.getTopicStats(match.topic.id);
+            const documents = topicManager
+              .listDocuments(match.topic.id)
+              .map((document) => ({ ...document, documentId: document.id }));
+            return toolJson({ ...stats, documents });
+          }
+          case "create": {
+            const topic = await runMutation(() =>
+              topicManager.createTopic({ name: input.name, description: input.description }),
+            );
+            return toolJson({
+              success: true,
+              topic: { id: topic.id, name: topic.name, description: topic.description },
+            });
+          }
+          case "rename": {
+            const match = await topicManager.resolveTopicByName(input.topic);
+            const updated = await runMutation(() => topicManager.updateTopic(match.topic.id, { name: input.newName }));
+            return toolJson({ success: true, topic: updated });
+          }
+          case "export": {
+            if (!config) {
+              throw new Error("Export configuration unavailable");
+            }
+            const match = await topicManager.resolveTopicByName(input.topic);
+            await fs.mkdir(config.exportDir, { recursive: true });
+            const safeName = match.topic.name.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "topic";
+            const exportPath = path.join(config.exportDir, `${safeName}-${Date.now()}.rag`);
+            await runMutation(() => topicManager.exportTopic(match.topic.id, exportPath));
+            const bytes = await fs.readFile(exportPath);
+            return toolJson({
+              path: exportPath,
+              size: bytes.byteLength,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            });
+          }
+          case "import": {
+            const realPath = await assertPathAllowed(input.archivePath);
+            const topic = await runMutation(() => topicManager.importTopic(realPath));
+            return toolJson({ success: true, topic });
+          }
         }
-        if (parsed.username || parsed.password) {
-          throw new Error("URLs containing credentials are not allowed");
-        }
-        const match = await topicManager.resolveTopicByName(topic);
-        const results = await runMutation(() =>
-          topicManager.addDocuments(match.topic.id, [url], {
-            loaderOptions: { fileType: "web" },
-            signal: context.mcpReq.signal,
-          }),
-        );
-        return toolJson({ success: results.length > 0, outcomes: results });
-      } catch (error) {
-        return toolError(error);
-      }
-    },
-  );
-
-  registerTool(
-    "rag_add_github_repo",
-    "Index a repository from an allowlisted GitHub or GHES host",
-    z.object({
-      topic: z.string().min(1).max(MCP_LIMITS.topicName),
-      url: z.string().url().max(MCP_LIMITS.url),
-      branch: z.string().min(1).max(255).optional(),
-    }),
-    networkWriteAnnotations,
-    async ({ topic, url, branch }, context) => {
-      try {
-        const parsed = new URL(url);
-        if (parsed.username || parsed.password || parsed.protocol !== "https:") {
-          throw new Error("GitHub repositories require an HTTPS URL without embedded credentials");
-        }
-        if (!config?.githubHosts.includes(parsed.hostname.toLowerCase())) {
-          throw new Error("GitHub host is not allowlisted");
-        }
-        const match = await topicManager.resolveTopicByName(topic);
-        const results = await runMutation(() =>
-          topicManager.addDocuments(match.topic.id, [url], {
-            loaderOptions: {
-              fileType: "github",
-              branch,
-              accessToken: config?.githubToken || undefined,
-            },
-            signal: context.mcpReq.signal,
-          }),
-        );
-        return toolJson({ success: results.length > 0, outcomes: results });
-      } catch (error) {
-        return toolError(error);
-      }
-    },
-  );
-
-  registerTool(
-    "rag_export_topic",
-    "Export a topic as a storage-v2 .rag archive under the configured export directory",
-    z.object({ topic: z.string().min(1).max(MCP_LIMITS.topicName) }),
-    writeAnnotations,
-    async ({ topic }) => {
-      try {
-        if (!config) {
-          throw new Error("Export configuration unavailable");
-        }
-        const match = await topicManager.resolveTopicByName(topic);
-        await fs.mkdir(config.exportDir, { recursive: true });
-        const safeName = match.topic.name.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "topic";
-        const exportPath = path.join(config.exportDir, `${safeName}-${Date.now()}.rag`);
-        await runMutation(() => topicManager.exportTopic(match.topic.id, exportPath));
-        const bytes = await fs.readFile(exportPath);
-        return toolJson({
-          path: exportPath,
-          size: bytes.byteLength,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-        });
-      } catch (error) {
-        return toolError(error);
-      }
-    },
-  );
-
-  registerTool(
-    "rag_import_topic",
-    "Import a validated storage-v2 .rag archive from an allowlisted path",
-    z.object({ archivePath: z.string().min(1).max(MCP_LIMITS.path), confirm: z.literal(true) }),
-    destructiveAnnotations,
-    async ({ archivePath }) => {
-      try {
-        const realPath = await assertPathAllowed(archivePath);
-        const topic = await runMutation(() => topicManager.importTopic(realPath));
-        return toolJson({ success: true, topic });
       } catch (error) {
         return toolError(error);
       }
@@ -1108,20 +840,6 @@ export function registerTools(
       async (_input, context) => invokeMemoryResetTool(context, memoryService),
     );
   }
-
-  registerTool(
-    "rag_storage_status",
-    "Report storage format and configured locations",
-    z.object({}),
-    readOnlyAnnotations,
-    async () => {
-      try {
-        return toolJson(await topicManager.getStorageStatus());
-      } catch (error) {
-        return toolError(error);
-      }
-    },
-  );
 
   // ────────────────────────────────────────────────────────────
   // Memory tools
@@ -1205,12 +923,12 @@ export function registerTools(
     );
   }
 
-  // rag_graph_visualize — interactive memory graph document for MCP Apps. It
+  // rag_memory_visualize — interactive memory graph document for MCP Apps. It
   // reads the memory graph, so it is absent without a graph service rather than
   // registered as a tool that could only ever error.
   if (graphVisualizationService) {
     registerTool(
-      "rag_graph_visualize",
+      "rag_memory_visualize",
       "Visualize a RAGnarōk workspace-memory or branch-memory graph as a deterministic bounded document.",
       graphVisualizationInput,
       readOnlyAnnotations,

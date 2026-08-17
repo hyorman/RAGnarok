@@ -89,19 +89,19 @@ are all facts receive fact immunity. The memory graph is a directed multigraph,
 so different relationship types may connect the same ordered pair. It is the
 only graph in the system: it is populated by memory entity extraction, which
 requires an LLM provider, and it is exposed read-only through
-`rag_graph_visualize`. Memory is read and written only through explicit
+`rag_memory_visualize`. Memory is read and written only through explicit
 `rag_memory` operations.
 
 VS Code exposes the core service as native `ragMemory` and confirmed
 `ragResetMemory` language-model tools. Its **RAGnarok: Show Memory Graph**
 command opens a nonce-protected local webview. MCP retains `rag_memory`,
-confirmed `rag_reset_memory`, and `rag_graph_visualize`, whose graph appears as
+confirmed `rag_reset_memory`, and `rag_memory_visualize`, whose graph appears as
 an inline MCP App. The private `@ragnarok/graph-ui` workspace supplies shared
 renderer source with separate VS Code and MCP lifecycle bridges.
 
 ## MCP protocol surface
 
-The MCP server registers 24 tools unconditionally. There are no roles, no
+The MCP server registers 11 tools unconditionally. There are no roles, no
 capability tiers, and no per-principal registration: the client that spawned
 the process already has the owner's authority, so a second authorization model
 inside the process would protect nothing.

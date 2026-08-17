@@ -23,7 +23,7 @@ const removedEnvContainer = "ragnarok-release-removed-env";
 const containers = [sessionContainer, persistenceContainer, lockContainer, removedEnvContainer];
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
-const expectedToolCount = 24;
+const expectedToolCount = 11;
 // Mirrors REMOVED_ENV_VARS in packages/mcp-server/src/config.ts: the image must
 // neither bake these in nor tolerate an operator supplying one.
 const removedEnvVars = [
@@ -266,14 +266,34 @@ function assertToolSurface(tools) {
     throw new Error(`Container exposed ${tools.length} tools; the stdio surface is exactly ${expectedToolCount}`);
   }
   const names = new Set(tools.map((tool) => tool.name));
-  for (const required of ["rag_query", "rag_create_topic", "rag_list_topics", "rag_memory"]) {
+  for (const required of ["rag_query", "rag_ingest", "rag_topic", "rag_memory"]) {
     if (!names.has(required)) {
       throw new Error(`Container tool surface is missing ${required}`);
     }
   }
-  for (const removed of ["rag_create_document_upload", "rag_ingest_upload", "rag_import_upload"]) {
+  for (const removed of [
+    "rag_create_document_upload",
+    "rag_ingest_upload",
+    "rag_import_upload",
+    "rag_create_topic",
+    "rag_list_topics",
+    "rag_topic_stats",
+    "rag_add_documents",
+    "rag_add_url",
+    "rag_add_github_repo",
+    "rag_rename_topic",
+    "rag_export_topic",
+    "rag_import_topic",
+    "rag_list_documents",
+    "rag_llm_status",
+    "rag_storage_status",
+    "rag_list_reranker_models",
+    "rag_reranker_info",
+    "rag_switch_reranker_model",
+    "rag_graph_visualize",
+  ]) {
     if (names.has(removed)) {
-      throw new Error(`Container still exposes the deleted transfer tool ${removed}`);
+      throw new Error(`Container still exposes the deleted tool ${removed}`);
     }
   }
 }
@@ -399,7 +419,7 @@ try {
 
   // A non-default value the server reports back, so the assertion below proves
   // the file was read rather than that a built-in default happened to match.
-  seedConfigFile({ reranker: { maxCandidates: 7 } });
+  seedConfigFile({ embedding: { model: "Xenova/all-MiniLM-L12-v2" } });
 
   // Session 1 — first contact over stdio, on a fresh volume.
   const session = new ContainerSession(sessionContainer);
@@ -408,14 +428,15 @@ try {
   assertRuntimeHardening(sessionContainer);
   await assertStorageLock();
   // config.json on the volume is the only way to configure a container, so the
-  // gate must prove the container actually reads it. maxCandidates defaults to
-  // 20; only the seeded file makes it 7.
-  const rerankerInfo = await session.callTool("rag_reranker_info", {});
-  if (rerankerInfo.maxCandidates !== 7) {
-    throw new Error(`Container ignored the seeded config.json: ${JSON.stringify(rerankerInfo)}`);
+  // gate must prove the container actually reads it. embedding.model defaults
+  // to Xenova/all-MiniLM-L6-v2; only the seeded file makes it the L12 variant.
+  const embeddingInfo = await session.callTool("rag_embedding_info", {});
+  if (embeddingInfo.configuredModel !== "Xenova/all-MiniLM-L12-v2") {
+    throw new Error(`Container ignored the seeded config.json: ${JSON.stringify(embeddingInfo)}`);
   }
 
-  await session.callTool("rag_create_topic", {
+  await session.callTool("rag_topic", {
+    action: "create",
     name: topicName,
     description: "Docker restart persistence gate",
   });
@@ -424,7 +445,7 @@ try {
   // Session 2 — a brand-new container on the same volume must still see it.
   const restarted = new ContainerSession(persistenceContainer);
   assertToolSurface((await restarted.request("tools/list")).tools);
-  const listed = await restarted.callTool("rag_list_topics", {});
+  const listed = await restarted.callTool("rag_topic", { action: "list" });
   const names = (listed.topics ?? listed).map((topic) => topic.name);
   if (!names.includes(topicName)) {
     throw new Error(`Topic did not survive a container replacement; saw ${JSON.stringify(names)}`);

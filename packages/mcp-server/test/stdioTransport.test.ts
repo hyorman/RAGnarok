@@ -17,30 +17,17 @@ import { MemoryVectorStore } from "@ragnarok/core";
 import { StdioHarness, withStdioHarness } from "./helpers/stdioHarness";
 
 const LOCAL_ADMIN_TOOLS = [
-  "rag_add_documents",
-  "rag_add_github_repo",
-  "rag_add_url",
-  "rag_create_topic",
   "rag_delete_topic",
   "rag_embedding_info",
-  "rag_export_topic",
-  "rag_graph_visualize",
-  "rag_import_topic",
-  "rag_list_documents",
+  "rag_ingest",
   "rag_list_embedding_models",
-  "rag_list_reranker_models",
-  "rag_list_topics",
-  "rag_llm_status",
   "rag_memory",
+  "rag_memory_visualize",
   "rag_query",
   "rag_remove_document",
-  "rag_rename_topic",
-  "rag_reranker_info",
   "rag_reset_memory",
-  "rag_storage_status",
   "rag_switch_embedding_model",
-  "rag_switch_reranker_model",
-  "rag_topic_stats",
+  "rag_topic",
 ];
 
 const MODERN_ENVELOPE = {
@@ -147,7 +134,8 @@ describe("stdio transport E2E", function () {
       () => new StdioHarness(storageDir, sourceDir),
       async (fixtureHarness) => {
         expect((await fixtureHarness.discover(900)).error).to.equal(undefined);
-        const fixtureTopicResponse = await fixtureHarness.callTool(901, "rag_create_topic", {
+        const fixtureTopicResponse = await fixtureHarness.callTool(901, "rag_topic", {
+          action: "create",
           name: "stdio-populated",
           description: "Persisted graph protocol fixture",
         });
@@ -185,12 +173,14 @@ describe("stdio transport E2E", function () {
       _meta?: Record<string, unknown>;
     }>;
     expect(listedTools.map((tool) => tool.name).sort()).to.deep.equal([...LOCAL_ADMIN_TOOLS].sort());
-    expect(listedTools.find((tool) => tool.name === "rag_list_documents")?.annotations?.readOnlyHint).to.equal(true);
+    expect(listedTools.find((tool) => tool.name === "rag_list_embedding_models")?.annotations?.readOnlyHint).to.equal(
+      true,
+    );
     expect(listedTools.find((tool) => tool.name === "rag_delete_topic")?.annotations?.destructiveHint).to.equal(true);
-    expect(listedTools.find((tool) => tool.name === "rag_add_url")?.annotations?.openWorldHint).to.equal(true);
+    expect(listedTools.find((tool) => tool.name === "rag_ingest")?.annotations?.openWorldHint).to.equal(true);
 
-    const graphTool = listedTools.find((tool) => tool.name === "rag_graph_visualize");
-    expect(graphTool, "rag_graph_visualize must be listed").to.exist;
+    const graphTool = listedTools.find((tool) => tool.name === "rag_memory_visualize");
+    expect(graphTool, "rag_memory_visualize must be listed").to.exist;
     expect(graphTool?._meta).to.deep.equal({ ui: { resourceUri: "ui://ragnarok/graph" } });
     expect(graphTool?._meta).not.to.have.property("ui/resourceUri");
 
@@ -237,25 +227,26 @@ describe("stdio transport E2E", function () {
       "utf8",
     );
 
-    const createResponse = await harness.callTool(3, "rag_create_topic", {
+    const createResponse = await harness.callTool(3, "rag_topic", {
+      action: "create",
       name: "stdio-flow",
       description: "Real-process ingestion and query verification",
     });
-    expect(createResponse.error, "rag_create_topic returned a protocol error").to.equal(undefined);
+    expect(createResponse.error, "rag_topic create returned a protocol error").to.equal(undefined);
     expect(createResponse.result?.isError, JSON.stringify(createResponse.result)).not.to.equal(true);
 
     const ingestResponse = await harness.callTool(
       4,
-      "rag_add_documents",
-      { topic: "stdio-flow", filePaths: [sourcePath] },
+      "rag_ingest",
+      { source: "files", topic: "stdio-flow", filePaths: [sourcePath] },
       60000,
     );
-    expect(ingestResponse.error, "rag_add_documents returned a protocol error").to.equal(undefined);
+    expect(ingestResponse.error, "rag_ingest returned a protocol error").to.equal(undefined);
     expect(ingestResponse.result?.isError, JSON.stringify(ingestResponse.result)).not.to.equal(true);
     const ingestPayload = JSON.parse(ingestResponse.result?.content?.[0]?.text ?? "{}");
     expect(ingestPayload.documentsAdded, JSON.stringify(ingestPayload)).to.equal(1);
 
-    const documentsResponse = await harness.callTool(5, "rag_list_documents", { topic: "stdio-flow" });
+    const documentsResponse = await harness.callTool(5, "rag_topic", { action: "stats", topic: "stdio-flow" });
     expect(documentsResponse.result?.isError, JSON.stringify(documentsResponse.result)).not.to.equal(true);
     const documentsPayload = JSON.parse(documentsResponse.result?.content?.[0]?.text ?? "{}");
     expect(documentsPayload.documents).to.have.length(1);
@@ -274,28 +265,25 @@ describe("stdio transport E2E", function () {
 
     const reingestResponse = await harness.callTool(
       7,
-      "rag_add_documents",
-      { topic: "stdio-flow", filePaths: [sourcePath] },
+      "rag_ingest",
+      { source: "files", topic: "stdio-flow", filePaths: [sourcePath] },
       60000,
     );
     expect(reingestResponse.result?.isError, JSON.stringify(reingestResponse.result)).not.to.equal(true);
 
-    const reingestedDocuments = await harness.callTool(8, "rag_list_documents", { topic: "stdio-flow" });
-    const reingestedPayload = JSON.parse(reingestedDocuments.result?.content?.[0]?.text ?? "{}");
-    expect(reingestedPayload.documents, "reingestion must replace, not duplicate, the source").to.have.length(1);
-
-    const statsResponse = await harness.callTool(9, "rag_topic_stats", { topic: "stdio-flow" });
+    const statsResponse = await harness.callTool(9, "rag_topic", { action: "stats", topic: "stdio-flow" });
     const statsPayload = JSON.parse(statsResponse.result?.content?.[0]?.text ?? "{}");
     expect(statsPayload.documentCount).to.equal(1);
     expect(statsPayload.chunkCount).to.equal(1);
+    expect(statsPayload.documents, "reingestion must replace, not duplicate, the source").to.have.length(1);
 
     // The knowledge source was removed with the document graph; the narrowed
     // schema must reject it over the wire rather than serving a memory graph.
-    const removedKnowledgeGraph = await harness.callTool(70, "rag_graph_visualize", {
+    const removedKnowledgeGraph = await harness.callTool(70, "rag_memory_visualize", {
       source: "knowledge",
       topic: "stdio-populated",
     });
-    expect(removedKnowledgeGraph.error, "rag_graph_visualize returned a protocol error").to.equal(undefined);
+    expect(removedKnowledgeGraph.error, "rag_memory_visualize returned a protocol error").to.equal(undefined);
     expect(removedKnowledgeGraph.result?.isError, JSON.stringify(removedKnowledgeGraph.result)).to.equal(true);
     expect(removedKnowledgeGraph.result?.content?.[0]?.text).to.match(/^Input validation error: /);
 
@@ -308,12 +296,12 @@ describe("stdio transport E2E", function () {
     ] as const) {
       const memoryGraphResponse = await harness.callTool(
         72 + (memoryCase.scope === "branch" ? 1 : 0),
-        "rag_graph_visualize",
+        "rag_memory_visualize",
         {
           ...memoryCase.arguments,
         },
       );
-      expect(memoryGraphResponse.error, `rag_graph_visualize ${memoryCase.scope} returned a protocol error`).to.equal(
+      expect(memoryGraphResponse.error, `rag_memory_visualize ${memoryCase.scope} returned a protocol error`).to.equal(
         undefined,
       );
       expect(memoryGraphResponse.result?.isError, JSON.stringify(memoryGraphResponse.result)).not.to.equal(true);
@@ -393,7 +381,7 @@ describe("stdio transport E2E", function () {
       );
     }
 
-    const exportResponse = await harness.callTool(40, "rag_export_topic", { topic: "stdio-flow" });
+    const exportResponse = await harness.callTool(40, "rag_topic", { action: "export", topic: "stdio-flow" });
     expect(exportResponse.result?.isError, JSON.stringify(exportResponse.result)).not.to.equal(true);
     const exported = JSON.parse(exportResponse.result?.content?.[0]?.text ?? "{}");
     expect(exported.path).to.match(/\.rag$/);
@@ -412,7 +400,8 @@ describe("stdio transport E2E", function () {
       }
     }
     corruptArchive.writeZip(corruptPath);
-    const corruptImport = await harness.callTool(60, "rag_import_topic", {
+    const corruptImport = await harness.callTool(60, "rag_topic", {
+      action: "import",
       archivePath: corruptPath,
       confirm: true,
     });
@@ -432,7 +421,8 @@ describe("stdio transport E2E", function () {
       }
     }
     oldFormatArchive.writeZip(oldFormatPath);
-    const oldFormatImport = await harness.callTool(61, "rag_import_topic", {
+    const oldFormatImport = await harness.callTool(61, "rag_topic", {
+      action: "import",
       archivePath: oldFormatPath,
       confirm: true,
     });
@@ -445,14 +435,15 @@ describe("stdio transport E2E", function () {
       confirm: true,
     });
     expect(removeResponse.result?.isError, JSON.stringify(removeResponse.result)).not.to.equal(true);
-    const emptyStatsResponse = await harness.callTool(42, "rag_topic_stats", { topic: "stdio-flow" });
+    const emptyStatsResponse = await harness.callTool(42, "rag_topic", { action: "stats", topic: "stdio-flow" });
     const emptyStats = JSON.parse(emptyStatsResponse.result?.content?.[0]?.text ?? "{}");
     expect(emptyStats.documentCount).to.equal(0);
     expect(emptyStats.chunkCount).to.equal(0);
 
     const deleteResponse = await harness.callTool(43, "rag_delete_topic", { topic: "stdio-flow", confirm: true });
     expect(deleteResponse.result?.isError, JSON.stringify(deleteResponse.result)).not.to.equal(true);
-    const importResponse = await harness.callTool(44, "rag_import_topic", {
+    const importResponse = await harness.callTool(44, "rag_topic", {
+      action: "import",
       archivePath: exported.path,
       confirm: true,
     });
@@ -469,19 +460,16 @@ describe("stdio transport E2E", function () {
     expect(importedQuery.result?.isError, JSON.stringify(importedQuery.result)).not.to.equal(true);
     expect((importedQuery.result?.content?.[0]?.text ?? "").toLowerCase()).to.include("violet compass");
 
-    const renameResponse = await harness.callTool(46, "rag_rename_topic", {
+    const renameResponse = await harness.callTool(46, "rag_topic", {
+      action: "rename",
       topic: "stdio-flow",
       newName: "restored-flow",
     });
     expect(renameResponse.result?.isError, JSON.stringify(renameResponse.result)).not.to.equal(true);
-    const storageStatus = await harness.callTool(47, "rag_storage_status", {});
-    const storagePayload = JSON.parse(storageStatus.result?.content?.[0]?.text ?? "{}");
-    expect(storagePayload.formatVersion).to.equal(2);
-    expect(storagePayload.topicCount).to.be.greaterThan(0);
     const resetMemory = await harness.callTool(48, "rag_reset_memory", { confirm: true });
     expect(resetMemory.result?.isError, JSON.stringify(resetMemory.result)).not.to.equal(true);
 
-    const listTopics = await harness.callTool(49, "rag_list_topics", {});
+    const listTopics = await harness.callTool(49, "rag_topic", { action: "list" });
     expect(listTopics.result?.isError, JSON.stringify(listTopics.result)).not.to.equal(true);
     // The fixture topic was created by an earlier server process; it must survive the restart.
     expect(
@@ -494,30 +482,31 @@ describe("stdio transport E2E", function () {
     const activeEmbedding = JSON.parse(embeddingInfo.result?.content?.[0]?.text ?? "{}").currentModel;
     const sameEmbedding = await harness.callTool(52, "rag_switch_embedding_model", { model: activeEmbedding }, 60000);
     expect(sameEmbedding.result?.isError, JSON.stringify(sameEmbedding.result)).not.to.equal(true);
-    const llmStatus = await harness.callTool(53, "rag_llm_status", {});
-    expect(llmStatus.result?.isError, JSON.stringify(llmStatus.result)).not.to.equal(true);
-    expect(JSON.parse(llmStatus.result?.content?.[0]?.text ?? "{}").available).to.equal(false);
-    const rerankerModels = await harness.callTool(54, "rag_list_reranker_models", {});
-    expect(rerankerModels.result?.isError, JSON.stringify(rerankerModels.result)).not.to.equal(true);
-    const rerankerInfo = await harness.callTool(55, "rag_reranker_info", {});
-    expect(rerankerInfo.result?.isError, JSON.stringify(rerankerInfo.result)).not.to.equal(true);
-    // Reranking is unconditional, so the reranker always exists and a switch to
-    // the bundled model succeeds. This used to assert the opposite, because the
-    // harness disabled reranking and left nothing to switch.
-    expect(JSON.parse(rerankerInfo.result?.content?.[0]?.text ?? "{}").enabled).to.equal(true);
-    const rerankerSwitch = await harness.callTool(
-      56,
-      "rag_switch_reranker_model",
-      { model: "Xenova/ms-marco-MiniLM-L-6-v2" },
-      60000,
-    );
-    expect(rerankerSwitch.result?.isError, JSON.stringify(rerankerSwitch.result)).not.to.equal(true);
-    const unsafeUrl = await harness.callTool(57, "rag_add_url", {
+    // The management tools for the reranker and LLM were removed with the
+    // config-file-only decision; the server must reject them as unknown.
+    for (const [id, removedTool] of (
+      [
+        [53, "rag_llm_status"],
+        [54, "rag_list_reranker_models"],
+        [55, "rag_reranker_info"],
+        [56, "rag_switch_reranker_model"],
+        [62, "rag_storage_status"],
+      ] as const
+    ).values()) {
+      const removedResponse = await harness.callTool(id, removedTool, {});
+      expect(
+        removedResponse.error ?? removedResponse.result?.isError,
+        `${removedTool} must no longer be callable`,
+      ).to.be.ok;
+    }
+    const unsafeUrl = await harness.callTool(57, "rag_ingest", {
+      source: "url",
       topic: "restored-flow",
       url: "file:///etc/passwd",
     });
-    expect(unsafeUrl.result?.isError, "non-HTTP URL must be rejected").to.equal(true);
-    const unapprovedGithub = await harness.callTool(58, "rag_add_github_repo", {
+    expect(unsafeUrl.result?.isError ?? unsafeUrl.error, "non-HTTP URL must be rejected").to.be.ok;
+    const unapprovedGithub = await harness.callTool(58, "rag_ingest", {
+      source: "github",
       topic: "restored-flow",
       url: "https://example.invalid/org/repository",
     });

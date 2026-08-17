@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { registerTools } from "../src/tools";
 import type {
   EmbeddingService,
-  ILLMProvider,
+
   MemoryOperationInput,
   MemoryService,
   MemoryStore,
@@ -47,14 +47,12 @@ function captureHandlers(options: {
   registerTools(
     server,
     topicManager,
-    {} as ILLMProvider,
     embeddingService,
     {} as RAGQueryService,
     undefined,
     options.memoryService as MemoryService | undefined,
     undefined,
     options.branchProvider,
-    undefined,
     { workingDir: options.workingDir ?? "/workspace" } as any,
   );
 
@@ -220,7 +218,6 @@ describe("MCP memory tools", () => {
     registerTools(
       server,
       { getAllTopics: sinon.stub().returns([]) } as any,
-      {} as any,
       {} as any,
       {} as any,
       undefined,

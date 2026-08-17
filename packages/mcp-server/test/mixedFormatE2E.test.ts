@@ -66,14 +66,14 @@ describe("mixed-format ingestion E2E (MB-1 gate)", function () {
   });
 
   async function ingestInOrder(topic: string, order: string[], firstId: number): Promise<void> {
-    const create = await harness!.callTool(firstId, "rag_create_topic", { name: topic });
+    const create = await harness!.callTool(firstId, "rag_topic", { action: "create", name: topic });
     expect(create.result?.isError, JSON.stringify(create.result)).not.to.equal(true);
     // One call per file so ingestion order is deterministic.
     for (const [index, filePath] of order.entries()) {
       const ingest = await harness!.callTool(
         firstId + 1 + index,
-        "rag_add_documents",
-        { topic, filePaths: [filePath] },
+        "rag_ingest",
+        { source: "files", topic, filePaths: [filePath] },
         60000,
       );
       expect(
@@ -82,7 +82,7 @@ describe("mixed-format ingestion E2E (MB-1 gate)", function () {
       ).not.to.equal(true);
       expect(payload(ingest).documentsAdded, `${topic} ← ${path.basename(filePath)}`).to.equal(1);
     }
-    const stats = payload(await harness!.callTool(firstId + 10, "rag_topic_stats", { topic }));
+    const stats = payload(await harness!.callTool(firstId + 10, "rag_topic", { action: "stats", topic }));
     expect(stats.documentCount, JSON.stringify(stats)).to.equal(3);
     expect(stats.chunkCount, JSON.stringify(stats)).to.be.greaterThan(0);
   }

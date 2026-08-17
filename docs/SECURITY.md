@@ -32,10 +32,10 @@ separate instance per user and per storage root instead.
 
 ## Capabilities
 
-There are no roles. All 24 tools are registered unconditionally, and the client
+There are no roles. All 11 tools are registered unconditionally, and the client
 that spawned the process may call any of them, including destructive ones
 (`rag_delete_topic`, `rag_remove_document`, `rag_reset_memory`) and
-configuration ones (`rag_switch_embedding_model`, `rag_switch_reranker_model`).
+the configuration one (`rag_switch_embedding_model`).
 Each destructive tool requires an explicit `confirm: true` argument; that is a
 guard against an agent's mistake, not an authorization boundary.
 
@@ -47,7 +47,7 @@ carries. Credentials remain environment-only and cannot be set in the file.
 
 ## Memory graph visualization exposure
 
-`rag_graph_visualize` serves memory graphs only; the document knowledge graph
+`rag_memory_visualize` serves memory graphs only; the document knowledge graph
 no longer exists. It is a full-detail data export, not a topology-only view.
 A caller authorized to invoke it receives complete persisted memory node and
 edge descriptions, memory scope, branch, source memory IDs, confidence/strength
@@ -82,7 +82,7 @@ OAuth/DCR hardening items are therefore not applicable to this server.
 
 ## File and network boundaries
 
-`rag_add_documents` and archive import accept only paths under canonical
+`rag_ingest` (files) and archive import accept only paths under canonical
 `security.allowedPaths` or the configured export root, resolved on the machine
 running the server. There is no upload handle; content is indexed from the
 filesystem the server can already see. That allowlist therefore defines what an

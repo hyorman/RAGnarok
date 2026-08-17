@@ -50,14 +50,12 @@ function register(server: McpServer, topicManager: any, options: RegisterOptions
   registerTools(
     server,
     topicManager,
-    undefined as any,
     sinon.createStubInstance(EmbeddingService) as any,
     {} as any,
     undefined,
     undefined,
     options.graphService as GraphVisualizationService | undefined,
     options.graphService ? ({ getCurrentBranch: sinon.stub().resolves(null) } as any) : undefined,
-    undefined,
     { maxResponseBytes: options.maxResponseBytes ?? MCP_LIMITS.responseBytes } as any,
     undefined,
     options.runtime,
@@ -65,9 +63,9 @@ function register(server: McpServer, topicManager: any, options: RegisterOptions
 }
 
 function graphTool(captured: CapturedTool[]): CapturedTool {
-  const tool = captured.find((candidate) => candidate.name === "rag_graph_visualize");
+  const tool = captured.find((candidate) => candidate.name === "rag_memory_visualize");
   if (!tool) {
-    expect.fail("rag_graph_visualize was not registered");
+    expect.fail("rag_memory_visualize was not registered");
   }
   return tool;
 }
@@ -167,7 +165,7 @@ function expectBoundedGraphError(result: any, code: string): any {
   return payload;
 }
 
-describe("rag_graph_visualize tool", function () {
+describe("rag_memory_visualize tool", function () {
   this.timeout(30000);
 
   it("exposes graph UI resource metadata", function () {
@@ -221,7 +219,7 @@ describe("rag_graph_visualize tool", function () {
   it("is not registered without a graph service", function () {
     const { server, captured } = fakeServer();
     register(server, makeTopicManager(), { graphService: undefined });
-    expect(captured.map((tool) => tool.name)).to.not.include("rag_graph_visualize");
+    expect(captured.map((tool) => tool.name)).to.not.include("rag_memory_visualize");
   });
 
   it("uses the common runtime wrapper", async function () {

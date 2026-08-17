@@ -69,13 +69,13 @@ To restore:
 3. Restore the complete snapshot to a same-filesystem staging directory.
 4. Verify `storage-format.json`, file ownership, and free space.
 5. Atomically rename the restored directory into place.
-6. Start one server, then verify through the client: `rag_storage_status`,
-   `rag_list_topics`, representative vector and hybrid `rag_query` calls, and a
+6. Start one server, then verify through the client: `rag_topic` (`list`),
+   representative vector and hybrid `rag_query` calls, and a
    `rag_memory` recall.
 
 Archive export/import is for moving individual topics, not for backing up the
-complete service. `rag_export_topic` writes a checksummed `.rag` archive into
-`storage.exportDir` (`<storage>/exports` by default). `rag_import_topic`
+complete service. `rag_topic` (`export`) writes a checksummed `.rag` archive into
+`storage.exportDir` (`<storage>/exports` by default). `rag_topic` (`import`)
 reads an archive from a canonical `security.allowedPaths` root and validates
 archive paths, limits, schemas, and checksums before publication.
 
@@ -144,13 +144,13 @@ rather than a truncated document.
 
 ## Memory graph visualization operations
 
-Graphs exist only in the memory subsystem. `rag_graph_visualize` is registered
+Graphs exist only in the memory subsystem. `rag_memory_visualize` is registered
 like every other tool and returns a deterministic
 `ragnarok.graph.visualization.v1` document.
 
 The graph MCP App is registered at `ui://ragnarok/graph`. Verify that both
 `resources/list` and `resources/read` report
-`text/html;profile=mcp-app`, and that `rag_graph_visualize` advertises only
+`text/html;profile=mcp-app`, and that `rag_memory_visualize` advertises only
 `_meta.ui.resourceUri`. The generated response is one self-contained HTML shell
 with inline code, an SVG, and reset control; it must not load external scripts.
 

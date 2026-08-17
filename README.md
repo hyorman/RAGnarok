@@ -141,7 +141,7 @@ Graphs exist only in the memory subsystem. There is no document knowledge
 graph, no entity extraction over ingested documents, and no `graph` or
 `graph_hybrid` retrieval strategy.
 
-The `rag_graph_visualize` tool exports the local user's own memory graph. It
+The `rag_memory_visualize` tool exports the local user's own memory graph. It
 accepts exactly
 `{ source: "memory", memoryScope: "workspace", maxNodes? }` or
 `{ source: "memory", memoryScope: "branch", branch, maxNodes? }` and returns the
@@ -514,37 +514,25 @@ npm run clean            # Clean all build artifacts
 
 The MCP server exposes these tools to any MCP-compatible agent:
 
-| Tool                         | Description                                                                              |
-| ---------------------------- | ---------------------------------------------------------------------------------------- |
-| `rag_query`                  | Query a topic with agentic RAG (supports all retrieval strategies)                       |
-| `rag_list_topics`            | List available topics                                                                    |
-| `rag_topic_stats`            | Get statistics for a topic                                                               |
-| `rag_create_topic`           | Create a new topic                                                                       |
-| `rag_add_documents`          | Add documents to a topic                                                                 |
-| `rag_list_embedding_models`  | List available embedding models                                                          |
-| `rag_embedding_info`         | Get current embedding model info                                                         |
-| `rag_switch_embedding_model` | Switch the active embedding model                                                        |
-| `rag_llm_status`             | Get current LLM provider status                                                          |
-| `rag_memory`                 | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped) |
-| `rag_list_documents`         | List stable source documents in a topic                                                  |
-| `rag_delete_topic`           | Delete a topic after explicit confirmation                                               |
-| `rag_remove_document`        | Remove a document and reconcile its chunks                                               |
-| `rag_rename_topic`           | Rename a topic                                                                           |
-| `rag_add_url`                | Securely ingest a public HTTP(S) page                                                    |
-| `rag_add_github_repo`        | Ingest an allowlisted GitHub/GHES repository                                             |
-| `rag_export_topic`           | Export a checksummed storage-v2 `.rag` archive                                           |
-| `rag_import_topic`           | Validate and import a `.rag` archive                                                     |
-| `rag_reset_memory`           | Reset incompatible or unwanted standalone memory after confirmation                      |
-| `rag_storage_status`         | Inspect storage-format readiness and reset requirements                                  |
-| `rag_list_reranker_models`   | List available cross-encoder reranker models                                             |
-| `rag_reranker_info`          | Get current reranker configuration and status                                            |
-| `rag_switch_reranker_model`  | Switch the cross-encoder reranker model                                                  |
-| `rag_graph_visualize`        | Return a deterministic memory graph document and associate the MCP App                   |
+| Tool                         | Description                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `rag_query`                  | Query a topic with agentic RAG (supports all retrieval strategies)                                               |
+| `rag_ingest`                 | Add content to a topic from local files, one public HTTP(S) page, or an allowlisted GitHub/GHES repository       |
+| `rag_topic`                  | Manage topics: `list`, `stats` (statistics plus indexed documents), `create`, `rename`, `export`, and `import`   |
+| `rag_delete_topic`           | Delete a topic after explicit confirmation                                                                       |
+| `rag_remove_document`        | Remove a document and reconcile its chunks                                                                       |
+| `rag_list_embedding_models`  | List available embedding models                                                                                  |
+| `rag_embedding_info`         | Get current embedding model info, including the configured model and provider                                    |
+| `rag_switch_embedding_model` | Switch the active embedding model                                                                                |
+| `rag_memory`                 | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped)                         |
+| `rag_reset_memory`           | Reset incompatible or unwanted standalone memory after confirmation                                              |
+| `rag_memory_visualize`       | Return a deterministic memory graph document and associate the MCP App                                           |
 
-That is the complete surface: 24 tools, all registered unconditionally on every
+That is the complete surface: 11 tools, all registered unconditionally on every
 connection. There are no roles and no capability tiers — the client already runs
-with the owner's authority. Parameters and error contracts are in the
-[MCP server guide](packages/mcp-server/README.md).
+with the owner's authority. The reranker and the LLM provider are configured
+exclusively through `config.json` and expose no tools. Parameters and error
+contracts are in the [MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility
 

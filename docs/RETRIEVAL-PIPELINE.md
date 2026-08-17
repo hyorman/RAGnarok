@@ -17,8 +17,8 @@ Every ingestion entry point converges on one method, and every query converges o
 flowchart TB
   subgraph entry["Ingestion entry points"]
     vs["VS Code<br/>Add Document / Git Repo / Web URL"]
-    mcpl["MCP<br/>rag_add_documents (filePaths)"]
-    url["rag_add_url · rag_add_github_repo"]
+    mcpl["MCP<br/>rag_ingest source=files"]
+    url["rag_ingest source=url · source=github"]
   end
 
   entry --> TM["TopicManager.addDocuments()<br/>topicManager.ts:907"]
@@ -193,7 +193,7 @@ flowchart TB
   RQ["rag_memory { action: recall }"] --> VS["vector recall over memory-lancedb"]
   VS --> FIL["exclude superseded · expired ·<br/>below-confidence · reserved auto: entries"]
 
-  GV["rag_graph_visualize"] --> SNAP["MemoryStore.getGraphSnapshot(scope, branch)"]
+  GV["rag_memory_visualize"] --> SNAP["MemoryStore.getGraphSnapshot(scope, branch)"]
   SNAP --> DOC["ragnarok.graph.visualization.v1<br/>deterministic bounded document"]
 ```
 
@@ -209,7 +209,7 @@ Three consequences worth stating plainly:
   recalled by vector similarity, but `MemoryGraph` stays empty and every visualization is a
   successful empty document — not an error.
 
-`rag_graph_visualize` is registered on every connection, like every other tool.
+`rag_memory_visualize` is registered on every connection, like every other tool.
 `maxNodes` defaults to 500 (range 1–2,000), projection retains at
 most 10,000 edges, and oversized records return `GRAPH_VISUALIZATION_RECORD_TOO_LARGE`. See the
 [MCP server contract](../packages/mcp-server/README.md#memory-graph-visualization).

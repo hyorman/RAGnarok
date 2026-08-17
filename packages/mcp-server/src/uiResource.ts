@@ -6,7 +6,7 @@ export const GRAPH_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 /**
  * Register the interactive graph visualization MCP App resource.
- * The tool `rag_graph_visualize` declares `_meta.ui.resourceUri` pointing here;
+ * The tool `rag_memory_visualize` declares `_meta.ui.resourceUri` pointing here;
  * the host fetches this resource and renders it in a sandboxed iframe.
  */
 export function registerGraphUiResource(server: McpServer): void {
