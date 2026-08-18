@@ -16,19 +16,35 @@ interface FakeOverrides {
   topics?: Array<Record<string, unknown>>;
 }
 
+/**
+ * Records every argument the executor plumbs through, so a slip that passes the
+ * topic *name* where the topic *id* belongs (both are strings, so the compiler
+ * cannot catch it) fails a test.
+ */
 function fakeManager(overrides: FakeOverrides = {}) {
-  const resolved: string[] = [];
+  const resolvedNames: string[] = [];
+  const statsIds: string[] = [];
+  const listDocumentsIds: string[] = [];
   const manager = {
-    resolvedNames: resolved,
+    resolvedNames,
+    statsIds,
+    listDocumentsIds,
     getAllTopics: () => overrides.topics ?? [topic],
     resolveTopicByName: async (name: string) => {
-      resolved.push(name);
+      resolvedNames.push(name);
       return { topic, matchType: name === topic.name ? "exact" : "fallback" };
     },
-    getTopicStats:
-      overrides.getTopicStats ??
-      (async () => ({ documentCount: 2, chunkCount: 9, lastUpdated: 1700000100000, embeddingModel: "m" })),
-    listDocuments: () => [{ id: "d1", name: "a.md", chunkCount: 5 }],
+    getTopicStats: async (topicId: string) => {
+      statsIds.push(topicId);
+      if (overrides.getTopicStats) {
+        return overrides.getTopicStats();
+      }
+      return { documentCount: 2, chunkCount: 9, lastUpdated: 1700000100000, embeddingModel: "m" };
+    },
+    listDocuments: (topicId: string) => {
+      listDocumentsIds.push(topicId);
+      return [{ id: "d1", name: "a.md", chunkCount: 5 }];
+    },
   };
   return manager;
 }
@@ -60,21 +76,50 @@ describe("topic read tool", function () {
     expect(payload.count).to.equal(2);
   });
 
+  it("passes a missing description through untouched", async function () {
+    const bare = { id: "t2", name: "Bare", documentCount: 0, createdAt: 1700000000000, updatedAt: 1700000000000 };
+    const payload = (await executeTopicRead(
+      { action: "list" },
+      { topicManager: fakeManager({ topics: [bare] }) as never },
+    )) as { topics: Array<Record<string, unknown>> };
+    // MCP passes `description` through raw; it must not be defaulted to a string.
+    expect(payload.topics[0]).to.have.property("description");
+    expect(payload.topics[0].description).to.equal(undefined);
+    expect(payload.topics[0]).to.deep.equal({
+      name: "Bare",
+      description: undefined,
+      documentCount: 0,
+      createdAt: new Date(1700000000000).toISOString(),
+      updatedAt: new Date(1700000000000).toISOString(),
+      source: "local",
+    });
+  });
+
+  it("returns an empty list with a zero count", async function () {
+    const payload = await executeTopicRead({ action: "list" }, { topicManager: fakeManager({ topics: [] }) as never });
+    expect(payload).to.deep.equal({ topics: [], count: 0 });
+  });
+
   it("returns stats merged with documents", async function () {
-    const payload = await executeTopicRead(
-      { action: "stats", topic: "Docs" },
-      { topicManager: fakeManager() as never },
-    );
-    expect(payload).to.deep.include({
+    const manager = fakeManager();
+    const payload = await executeTopicRead({ action: "stats", topic: "Docs" }, { topicManager: manager as never });
+    // deep.equal, not deep.include: an extra top-level key would silently change
+    // the MCP handler's published stats output.
+    expect(payload).to.deep.equal({
       documentCount: 2,
       chunkCount: 9,
       lastUpdated: 1700000100000,
       embeddingModel: "m",
+      // Mirrors the MCP handler: `documentId` is *added* to the document, `id` survives.
+      documents: [{ id: "d1", documentId: "d1", name: "a.md", chunkCount: 5 }],
     });
-    // Mirrors the MCP handler: `documentId` is *added* to the document, `id` survives.
-    expect((payload as { documents: unknown[] }).documents).to.deep.equal([
-      { id: "d1", documentId: "d1", name: "a.md", chunkCount: 5 },
-    ]);
+  });
+
+  it("reads stats and documents by the resolved topic id, not the name", async function () {
+    const manager = fakeManager();
+    await executeTopicRead({ action: "stats", topic: "Docs" }, { topicManager: manager as never });
+    expect(manager.statsIds).to.deep.equal(["t1"]);
+    expect(manager.listDocumentsIds).to.deep.equal(["t1"]);
   });
 
   it("resolves the trimmed topic name", async function () {
@@ -88,7 +133,7 @@ describe("topic read tool", function () {
       await executeTopicRead({ action: "stats" } as never, { topicManager: fakeManager() as never });
       expect.fail("should have thrown");
     } catch (error) {
-      expect((error as Error).message).to.match(/'topic'/);
+      expect((error as Error).message).to.match(/is required for the 'stats' action/);
     }
   });
 
