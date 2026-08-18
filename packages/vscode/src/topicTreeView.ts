@@ -370,7 +370,6 @@ export class TopicTreeItem extends vscode.TreeItem {
           };
           this.contextValue = "config-reranker-model";
           this.tooltip = `Reranker: ${data.value} — Click to change`;
-          this.iconPath = new vscode.ThemeIcon("filter");
         }
 
         break;
@@ -465,6 +464,9 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
       ),
     );
 
+    const rerankerModel = config.get<string>(CONFIG.RERANKER_MODEL) ?? DEFAULTS.RERANKER_MODEL;
+    items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RERANKER_MODEL, value: rerankerModel }, "config-item"));
+
     const strategy = config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "hybrid");
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RETRIEVAL_STRATEGY, value: strategy }, "config-item"));
 
@@ -490,10 +492,6 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
 
     const threshold = config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD, value: threshold }, "config-item"));
-
-    // Reranker model
-    const rerankerModel = config.get<string>(CONFIG.RERANKER_MODEL) ?? DEFAULTS.RERANKER_MODEL;
-    items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RERANKER_MODEL, value: rerankerModel }, "config-item"));
 
     return items;
   }

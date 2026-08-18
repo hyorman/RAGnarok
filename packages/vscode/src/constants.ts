@@ -85,6 +85,7 @@ export const CONTEXT = {
 export const TREE_CONFIG_KEY = {
   EMBEDDING_MODEL: "embedding-model",
   EMBEDDING_BACKEND: "embedding-backend",
+  RERANKER_MODEL: "reranker-model",
   RETRIEVAL_STRATEGY: "retrieval-strategy",
   TOP_K: "top-k",
   CHUNK_SIZE: "chunk-size",
@@ -93,5 +94,4 @@ export const TREE_CONFIG_KEY = {
   INCLUDE_WORKSPACE_CONTEXT: "include-workspace-context",
   MAX_ITERATIONS: "max-iterations",
   CONFIDENCE_THRESHOLD: "confidence-threshold",
-  RERANKER_MODEL: "reranker-model",
 } as const;
