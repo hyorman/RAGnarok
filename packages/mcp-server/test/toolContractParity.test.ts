@@ -1,7 +1,18 @@
 /**
- * The plan's guarantee: the MCP server's Zod gates and the canonical JSON Schema
- * contracts in @ragnarok/core describe the same inputs, and the shared executors
- * produce one payload for both hosts.
+ * The plan's guarantee, as far as this package can prove it: the MCP server's
+ * Zod gates and the canonical JSON Schema contracts in @ragnarok/core describe
+ * the same inputs, and the MCP host's tool payloads are the ones the shared
+ * core executors produce.
+ *
+ * SCOPE, stated precisely because the file outlives the task report. At this
+ * commit only the MCP host has been migrated onto the shared core module. The
+ * VS Code host still carries its own local memory-input normalizer
+ * (packages/vscode/src/memoryTools.ts) and still calls
+ * RAGQueryService.executeQuery directly rather than executeQueryTool
+ * (packages/vscode/src/ragTool.ts); it migrates in a later task. So what is
+ * proven here is "MCP ≡ contract" and "MCP ≡ shared executors", plus the
+ * host-independence of the shared executors themselves. "VS Code ≡ contract"
+ * is NOT proven by this file and must not be read into it.
  *
  * Equivalence is scoped to DECLARED FIELDS ONLY — same requiredness, same type,
  * same min/max/enum bounds. Unknown-key handling is deliberately out of scope:
@@ -27,6 +38,7 @@ import {
   normalizeMemoryInput,
   type JsonSchemaObject,
   type JsonSchemaProperty,
+  type MemoryServiceErrorCode,
 } from "@ragnarok/core";
 import { MCP_LIMITS, registerTools } from "../src/tools";
 import { invokeMemoryTool } from "../src/memoryToolAdapter";
@@ -35,23 +47,31 @@ interface ZodLike {
   safeParse(value: unknown): { success: boolean };
 }
 
+type ToolHandler = (args: any, context: any) => Promise<any>;
+
+interface CapturedTool {
+  inputSchema: ZodLike;
+  handler: ToolHandler;
+}
+
 /**
- * The schemas the MCP SDK actually validates against, read back off the
+ * The schemas AND handlers the MCP SDK actually receives, read back off the
  * registration calls, so a registration site that stopped using the bounded
- * schema cannot pass unnoticed.
+ * schema — or a handler that stopped using the shared executor — cannot pass
+ * unnoticed.
  */
-function registeredInputSchemas(): Record<string, ZodLike> {
-  const captured: Record<string, ZodLike> = {};
+function registerAndCapture(ragQueryService: unknown = {}): Record<string, CapturedTool> {
+  const captured: Record<string, CapturedTool> = {};
   const server = {
-    registerTool(name: string, config: { inputSchema: ZodLike }) {
-      captured[name] = config.inputSchema;
+    registerTool(name: string, config: { inputSchema: ZodLike }, handler: ToolHandler) {
+      captured[name] = { inputSchema: config.inputSchema, handler };
       return { name };
     },
   } as unknown as McpServer;
   registerTools(
     server,
     { getAllTopics: sinon.stub().returns([]), getVectorStore: sinon.stub().resolves(null) } as never,
-    {} as never,
+    ragQueryService as never,
     { execute: sinon.stub(), reset: sinon.stub() } as never,
     undefined,
     { getCurrentBranch: sinon.stub().resolves(null) } as never,
@@ -59,8 +79,32 @@ function registeredInputSchemas(): Record<string, ZodLike> {
   );
   for (const name of ["rag_query", "rag_memory", "rag_topic"]) {
     expect(captured[name], `${name} was not registered`).to.not.equal(undefined);
+    expect(captured[name].handler, `${name} was registered without a handler`).to.be.a("function");
   }
   return captured;
+}
+
+/** Unwraps optional/default/nullable wrappers to reach the base Zod type. */
+function unwrapZod(schema: any): any {
+  let current = schema;
+  while (current?.def?.innerType) {
+    current = current.def.innerType;
+  }
+  return current;
+}
+
+/** The property names a Zod object schema actually declares. */
+function zodKeys(schema: ZodLike, label: string): string[] {
+  const shape = (schema as any).shape;
+  expect(shape, `${label}: expected a Zod object with a shape`).to.not.equal(undefined);
+  return Object.keys(shape).sort();
+}
+
+/** The members a Zod enum property actually declares. */
+function zodEnumMembers(schema: ZodLike, field: string, label: string): string[] {
+  const inner = unwrapZod((schema as any).shape?.[field]);
+  expect(inner?.options, `${label}: expected a Zod enum`).to.be.an("array");
+  return [...inner.options].sort();
 }
 
 /** A value the contract declares valid for one property. */
@@ -233,7 +277,60 @@ function assertDeclaredFieldParity(schema: ZodLike, contract: JsonSchemaObject, 
 }
 
 describe("tool contract parity", function () {
-  const schemas = registeredInputSchemas();
+  const tools = registerAndCapture();
+  const schemas = {
+    rag_query: tools.rag_query.inputSchema,
+    rag_memory: tools.rag_memory.inputSchema,
+    rag_topic: tools.rag_topic.inputSchema,
+  };
+
+  it("declares exactly the contract's property set, in both directions", function () {
+    // The per-field walk below iterates the CONTRACT, so a Zod-only property
+    // would never be probed and the field count — being a count of contract
+    // properties — could not catch it either. This closes that direction: the
+    // two key sets must match exactly, so MCP cannot advertise a surface the
+    // manifest generator will never emit.
+    const cases = [
+      { label: "rag_memory", schema: schemas.rag_memory, contract: RAG_MEMORY_INPUT_SCHEMA },
+      { label: "rag_query", schema: schemas.rag_query, contract: RAG_QUERY_INPUT_SCHEMA },
+    ];
+
+    let compared = 0;
+    for (const { label, schema, contract } of cases) {
+      compared += 1;
+      const contractKeys = Object.keys(contract.properties).sort();
+      expect(contractKeys.length, `${label}: contract must declare properties`).to.be.greaterThan(0);
+      expect(zodKeys(schema, label), `${label}: property set`).to.deep.equal(contractKeys);
+    }
+    expect(compared, "the key-set loop must not be vacuous").to.equal(2);
+    // rag_topic is deliberately absent: its Zod is a discriminated union whose
+    // four WRITE actions have no counterpart in the read-only contract, so a
+    // key-set comparison there would be meaningless rather than merely scoped.
+  });
+
+  it("declares exactly the contract's enum members, in both directions", function () {
+    // Same one-directional hole: the walk accepts every declared member and
+    // rejects one literal outsider, which an 11th Zod-only member survives.
+    const cases = [
+      { label: "rag_memory.action", schema: schemas.rag_memory, field: "action", contract: RAG_MEMORY_INPUT_SCHEMA },
+      { label: "rag_memory.scope", schema: schemas.rag_memory, field: "scope", contract: RAG_MEMORY_INPUT_SCHEMA },
+      {
+        label: "rag_query.retrievalStrategy",
+        schema: schemas.rag_query,
+        field: "retrievalStrategy",
+        contract: RAG_QUERY_INPUT_SCHEMA,
+      },
+    ];
+
+    let compared = 0;
+    for (const { label, schema, field, contract } of cases) {
+      compared += 1;
+      const declared = [...(contract.properties[field].enum ?? [])].sort();
+      expect(declared.length, `${label}: contract must declare enum members`).to.be.greaterThan(0);
+      expect(zodEnumMembers(schema, field, label), `${label}: enum members`).to.deep.equal(declared);
+    }
+    expect(compared, "the enum-set loop must not be vacuous").to.equal(3);
+  });
 
   it("agrees with the rag_memory contract on every declared field", function () {
     const coverage = assertDeclaredFieldParity(schemas.rag_memory, RAG_MEMORY_INPUT_SCHEMA, "rag_memory");
@@ -306,9 +403,11 @@ describe("tool contract parity", function () {
 describe("runtime payload parity", function () {
   afterEach(() => sinon.restore());
 
-  it("normalizes a memory input identically for both hosts", function () {
-    // Both hosts call the same core normalizer, so this pins the behavior that
-    // used to differ: the MCP copy did not trim, the VS Code copy did.
+  it("normalizes a memory input through the shared core normalizer", function () {
+    // The MCP host now calls this core normalizer instead of its own copy, so
+    // this pins the behavior that used to differ: the old MCP copy did not
+    // trim. The VS Code host still has a local copy (see the file header) and
+    // adopts this one in a later task; this test does not speak for it.
     const raw = { action: "recall" as const, query: "  why  ", topK: 3, branch: " main " };
 
     expect(normalizeMemoryInput(raw)).to.deep.equal({
@@ -342,9 +441,11 @@ describe("runtime payload parity", function () {
   });
 
   it("reports every MemoryServiceError code in the one canonical payload", async function () {
-    // Both hosts emit {error: {code, message}} verbatim for a MemoryServiceError.
-    // Written as literals, not built with toolErrorPayload: an expectation that
-    // shares its builder with the code under test can never go red.
+    // MCP emits {error: {code, message}} verbatim for a MemoryServiceError —
+    // the same shape packages/vscode/src/memoryTools.ts builds in
+    // serviceErrorResult. Written as literals, not built with toolErrorPayload:
+    // an expectation that shares its builder with the code under test can never
+    // go red.
     //
     // Non-MemoryServiceError failures are deliberately NOT compared here: MCP
     // maps them to MEMORY_OPERATION_FAILED while the VS Code tool rethrows so
@@ -359,6 +460,13 @@ describe("runtime payload parity", function () {
       "MEMORY_RESET_FAILED",
       "GRAPH_VISUALIZATION_FAILED",
     ] as const;
+
+    // Compile-time exhaustiveness: the runtime list above cannot see a code
+    // added to the union, so an 8th member turns this type into `false` and the
+    // assignment stops compiling.
+    type MissingCode = Exclude<MemoryServiceErrorCode, (typeof codes)[number]>;
+    const everyCodeCovered: [MissingCode] extends [never] ? true : false = true;
+    expect(everyCodeCovered, "the code list must cover MemoryServiceErrorCode").to.equal(true);
 
     let checked = 0;
     for (const code of codes) {
@@ -381,49 +489,100 @@ describe("runtime payload parity", function () {
     expect(checked, "the code loop must not be vacuous").to.equal(7);
   });
 
-  it("produces one empty-topic payload regardless of workspace context", async function () {
+  it("keeps the shared executor's empty-topic payload invariant to workspaceContext", async function () {
+    // A property of the shared executor, not of either host: supplying editor
+    // context cannot change the empty payload. MCP's own handler is driven
+    // separately below; VS Code's path does not reach executeQueryTool yet.
     const service = {
       executeQuery: async () => {
         throw new TopicEmptyError("Docs");
       },
     };
 
-    const mcpPayload = await executeQueryTool({ topic: "Docs", query: "q" }, { ragQueryService: service as never });
-    const vscodePayload = await executeQueryTool(
+    const withoutContext = await executeQueryTool({ topic: "Docs", query: "q" }, { ragQueryService: service as never });
+    const withContext = await executeQueryTool(
       { topic: "Docs", query: "q" },
       { ragQueryService: service as never, workspaceContext: "editor context" },
     );
 
-    expect(mcpPayload).to.deep.equal(vscodePayload);
-    expect(mcpPayload).to.not.have.property("agenticMetadata");
+    expect(withoutContext).to.deep.equal(withContext);
+    expect(withoutContext).to.not.have.property("agenticMetadata");
   });
 
-  it("produces one success payload while still forwarding each host's own context", async function () {
-    // The shared executor returns the service payload verbatim — neither host
-    // decorates it — but the optional workspaceContext an options object would
-    // hide must still reach the service, so assert the recorded arguments.
+  it("keeps the shared executor's success payload invariant while still forwarding workspaceContext", async function () {
+    // The executor returns the service payload verbatim and adds no decoration
+    // of its own — but the optional workspaceContext an options object would
+    // hide from the compiler must still reach the service, so assert the
+    // recorded arguments.
     const payload = { query: "q", topicName: "Docs", results: [{ content: "hit" }] };
     const executeQuery = sinon.stub().resolves(payload);
     const service = { executeQuery };
     const signal = new AbortController().signal;
 
-    const mcpPayload = await executeQueryTool(
+    const withoutContext = await executeQueryTool(
       { topic: "Docs", query: "q" },
       { ragQueryService: service as never },
       signal,
     );
-    const vscodePayload = await executeQueryTool(
+    const withContext = await executeQueryTool(
       { topic: "Docs", query: "q" },
       { ragQueryService: service as never, workspaceContext: "editor context" },
       signal,
     );
 
-    expect(mcpPayload).to.deep.equal(vscodePayload);
-    expect(mcpPayload).to.deep.equal(payload);
+    expect(withoutContext).to.deep.equal(withContext);
+    expect(withoutContext).to.deep.equal(payload);
     expect(executeQuery.callCount).to.equal(2);
-    expect(executeQuery.firstCall.args[1], "MCP supplies no workspace context").to.equal(undefined);
-    expect(executeQuery.secondCall.args[1], "VS Code's editor context must survive").to.equal("editor context");
+    expect(executeQuery.firstCall.args[1], "no context in, no context out").to.equal(undefined);
+    expect(executeQuery.secondCall.args[1], "editor context must survive the options object").to.equal(
+      "editor context",
+    );
     expect(executeQuery.firstCall.args[2], "the request signal, by identity").to.equal(signal);
     expect(executeQuery.secondCall.args[2], "the request signal, by identity").to.equal(signal);
+  });
+
+  it("routes MCP's registered rag_query handler through the shared executor with no workspace context", async function () {
+    // Drives the handler the MCP SDK actually calls, not the executor directly:
+    // editor state is VS Code's alone, so MCP must supply no workspaceContext,
+    // and the payload the client sees must be the executor's verbatim.
+    const payload = { query: "q", topicName: "Docs", results: [{ content: "hit" }] };
+    const executeQuery = sinon.stub().resolves(payload);
+    const signal = new AbortController().signal;
+
+    const result = await registerAndCapture({ executeQuery }).rag_query.handler(
+      { topic: "Docs", query: "q" },
+      { mcpReq: { signal } },
+    );
+
+    expect(executeQuery.calledOnce, "the query service must run once").to.equal(true);
+    expect(executeQuery.firstCall.args[0]).to.deep.equal({ topic: "Docs", query: "q" });
+    expect(executeQuery.firstCall.args[1], "MCP must supply no workspace context").to.equal(undefined);
+    expect(executeQuery.firstCall.args[2], "the request signal, by identity").to.equal(signal);
+    expect(result.isError, "a successful query is not an error").to.equal(undefined);
+    expect(JSON.parse(result.content[0].text)).to.deep.equal(payload);
+    expect(result.structuredContent).to.deep.equal(payload);
+  });
+
+  it("returns the shared empty-topic payload through MCP's registered rag_query handler", async function () {
+    // The empty-topic case is no longer handled in tools.ts; the shared
+    // executor owns it, so the MCP client must see exactly the core payload.
+    const executeQuery = sinon.stub().rejects(new TopicEmptyError("Docs"));
+
+    const result = await registerAndCapture({ executeQuery }).rag_query.handler(
+      { topic: "Docs", query: "q" },
+      { mcpReq: { signal: new AbortController().signal } },
+    );
+
+    expect(result.isError, "an empty topic is not a tool failure").to.equal(undefined);
+    const body = JSON.parse(result.content[0].text);
+    expect(body).to.deep.equal({
+      query: "q",
+      topicName: "Docs",
+      topicMatched: "fallback",
+      results: [],
+      empty: true,
+      message: 'Topic "Docs" exists but has no documents. Add documents to the topic before querying.',
+    });
+    expect(body).to.not.have.property("agenticMetadata");
   });
 });
