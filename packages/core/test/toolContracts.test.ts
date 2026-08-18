@@ -9,6 +9,20 @@ import {
 } from "../src/tools/index";
 
 describe("tool contracts", function () {
+  it("pins the literal limit values both hosts are generated from", function () {
+    expect(TOOL_LIMITS).to.deep.equal({
+      topicName: 200,
+      query: 20_000,
+      memoryQuery: 10_000,
+      memoryContent: 50_000,
+      memoryId: 1_000,
+      branch: 255,
+      tag: 100,
+      tags: 20,
+      ids: 500,
+    });
+  });
+
   it("bounds rag_query inputs", function () {
     expect(RAG_QUERY_INPUT_SCHEMA.required).to.deep.equal(["topic", "query"]);
     expect(RAG_QUERY_INPUT_SCHEMA.properties.topic.maxLength).to.equal(TOOL_LIMITS.topicName);
