@@ -9,11 +9,11 @@ import {
   EmbeddingService,
   Logger,
   RAGQueryParams,
-  RAGQueryResult,
   IConfigProvider,
   ILLMProvider,
   RAGQueryService,
-  TopicEmptyError,
+  executeQueryTool,
+  QueryToolPayload,
 } from "@ragnarok/core";
 import { TOOLS, VSCODE_CONFIG } from "./constants";
 import { WorkspaceContextProvider } from "./workspaceContext";
@@ -114,7 +114,7 @@ export class RAGTool {
   /**
    * Execute a RAG query (supports both simple and agentic modes)
    */
-  public async executeQuery(params: RAGQueryParams, signal?: AbortSignal): Promise<RAGQueryResult> {
+  public async executeQuery(params: RAGQueryParams, signal?: AbortSignal): Promise<QueryToolPayload> {
     if (!this.acceptingQueries) {
       throw new Error("RAGnarōk is shutting down and is not accepting new queries");
     }
@@ -137,7 +137,7 @@ export class RAGTool {
     }
   }
 
-  private async executeQueryCore(params: RAGQueryParams, signal: AbortSignal): Promise<RAGQueryResult> {
+  private async executeQueryCore(params: RAGQueryParams, signal: AbortSignal): Promise<QueryToolPayload> {
     try {
       signal.throwIfAborted();
       logger.info(`Executing RAG query: "${params.query}" for topic: "${params.topic}"`);
@@ -167,25 +167,10 @@ export class RAGTool {
         });
       }
 
-      // Delegate to the shared RAGQueryService
-      return await this.ragQueryService.executeQuery(params, workspaceContext, signal);
+      // Delegate to the shared executor; it owns validation, the empty-topic
+      // payload, and the result shape that MCP also returns.
+      return await executeQueryTool(params, { ragQueryService: this.ragQueryService, workspaceContext }, signal);
     } catch (error) {
-      if (error instanceof TopicEmptyError) {
-        // Return empty result with structured info instead of a generic error
-        return {
-          query: params.query,
-          topicName: error.topicName,
-          topicMatched: "fallback",
-          results: [],
-          agenticMetadata: {
-            mode: "agentic",
-            steps: [],
-            totalIterations: 0,
-            queryComplexity: "simple",
-            confidence: 0,
-          },
-        };
-      }
       const rawMessage = error instanceof Error ? error.message : String(error);
       logger.error(`RAG Query Failed: ${rawMessage}`);
       const sanitizedMessage = rawMessage
