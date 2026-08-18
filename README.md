@@ -521,17 +521,14 @@ The MCP server exposes these tools to any MCP-compatible agent:
 | `rag_topic`                  | Manage topics: `list`, `stats` (statistics plus indexed documents), `create`, `rename`, `export`, and `import`   |
 | `rag_delete_topic`           | Delete a topic after explicit confirmation                                                                       |
 | `rag_remove_document`        | Remove a document and reconcile its chunks                                                                       |
-| `rag_list_embedding_models`  | List available embedding models                                                                                  |
-| `rag_embedding_info`         | Get current embedding model info, including the configured model and provider                                    |
-| `rag_switch_embedding_model` | Switch the active embedding model                                                                                |
 | `rag_memory`                 | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped)                         |
 | `rag_reset_memory`           | Reset incompatible or unwanted standalone memory after confirmation                                              |
 | `rag_memory_visualize`       | Return a deterministic memory graph document and associate the MCP App                                           |
 
-That is the complete surface: 11 tools, all registered unconditionally on every
+That is the complete surface: 8 tools, all registered unconditionally on every
 connection. There are no roles and no capability tiers — the client already runs
-with the owner's authority. The reranker and the LLM provider are configured
-exclusively through `config.json` and expose no tools. Parameters and error
+with the owner's authority. The embedding model, the reranker, and the LLM
+provider are configured exclusively through `config.json` and expose no tools. Parameters and error
 contracts are in the [MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility

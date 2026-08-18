@@ -101,7 +101,7 @@ renderer source with separate VS Code and MCP lifecycle bridges.
 
 ## MCP protocol surface
 
-The MCP server registers 11 tools unconditionally. There are no roles, no
+The MCP server registers 8 tools unconditionally. There are no roles, no
 capability tiers, and no per-principal registration: the client that spawned
 the process already has the owner's authority, so a second authorization model
 inside the process would protect nothing.

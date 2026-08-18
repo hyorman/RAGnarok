@@ -47,11 +47,12 @@ Logs go to stderr so they never corrupt the JSON-RPC framing on stdout.
 
 ## Tool surface
 
-The server registers **11 tools**, unconditionally. There are no roles and no
+The server registers **8 tools**, unconditionally. There are no roles and no
 capability tiers: the client already runs with the owner's authority, so a
 second authorization model inside the process would protect nothing. Every tool
-below appears in `tools/list` on every connection. The reranker and the LLM
-provider are configured exclusively through `config.json` and expose no tools.
+below appears in `tools/list` on every connection. The embedding model, the
+reranker, and the LLM provider are configured exclusively through `config.json`
+and expose no tools.
 
 Destructive tools (`rag_delete_topic`, `rag_remove_document`,
 `rag_reset_memory`, archive import) require an explicit `confirm: true`. That is
@@ -71,9 +72,6 @@ file where the server can read it.
 | `rag_topic`                  | Manage topics through one discriminated action                                                                                            | `action: "list"`; `"stats"` with `topic` (returns statistics plus the topic's documents); `"create"` with `name`, `description?`; `"rename"` with `topic`, `newName`; `"export"` with `topic`; `"import"` with `archivePath`, `confirm` (`true`) |
 | `rag_delete_topic`           | Delete a topic and all managed data                                                                                                       | `topic` (string), `confirm` (`true`)                                                                                                                            |
 | `rag_remove_document`        | Remove one document and its chunks                                                                                                        | `topic` (string), `documentId` (string), `confirm` (`true`)                                                                                                     |
-| `rag_list_embedding_models`  | List available embedding models (flags `remoteListingFailed` when a configured remote catalogue cannot be fetched)                        | _(none)_                                                                                                                                                        |
-| `rag_embedding_info`         | Get current embedding model info plus `configuredModel`/`configuredProvider` from `config.json`                                           | _(none)_                                                                                                                                                        |
-| `rag_switch_embedding_model` | Switch the active embedding model                                                                                                         | `model` (string)                                                                                                                                                |
 | `rag_memory`                 | Project memory: store, recall, forget (incl. `expired`), stats, list, decay, history, promote, links, communities (needs an LLM provider) | `action` (string) plus action-specific fields (`content`, `query`, `id`, `scope`, `branch`, `tags`, `topK`, `olderThan`, `expired`, `limit`, `includeEntities`) |
 | `rag_reset_memory`           | Delete standalone memory after explicit confirmation                                                                                      | `confirm` (`true`)                                                                                                                                              |
 | `rag_memory_visualize`       | Return a deterministic memory graph and associate the MCP App                                                                             | One exact input shape from [Memory graph visualization](#memory-graph-visualization)                                                                            |
@@ -316,13 +314,15 @@ Reading the table row by row: a topic built under one model keeps answering
 under that model even while a different one is configured, and adding documents
 to it embeds the new chunks with the topic's own model — so the topic stays one
 coherent embedding space. Memory is the exception, because it is not a topic and
-carries no per-topic metadata: it always uses the currently configured model, and
-it follows an explicit `rag_switch_embedding_model` call, which is why that tool
-rejects a candidate whose dimension memory cannot serve.
+carries no per-topic metadata: it always uses the currently configured model.
 
 Changing a topic's model is therefore a delete-and-recreate, not a setting.
-`rag_switch_embedding_model` changes the default for topics created afterwards
-and re-points memory; it does not migrate anything already indexed.
+Changing `embedding.model` takes effect on restart. Existing topics keep the
+model recorded at their creation; the new model applies to new topics and to
+standalone memory, whose fingerprint guard fails closed until `rag_reset_memory`
+is confirmed. A model that is neither bundled nor cached downloads on first use
+— expect first-use latency and a stderr log line rather than a pre-flight
+warning.
 
 **A knowledge base built against a remote embedding endpoint is readable only by
 a deployment configured with that same endpoint.** The model is resolved per
@@ -467,7 +467,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_me
 ```
 
 A successful reply advertises protocol `2026-07-28`. Follow it with a
-`tools/list` request on the same connection to see all 11 tools.
+`tools/list` request on the same connection to see all 8 tools.
 
 ### Claude Desktop configuration
 

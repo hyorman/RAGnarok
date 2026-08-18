@@ -26,16 +26,15 @@ hardened network service can never quietly become a local pipe.
 
 Do not attempt to re-expose the server by wrapping stdio in a network relay. A
 relay would grant every caller the spawning user's full authority — including
-memory, model switching, storage reset, and read access to every path under
+memory, storage reset, and read access to every path under
 `security.allowedPaths` — with no role, quota, or credential in between. Run a
 separate instance per user and per storage root instead.
 
 ## Capabilities
 
-There are no roles. All 11 tools are registered unconditionally, and the client
+There are no roles. All 8 tools are registered unconditionally, and the client
 that spawned the process may call any of them, including destructive ones
-(`rag_delete_topic`, `rag_remove_document`, `rag_reset_memory`) and
-the configuration one (`rag_switch_embedding_model`).
+(`rag_delete_topic`, `rag_remove_document`, `rag_reset_memory`).
 Each destructive tool requires an explicit `confirm: true` argument; that is a
 guard against an agent's mistake, not an authorization boundary.
 
