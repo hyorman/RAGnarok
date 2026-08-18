@@ -109,7 +109,10 @@ The complete key table is in
   the recorded model, so the topic stays one coherent embedding space. Changing
   this setting takes effect on restart and changes the default for topics
   created afterwards; memory always uses the currently configured model, so its
-  fingerprint guard fails closed until `rag_reset_memory` is confirmed. It
+  fingerprint guard fails closed until `rag_reset_memory` is confirmed. In the
+  VS Code extension the equivalent action is **Reset Memory** in the RAG
+  sidebar's Memory section, which confirms modally before deleting; the
+  extension contributes no reset language-model tool. It
   migrates nothing already indexed; changing a topic's model is a
   delete-and-recreate. A
   dimension mismatch or a missing fingerprint is still a hard reindex error

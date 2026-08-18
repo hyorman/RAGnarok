@@ -67,9 +67,12 @@ both resource catalog and resource content declare
 
 VS Code's **RAGnarok: Show Memory Graph** webview uses separate generated JS/CSS,
 a nonce and restrictive CSP, local resource roots, and the same text-only
-renderer. It reads only VS Code extension memory. The native `ragResetMemory`
-tool requires VS Code invocation confirmation before deleting that root; MCP's
-`rag_reset_memory` separately requires `confirm: true` for MCP storage.
+renderer. It reads only VS Code extension memory. The extension contributes no
+reset language-model tool at all: deleting that root is the sidebar's **Reset
+Memory** command, which a human triggers behind a modal confirmation, so a model
+cannot reach it. MCP's `rag_reset_memory` remains a tool and separately requires
+`confirm: true` for MCP storage, because a headless agent has no sidebar to
+click.
 
 ## Authentication protocol scope
 

@@ -86,8 +86,25 @@ const architecture = await readFile(path.join(root, "ARCHITECTURE.md"), "utf8");
 const operations = await readFile(path.join(root, "docs/OPERATIONS.md"), "utf8");
 const security = await readFile(path.join(root, "docs/SECURITY.md"), "utf8");
 const release = await readFile(path.join(root, "docs/RELEASE.md"), "utf8");
-assert.match(rootReadme, /ragMemory/);
-assert.match(rootReadme, /ragResetMemory/);
+// The extension contributes exactly ragQuery, ragTopic, and ragMemory. Naming
+// ragResetMemory would document a tool that no longer exists: the irreversible
+// wipe is the sidebar's Reset Memory command, not something a model may call.
+for (const tool of ["ragQuery", "ragTopic", "ragMemory"]) {
+  for (const [name, contents] of [
+    ["root README", rootReadme],
+    ["vscode README", vscodeReadme],
+  ]) {
+    assert.match(contents, new RegExp(tool), `${name} must document the ${tool} tool`);
+  }
+}
+for (const [name, contents] of [
+  ["root README", rootReadme],
+  ["vscode README", vscodeReadme],
+  ["architecture", architecture],
+  ["security", security],
+]) {
+  assert.doesNotMatch(contents, /ragResetMemory/, `${name} must not document the removed ragResetMemory tool`);
+}
 assert.match(vscodeReadme, /RAGnarok: Show Memory Graph/);
 assert.match(architecture, /separate storage/i);
 assert.match(core, /MemoryService/);

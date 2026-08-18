@@ -127,7 +127,7 @@ Notes:
 ### 🧠 **Standalone Memory Module**
 
 - **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing or automatic migration.
-- **Native VS Code Tools**: Copilot can invoke `ragMemory` for scoped memory operations and `ragResetMemory` for a full reset. `ragResetMemory` always shows a VS Code confirmation before deleting extension memory.
+- **Native VS Code Tools**: the extension contributes exactly three language-model tools — `ragQuery` to search a topic, `ragTopic` to list topics or inspect one topic's statistics and documents, and `ragMemory` for scoped memory operations. `ragQuery` and `ragTopic` are read-only. `ragMemory` stores, recalls, and forgets individual memories, but it has no reset action: wiping memory outright is **Reset Memory** in the RAG sidebar's **Memory** section, behind a modal confirmation, just as creating, renaming, exporting, importing, and deleting topics are sidebar actions. The three tools' input schemas are generated from the canonical JSON Schema contracts in `@ragnarok/core` by `npm run tools:manifest` and drift-checked by `npm run tools:manifest:check`.
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
 - **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
@@ -514,16 +514,16 @@ npm run clean            # Clean all build artifacts
 
 The MCP server exposes these tools to any MCP-compatible agent:
 
-| Tool                         | Description                                                                                                      |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `rag_query`                  | Query a topic with agentic RAG (supports all retrieval strategies)                                               |
-| `rag_ingest`                 | Add content to a topic from local files, one public HTTP(S) page, or an allowlisted GitHub/GHES repository       |
-| `rag_topic`                  | Manage topics: `list`, `stats` (statistics plus indexed documents), `create`, `rename`, `export`, and `import`   |
-| `rag_delete_topic`           | Delete a topic after explicit confirmation                                                                       |
-| `rag_remove_document`        | Remove a document and reconcile its chunks                                                                       |
-| `rag_memory`                 | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped)                         |
-| `rag_reset_memory`           | Reset incompatible or unwanted standalone memory after confirmation                                              |
-| `rag_memory_visualize`       | Return a deterministic memory graph document and associate the MCP App                                           |
+| Tool                   | Description                                                                                                                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rag_query`            | Query a topic with agentic RAG (supports all retrieval strategies); shares one executor with the VS Code `ragQuery` tool                                                                      |
+| `rag_ingest`           | Add content to a topic from local files, one public HTTP(S) page, or an allowlisted GitHub/GHES repository                                                                                    |
+| `rag_topic`            | Manage topics: `list`, `stats` (statistics plus indexed documents), `create`, `rename`, `export`, and `import` (`list` and `stats` share one implementation with the VS Code `ragTopic` tool) |
+| `rag_delete_topic`     | Delete a topic after explicit confirmation                                                                                                                                                    |
+| `rag_remove_document`  | Remove a document and reconcile its chunks                                                                                                                                                    |
+| `rag_memory`           | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped); shares its input normalizer and `MemoryService` with the VS Code `ragMemory` tool                   |
+| `rag_reset_memory`     | Reset incompatible or unwanted standalone memory after confirmation. It has no VS Code counterpart: a headless agent has no sidebar to click, so this stays a tool guarded by `confirm: true` |
+| `rag_memory_visualize` | Return a deterministic memory graph document and associate the MCP App                                                                                                                        |
 
 That is the complete surface: 8 tools, all registered unconditionally on every
 connection. There are no roles and no capability tiers — the client already runs

@@ -92,12 +92,22 @@ requires an LLM provider, and it is exposed read-only through
 `rag_memory_visualize`. Memory is read and written only through explicit
 `rag_memory` operations.
 
-VS Code exposes the core service as native `ragMemory` and confirmed
-`ragResetMemory` language-model tools. Its **RAGnarok: Show Memory Graph**
+VS Code exposes the core services as exactly three native language-model tools:
+read-only `ragQuery` and `ragTopic`, and `ragMemory` for scoped store, recall,
+forget, list, and stats operations. There is no reset tool — an irreversible
+wipe is **Reset Memory** in the sidebar's Memory section, behind a modal
+confirmation. The three input schemas are generated from the canonical JSON
+Schema contracts in `@ragnarok/core` and drift-checked by
+`npm run tools:manifest:check`; the MCP server's Zod schemas are asserted
+equivalent to the same contracts by a parity test. Both hosts run one
+implementation per shared action: `executeQueryTool` for query, `executeTopicRead`
+for topic `list` and `stats`, and `normalizeMemoryInput` plus the same
+`MemoryService.execute` for memory. Its **RAGnarok: Show Memory Graph**
 command opens a nonce-protected local webview. MCP retains `rag_memory`,
-confirmed `rag_reset_memory`, and `rag_memory_visualize`, whose graph appears as
-an inline MCP App. The private `@ragnarok/graph-ui` workspace supplies shared
-renderer source with separate VS Code and MCP lifecycle bridges.
+`rag_reset_memory` — still a tool, confirmed by `confirm: true`, because a
+headless agent has no sidebar to click — and `rag_memory_visualize`, whose graph
+appears as an inline MCP App. The private `@ragnarok/graph-ui` workspace supplies
+shared renderer source with separate VS Code and MCP lifecycle bridges.
 
 ## MCP protocol surface
 
