@@ -26,9 +26,9 @@ import { McpServer, type ServerContext, type ToolAnnotations } from "@modelconte
 import { z } from "zod";
 import {
   TopicManager,
-  RetrievalStrategy,
   RAGQueryService,
-  TopicEmptyError,
+  executeQueryTool,
+  executeTopicRead,
   MemoryStore,
   MemoryService,
   GraphVisualizationService,
@@ -394,42 +394,17 @@ export function registerTools(
         ),
     }),
     readOnlyAnnotations,
+    // No workspace context is supplied: editor state is VS Code's alone. The
+    // empty-topic case is no longer handled here — the shared executor turns it
+    // into the canonical empty payload. Query FAILURES keep MCP's flat
+    // {error: message} transport; only rag_memory speaks {error: {code, message}}.
     async ({ topic, query, topK, retrievalStrategy }, context) => {
       try {
-        const result = await ragQueryService.executeQuery(
-          {
-            topic,
-            query,
-            topK,
-            retrievalStrategy: retrievalStrategy as RetrievalStrategy | undefined,
-          },
-          undefined,
-          context.mcpReq.signal,
+        return toolJson(
+          await executeQueryTool({ topic, query, topK, retrievalStrategy }, { ragQueryService }, context.mcpReq.signal),
         );
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
       } catch (error) {
-        // TopicEmptyError is informational, not a query failure — return as non-error
-        if (error instanceof TopicEmptyError) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({ message: error.message, topicName: error.topicName }),
-              },
-            ],
-          };
-        }
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-            },
-          ],
-          isError: true,
-        };
+        return toolError(error);
       }
     },
   );
@@ -640,25 +615,13 @@ export function registerTools(
     async (input: TopicInput) => {
       try {
         switch (input.action) {
-          case "list": {
-            const topics = topicManager.getAllTopics().map((t) => ({
-              name: t.name,
-              description: t.description,
-              documentCount: t.documentCount,
-              createdAt: new Date(t.createdAt).toISOString(),
-              updatedAt: new Date(t.updatedAt).toISOString(),
-              source: t.source || "local",
-            }));
-            return toolJson({ topics, count: topics.length });
-          }
-          case "stats": {
-            const match = await topicManager.resolveTopicByName(input.topic);
-            const stats = await topicManager.getTopicStats(match.topic.id);
-            const documents = topicManager
-              .listDocuments(match.topic.id)
-              .map((document) => ({ ...document, documentId: document.id }));
-            return toolJson({ ...stats, documents });
-          }
+          // The two READ actions delegate to the shared executor. The zod gate
+          // above stays in front of it: zod bounds the RAW topic string at 200,
+          // the executor bounds the TRIMMED one, so both bounds apply.
+          case "list":
+            return toolJson(await executeTopicRead({ action: "list" }, { topicManager }));
+          case "stats":
+            return toolJson(await executeTopicRead({ action: "stats", topic: input.topic }, { topicManager }));
           case "create": {
             const topic = await runMutation(() =>
               topicManager.createTopic({ name: input.name, description: input.description }),

@@ -13,6 +13,7 @@ import sinon from "sinon";
 import { McpServer } from "@modelcontextprotocol/server";
 import { measureToolResultForResponse, registerTools } from "../src/tools";
 import type { McpConfig } from "../src/config";
+import { TopicEmptyError } from "@ragnarok/core";
 import type {
   TopicManager,
   IConfigProvider,
@@ -333,6 +334,23 @@ describe("MCP Tools (registerTools)", () => {
       expect(body.topicName).to.equal("docs");
       expect(body.results).to.deep.equal([]);
     });
+
+    // The empty-topic payload is produced by the shared core executor, not by a
+    // local TopicEmptyError branch. Reverting to the inline branch reinstates
+    // the old {message, topicName} body and fails this test.
+    it("returns the honest empty payload for a topic with no documents", async () => {
+      ragQueryService.executeQuery.rejects(new TopicEmptyError("Empty"));
+
+      const result = await handlers.rag_query({ topic: "Empty", query: "anything" });
+      const payload = parseResponse(result);
+
+      expect(result.isError).to.be.undefined;
+      expect(payload).to.include({ empty: true, topicMatched: "fallback", topicName: "Empty", query: "anything" });
+      expect(payload.results).to.deep.equal([]);
+      expect(payload.message).to.include("no documents");
+      // The retrieval run never happened, so no agentic metadata is invented.
+      expect(payload).to.not.have.property("agenticMetadata");
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -413,6 +431,50 @@ describe("MCP Tools (registerTools)", () => {
       expect(topicManager.getTopicStats.calledWith("t1")).to.be.true;
     });
 
+    // getTopicStats returns null for an uninitialised index AND for any swallowed
+    // internal error. The inline handler spread that null into a stats body with
+    // no counts at all; the shared executor refuses to report a non-answer.
+    it("stats sets isError when getTopicStats yields no statistics", async () => {
+      topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
+      topicManager.getTopicStats.resolves(null as any);
+      (topicManager as any).listDocuments = sinon.stub().returns([]);
+
+      const result = await handlers.rag_topic({ action: "stats", topic: "docs" });
+      const body = parseResponse(result);
+
+      expect(result.isError).to.equal(true);
+      expect(body.error).to.equal("No statistics available for topic 'docs'");
+      expect(body).to.not.have.property("documents");
+    });
+
+    // The shared executor resolves the TRIMMED name. The zod schema for `stats`
+    // does not trim, so an untrimmed name used to reach resolveTopicByName raw
+    // and could match a different topic through the similarity branch.
+    it("stats resolves the trimmed topic name", async () => {
+      topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
+      topicManager.getTopicStats.resolves({
+        documentCount: 1,
+        chunkCount: 2,
+        lastUpdated: 3,
+        embeddingModel: "m",
+      } as any);
+      (topicManager as any).listDocuments = sinon.stub().returns([]);
+
+      await handlers.rag_topic({ action: "stats", topic: "  docs  " });
+
+      expect(topicManager.resolveTopicByName.calledOnceWithExactly("docs")).to.equal(true);
+    });
+
+    // A whitespace-only name clears zod's min(1) on the raw string; the shared
+    // executor's own guard fires before TopicManager is consulted at all.
+    it("stats rejects a whitespace-only topic before touching the manager", async () => {
+      const result = await handlers.rag_topic({ action: "stats", topic: "   " });
+
+      expect(result.isError).to.equal(true);
+      expect(parseResponse(result).error).to.equal("Topic tool 'topic' is required for the 'stats' action");
+      expect(topicManager.resolveTopicByName.called).to.equal(false);
+    });
+
     it("create returns created topic details", async () => {
       topicManager.createTopic.resolves(makeTopic({ id: "new-id", name: "my-topic", description: "desc" }));
 
@@ -465,6 +527,29 @@ describe("MCP Tools (registerTools)", () => {
       expect(schema.safeParse({ action: "stats" }).success, "stats requires topic").to.equal(false);
       expect(schema.safeParse({ action: "create" }).success, "create requires name").to.equal(false);
       expect(schema.safeParse({ action: "rename", topic: "docs" }).success, "rename requires newName").to.equal(false);
+    });
+
+    // The zod gate must stay IN FRONT of the shared executor: zod bounds the RAW
+    // string at 200 while the executor bounds the TRIMMED one, so bypassing zod
+    // would widen what rag_topic accepts.
+    it("bounds the raw stats topic string at 200 characters before the executor sees it", () => {
+      const captured: CapturedTool[] = [];
+      const server = {
+        registerTool(name: string, config: CapturedTool["config"], handler: CapturedTool["handler"]) {
+          captured.push({ name, config, handler });
+          return { name };
+        },
+      } as unknown as McpServer;
+      registerTools(server, topicManager as unknown as TopicManager, ragQueryService as unknown as RAGQueryService);
+      const schema: any = captured.find(({ name }) => name === "rag_topic")!.config.inputSchema;
+
+      expect(schema.safeParse({ action: "stats", topic: "x".repeat(200) }).success).to.equal(true);
+      expect(schema.safeParse({ action: "stats", topic: "x".repeat(201) }).success).to.equal(false);
+      // 210 raw characters that would trim down to 20 are still rejected: the
+      // raw bound is the outer gate, not the executor's trimmed bound.
+      expect(schema.safeParse({ action: "stats", topic: `${" ".repeat(190)}${"x".repeat(20)}` }).success).to.equal(
+        false,
+      );
     });
 
     it("import rejects archives outside the allowed roots", async () => {
