@@ -211,6 +211,24 @@ describe("topic read tool", function () {
       }
     });
 
+    // TopicManager.getTopicStats catches every internal failure, logs it, and
+    // returns null, so null is what an embedding outage, a rate limit, and an
+    // unreadable metadata file all look like from here. Classifying that as an
+    // input error tells the model to retry a different topic name against
+    // infrastructure that is down.
+    it("does not throw TopicInputError when no statistics are available", async function () {
+      try {
+        await executeTopicRead(
+          { action: "stats", topic: "Docs" },
+          { topicManager: fakeManager({ getTopicStats: async () => null }) as never },
+        );
+        expect.fail("should have thrown");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Error);
+        expect(error).to.not.be.instanceOf(TopicInputError);
+      }
+    });
+
     it("does not throw TopicInputError when listing fails", async function () {
       const manager = fakeManager();
       manager.getAllTopics = () => {

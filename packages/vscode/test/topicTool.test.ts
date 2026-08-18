@@ -194,7 +194,7 @@ describe("VS Code ragTopic tool", function () {
       expect(payload.error.code).to.equal("TOPIC_TOOL_FAILED");
     });
 
-    it("keeps the executor's own guards on the input code", async function () {
+    it("reports absent statistics as TOPIC_TOOL_FAILED", async function () {
       const manager = fakeManager();
       manager.getTopicStats = async () => null as never;
 
@@ -203,9 +203,12 @@ describe("VS Code ragTopic tool", function () {
         manager as unknown as TopicManager,
       )) as unknown as ErrorPayload;
 
-      // "No statistics available" is the executor rejecting the topic argument,
-      // not the backend failing, so it stays an input error.
-      expect(payload.error.code).to.equal("TOPIC_TOOL_INVALID_INPUT");
+      // TopicManager.getTopicStats (packages/core/src/managers/topicManager.ts)
+      // catches every internal failure, logs it, and returns null, so null is
+      // what an embedding outage, a rate limit, and unreadable storage all look
+      // like. Nothing about the topic argument is wrong, and telling the model
+      // otherwise sends it retrying names against broken infrastructure.
+      expect(payload.error.code).to.equal("TOPIC_TOOL_FAILED");
     });
   });
 

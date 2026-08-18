@@ -71,7 +71,13 @@ export async function executeTopicRead(
   signal?.throwIfAborted();
   const stats = await deps.topicManager.getTopicStats(match.topic.id);
   if (!stats) {
-    throw new TopicInputError(`No statistics available for topic '${match.topic.name}'`);
+    // Deliberately NOT a TopicInputError. TopicManager.getTopicStats catches
+    // every internal failure, logs it, and returns null, so null is equally
+    // what an embedding outage, a rate limit, and unreadable storage look like
+    // from here. The topic resolved, so nothing about the argument is wrong,
+    // and a host that reported this as bad input would send the model looking
+    // for a better topic name against infrastructure that is down.
+    throw new Error(`No statistics available for topic '${match.topic.name}'`);
   }
   signal?.throwIfAborted();
   const documents = deps.topicManager.listDocuments(match.topic.id).map((document) => ({

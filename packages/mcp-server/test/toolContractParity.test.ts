@@ -4,15 +4,19 @@
  * the same inputs, and the MCP host's tool payloads are the ones the shared
  * core executors produce.
  *
- * SCOPE, stated precisely because the file outlives the task report. At this
- * commit only the MCP host has been migrated onto the shared core module. The
- * VS Code host still carries its own local memory-input normalizer
- * (packages/vscode/src/memoryTools.ts) and still calls
- * RAGQueryService.executeQuery directly rather than executeQueryTool
- * (packages/vscode/src/ragTool.ts); it migrates in a later task. So what is
- * proven here is "MCP ≡ contract" and "MCP ≡ shared executors", plus the
- * host-independence of the shared executors themselves. "VS Code ≡ contract"
- * is NOT proven by this file and must not be read into it.
+ * SCOPE, stated precisely because the file outlives the task report. Both hosts
+ * now run on the shared core module: packages/vscode/src/memoryTools.ts calls
+ * core's normalizeMemoryInput, and packages/vscode/src/ragTool.ts delegates to
+ * executeQueryTool rather than calling RAGQueryService.executeQuery itself.
+ * This file still only DRIVES the MCP host, so what it proves is "MCP ≡
+ * contract" and "MCP ≡ shared executors", plus the host-independence of the
+ * shared executors themselves. "VS Code ≡ contract" is NOT proven here and must
+ * not be read into it — that is carried by
+ * packages/vscode/test/integrationContracts.test.ts ("contributes the manifest
+ * the generator produces from the shared contracts"), which asserts the
+ * inputSchema of every contributed languageModelTool deep-equals the canonical
+ * schema in @ragnarok/core, and by `npm run tools:manifest:check`, which fails
+ * on drift between those contracts and the root package.json manifest.
  *
  * Equivalence is scoped to DECLARED FIELDS ONLY — same requiredness, same type,
  * same min/max/enum bounds. Unknown-key handling is deliberately out of scope:
@@ -404,10 +408,12 @@ describe("runtime payload parity", function () {
   afterEach(() => sinon.restore());
 
   it("normalizes a memory input through the shared core normalizer", function () {
-    // The MCP host now calls this core normalizer instead of its own copy, so
-    // this pins the behavior that used to differ: the old MCP copy did not
-    // trim. The VS Code host still has a local copy (see the file header) and
-    // adopts this one in a later task; this test does not speak for it.
+    // The MCP host calls this core normalizer instead of its own copy, so this
+    // pins the behavior that used to differ: the old MCP copy did not trim.
+    // packages/vscode/src/memoryTools.ts now calls the same normalizeMemoryInput
+    // (its own copy is gone), so the trimming pinned here is what both hosts
+    // do — but this test drives only the core function, so its green is not by
+    // itself evidence about the VS Code invocation path.
     const raw = { action: "recall" as const, query: "  why  ", topK: 3, branch: " main " };
 
     expect(normalizeMemoryInput(raw)).to.deep.equal({
@@ -491,8 +497,10 @@ describe("runtime payload parity", function () {
 
   it("keeps the shared executor's empty-topic payload invariant to workspaceContext", async function () {
     // A property of the shared executor, not of either host: supplying editor
-    // context cannot change the empty payload. MCP's own handler is driven
-    // separately below; VS Code's path does not reach executeQueryTool yet.
+    // context cannot change the empty payload. Both hosts reach this executor
+    // — MCP with no workspaceContext (its handler is driven separately below)
+    // and packages/vscode/src/ragTool.ts with one — so the invariant is what
+    // makes their empty-topic payloads identical.
     const service = {
       executeQuery: async () => {
         throw new TopicEmptyError("Docs");
