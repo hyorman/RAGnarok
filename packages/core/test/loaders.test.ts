@@ -17,7 +17,7 @@ import type { LoaderOptions } from "../src/index";
 describe("Individual Loader Modules", function () {
   this.timeout(30000);
 
-  const fixturesPath = path.join(__dirname, "../../../../test/fixtures");
+  const fixturesPath = path.join(__dirname, "../../test/fixtures");
 
   const makeOptions = (filePath: string, overrides?: Partial<LoaderOptions>): LoaderOptions => ({
     filePath,

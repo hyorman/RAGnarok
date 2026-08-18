@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import * as fs from "fs/promises";
 import * as path from "path";
-import mockVscode from "../../../test/setup";
+import mockVscode from "../test-harness/setup";
 import { RetrievalStrategy } from "@ragnarok/core";
 import { openTopicManagerWithMigration, TOOLS, TopicTreeItem, type MigrationUxDependencies } from "@ragnarok/vscode";
 

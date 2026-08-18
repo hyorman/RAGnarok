@@ -14,8 +14,8 @@ describe("DocumentLoaderFactory", function () {
 
   let factory: DocumentLoaderFactory;
 
-  // Compiled tests live in packages/core/dist-test/test, so resolve fixtures relative to workspace root
-  const fixturesPath = path.join(__dirname, "../../../../test/fixtures");
+  // Compiled tests live in packages/core/dist-test/test; fixtures are package-local under test/fixtures
+  const fixturesPath = path.join(__dirname, "../../test/fixtures");
 
   before(function () {
     factory = new DocumentLoaderFactory();

@@ -7,7 +7,7 @@ dist-test/
 !media/memoryGraph.js
 *.js.map
 *.tsbuildinfo
-!test/fixtures/**
+!packages/core/test/fixtures/**
 !scripts/**
 
 # Dependencies
@@ -37,8 +37,8 @@ docs/superpowers/
 # Test artifacts
 coverage/
 .nyc_output/
-test/chunk-output/
-test/.temp-storage/
+packages/core/test/chunk-output/
+
 benchmark-results/
 release-manifest.json
 release-provenance.json

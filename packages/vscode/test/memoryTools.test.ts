@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import sinon from "sinon";
-import mockVscode from "../../../test/setup";
+import mockVscode from "../test-harness/setup";
 import {
   MemoryServiceError,
   type MemoryOperationInput,

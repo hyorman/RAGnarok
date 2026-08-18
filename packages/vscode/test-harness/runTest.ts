@@ -34,12 +34,13 @@ async function main() {
       delete process.env[key];
     }
 
-    // The folder containing the Extension Manifest package.json
-    const extensionDevelopmentPath = path.resolve(__dirname, "../../");
+    // The folder containing the Extension Manifest package.json — the repo
+    // root, four levels up from dist-test/packages/vscode/test-harness/.
+    const extensionDevelopmentPath = path.resolve(__dirname, "../../../../");
 
     // The path to the extension test script
     const extensionTestsPath = path.resolve(__dirname, "./suite/index");
-    const manifest = JSON.parse(await readFile(path.resolve(__dirname, "../../package.json"), "utf8")) as {
+    const manifest = JSON.parse(await readFile(path.resolve(__dirname, "../../../../package.json"), "utf8")) as {
       engines: { vscode: string };
     };
     const minimumVersion = manifest.engines.vscode.replace(/^[^\d]*/, "");

@@ -19,6 +19,6 @@
       "@ragnarok/vscode": ["./packages/vscode/src/index.ts"]
     }
   },
-  "include": ["test/**/*.ts", "packages/vscode/test/**/*.ts"],
+  "include": ["packages/vscode/test-harness/**/*.ts", "packages/vscode/test/**/*.ts"],
   "exclude": ["node_modules", "out"]
 }

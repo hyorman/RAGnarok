@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import mockVscode from "../../../test/setup";
+import mockVscode from "../test-harness/setup";
 import { TopicManager, RetrievalStrategy, IConfigProvider, ILLMProvider } from "@ragnarok/core";
 import { RAGTool, WorkspaceContextProvider, VSCODE_CONFIG } from "@ragnarok/vscode";
 

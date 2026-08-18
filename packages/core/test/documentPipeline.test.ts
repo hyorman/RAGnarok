@@ -39,8 +39,8 @@ describe("DocumentPipeline", function () {
   let embeddingRegistry: EmbeddingServiceRegistry;
   let originalModel: string | null = null;
 
-  // When tests are compiled, they're in packages/core/dist-test/test, so go up to workspace root
-  const fixturesPath = path.join(__dirname, "../../../../test/fixtures");
+  // Compiled tests live in packages/core/dist-test/test; fixtures are package-local under test/fixtures
+  const fixturesPath = path.join(__dirname, "../../test/fixtures");
   let tempStorageDir: string;
 
   before(async function () {

@@ -101,8 +101,8 @@ async function main() {
   console.log('\n🔍 RAG Chunk Inspector');
   console.log('═'.repeat(60));
 
-  const fixturesPath = path.join(__dirname, '../test/fixtures');
-  const outputDir = path.join(__dirname, '../test/chunk-output');
+  const fixturesPath = path.join(__dirname, '../packages/core/test/fixtures');
+  const outputDir = path.join(__dirname, '../packages/core/test/chunk-output');
 
   // Create output directory
   if (!fs.existsSync(outputDir)) {

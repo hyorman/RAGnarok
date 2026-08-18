@@ -1,7 +1,6 @@
 # Development and test files
 .vscode/**
 .vscode-test/**
-test/**
 out/**
 dist-test/**
 scripts/**
