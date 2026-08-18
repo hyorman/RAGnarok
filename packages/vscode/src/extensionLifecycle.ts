@@ -67,6 +67,8 @@ export interface ExtensionLifecycleResources {
   memoryTools?: AwaitableDisposable;
   graphCommand?: AwaitableDisposable;
   graphPanel?: AwaitableDisposable;
+  /** The sidebar Memory section: its tree view plus its reset/refresh commands. */
+  memorySidebar?: AwaitableDisposable;
   memoryCoordinator?: MemoryCoordinatorLifecycle;
   memoryStore?: AwaitableDisposable;
   topicManager?: AwaitableDisposable;
@@ -197,6 +199,7 @@ export class ExtensionLifecycle {
     await close(this.resources.memoryTools);
     await close(this.resources.graphCommand);
     await close(this.resources.graphPanel);
+    await close(this.resources.memorySidebar);
 
     for (const disposable of this.ownedDisposables) {
       await close(disposable);

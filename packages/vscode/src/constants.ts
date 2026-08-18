@@ -58,6 +58,9 @@ export const COMMANDS = {
   IMPORT_TOPIC: "ragnarok.importTopic",
   RENAME_TOPIC: "ragnarok.renameTopic",
   SHOW_MEMORY_GRAPH: "ragnarok.showMemoryGraph",
+  /** Destructive: the sidebar replacement for the removed ragResetMemory tool. */
+  RESET_MEMORY: "ragnarok.resetMemory",
+  REFRESH_MEMORY: "ragnarok.refreshMemory",
   /** Release harness hook; intentionally not contributed to the Command Palette. */
   INSTALLED_SMOKE: "ragnarok._runInstalledSmoke",
 } as const;
@@ -67,6 +70,7 @@ export const COMMANDS = {
  */
 export const VIEWS = {
   RAG_TOPICS: "ragTopics",
+  RAG_MEMORY: "ragMemory",
   RAG_CONFIG: "ragConfig",
 } as const;
 

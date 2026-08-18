@@ -10,7 +10,7 @@ import {
   type ActivationRuntimeFactory,
   type RagnarokExtensionApi,
 } from "../src/extension";
-import { COMMANDS, TOOLS } from "../src/constants";
+import { COMMANDS, TOOLS, VIEWS } from "../src/constants";
 
 describe("real VS Code extension host activation", function () {
   this.timeout(120_000);
@@ -36,6 +36,18 @@ describe("real VS Code extension host activation", function () {
       expect(registered, `${command} should be registered`).to.include(command);
     }
     await vscode.commands.executeCommand(COMMANDS.REFRESH_TOPICS);
+  });
+
+  // Runs against the live activation, before the rollback test tears it down.
+  // The reset command is deliberately not executed here: its modal has no user.
+  it("registers the memory sidebar commands and refreshes the memory tree", async function () {
+    const registered = await vscode.commands.getCommands(true);
+    expect(registered).to.include(COMMANDS.RESET_MEMORY);
+    expect(registered).to.include(COMMANDS.REFRESH_MEMORY);
+    await vscode.commands.executeCommand(COMMANDS.REFRESH_MEMORY);
+    // createTreeView throws for an uncontributed id, so a real activation that
+    // reached this point also proves VIEWS.RAG_MEMORY is contributed.
+    expect(VIEWS.RAG_MEMORY).to.equal("ragMemory");
   });
 
   // Witnesses the extension.ts wiring, not just the tool class: invokeTool only
@@ -99,14 +111,20 @@ describe("real VS Code extension host activation", function () {
         events.push("memoryCoordinator:drain");
       },
     };
+    const memoryService = { execute: sinon.stub(), reset: sinon.stub() };
     const serviceFactory = {
       createEmbeddingService: () => embeddingService,
       createTopicManager: async () => topicManager,
       createMemoryStore: () => memoryStore,
       createMemoryCoordinator: () => coordinator,
-      createMemoryService: () => ({ execute: sinon.stub(), reset: sinon.stub() }),
+      createMemoryService: () => memoryService,
       createGraphVisualizationService: () => ({ generate: sinon.stub() }),
     };
+    // Witnesses the extension.ts wiring: dropping the registerMemorySidebar call
+    // leaves this spy uncalled and its dispose event missing from the rollback.
+    const registerMemorySidebar = sinon.spy((_service: unknown, _operationRunner: unknown) => ({
+      dispose: () => events.push("memorySidebar:dispose"),
+    }));
     const runtimeFactory: ActivationRuntimeFactory = {
       registerMemoryTools: () => ({ dispose: () => events.push("memoryTools:dispose") }),
       createMemoryGraphPanel: () => ({
@@ -114,6 +132,7 @@ describe("real VS Code extension host activation", function () {
         dispose: () => events.push("graphPanel:dispose"),
       }),
       registerMemoryGraphCommand: () => ({ dispose: () => events.push("graphCommand:dispose") }),
+      registerMemorySidebar,
       afterMemorySurfacesRegistered: () => {
         throw new Error("post-registration failure");
       },
@@ -135,10 +154,14 @@ describe("real VS Code extension host activation", function () {
 
     expect(caught).to.be.instanceOf(Error);
     expect((caught as Error).message).to.equal("post-registration failure");
+    expect(registerMemorySidebar.calledOnce).to.equal(true);
+    expect(registerMemorySidebar.firstCall.args[0]).to.equal(memoryService);
+    expect(registerMemorySidebar.firstCall.args[1]).to.be.a("function");
     expect(events).to.deep.equal([
       "memoryTools:dispose",
       "graphCommand:dispose",
       "graphPanel:dispose",
+      "memorySidebar:dispose",
       "memoryCoordinator:stop",
       "memoryCoordinator:drain",
       "memoryStore:dispose",

@@ -276,7 +276,20 @@
       },
       {
         "command": "ragnarok.showMemoryGraph",
-        "title": "RAGnarok: Show Memory Graph"
+        "title": "RAGnarok: Show Memory Graph",
+        "icon": "$(graph-scatter)"
+      },
+      {
+        "command": "ragnarok.resetMemory",
+        "title": "Reset Memory",
+        "category": "RAG",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "ragnarok.refreshMemory",
+        "title": "Refresh Memory",
+        "category": "RAG",
+        "icon": "$(refresh)"
       }
     ],
     "viewsContainers": {
@@ -296,6 +309,12 @@
           "icon": "$(files)"
         },
         {
+          "id": "ragMemory",
+          "name": "Memory",
+          "icon": "$(archive)",
+          "type": "tree"
+        },
+        {
           "id": "ragConfig",
           "name": "Configuration",
           "icon": "$(settings-gear)"
@@ -312,6 +331,10 @@
         "view": "ragTopics",
         "contents": "No topics yet.\n\nCreate a topic to start indexing your documents for semantic search and RAG queries with Copilot.\n\n[$(add) Create Topic](command:ragnarok.createTopic)\n[$(cloud-download) Import Topic](command:ragnarok.importTopic)\n\nNeed help? [Read the docs](https://github.com/hyorman/ragnarok#readme)",
         "when": "ragnarok.loaded && !ragnarok.hasTopics"
+      },
+      {
+        "view": "ragMemory",
+        "contents": "No memories stored yet.\nMemories are written through the ragMemory tool in Copilot Chat.\n[$(graph-scatter) Show Memory Graph](command:ragnarok.showMemoryGraph)"
       }
     ],
     "menus": {
@@ -329,6 +352,21 @@
         {
           "command": "ragnarok.refreshTopics",
           "when": "view == ragTopics",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ragnarok.showMemoryGraph",
+          "when": "view == ragMemory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ragnarok.refreshMemory",
+          "when": "view == ragMemory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ragnarok.resetMemory",
+          "when": "view == ragMemory",
           "group": "navigation@3"
         }
       ],

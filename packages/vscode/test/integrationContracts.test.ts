@@ -9,7 +9,14 @@ import {
   RAG_TOPIC_READ_INPUT_SCHEMA,
   TOOL_LIMITS,
 } from "@ragnarok/core";
-import { openTopicManagerWithMigration, TOOLS, TopicTreeItem, type MigrationUxDependencies } from "@ragnarok/vscode";
+import {
+  COMMANDS,
+  VIEWS,
+  openTopicManagerWithMigration,
+  TOOLS,
+  TopicTreeItem,
+  type MigrationUxDependencies,
+} from "@ragnarok/vscode";
 
 function legacyPlan(): any {
   return {
@@ -121,6 +128,41 @@ describe("VS Code contribution and tree contracts", function () {
       expect(tool.userDescription, `${tool.name} userDescription`).to.be.a("string").and.not.empty;
       expect(tool.icon, `${tool.name} icon`).to.match(/^\$\(.+\)$/);
     }
+  });
+
+  // The sidebar half of the ragResetMemory removal: reset has to be reachable by
+  // a human, so the view, its commands, its title actions, and the welcome entry
+  // are all contributed. A dropped contribution is invisible to the compiler.
+  it("contributes the memory sidebar section with graph, refresh, and reset actions", async function () {
+    const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+    const views = manifest.contributes.views.ragnarok;
+    const commands = manifest.contributes.commands;
+    const findCommand = (id: string) => commands.find((command: any) => command.command === id);
+
+    expect(views.map((view: any) => view.id)).to.deep.equal([VIEWS.RAG_TOPICS, VIEWS.RAG_MEMORY, VIEWS.RAG_CONFIG]);
+    expect(views.find((view: any) => view.id === VIEWS.RAG_MEMORY).name).to.equal("Memory");
+
+    expect(findCommand(COMMANDS.RESET_MEMORY)).to.include({ title: "Reset Memory", icon: "$(trash)" });
+    expect(findCommand(COMMANDS.REFRESH_MEMORY)).to.include({ title: "Refresh Memory", icon: "$(refresh)" });
+    // Without an icon the reused graph command cannot render as a title action.
+    expect(findCommand(COMMANDS.SHOW_MEMORY_GRAPH).icon).to.match(/^\$\(.+\)$/);
+
+    const titleActions = manifest.contributes.menus["view/title"]
+      .filter((item: any) => item.when === `view == ${VIEWS.RAG_MEMORY}`)
+      .map((item: any) => [item.command, item.group]);
+    expect(titleActions).to.deep.equal([
+      [COMMANDS.SHOW_MEMORY_GRAPH, "navigation@1"],
+      [COMMANDS.REFRESH_MEMORY, "navigation@2"],
+      [COMMANDS.RESET_MEMORY, "navigation@3"],
+    ]);
+
+    const welcome = manifest.contributes.viewsWelcome.find((entry: any) => entry.view === VIEWS.RAG_MEMORY);
+    expect(welcome.contents).to.include(`command:${COMMANDS.SHOW_MEMORY_GRAPH}`);
+
+    // Reset is a human action in the sidebar and never a model-callable tool.
+    const toolNames = manifest.contributes.languageModelTools.map((tool: any) => tool.name);
+    expect(toolNames).to.deep.equal(["ragQuery", "ragMemory", "ragTopic"]);
+    expect(toolNames).to.not.include(COMMANDS.RESET_MEMORY);
   });
 
   it("declares the same three retrieval strategies in settings, LM tool schema, and tree labels", async function () {

@@ -36,6 +36,7 @@ import { createDefaultMigrationUx, openTopicManagerWithMigration } from "./migra
 import { registerMemoryTools } from "./memoryTools";
 import { MemoryGraphPanel } from "./memoryGraphPanel";
 import { registerMemoryGraphCommand } from "./memoryGraphCommand";
+import { registerMemorySidebar } from "./memoryTreeView";
 
 // Install VS Code logger factory before anything else
 setLoggerFactory(new VsCodeLoggerFactory());
@@ -78,6 +79,10 @@ export interface ActivationRuntimeFactory {
     panel: Pick<MemoryGraphPanel, "show">,
     operationRunner: ExtensionLifecycle["run"],
   ): vscode.Disposable;
+  registerMemorySidebar(
+    memoryService: Pick<MemoryService, "execute" | "reset">,
+    operationRunner: ExtensionLifecycle["run"],
+  ): vscode.Disposable;
   afterMemorySurfacesRegistered?(): void | Promise<void>;
 }
 
@@ -94,6 +99,7 @@ const defaultRuntimeFactory: ActivationRuntimeFactory = {
   registerMemoryTools: (memoryService, operationRunner) => registerMemoryTools(memoryService, operationRunner),
   createMemoryGraphPanel: (extensionUri) => new MemoryGraphPanel(extensionUri),
   registerMemoryGraphCommand,
+  registerMemorySidebar: (memoryService, operationRunner) => registerMemorySidebar(memoryService, operationRunner),
 };
 
 export function createMemoryServices(
@@ -214,6 +220,11 @@ export async function activateWithServiceFactory(
     lifecycle.setResources({ graphPanel });
     const graphCommand = runtimeFactory.registerMemoryGraphCommand(graphService, graphPanel, lifecycle.run);
     lifecycle.setResources({ graphCommand });
+    // Registered with the other memory surfaces, not with the topic/config tree
+    // views below, so a failure after this point rolls the whole section back.
+    const memorySidebar = runtimeFactory.registerMemorySidebar(memoryService, lifecycle.run);
+    lifecycle.setResources({ memorySidebar });
+    context.subscriptions.push(memorySidebar);
     await runtimeFactory.afterMemorySurfacesRegistered?.();
 
     // Start model initialization in the background — don't block activation

@@ -10,7 +10,7 @@ export { TopicTool, type TopicToolPayload } from "./topicTool";
 export { vscodeToolRegistrationHost, type LanguageModelToolRegistrationHost } from "./toolRegistrationHost";
 export { VscodeLmBackend } from "./vscodeLmBackend";
 export { WorkspaceContextProvider } from "./workspaceContext";
-export { COMMANDS, TOOLS, VSCODE_CONFIG } from "./constants";
+export { COMMANDS, TOOLS, VIEWS, VSCODE_CONFIG } from "./constants";
 export { resolveMemoryHostContext, type MemoryHostContextHost } from "./memoryHostContext";
 export { registerMemoryTools, type RegisterMemoryToolsOptions } from "./memoryTools";
 export {
@@ -19,6 +19,15 @@ export {
   type MemoryGraphWorkspaceFolder,
 } from "./memoryGraphCommand";
 export { MemoryGraphPanel, type MemoryGraphPanelFactory } from "./memoryGraphPanel";
+export {
+  MemoryTreeDataProvider,
+  MemoryTreeItem,
+  registerMemoryCommands,
+  registerMemorySidebar,
+  type MemoryCommandHost,
+  type MemorySidebarHost,
+  type MemoryTreeContextHost,
+} from "./memoryTreeView";
 export {
   ExtensionLifecycle,
   ExtensionShutdownError,
