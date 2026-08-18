@@ -30,6 +30,12 @@ export interface EmptyTopicPayload {
   message: string;
 }
 
+/**
+ * NOT a discriminated union: `EmptyTopicPayload` is structurally assignable to
+ * `RAGQueryResult`, so TypeScript silently accepts an empty payload wherever a
+ * full result is expected. Narrow with `"empty" in payload` — nothing else is
+ * safe.
+ */
 export type QueryToolPayload = RAGQueryResult | EmptyTopicPayload;
 
 class QueryInputError extends Error {}
