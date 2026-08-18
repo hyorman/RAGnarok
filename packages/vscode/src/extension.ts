@@ -26,6 +26,7 @@ import { VsCodeNotifier } from "./adapters/vsCodeNotifier";
 import { VsCodeLLMProvider } from "./adapters/vsCodeLLMProvider";
 import { VscodeLmBackend } from "./vscodeLmBackend";
 import { RAGTool } from "./ragTool";
+import { TopicTool } from "./topicTool";
 import { CommandHandler } from "./commands";
 import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
 import { VIEWS, CONTEXT, COMMANDS, VSCODE_CONFIG } from "./constants";
@@ -68,7 +69,7 @@ export interface ActivationServiceFactory {
 
 export interface ActivationRuntimeFactory {
   registerMemoryTools(
-    memoryService: Pick<MemoryService, "execute" | "reset">,
+    memoryService: Pick<MemoryService, "execute">,
     operationRunner: ExtensionLifecycle["run"],
   ): vscode.Disposable;
   createMemoryGraphPanel(extensionUri: vscode.Uri): Pick<MemoryGraphPanel, "show" | "dispose">;
@@ -306,7 +307,9 @@ export async function activateWithServiceFactory(
         ragToolRegistration = RAGTool.register(context, topicManager, embeddingService, configProvider, llmProvider);
         lifecycle.setResources({ ragTool: ragToolRegistration });
         lifecycle.addDisposable(ragToolRegistration);
-        logger.info("RAG query tool registered successfully");
+        // Same guard on purpose: without vscode.lm there is nothing to register.
+        lifecycle.addDisposable(TopicTool.register(context, topicManager));
+        logger.info("RAG query and topic tools registered successfully");
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

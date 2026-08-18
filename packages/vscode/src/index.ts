@@ -6,6 +6,7 @@
  */
 
 export { RAGTool } from "./ragTool";
+export { TopicTool, type TopicToolPayload, type TopicToolRegistrationHost } from "./topicTool";
 export { VscodeLmBackend } from "./vscodeLmBackend";
 export { WorkspaceContextProvider } from "./workspaceContext";
 export { COMMANDS, TOOLS, VSCODE_CONFIG } from "./constants";

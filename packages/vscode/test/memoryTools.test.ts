@@ -47,11 +47,9 @@ function registrationHarness(
     },
     createToolResult: (content) => new mockVscode.LanguageModelToolResult(content),
     createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
-    createMarkdownString: (value) => new mockVscode.MarkdownString(value),
   };
   const memoryService = {
     execute: sinon.stub().resolves(result),
-    reset: sinon.stub().resolves({ success: true }),
   };
   const contextHost: MemoryHostContextHost = {
     workspaceFolders: [{ uri: { fsPath: "/workspace" } }],
@@ -61,9 +59,12 @@ function registrationHarness(
   const operationRunner = sinon.spy(runOperation) as sinon.SinonSpy & ExtensionOperationRunner;
 
   const registration = registerMemoryTools(
-    memoryService as unknown as Pick<MemoryService, "execute" | "reset">,
+    memoryService as unknown as Pick<MemoryService, "execute">,
     operationRunner,
-    { registrationHost, contextHost },
+    {
+      registrationHost,
+      contextHost,
+    },
   );
   return { tools, registrations, registration, memoryService, operationRunner };
 }
@@ -86,35 +87,15 @@ async function caughtError(operation: Promise<unknown>): Promise<Error> {
 describe("VS Code native memory tools", function () {
   afterEach(() => sinon.restore());
 
-  it("registers both tools and disposes both through the returned registration", function () {
+  // ragResetMemory is deliberately not a model-callable tool: destructive memory
+  // reset is a human action in the sidebar, not something a model may decide.
+  it("registers only ragMemory and disposes it through the returned registration", function () {
     const harness = registrationHarness();
 
-    expect([...harness.tools.keys()]).to.deep.equal([TOOLS.RAG_MEMORY, TOOLS.RAG_RESET_MEMORY]);
+    expect([...harness.tools.keys()]).to.deep.equal([TOOLS.RAG_MEMORY]);
+    expect(Object.values(TOOLS)).to.not.include("ragResetMemory");
     harness.registration.dispose();
-    expect(harness.registrations.map(({ disposed }) => disposed)).to.deep.equal([true, true]);
-  });
-
-  it("disposes the memory registration when reset registration throws", function () {
-    const firstRegistration = { dispose: sinon.spy() };
-    const registrationHost: MemoryToolRegistrationHost = {
-      registerTool: sinon
-        .stub()
-        .onFirstCall()
-        .returns(firstRegistration)
-        .onSecondCall()
-        .throws(new Error("reset failed")),
-      createToolResult: (content) => new mockVscode.LanguageModelToolResult(content),
-      createTextPart: (value) => new mockVscode.LanguageModelTextPart(value),
-      createMarkdownString: (value) => new mockVscode.MarkdownString(value),
-    };
-    expect(() =>
-      registerMemoryTools(
-        { execute: sinon.stub(), reset: sinon.stub() } as any,
-        async (_label, operation) => operation(new AbortController().signal),
-        { registrationHost },
-      ),
-    ).to.throw("reset failed");
-    expect(firstRegistration.dispose.calledOnce).to.equal(true);
+    expect(harness.registrations.map(({ disposed }) => disposed)).to.deep.equal([true]);
   });
 
   const cases: Array<{ input: Record<string, unknown>; forwarded: MemoryOperationInput }> = [
@@ -274,13 +255,17 @@ describe("VS Code native memory tools", function () {
     });
   });
 
-  it("returns reset failures as structured tool output", async function () {
+  // VS Code does not enforce the contributed inputSchema before invoking a tool,
+  // so an action the manifest never declares can reach the shared normalizer.
+  it("returns a structured invalid-input error for an unrecognized action", async function () {
     const harness = registrationHarness();
-    harness.memoryService.reset.rejects(new MemoryServiceError("MEMORY_RESET_FAILED", "reset broke"));
 
-    const output = await harness.tools.get(TOOLS.RAG_RESET_MEMORY).invoke({ input: {} }, token());
+    const output = await harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input: { action: "reset" } }, token());
 
-    expect(outputJson(output)).to.deep.equal({ error: { code: "MEMORY_RESET_FAILED", message: "reset broke" } });
+    const payload = outputJson(output) as { error: { code: string; message: string } };
+    expect(payload.error.code).to.equal("MEMORY_INVALID_INPUT");
+    expect(payload.error.message).to.include("reset");
+    expect(harness.memoryService.execute.called).to.equal(false);
   });
 
   it("still rejects unexpected non-service errors", async function () {
@@ -347,30 +332,6 @@ describe("VS Code native memory tools", function () {
 
     expect(error).to.equal(lifecycleError);
     expect(harness.memoryService.execute.called).to.equal(false);
-  });
-
-  it("forwards VS Code cancellation to ragResetMemory", async function () {
-    let resetSignal: AbortSignal | undefined;
-    let admitted!: () => void;
-    const resetAdmitted = new Promise<void>((resolve) => (admitted = resolve));
-    const harness = registrationHarness();
-    harness.memoryService.reset.callsFake(async (signal) => {
-      resetSignal = signal;
-      admitted();
-      return await new Promise((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-      });
-    });
-    const cancellation = token();
-    const pending = harness.tools.get(TOOLS.RAG_RESET_MEMORY).invoke({ input: {} }, cancellation);
-
-    await resetAdmitted;
-    cancellation.cancel();
-    const error = await caughtError(pending);
-
-    expect(error.message).to.include("cancelled");
-    expect(resetSignal?.aborted).to.equal(true);
-    expect(harness.memoryService.reset.calledOnce).to.equal(true);
   });
 
   it("executes once, reduces the completed result to the token budget, and returns pretty JSON", async function () {
@@ -441,21 +402,5 @@ describe("VS Code native memory tools", function () {
       expect((error as Error).message).to.include("cancelled");
     }
     expect(harness.memoryService.execute.calledOnce).to.equal(true);
-  });
-
-  it("always prepares reset confirmation and resets only during invocation", async function () {
-    const harness = registrationHarness();
-    const resetTool = harness.tools.get(TOOLS.RAG_RESET_MEMORY);
-
-    const prepared = await resetTool.prepareInvocation({ input: {} }, token());
-
-    expect(prepared.confirmationMessages.title).to.equal("Reset RAGnarok memory?");
-    expect(prepared.confirmationMessages.message).to.be.instanceOf(mockVscode.MarkdownString);
-    expect(prepared.confirmationMessages.message.value).to.include("all memories");
-    expect(harness.memoryService.reset.called).to.equal(false);
-
-    const output = await resetTool.invoke({ input: {} }, token());
-    expect(harness.memoryService.reset.calledOnce).to.equal(true);
-    expect(outputJson(output)).to.deep.equal({ success: true });
   });
 });

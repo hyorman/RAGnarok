@@ -108,5 +108,13 @@ export function normalizeMemoryInput(input: MemoryToolInput): MemoryOperationInp
       return defined({ action: "links" as const, scope: input.scope, branch }) as MemoryOperationInput;
     case "communities":
       return defined({ action: "communities" as const, scope: input.scope, branch }) as MemoryOperationInput;
+    default:
+      // Reached only from a host that does not validate the declared input
+      // schema before invoking (VS Code does not). Without this arm the switch
+      // falls through to undefined and the host TypeErrors far from the cause.
+      throw new MemoryServiceError(
+        "MEMORY_INVALID_INPUT",
+        `Memory tool unsupported action '${String((input as { action?: unknown }).action)}'`,
+      );
   }
 }

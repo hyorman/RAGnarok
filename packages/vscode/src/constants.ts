@@ -18,12 +18,18 @@ export const VSCODE_CONFIG = {
 } as const;
 
 /**
- * Tool identifiers
+ * Tool identifiers.
+ *
+ * The contributed `languageModelTools` manifest is generated from this set (see
+ * scripts/generate-tool-manifest.mjs) and asserted equal to it, so a tool added
+ * here without a contract entry — or the reverse — fails the contract test.
+ * Destructive operations (memory reset, topic create/rename/delete/import) are
+ * deliberately absent: they stay sidebar commands so a human confirms them.
  */
 export const TOOLS = {
   RAG_QUERY: "ragQuery",
   RAG_MEMORY: "ragMemory",
-  RAG_RESET_MEMORY: "ragResetMemory",
+  RAG_TOPIC: "ragTopic",
 } as const;
 
 /**

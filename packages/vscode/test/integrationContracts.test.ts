@@ -2,7 +2,13 @@ import { expect } from "chai";
 import * as fs from "fs/promises";
 import * as path from "path";
 import mockVscode from "../test-harness/setup";
-import { RetrievalStrategy } from "@ragnarok/core";
+import {
+  RetrievalStrategy,
+  RAG_MEMORY_INPUT_SCHEMA,
+  RAG_QUERY_INPUT_SCHEMA,
+  RAG_TOPIC_READ_INPUT_SCHEMA,
+  TOOL_LIMITS,
+} from "@ragnarok/core";
 import { openTopicManagerWithMigration, TOOLS, TopicTreeItem, type MigrationUxDependencies } from "@ragnarok/vscode";
 
 function legacyPlan(): any {
@@ -51,13 +57,12 @@ describe("VS Code contribution and tree contracts", function () {
   it("keeps native memory tool manifests aligned with runtime names and MCP limits", async function () {
     const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
     const contributedNames = manifest.contributes.languageModelTools.map((tool: any) => tool.name);
-    const memoryToolNames = [TOOLS.RAG_MEMORY, TOOLS.RAG_RESET_MEMORY];
-    const tools = manifest.contributes.languageModelTools.filter((tool: any) => memoryToolNames.includes(tool.name));
-    const memory = tools.find((tool: any) => tool.name === TOOLS.RAG_MEMORY);
-    const reset = tools.find((tool: any) => tool.name === TOOLS.RAG_RESET_MEMORY);
+    const memory = manifest.contributes.languageModelTools.find((tool: any) => tool.name === TOOLS.RAG_MEMORY);
 
     expect(contributedNames).to.have.members(Object.values(TOOLS));
-    expect(tools.map((tool: any) => tool.name)).to.have.members(memoryToolNames);
+    expect(contributedNames).to.deep.equal(["ragQuery", "ragMemory", "ragTopic"]);
+    // Destructive memory reset is a sidebar action, never a model-callable tool.
+    expect(contributedNames).to.not.include("ragResetMemory");
     expect(memory.inputSchema.required).to.deep.equal(["action"]);
     expect(memory.inputSchema.properties.action.enum).to.deep.equal([
       "store",
@@ -80,8 +85,36 @@ describe("VS Code contribution and tree contracts", function () {
     expect(memory.inputSchema.properties.ttlDays.maximum).to.equal(3650);
     expect(memory.inputSchema.properties.ids.maxItems).to.equal(500);
     expect(memory.inputSchema.properties.limit).to.include({ minimum: 1, maximum: 500 });
-    expect(reset.inputSchema).to.deep.equal({ type: "object", properties: {} });
-    expect(reset.inputSchema.properties).not.to.have.property("confirm");
+  });
+
+  it("contributes the manifest the generator produces from the shared contracts", async function () {
+    const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+    const tools = manifest.contributes.languageModelTools;
+    const ragTopic = tools.find((tool: any) => tool.name === TOOLS.RAG_TOPIC);
+
+    expect(ragTopic.inputSchema).to.deep.equal(RAG_TOPIC_READ_INPUT_SCHEMA);
+    expect(ragTopic.inputSchema.properties.action.enum).to.deep.equal(["list", "stats"]);
+    expect(ragTopic.inputSchema.properties.topic.maxLength).to.equal(TOOL_LIMITS.topicName);
+    // Read-only by construction: the write actions the MCP rag_topic tool offers
+    // stay sidebar commands so a human confirms them.
+    expect(ragTopic.inputSchema.properties.action.enum).to.not.include.members(["create", "rename", "delete"]);
+    expect(ragTopic.modelDescription).to.include("Read-only");
+    expect(ragTopic.toolReferenceName).to.equal(TOOLS.RAG_TOPIC);
+    expect(ragTopic.canBeReferencedInPrompt).to.equal(true);
+
+    const ragQuery = tools.find((tool: any) => tool.name === TOOLS.RAG_QUERY);
+    expect(ragQuery.inputSchema).to.deep.equal(RAG_QUERY_INPUT_SCHEMA);
+    // The canonical empty-topic payload carries no agenticMetadata, so the old
+    // "always check ... agenticMetadata" instruction must not come back.
+    expect(ragQuery.modelDescription).to.not.include("agenticMetadata");
+
+    const ragMemory = tools.find((tool: any) => tool.name === TOOLS.RAG_MEMORY);
+    expect(ragMemory.inputSchema).to.deep.equal(RAG_MEMORY_INPUT_SCHEMA);
+
+    for (const tool of tools) {
+      expect(tool.userDescription, `${tool.name} userDescription`).to.be.a("string").and.not.empty;
+      expect(tool.icon, `${tool.name} icon`).to.match(/^\$\(.+\)$/);
+    }
   });
 
   it("declares the same three retrieval strategies in settings, LM tool schema, and tree labels", async function () {

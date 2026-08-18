@@ -10,7 +10,7 @@ import {
   type ActivationRuntimeFactory,
   type RagnarokExtensionApi,
 } from "../src/extension";
-import { COMMANDS } from "../src/constants";
+import { COMMANDS, TOOLS } from "../src/constants";
 
 describe("real VS Code extension host activation", function () {
   this.timeout(120_000);
@@ -36,6 +36,22 @@ describe("real VS Code extension host activation", function () {
       expect(registered, `${command} should be registered`).to.include(command);
     }
     await vscode.commands.executeCommand(COMMANDS.REFRESH_TOPICS);
+  });
+
+  // Witnesses the extension.ts wiring, not just the tool class: invokeTool only
+  // reaches a tool that activation actually registered, so dropping the
+  // TopicTool.register call fails here rather than passing unnoticed.
+  it("registers ragTopic with the language model API during activation", async function () {
+    const result = await vscode.lm.invokeTool(
+      TOOLS.RAG_TOPIC,
+      { input: { action: "list" }, toolInvocationToken: undefined },
+      new vscode.CancellationTokenSource().token,
+    );
+    const part = result.content[0] as vscode.LanguageModelTextPart;
+    const payload = JSON.parse(part.value);
+
+    expect(payload.count).to.be.a("number");
+    expect(payload.topics).to.be.an("array");
   });
 
   it("constructs memory and graph services with one shared coordinator", function () {

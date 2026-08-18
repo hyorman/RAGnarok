@@ -171,4 +171,22 @@ describe("memory tool normalizer", function () {
       /entries must be strings/,
     );
   });
+
+  // The MCP host gates action through a zod enum, but VS Code does not enforce a
+  // tool's declared inputSchema before invoking it, so an unrecognized action can
+  // reach this function as raw JSON. Falling through would return undefined and
+  // TypeError deep inside the host instead of producing a correctable payload.
+  it("rejects an unrecognized action with a structured invalid-input error", function () {
+    expect(() => normalizeMemoryInput({ action: "reset" } as never)).to.throw(MemoryServiceError);
+    expect(() => normalizeMemoryInput({ action: "reset" } as never)).to.throw(/unsupported action 'reset'/);
+  });
+
+  it("reports the invalid-input code for an unrecognized action", function () {
+    try {
+      normalizeMemoryInput({ action: "" } as never);
+      expect.fail("expected an unsupported-action rejection");
+    } catch (error) {
+      expect((error as MemoryServiceError).code).to.equal("MEMORY_INVALID_INPUT");
+    }
+  });
 });

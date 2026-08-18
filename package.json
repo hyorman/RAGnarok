@@ -368,6 +368,12 @@
     "languageModelTools": [
       {
         "name": "ragQuery",
+        "toolReferenceName": "ragQuery",
+        "displayName": "RAG Query",
+        "modelDescription": "Query an indexed RAG topic to find relevant information. Use it when the user asks about material they have added to RAGnarok. The topic is matched exactly when possible and otherwise by the closest semantic match, reported in the 'topicMatched' field. Complex queries may be answered with multi-step agentic planning.",
+        "userDescription": "Search an indexed RAG topic",
+        "icon": "$(database)",
+        "canBeReferencedInPrompt": true,
         "tags": [
           "documentation",
           "search",
@@ -375,34 +381,35 @@
           "context",
           "rag"
         ],
-        "toolReferenceName": "ragQuery",
-        "displayName": "RAG Query",
-        "modelDescription": "Use this tool when the user asks questions about topics they have added to the RAG system. Supports both simple single-shot retrieval and advanced agentic RAG with multi-step query planning, iterative refinement, and intelligent result evaluation. The tool intelligently matches the requested topic: it first tries an exact match, then finds the most semantically similar topic if no exact match exists. In agentic mode, complex queries are automatically decomposed into sub-queries for comprehensive information gathering. Always check the 'topicMatched' field and 'agenticMetadata' in the response.",
-        "icon": "$(database)",
-        "canBeReferencedInPrompt": true,
         "inputSchema": {
           "type": "object",
           "properties": {
             "topic": {
               "type": "string",
-              "description": "The name of the topic to search within (e.g., 'React Documentation', 'Company Policy'). If exact match is not found, the most semantically similar topic will be automatically selected."
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "The name of the topic to search within. If no exact match is found, the most semantically similar topic is used."
             },
             "query": {
               "type": "string",
+              "minLength": 1,
+              "maxLength": 20000,
               "description": "The search query or question to find relevant information"
             },
             "topK": {
-              "type": "number",
-              "description": "Number of top results to return (optional, uses configured value if not provided)"
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "Number of top results to return. Optional - uses the configured value when omitted."
             },
             "retrievalStrategy": {
               "type": "string",
-              "description": "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). Optional - uses configured value if not provided.",
               "enum": [
                 "vector",
                 "hybrid",
                 "bm25"
-              ]
+              ],
+              "description": "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). Optional - uses the configured value when omitted."
             }
           },
           "required": [
@@ -413,22 +420,22 @@
       },
       {
         "name": "ragMemory",
+        "toolReferenceName": "ragMemory",
+        "displayName": "RAG Memory",
+        "modelDescription": "Store, recall, forget, list, or inspect project memories scoped to the workspace or the current git branch.",
+        "userDescription": "Work with project memories",
+        "icon": "$(archive)",
+        "canBeReferencedInPrompt": true,
         "tags": [
           "memory",
           "context",
           "rag"
         ],
-        "toolReferenceName": "ragMemory",
-        "displayName": "RAG Memory",
-        "modelDescription": "Store, recall, forget, list, inspect, decay, promote, and organize project memories. Memories can be scoped to the workspace or a Git branch.",
-        "icon": "$(archive)",
-        "canBeReferencedInPrompt": true,
         "inputSchema": {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "description": "The memory operation to perform",
               "enum": [
                 "store",
                 "recall",
@@ -440,96 +447,100 @@
                 "promote",
                 "links",
                 "communities"
-              ]
+              ],
+              "description": "The memory operation to perform"
             },
             "content": {
               "type": "string",
-              "description": "Memory content to store",
               "minLength": 1,
-              "maxLength": 50000
+              "maxLength": 50000,
+              "description": "Memory content to store (required for 'store')"
             },
             "query": {
               "type": "string",
-              "description": "Search query for recall",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 10000,
+              "description": "Search query (required for 'recall')"
             },
             "topK": {
               "type": "integer",
-              "description": "Number of recall results",
               "minimum": 1,
-              "maximum": 50
+              "maximum": 50,
+              "description": "Maximum memories to recall (default 10)"
             },
             "includeEntities": {
               "type": "boolean",
-              "description": "Include related graph entities in recall results"
+              "description": "Include extracted entities in recall results"
             },
             "id": {
               "type": "string",
-              "description": "Memory entry ID",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "Memory id (used by 'forget', 'history', and 'promote')"
             },
             "olderThan": {
               "type": "integer",
-              "description": "Forget memories older than this many days",
               "minimum": 1,
-              "maximum": 3650
+              "maximum": 3650,
+              "description": "Forget memories older than N days"
             },
             "expired": {
               "type": "boolean",
-              "description": "Forget memories that have expired"
+              "description": "Forget expired memories"
             },
             "scope": {
               "type": "string",
-              "description": "Memory scope",
               "enum": [
                 "workspace",
                 "branch"
-              ]
+              ],
+              "description": "Memory scope"
             },
             "branch": {
               "type": "string",
-              "description": "Git branch name",
               "minLength": 1,
-              "maxLength": 255
+              "maxLength": 255,
+              "description": "Branch name; auto-detected for branch scope when omitted"
             },
             "tags": {
               "type": "array",
-              "description": "Tags to attach to memory",
               "maxItems": 20,
               "items": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 100
-              }
+              },
+              "description": "Tags to attach when storing"
             },
             "ttlDays": {
               "type": "number",
-              "description": "Optional memory TTL in days",
               "exclusiveMinimum": 0,
-              "maximum": 3650
+              "maximum": 3650,
+              "description": "Time to live in days"
             },
             "includeAuto": {
               "type": "boolean",
-              "description": "Include reserved auto-generated memories"
+              "description": "Include reserved automatic memories"
             },
             "reinforce": {
               "type": "boolean",
-              "description": "Update access counters during recall"
+              "description": "Reinforce recalled memories (turns recall into a mutation)"
             },
             "ids": {
               "type": "array",
-              "description": "Memory IDs to promote",
               "maxItems": 500,
               "items": {
                 "type": "string",
-                "minLength": 1
-              }
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "description": "Memory ids to promote"
             },
             "limit": {
               "type": "integer",
-              "description": "Maximum entries to list",
               "minimum": 1,
-              "maximum": 500
+              "maximum": 500,
+              "description": "Maximum memories to list (default 50)"
             }
           },
           "required": [
@@ -538,20 +549,39 @@
         }
       },
       {
-        "name": "ragResetMemory",
+        "name": "ragTopic",
+        "toolReferenceName": "ragTopic",
+        "displayName": "RAG Topics",
+        "modelDescription": "List the available RAG topics, or get one topic's statistics and indexed documents. Read-only: creating, renaming, exporting, importing, and deleting topics are user actions in the RAGnarok sidebar.",
+        "userDescription": "List RAG topics and inspect one topic",
+        "icon": "$(list-tree)",
+        "canBeReferencedInPrompt": true,
         "tags": [
-          "memory",
-          "reset",
+          "documentation",
+          "search",
           "rag"
         ],
-        "toolReferenceName": "ragResetMemory",
-        "displayName": "Reset RAG Memory",
-        "modelDescription": "Permanently delete all memories stored by the RAGnarok extension. Always requires user confirmation.",
-        "icon": "$(trash)",
-        "canBeReferencedInPrompt": true,
         "inputSchema": {
           "type": "object",
-          "properties": {}
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "list",
+                "stats"
+              ],
+              "description": "'list' returns every topic; 'stats' returns one topic's statistics and indexed documents"
+            },
+            "topic": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Topic name (required for 'stats')"
+            }
+          },
+          "required": [
+            "action"
+          ]
         }
       }
     ]
@@ -570,6 +600,8 @@
     "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\" \"packages/vscode/test-harness/**/*.ts\" \"*.{json,mjs,md}\"",
     "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\" \"packages/vscode/test-harness/**/*.ts\" \"*.{json,mjs,md}\"",
     "version:sync": "node scripts/version-sync.js",
+    "tools:manifest": "node scripts/generate-tool-manifest.mjs",
+    "tools:manifest:check": "node scripts/generate-tool-manifest.mjs --check",
     "vscode:prepublish": "npm run compile && npm run bundle",
     "package:dev": "node scripts/package-dev.js",
     "package": "npm run package:win32-x64 && npm run package:win32-arm64 && npm run package:darwin-x64 && npm run package:darwin-arm64 && npm run package:linux-x64 && npm run package:linux-arm64",
