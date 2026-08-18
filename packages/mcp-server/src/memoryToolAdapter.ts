@@ -1,15 +1,14 @@
 import type { ServerContext } from "@modelcontextprotocol/server";
+import { MemoryServiceError, normalizeMemoryInput, toolErrorPayload } from "@ragnarok/core";
 import type {
   MemoryHostContext,
-  MemoryOperationInput,
   MemoryOperationResult,
   MemoryResetResult,
   MemoryService,
   MemoryStore,
+  MemoryToolInput,
 } from "@ragnarok/core";
 import type { McpConfig } from "./config";
-
-type MemoryToolInput = Record<string, unknown> & { action: MemoryOperationInput["action"] };
 
 export type MemoryToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -27,71 +26,17 @@ function toolError(error: unknown): MemoryToolResult {
   return toolJson({ error: error instanceof Error ? error.message : String(error) }, true);
 }
 
-function defined<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as T;
-}
-
-function normalizeMemoryInput(input: MemoryToolInput): MemoryOperationInput {
-  switch (input.action) {
-    case "store":
-      return defined({
-        action: "store" as const,
-        content: (input.content as string | undefined) ?? "",
-        scope: input.scope,
-        branch: input.branch,
-        tags: input.tags,
-        ttlDays: input.ttlDays,
-      }) as MemoryOperationInput;
-    case "recall":
-      return defined({
-        action: "recall" as const,
-        query: (input.query as string | undefined) ?? "",
-        topK: input.topK,
-        includeEntities: input.includeEntities,
-        includeAuto: input.includeAuto,
-        reinforce: input.reinforce,
-        scope: input.scope,
-        branch: input.branch,
-      }) as MemoryOperationInput;
-    case "forget":
-      return defined({
-        action: "forget" as const,
-        id: input.id,
-        olderThan: input.olderThan,
-        expired: input.expired,
-        scope: input.scope,
-        branch: input.branch,
-      }) as MemoryOperationInput;
-    case "stats":
-      return { action: "stats" };
-    case "list":
-      return defined({
-        action: "list" as const,
-        limit: input.limit,
-        includeAuto: input.includeAuto,
-        scope: input.scope,
-        branch: input.branch,
-      }) as MemoryOperationInput;
-    case "decay":
-      return defined({ action: "decay" as const, scope: input.scope, branch: input.branch }) as MemoryOperationInput;
-    case "history":
-      return { action: "history", id: (input.id as string | undefined) ?? "" };
-    case "promote":
-      return defined({
-        action: "promote" as const,
-        branch: (input.branch as string | undefined) ?? "",
-        ids: input.ids,
-        id: input.id,
-      }) as MemoryOperationInput;
-    case "links":
-      return defined({ action: "links" as const, scope: input.scope, branch: input.branch }) as MemoryOperationInput;
-    case "communities":
-      return defined({
-        action: "communities" as const,
-        scope: input.scope,
-        branch: input.branch,
-      }) as MemoryOperationInput;
-  }
+/**
+ * rag_memory reports the canonical {error: {code, message}} payload both hosts
+ * share; isError stays on the MCP envelope around it. Other MCP tools keep
+ * their flat error body until their own switchover.
+ */
+function memoryToolError(error: unknown): MemoryToolResult {
+  const payload =
+    error instanceof MemoryServiceError
+      ? toolErrorPayload(error.code, error.message)
+      : toolErrorPayload("MEMORY_OPERATION_FAILED", error instanceof Error ? error.message : String(error));
+  return toolJson(payload, true);
 }
 
 async function resolveHostContext(
@@ -117,7 +62,7 @@ export async function invokeMemoryTool(
     const result = await memoryService.execute(normalizeMemoryInput(input), hostContext, context.mcpReq.signal);
     return toolJson(result satisfies MemoryOperationResult);
   } catch (error) {
-    return toolError(error);
+    return memoryToolError(error);
   }
 }
 

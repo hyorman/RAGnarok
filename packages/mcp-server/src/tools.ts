@@ -32,6 +32,7 @@ import {
   MemoryStore,
   MemoryService,
   GraphVisualizationService,
+  TOOL_LIMITS,
 } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "./uiResource";
 import type { McpConfig } from "./config";
@@ -142,6 +143,95 @@ const graphVisualizationInput = z.discriminatedUnion("memoryScope", [
     })
     .strict(),
 ]);
+
+/**
+ * The rag_memory input schema. Every bound comes from TOOL_LIMITS in
+ * @ragnarok/core, which mirrors MemoryService.validateCommonInput, so the Zod
+ * gate and the service reject the same inputs at the same thresholds.
+ */
+export function buildMemoryInputSchema() {
+  return z.object({
+    action: z
+      .enum(["store", "recall", "forget", "stats", "list", "decay", "history", "promote", "links", "communities"])
+      .describe("The memory operation to perform"),
+    content: z
+      .string()
+      .trim()
+      .min(1)
+      .max(TOOL_LIMITS.memoryContent)
+      .optional()
+      .describe("Memory content to store (required for 'store' action)"),
+    query: z
+      .string()
+      .trim()
+      .min(1)
+      .max(TOOL_LIMITS.memoryQuery)
+      .optional()
+      .describe("Search query (required for 'recall' action)"),
+    topK: z
+      .number()
+      .int()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe("Number of results to return (default: 10, for 'recall' action)"),
+    includeEntities: z
+      .boolean()
+      .optional()
+      .describe("Include related graph entities in recall results (default: false)"),
+    id: z
+      .string()
+      .trim()
+      .min(1)
+      .max(TOOL_LIMITS.memoryId)
+      .optional()
+      .describe("Memory entry ID (for 'forget' or 'history' action)"),
+    olderThan: z
+      .number()
+      .int()
+      .min(1)
+      .max(3650)
+      .optional()
+      .describe("Forget memories older than N days (for 'forget' action)"),
+    expired: z
+      .boolean()
+      .optional()
+      .describe(
+        "Purge entries whose TTL has passed or whose effective confidence decayed below the expiry threshold (for 'forget' action)",
+      ),
+    scope: z
+      .enum(["workspace", "branch"])
+      .optional()
+      .describe("Memory scope (default: 'workspace' for store, both for recall)"),
+    branch: z
+      .string()
+      .trim()
+      .min(1)
+      .max(TOOL_LIMITS.branch)
+      .optional()
+      .describe("Git branch name (auto-detected if scope is 'branch' and not provided)"),
+    tags: z
+      .array(z.string().trim().min(1).max(TOOL_LIMITS.tag))
+      .max(TOOL_LIMITS.tags)
+      .optional()
+      .describe("Tags to attach to memory (for 'store' action)"),
+    ttlDays: z.number().positive().max(3650).optional().describe("Optional memory TTL in days"),
+    includeAuto: z.boolean().optional().describe("Include reserved auto-generated memories"),
+    reinforce: z.boolean().optional().describe("Update access counters during recall (writer sessions only)"),
+    ids: z
+      .array(z.string().trim().min(1).max(TOOL_LIMITS.memoryId))
+      .max(TOOL_LIMITS.ids)
+      .optional()
+      .describe("Memory IDs for promote"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe("Max entries to return (for 'list' action, default: 50)"),
+  });
+}
 
 // Re-serializes JSON text content and mirrors it as structuredContent so
 // clients get a typed payload without the tool handlers building it twice.
@@ -634,71 +724,7 @@ export function registerTools(
         "Entities and relationships are automatically extracted when an LLM is available. " +
         "Supports decay (expire stale entries), history (version chain), promote (branch→workspace), links (cross-scope entity links), " +
         "and communities (clusters of related entities in the memory graph; requires an LLM provider).",
-      z.object({
-        action: z
-          .enum(["store", "recall", "forget", "stats", "list", "decay", "history", "promote", "links", "communities"])
-          .describe("The memory operation to perform"),
-        content: z
-          .string()
-          .trim()
-          .min(1)
-          .max(50_000)
-          .optional()
-          .describe("Memory content to store (required for 'store' action)"),
-        query: z.string().trim().min(1).optional().describe("Search query (required for 'recall' action)"),
-        topK: z
-          .number()
-          .int()
-          .min(1)
-          .max(50)
-          .optional()
-          .describe("Number of results to return (default: 10, for 'recall' action)"),
-        includeEntities: z
-          .boolean()
-          .optional()
-          .describe("Include related graph entities in recall results (default: false)"),
-        id: z.string().trim().min(1).optional().describe("Memory entry ID (for 'forget' or 'history' action)"),
-        olderThan: z
-          .number()
-          .int()
-          .min(1)
-          .max(3650)
-          .optional()
-          .describe("Forget memories older than N days (for 'forget' action)"),
-        expired: z
-          .boolean()
-          .optional()
-          .describe(
-            "Purge entries whose TTL has passed or whose effective confidence decayed below the expiry threshold (for 'forget' action)",
-          ),
-        scope: z
-          .enum(["workspace", "branch"])
-          .optional()
-          .describe("Memory scope (default: 'workspace' for store, both for recall)"),
-        branch: z
-          .string()
-          .trim()
-          .min(1)
-          .max(255)
-          .optional()
-          .describe("Git branch name (auto-detected if scope is 'branch' and not provided)"),
-        tags: z
-          .array(z.string().trim().min(1).max(100))
-          .max(20)
-          .optional()
-          .describe("Tags to attach to memory (for 'store' action)"),
-        ttlDays: z.number().positive().max(3650).optional().describe("Optional memory TTL in days"),
-        includeAuto: z.boolean().optional().describe("Include reserved auto-generated memories"),
-        reinforce: z.boolean().optional().describe("Update access counters during recall (writer sessions only)"),
-        ids: z.array(z.string().trim().min(1)).max(500).optional().describe("Memory IDs for promote"),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe("Max entries to return (for 'list' action, default: 50)"),
-      }),
+      buildMemoryInputSchema(),
       writeAnnotations,
       async (input, context) => invokeMemoryTool(input, context, memoryService, memoryBranchProvider, config),
     );

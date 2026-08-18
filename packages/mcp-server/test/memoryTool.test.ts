@@ -182,13 +182,24 @@ describe("MCP memory tools", () => {
     ).to.equal(true);
   });
 
-  it("returns core errors in the existing MCP error envelope", async () => {
+  it("returns core errors as the canonical payload inside the MCP error envelope", async () => {
     memoryService.execute.rejects(new Error("memory failed"));
 
     const result = await handlers.rag_memory({ action: "list" });
 
     expect(result.isError).to.equal(true);
-    expect(parseResponse(result)).to.deep.equal({ error: "memory failed" });
+    expect(parseResponse(result)).to.deep.equal({
+      error: { code: "MEMORY_OPERATION_FAILED", message: "memory failed" },
+    });
+  });
+
+  it("keeps the flat error body for rag_reset_memory", async () => {
+    memoryService.reset.rejects(new Error("reset failed"));
+
+    const result = await handlers.rag_reset_memory({ confirm: true });
+
+    expect(result.isError).to.equal(true);
+    expect(parseResponse(result)).to.deep.equal({ error: "reset failed" });
   });
 
   it("requires confirm true in the reset schema", () => {
