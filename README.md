@@ -527,8 +527,9 @@ The MCP server exposes these tools to any MCP-compatible agent:
 
 That is the complete surface: 8 tools, all registered unconditionally on every
 connection. There are no roles and no capability tiers — the client already runs
-with the owner's authority. The embedding model, the reranker, and the LLM
-provider are configured exclusively through `config.json` and expose no tools. Parameters and error
+with the owner's authority. For the MCP server, the embedding model, the
+reranker, and the LLM provider are configured exclusively through `config.json`
+and expose no tools. Parameters and error
 contracts are in the [MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility

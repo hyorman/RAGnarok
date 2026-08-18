@@ -301,7 +301,7 @@ Three of those rows deserve a paragraph each.
 created topics**. It is not a global switch: each topic records the embedding
 model and fingerprint it was indexed under, and is served with that recorded
 model for the rest of its life. Changing this setting re-embeds nothing and
-invalidates nothing.
+invalidates no topic.
 
 | Operation                              | Model used                                                   |
 | -------------------------------------- | ------------------------------------------------------------ |

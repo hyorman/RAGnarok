@@ -201,7 +201,7 @@ Three consequences worth stating plainly:
 
 - **Memory uses the currently configured model.** Unlike a topic, memory records no model of its own,
   so both `store` and `recall` embed with whatever `embedding.model` currently resolves to, and a
-  changed `embedding.model` moves memory with it on restart, behind the fingerprint guard (§2.1).
+  changed `embedding.model` applies to memory on restart, behind the fingerprint guard (§2.1).
 - **Memory is explicit.** There is no automatic query-time recall and no automatic write-back of
   query insights; that behavior lived in the deleted LangGraph path. Memory changes only through
   `rag_memory` calls.
