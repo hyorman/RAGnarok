@@ -107,10 +107,11 @@ The complete key table is in
   indexed under and is served with that model afterwards: a query against it
   uses the recorded model, and adding documents to it embeds the new chunks with
   the recorded model, so the topic stays one coherent embedding space. Changing
-  this setting — or calling `rag_switch_embedding_model` — changes the default
-  for topics created afterwards and re-points memory, which always uses the
-  currently configured model and follows an explicit switch. It migrates nothing
-  already indexed; changing a topic's model is a delete-and-recreate. A
+  this setting takes effect on restart and changes the default for topics
+  created afterwards; memory always uses the currently configured model, so its
+  fingerprint guard fails closed until `rag_reset_memory` is confirmed. It
+  migrates nothing already indexed; changing a topic's model is a
+  delete-and-recreate. A
   dimension mismatch or a missing fingerprint is still a hard reindex error
   rather than a silently degraded result.
 - `embedding.maxResidentModels` (default `2`, minimum `1`) bounds how many

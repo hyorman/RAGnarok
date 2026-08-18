@@ -77,9 +77,9 @@ never mixes two embedding spaces in one table. Changing a topic's model remains 
 delete-and-recreate; there is no in-place conversion.
 
 **Memory is the one row that follows configuration.** Memory is not a topic and carries no per-topic
-metadata, so it always uses the currently configured model, and it follows an explicit
-`rag_switch_embedding_model` — which is precisely why that tool validates the candidate's dimension
-against memory before accepting it.
+metadata, so it always uses the currently configured model — a changed `embedding.model` therefore
+applies to memory on restart, and its fingerprint guard fails closed until `rag_reset_memory` is
+confirmed.
 
 `VectorStoreFactory` owns one immutable `EmbeddingService` per `(backend, endpoint, model)` triple in
 an LRU registry (`embeddingServiceRegistry.ts`), bounded by `embedding.maxResidentModels` (default 2,
@@ -200,8 +200,8 @@ flowchart TB
 Three consequences worth stating plainly:
 
 - **Memory uses the currently configured model.** Unlike a topic, memory records no model of its own,
-  so both `store` and `recall` embed with whatever `embedding.model` currently resolves to, and an
-  explicit `rag_switch_embedding_model` moves memory with it (§2.1).
+  so both `store` and `recall` embed with whatever `embedding.model` currently resolves to, and a
+  changed `embedding.model` moves memory with it on restart, behind the fingerprint guard (§2.1).
 - **Memory is explicit.** There is no automatic query-time recall and no automatic write-back of
   query insights; that behavior lived in the deleted LangGraph path. Memory changes only through
   `rag_memory` calls.
