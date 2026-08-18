@@ -335,6 +335,29 @@ describe("MCP Tools (registerTools)", () => {
       expect(body.results).to.deep.equal([]);
     });
 
+    // The shared executor is called as (input, deps, signal); every one of the
+    // forwarded pieces is optional, so dropping any of them still compiles and
+    // still returns a result. Pin all three by hand — a dropped abort signal
+    // means client cancellation silently stops reaching retrieval.
+    it("forwards the normalized query params, no workspace context, and the request signal", async () => {
+      const signal = new AbortController().signal;
+      ragQueryService.executeQuery.resolves({ query: "q", topicName: "docs", results: [] } as any);
+
+      const result = await handlers.rag_query(
+        { topic: "  docs  ", query: "  q  ", topK: 3, retrievalStrategy: "bm25" },
+        makeServerContext(signal),
+      );
+
+      expect(ragQueryService.executeQuery.calledOnce).to.equal(true);
+      const [params, workspaceContext, forwardedSignal] = ragQueryService.executeQuery.firstCall.args;
+      expect(params).to.deep.equal({ topic: "docs", query: "q", topK: 3, retrievalStrategy: "bm25" });
+      // Editor context is VS Code's alone: MCP must forward none.
+      expect(workspaceContext).to.equal(undefined);
+      // By identity, not by deep equality — two fresh AbortSignals look alike.
+      expect(forwardedSignal).to.equal(signal);
+      expect(parseResponse(result).topicName).to.equal("docs");
+    });
+
     // The empty-topic payload is produced by the shared core executor, not by a
     // local TopicEmptyError branch. Reverting to the inline branch reinstates
     // the old {message, topicName} body and fails this test.
@@ -460,9 +483,19 @@ describe("MCP Tools (registerTools)", () => {
       } as any);
       (topicManager as any).listDocuments = sinon.stub().returns([]);
 
-      await handlers.rag_topic({ action: "stats", topic: "  docs  " });
+      const result = await handlers.rag_topic({ action: "stats", topic: "  docs  " });
 
       expect(topicManager.resolveTopicByName.calledOnceWithExactly("docs")).to.equal(true);
+      // Resolving the right name is not enough: the call must also succeed, or
+      // an executor that resolved correctly and then threw would pass this test.
+      expect(result.isError).to.be.undefined;
+      expect(parseResponse(result)).to.deep.equal({
+        documentCount: 1,
+        chunkCount: 2,
+        lastUpdated: 3,
+        embeddingModel: "m",
+        documents: [],
+      });
     });
 
     // A whitespace-only name clears zod's min(1) on the raw string; the shared
