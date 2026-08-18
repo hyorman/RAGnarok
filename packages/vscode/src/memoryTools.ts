@@ -9,21 +9,10 @@ import {
 import { TOOLS } from "./constants";
 import type { ExtensionOperationRunner } from "./extensionLifecycle";
 import { resolveMemoryHostContext, type MemoryHostContextHost } from "./memoryHostContext";
-
-export interface MemoryToolRegistrationHost {
-  registerTool<T>(name: string, tool: vscode.LanguageModelTool<T>): vscode.Disposable;
-  createToolResult(content: Array<vscode.LanguageModelTextPart | unknown>): vscode.LanguageModelToolResult;
-  createTextPart(value: string): vscode.LanguageModelTextPart;
-}
-
-const vscodeMemoryToolRegistrationHost: MemoryToolRegistrationHost = {
-  registerTool: <T>(name: string, tool: vscode.LanguageModelTool<T>) => vscode.lm.registerTool(name, tool),
-  createToolResult: (content) => new vscode.LanguageModelToolResult(content),
-  createTextPart: (value) => new vscode.LanguageModelTextPart(value),
-};
+import { vscodeToolRegistrationHost, type LanguageModelToolRegistrationHost } from "./toolRegistrationHost";
 
 function serviceErrorResult(
-  registrationHost: MemoryToolRegistrationHost,
+  registrationHost: LanguageModelToolRegistrationHost,
   error: MemoryServiceError,
 ): vscode.LanguageModelToolResult {
   // Returned, not thrown: a thrown error reaches the model as an opaque tool
@@ -63,7 +52,7 @@ function bridgeCancellation(
 }
 
 export interface RegisterMemoryToolsOptions {
-  registrationHost?: MemoryToolRegistrationHost;
+  registrationHost?: LanguageModelToolRegistrationHost;
   contextHost?: MemoryHostContextHost;
 }
 
@@ -76,7 +65,7 @@ export function registerMemoryTools(
   operationRunner: ExtensionOperationRunner,
   options: RegisterMemoryToolsOptions = {},
 ): vscode.Disposable {
-  const { registrationHost = vscodeMemoryToolRegistrationHost, contextHost } = options;
+  const { registrationHost = vscodeToolRegistrationHost, contextHost } = options;
 
   return registrationHost.registerTool<MemoryToolInput>(TOOLS.RAG_MEMORY, {
     invoke: (options, token) =>

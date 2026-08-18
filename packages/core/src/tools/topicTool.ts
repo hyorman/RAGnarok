@@ -27,12 +27,26 @@ export interface TopicStatsPayload {
   documents: Array<Record<string, unknown> & { documentId: string }>;
 }
 
-class TopicInputError extends Error {}
+/**
+ * Thrown only for arguments this executor rejects. Exported so a host can tell
+ * "the model sent bad arguments" (worth retrying with different ones) apart from
+ * a backend failure such as an embedding outage (retrying arguments will not
+ * help), and report a different error code for each.
+ */
+export class TopicInputError extends Error {}
 
+/**
+ * `signal` is optional so the MCP host can keep calling with two arguments. The
+ * stats path is worth interrupting: resolveTopicByName embeds the query plus one
+ * vector per topic whenever the name is not an exact match.
+ */
 export async function executeTopicRead(
   input: TopicReadInput,
   deps: TopicToolDeps,
+  signal?: AbortSignal,
 ): Promise<TopicListPayload | TopicStatsPayload> {
+  signal?.throwIfAborted();
+
   if (input.action === "list") {
     const topics = deps.topicManager.getAllTopics().map((topic) => ({
       name: topic.name,
@@ -52,11 +66,14 @@ export async function executeTopicRead(
     throw new TopicInputError(`Topic tool 'topic' must not exceed ${TOOL_LIMITS.topicName} characters`);
   }
 
+  signal?.throwIfAborted();
   const match = await deps.topicManager.resolveTopicByName(input.topic.trim());
+  signal?.throwIfAborted();
   const stats = await deps.topicManager.getTopicStats(match.topic.id);
   if (!stats) {
     throw new TopicInputError(`No statistics available for topic '${match.topic.name}'`);
   }
+  signal?.throwIfAborted();
   const documents = deps.topicManager.listDocuments(match.topic.id).map((document) => ({
     ...document,
     documentId: document.id,

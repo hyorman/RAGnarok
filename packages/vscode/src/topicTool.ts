@@ -8,6 +8,7 @@ import * as vscode from "vscode";
 import {
   executeTopicRead,
   toolErrorPayload,
+  TopicInputError,
   type TopicManager,
   type TopicListPayload,
   type TopicReadInput,
@@ -15,45 +16,56 @@ import {
   type ToolErrorPayload,
 } from "@ragnarok/core";
 import { TOOLS } from "./constants";
+import { vscodeToolRegistrationHost, type LanguageModelToolRegistrationHost } from "./toolRegistrationHost";
 
 export type TopicToolPayload = TopicListPayload | TopicStatsPayload | ToolErrorPayload;
 
-/**
- * The same seam registerMemoryTools uses: `vscode.lm` is unavailable to unit
- * tests running outside a Copilot-enabled host, so registration is injectable.
- */
-export interface TopicToolRegistrationHost {
-  registerTool<T>(name: string, tool: vscode.LanguageModelTool<T>): vscode.Disposable;
-  createToolResult(content: Array<vscode.LanguageModelTextPart | unknown>): vscode.LanguageModelToolResult;
-  createTextPart(value: string): vscode.LanguageModelTextPart;
-}
-
-const vscodeTopicToolRegistrationHost: TopicToolRegistrationHost = {
-  registerTool: <T>(name: string, tool: vscode.LanguageModelTool<T>) => vscode.lm.registerTool(name, tool),
-  createToolResult: (content) => new vscode.LanguageModelToolResult(content),
-  createTextPart: (value) => new vscode.LanguageModelTextPart(value),
-};
+const CANCELLED = "RAG topic read cancelled";
 
 export class TopicTool {
-  static async invoke(input: TopicReadInput, topicManager: TopicManager): Promise<TopicToolPayload> {
+  static async invoke(
+    input: TopicReadInput,
+    topicManager: TopicManager,
+    signal?: AbortSignal,
+  ): Promise<TopicToolPayload> {
     try {
-      return await executeTopicRead(input, { topicManager });
+      return await executeTopicRead(input, { topicManager }, signal);
     } catch (error) {
-      // Returned, not thrown: a thrown error reaches the model as an opaque tool
-      // failure, while a structured payload lets it correct its arguments.
-      return toolErrorPayload("TOPIC_TOOL_INVALID_INPUT", error instanceof Error ? error.message : String(error));
+      // Cancellation is the host's decision, not a tool failure: rethrow so VS
+      // Code reports a cancelled invocation instead of handing the model an
+      // error payload it would try to "fix".
+      if (signal?.aborted) {
+        throw error;
+      }
+      // Two distinct codes on purpose. Told its input was invalid, a model
+      // retries with different arguments — the right move for a bad topic name,
+      // and a pointless loop against a down embedding provider or a rate limit.
+      const code = error instanceof TopicInputError ? "TOPIC_TOOL_INVALID_INPUT" : "TOPIC_TOOL_FAILED";
+      return toolErrorPayload(code, error instanceof Error ? error.message : String(error));
     }
   }
 
   static register(
     context: Pick<vscode.ExtensionContext, "subscriptions">,
     topicManager: TopicManager,
-    registrationHost: TopicToolRegistrationHost = vscodeTopicToolRegistrationHost,
+    registrationHost: LanguageModelToolRegistrationHost = vscodeToolRegistrationHost,
   ): vscode.Disposable {
     const registration = registrationHost.registerTool<TopicReadInput>(TOOLS.RAG_TOPIC, {
-      invoke: async (options) => {
-        const payload = await TopicTool.invoke(options.input, topicManager);
-        return registrationHost.createToolResult([registrationHost.createTextPart(JSON.stringify(payload, null, 2))]);
+      invoke: async (options, token) => {
+        // The stats path can be network-bound: resolveTopicByName embeds the
+        // query plus one vector per topic when the name is not an exact match.
+        const controller = new AbortController();
+        const cancel = () => controller.abort(new Error(CANCELLED));
+        if (token.isCancellationRequested) {
+          cancel();
+        }
+        const onCancel = token.onCancellationRequested(cancel);
+        try {
+          const payload = await TopicTool.invoke(options.input, topicManager, controller.signal);
+          return registrationHost.createToolResult([registrationHost.createTextPart(JSON.stringify(payload, null, 2))]);
+        } finally {
+          onCancel.dispose();
+        }
       },
       prepareInvocation: async (options) => ({
         invocationMessage:

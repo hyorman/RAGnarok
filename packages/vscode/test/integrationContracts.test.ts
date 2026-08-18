@@ -96,8 +96,14 @@ describe("VS Code contribution and tree contracts", function () {
     expect(ragTopic.inputSchema.properties.action.enum).to.deep.equal(["list", "stats"]);
     expect(ragTopic.inputSchema.properties.topic.maxLength).to.equal(TOOL_LIMITS.topicName);
     // Read-only by construction: the write actions the MCP rag_topic tool offers
-    // stay sidebar commands so a human confirms them.
-    expect(ragTopic.inputSchema.properties.action.enum).to.not.include.members(["create", "rename", "delete"]);
+    // stay sidebar commands so a human confirms them. Asserted one at a time —
+    // a negated `include.members` only means "not a superset of all of them",
+    // so a single leaked write action would slip through it.
+    for (const writeAction of ["create", "rename", "delete", "export", "import"]) {
+      expect(ragTopic.inputSchema.properties.action.enum, `${writeAction} must not be model-callable`).to.not.include(
+        writeAction,
+      );
+    }
     expect(ragTopic.modelDescription).to.include("Read-only");
     expect(ragTopic.toolReferenceName).to.equal(TOOLS.RAG_TOPIC);
     expect(ragTopic.canBeReferencedInPrompt).to.equal(true);

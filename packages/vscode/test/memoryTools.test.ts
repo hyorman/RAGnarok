@@ -12,7 +12,7 @@ import {
   TOOLS,
   type ExtensionOperationRunner,
   type MemoryHostContextHost,
-  type MemoryToolRegistrationHost,
+  type LanguageModelToolRegistrationHost,
 } from "@ragnarok/vscode";
 
 function token() {
@@ -38,7 +38,7 @@ function registrationHarness(
 ) {
   const tools = new Map<string, any>();
   const registrations: Array<{ disposed: boolean }> = [];
-  const registrationHost: MemoryToolRegistrationHost = {
+  const registrationHost: LanguageModelToolRegistrationHost = {
     registerTool(name, tool) {
       tools.set(name, tool);
       const state = { disposed: false };

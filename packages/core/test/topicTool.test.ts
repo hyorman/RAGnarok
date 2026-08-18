@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import { executeTopicRead } from "../src/tools/index";
+import { executeTopicRead, TopicInputError } from "../src/tools/index";
 
 const topic = {
   id: "t1",
@@ -174,5 +174,128 @@ describe("topic read tool", function () {
     } catch (error) {
       expect((error as Error).message).to.match(/No statistics available for topic 'Docs'/);
     }
+  });
+
+  // Hosts need to tell "the model sent bad arguments" apart from "the backend is
+  // unwell", because only the first is worth retrying with different arguments.
+  describe("input errors are distinguishable from backend failures", function () {
+    const inputCases: Array<{ label: string; input: unknown }> = [
+      { label: "missing topic", input: { action: "stats" } },
+      { label: "blank topic", input: { action: "stats", topic: "   " } },
+      { label: "over-long topic", input: { action: "stats", topic: "x".repeat(201) } },
+    ];
+
+    for (const { label, input } of inputCases) {
+      it(`throws TopicInputError for a ${label}`, async function () {
+        try {
+          await executeTopicRead(input as never, { topicManager: fakeManager() as never });
+          expect.fail("should have thrown");
+        } catch (error) {
+          expect(error).to.be.instanceOf(TopicInputError);
+        }
+      });
+    }
+
+    it("does not throw TopicInputError when the backend fails", async function () {
+      const manager = fakeManager();
+      manager.resolveTopicByName = async () => {
+        throw new Error("embedding provider unavailable");
+      };
+      try {
+        await executeTopicRead({ action: "stats", topic: "Docs" }, { topicManager: manager as never });
+        expect.fail("should have thrown");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Error);
+        expect(error).to.not.be.instanceOf(TopicInputError);
+        expect((error as Error).message).to.equal("embedding provider unavailable");
+      }
+    });
+
+    it("does not throw TopicInputError when listing fails", async function () {
+      const manager = fakeManager();
+      manager.getAllTopics = () => {
+        throw new Error("storage unreadable");
+      };
+      try {
+        await executeTopicRead({ action: "list" }, { topicManager: manager as never });
+        expect.fail("should have thrown");
+      } catch (error) {
+        expect(error).to.not.be.instanceOf(TopicInputError);
+      }
+    });
+  });
+
+  // resolveTopicByName embeds the query plus one vector per topic when the name
+  // is not an exact match, so the stats path can be network-bound and must be
+  // interruptible. The signal is optional: the MCP host passes none.
+  describe("cancellation", function () {
+    it("rejects a pre-aborted list before touching the manager", async function () {
+      const manager = fakeManager();
+      const controller = new AbortController();
+      controller.abort(new Error("cancelled by host"));
+      try {
+        await executeTopicRead({ action: "list" }, { topicManager: manager as never }, controller.signal);
+        expect.fail("should have thrown");
+      } catch (error) {
+        expect((error as Error).message).to.equal("cancelled by host");
+      }
+    });
+
+    it("rejects a pre-aborted stats before resolving the topic", async function () {
+      const manager = fakeManager();
+      const controller = new AbortController();
+      controller.abort(new Error("cancelled by host"));
+      try {
+        await executeTopicRead(
+          { action: "stats", topic: "Docs" },
+          { topicManager: manager as never },
+          controller.signal,
+        );
+        expect.fail("should have thrown");
+      } catch (error) {
+        expect((error as Error).message).to.equal("cancelled by host");
+      }
+      expect(manager.resolvedNames).to.deep.equal([]);
+    });
+
+    it("stops between resolve and stats when cancelled mid-flight", async function () {
+      const controller = new AbortController();
+      const manager = fakeManager();
+      const resolve = manager.resolveTopicByName;
+      manager.resolveTopicByName = async (name: string) => {
+        const result = await resolve(name);
+        controller.abort(new Error("cancelled mid-flight"));
+        return result;
+      };
+      try {
+        await executeTopicRead(
+          { action: "stats", topic: "Docs" },
+          { topicManager: manager as never },
+          controller.signal,
+        );
+        expect.fail("should have thrown");
+      } catch (error) {
+        expect((error as Error).message).to.equal("cancelled mid-flight");
+      }
+      expect(manager.resolvedNames).to.deep.equal(["Docs"]);
+      // The abort must land before the next await, not after it.
+      expect(manager.statsIds).to.deep.equal([]);
+    });
+
+    it("completes normally with a live signal", async function () {
+      const controller = new AbortController();
+      const manager = fakeManager();
+      const payload = await executeTopicRead(
+        { action: "stats", topic: "Docs" },
+        { topicManager: manager as never },
+        controller.signal,
+      );
+      expect(payload).to.have.property("chunkCount", 9);
+    });
+
+    it("still works when no signal is passed, as the MCP host calls it", async function () {
+      const payload = await executeTopicRead({ action: "list" }, { topicManager: fakeManager() as never });
+      expect(payload).to.have.property("count", 1);
+    });
   });
 });

@@ -6,12 +6,13 @@
  */
 
 export { RAGTool } from "./ragTool";
-export { TopicTool, type TopicToolPayload, type TopicToolRegistrationHost } from "./topicTool";
+export { TopicTool, type TopicToolPayload } from "./topicTool";
+export { vscodeToolRegistrationHost, type LanguageModelToolRegistrationHost } from "./toolRegistrationHost";
 export { VscodeLmBackend } from "./vscodeLmBackend";
 export { WorkspaceContextProvider } from "./workspaceContext";
 export { COMMANDS, TOOLS, VSCODE_CONFIG } from "./constants";
 export { resolveMemoryHostContext, type MemoryHostContextHost } from "./memoryHostContext";
-export { registerMemoryTools, type MemoryToolRegistrationHost, type RegisterMemoryToolsOptions } from "./memoryTools";
+export { registerMemoryTools, type RegisterMemoryToolsOptions } from "./memoryTools";
 export {
   registerMemoryGraphCommand,
   type MemoryGraphCommandHost,
