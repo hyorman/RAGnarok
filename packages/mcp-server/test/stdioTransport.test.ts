@@ -485,10 +485,8 @@ describe("stdio transport E2E", function () {
       ] as const
     ).values()) {
       const removedResponse = await harness.callTool(id, removedTool, {});
-      expect(
-        removedResponse.error ?? removedResponse.result?.isError,
-        `${removedTool} must no longer be callable`,
-      ).to.be.ok;
+      expect(removedResponse.error ?? removedResponse.result?.isError, `${removedTool} must no longer be callable`).to
+        .be.ok;
     }
     const unsafeUrl = await harness.callTool(57, "rag_ingest", {
       source: "url",

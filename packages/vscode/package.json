@@ -10,8 +10,8 @@
   },
   "scripts": {
     "build": "tsc -p ./",
-    "lint": "eslint src test",
-    "lint:fix": "eslint --fix src test",
+    "lint": "eslint src test test-harness",
+    "lint:fix": "eslint --fix src test test-harness",
     "clean": "rimraf dist tsconfig.tsbuildinfo",
     "test": "echo 'VS Code extension tests must be run from root: npm test'"
   },
