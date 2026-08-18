@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const manifest = JSON.parse(await readFile(path.join(root, "benchmarks/corpus-manifest.json"), "utf8"));
+const manifest = JSON.parse(await readFile(path.join(root, "packages/core/benchmarks/data/corpus-manifest.json"), "utf8"));
 const sha256 = (contents) => createHash("sha256").update(contents).digest("hex");
 const readIfValid = async (relative, expected) => {
   try {

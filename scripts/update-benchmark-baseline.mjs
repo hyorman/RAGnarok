@@ -14,7 +14,7 @@ const evidence = JSON.parse(await readFile(path.resolve(root, results), "utf8"))
 if (evidence.status !== "passed" || !evidence.sourceCommit || !evidence.corpusManifestSha256) {
   throw new Error("Benchmark evidence is incomplete or did not pass");
 }
-await copyFile(path.resolve(root, results), path.join(root, "benchmarks/approved-result.json"));
+await copyFile(path.resolve(root, results), path.join(root, "packages/core/benchmarks/data/approved-result.json"));
 console.log(
-  "Reviewed evidence copied to benchmarks/approved-result.json. Threshold changes remain an explicit reviewed edit.",
+  "Reviewed evidence copied to packages/core/benchmarks/data/approved-result.json. Threshold changes remain an explicit reviewed edit.",
 );

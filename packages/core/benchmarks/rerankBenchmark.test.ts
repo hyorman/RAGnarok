@@ -29,8 +29,8 @@ import {
   TransformersEmbeddings,
 } from "../src/index";
 import type { ScoredDocument } from "../src/index";
-import { RealVectorStore, mockConfig, mockNotifier } from "./helpers/realVectorStore";
-import { mean, stddev, percentile, ndcgAtK, mrrAtK, recallAtK } from "./helpers/metrics";
+import { RealVectorStore, mockConfig, mockNotifier } from "../test/helpers/realVectorStore";
+import { mean, stddev, percentile, ndcgAtK, mrrAtK, recallAtK } from "../test/helpers/metrics";
 import { formatSampleSelection, parseBenchmarkSampleSize, sampleDeterministically } from "./helpers/benchmarkSampling";
 import { downloadAndExtract, loadCorpus, loadQueries, loadQrels } from "./helpers/beirLoader";
 

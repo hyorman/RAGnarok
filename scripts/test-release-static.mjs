@@ -1623,8 +1623,8 @@ for (const requiredBenchmarkFile of [
 for (const blocker of ["missing_child_peak_rss", "missing_index_time", "missing_exact_package_measurement"]) {
   assert.match(releaseBenchmark, new RegExp(blocker));
 }
-const releasePerformanceBenchmark = await read("packages/core/test/releasePerformanceBenchmark.test.ts");
-const releaseChildMetricsHook = await read("packages/core/test/releaseChildMetricsHook.ts");
+const releasePerformanceBenchmark = await read("packages/core/benchmarks/releasePerformanceBenchmark.test.ts");
+const releaseChildMetricsHook = await read("packages/core/benchmarks/releaseChildMetricsHook.ts");
 assert.match(releasePerformanceBenchmark, /RAGNAROK_METRICS performance /);
 assert.match(releaseChildMetricsHook, /process\.resourceUsage\(\)\.maxRSS/);
 assert.match(releaseChildMetricsHook, /RAGNAROK_CHILD_METRICS/);

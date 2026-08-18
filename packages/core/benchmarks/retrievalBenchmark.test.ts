@@ -22,9 +22,9 @@ import {
   TransformersEmbeddings,
   extractKeywords,
 } from "../src/index";
-import { RealVectorStore, mockConfig, mockNotifier } from "./helpers/realVectorStore";
-import { mean, stddev, ndcgAtK, mapAtK, recallAtK, precisionAtK, mrrAtK } from "./helpers/metrics";
-import { EVAL_CORPUS as CORPUS } from "./helpers/evalCorpus";
+import { RealVectorStore, mockConfig, mockNotifier } from "../test/helpers/realVectorStore";
+import { mean, stddev, ndcgAtK, mapAtK, recallAtK, precisionAtK, mrrAtK } from "../test/helpers/metrics";
+import { EVAL_CORPUS as CORPUS } from "../test/helpers/evalCorpus";
 
 // ═══════════════════════════════════════════════════════════════════════
 // §2  Helpers

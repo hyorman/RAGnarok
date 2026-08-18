@@ -28,7 +28,7 @@
     "test": "mocha",
     "bench:beir": "npm run compile:tests && BEIR_BENCHMARK=1 mocha --grep 'BEIR' --timeout 0",
     "bench:frames": "npm run compile:tests && FRAMES_BENCHMARK=1 mocha --grep 'FRAMES' --timeout 0",
-    "bench:smoke": "npm run compile:tests && mocha --no-config --require dist-test/test/setup.js --reporter spec --timeout 120000 dist-test/test/retrievalBenchmark.test.js dist-test/test/vectorRetriever.test.js dist-test/test/crossEncoderReranker.test.js",
+    "bench:smoke": "npm run compile:tests && mocha --no-config --require dist-test/test/setup.js --reporter spec --timeout 120000 dist-test/benchmarks/retrievalBenchmark.test.js dist-test/test/vectorRetriever.test.js dist-test/test/crossEncoderReranker.test.js",
     "bench:release": "node ../../scripts/run-release-benchmarks.mjs"
   },
   "license": "MIT",

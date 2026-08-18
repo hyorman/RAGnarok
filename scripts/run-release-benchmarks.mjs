@@ -6,8 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const manifestPath = path.join(root, "benchmarks/corpus-manifest.json");
-const baselinePath = path.join(root, "benchmarks/release-baseline.json");
+const manifestPath = path.join(root, "packages/core/benchmarks/data/corpus-manifest.json");
+const baselinePath = path.join(root, "packages/core/benchmarks/data/release-baseline.json");
 const manifestContents = await readFile(manifestPath);
 const manifest = JSON.parse(manifestContents);
 const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
@@ -103,13 +103,13 @@ execFileSync("npm", ["run", "compile:tests", "--workspace=@ragnarok/core"], { cw
 const benchmarkWorkloads = [
   {
     id: "retrieval-fixture",
-    files: ["dist-test/test/retrievalBenchmark.test.js", "dist-test/test/vectorRetriever.test.js"],
+    files: ["dist-test/benchmarks/retrievalBenchmark.test.js", "dist-test/test/vectorRetriever.test.js"],
   },
-  { id: "beir", files: ["dist-test/test/beirBenchmark.test.js"] },
-  { id: "beir-rerank", files: ["dist-test/test/rerankBenchmark.test.js"] },
-  { id: "frames", files: ["dist-test/test/framesBenchmark.test.js"] },
-  { id: "frames-rerank", files: ["dist-test/test/framesRerankBenchmark.test.js"] },
-  { id: "index-construction", files: ["dist-test/test/releasePerformanceBenchmark.test.js"] },
+  { id: "beir", files: ["dist-test/benchmarks/beirBenchmark.test.js"] },
+  { id: "beir-rerank", files: ["dist-test/benchmarks/rerankBenchmark.test.js"] },
+  { id: "frames", files: ["dist-test/benchmarks/framesBenchmark.test.js"] },
+  { id: "frames-rerank", files: ["dist-test/benchmarks/framesRerankBenchmark.test.js"] },
+  { id: "index-construction", files: ["dist-test/benchmarks/releasePerformanceBenchmark.test.js"] },
 ];
 const started = performance.now();
 const beforeRss = process.memoryUsage().rss;
@@ -123,7 +123,7 @@ for (const workload of benchmarkWorkloads) {
       "--require",
       "dist-test/test/setup.js",
       "--require",
-      "dist-test/test/releaseChildMetricsHook.js",
+      "dist-test/benchmarks/releaseChildMetricsHook.js",
       "--reporter",
       "spec",
       "--timeout",

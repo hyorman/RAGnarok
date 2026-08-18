@@ -1,4 +1,6 @@
-spec: "dist-test/test/**/*.test.js"
+spec:
+  - "dist-test/test/**/*.test.js"
+  - "dist-test/benchmarks/**/*.test.js"
 timeout: 120000
 reporter: spec
 recursive: true

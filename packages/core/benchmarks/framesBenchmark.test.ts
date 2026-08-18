@@ -31,8 +31,8 @@ import {
   TransformersEmbeddings,
   extractKeywords,
 } from "../src/index";
-import { RealVectorStore, mockConfig, mockNotifier } from "./helpers/realVectorStore";
-import { mean, median, ndcgAtK, recallAtK, mrrAtK } from "./helpers/metrics";
+import { RealVectorStore, mockConfig, mockNotifier } from "../test/helpers/realVectorStore";
+import { mean, median, ndcgAtK, recallAtK, mrrAtK } from "../test/helpers/metrics";
 import { FramesEntry } from "./helpers/framesLoader";
 import { parseBenchmarkSampleSize } from "./helpers/benchmarkSampling";
 import { prepareFramesBenchmarkCorpus } from "./helpers/framesBenchmarkCorpus";

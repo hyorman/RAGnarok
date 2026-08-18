@@ -12,7 +12,7 @@ import {
   type IConfigProvider,
   type INotifier,
 } from "../src/index";
-import { EVAL_CORPUS } from "./helpers/evalCorpus";
+import { EVAL_CORPUS } from "../test/helpers/evalCorpus";
 
 let isolatedIndexTimeMs: number | undefined;
 

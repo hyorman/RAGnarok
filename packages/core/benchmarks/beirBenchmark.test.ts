@@ -34,8 +34,8 @@ import {
   extractKeywords,
 } from "../src/index";
 import type { RemoteEmbeddingFormat } from "../src/index";
-import { RealVectorStore, mockConfig, mockNotifier } from "./helpers/realVectorStore";
-import { mean, stddev, ndcgAtK, mapAtK, recallAtK, precisionAtK, mrrAtK } from "./helpers/metrics";
+import { RealVectorStore, mockConfig, mockNotifier } from "../test/helpers/realVectorStore";
+import { mean, stddev, ndcgAtK, mapAtK, recallAtK, precisionAtK, mrrAtK } from "../test/helpers/metrics";
 import { formatSampleSelection, parseBenchmarkSampleSize, sampleDeterministically } from "./helpers/benchmarkSampling";
 import { downloadAndExtract, loadCorpus, loadQueries, loadQrels } from "./helpers/beirLoader";
 

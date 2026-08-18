@@ -11,6 +11,6 @@
     "moduleResolution": "nodenext",
     "types": ["mocha", "node", "chai"]
   },
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "benchmarks/**/*"],
   "exclude": ["node_modules", "dist", "dist-test"]
 }

@@ -24,8 +24,8 @@ RAGNAROK_RELEASE_ARTIFACT_DIR=/tmp/ragnarok-release-candidate npm run bench:rele
 cross-encoder behavior on repository fixtures. It does not produce release
 evidence.
 
-`bench:release` verifies `benchmarks/corpus-manifest.json` and its binding to
-`benchmarks/release-baseline.json`, compiles tests, enables every external
+`bench:release` verifies `packages/core/benchmarks/data/corpus-manifest.json` and its binding to
+`packages/core/benchmarks/data/release-baseline.json`, compiles tests, enables every external
 benchmark suite explicitly, rejects Mocha pending/skip output, and writes
 `benchmark-results/release.json`. Before running it, CI downloads the immutable
 release candidate, verifies `artifact-sha256.txt`, and points
@@ -53,7 +53,7 @@ sizes, and required strategies. The release harness expects:
 
 `npm run bench:acquire` obtains missing SciFact, FRAMES, and deterministic
 sample-article inputs from the URLs implied by
-`benchmarks/corpus-manifest.json`, writes only under the ignored `.cache`
+`packages/core/benchmarks/data/corpus-manifest.json`, writes only under the ignored `.cache`
 directory, and verifies every file or aggregate checksum. Then run the release
 command. Never change a checksum simply to accept an unexpected download;
 investigate the source revision and license first.
@@ -126,7 +126,7 @@ npm run bench:update-baseline -- \
   --results=/absolute/path/to/release.json
 ```
 
-This command copies the evidence to `benchmarks/approved-result.json`; it does
+This command copies the evidence to `packages/core/benchmarks/data/approved-result.json`; it does
 not edit thresholds. Edit the baseline separately, update the manifest binding
 when inputs changed, and have both the evidence and threshold diff reviewed.
 
