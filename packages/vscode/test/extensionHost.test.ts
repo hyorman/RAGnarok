@@ -45,9 +45,9 @@ describe("real VS Code extension host activation", function () {
     expect(registered).to.include(COMMANDS.RESET_MEMORY);
     expect(registered).to.include(COMMANDS.REFRESH_MEMORY);
     await vscode.commands.executeCommand(COMMANDS.REFRESH_MEMORY);
-    // createTreeView throws for an uncontributed id, so a real activation that
-    // reached this point also proves VIEWS.RAG_MEMORY is contributed.
-    expect(VIEWS.RAG_MEMORY).to.equal("ragMemory");
+    // VS Code derives <viewId>.focus from the manifest, so this fails if the
+    // view contribution is dropped or its id drifts from the constant.
+    expect(registered).to.include(`${VIEWS.RAG_MEMORY}.focus`);
   });
 
   // Witnesses the extension.ts wiring, not just the tool class: invokeTool only

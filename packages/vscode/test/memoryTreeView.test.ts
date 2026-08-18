@@ -1,7 +1,8 @@
 import { expect } from "chai";
 import sinon from "sinon";
 import * as vscode from "vscode";
-import type { MemoryHostContext, MemoryService } from "@ragnarok/core";
+import { setLoggerFactory, type ILoggerFactory, type MemoryHostContext, type MemoryService } from "@ragnarok/core";
+import { VsCodeLoggerFactory } from "../src/adapters/vsCodeLogger";
 import { COMMANDS, VIEWS } from "../src/constants";
 import {
   MemoryTreeDataProvider,
@@ -88,6 +89,68 @@ describe("memory tree view", function () {
 
     expect(execute.firstCall.args[1]).to.equal(resolvedContext);
     expect(labels).to.include("Memories: 7");
+    provider.dispose();
+  });
+
+  // A store that has never been written has lastUpdated === 0
+  // (memoryStore.ts:438), which as a date is 1 Jan 1970.
+  it("labels a store that has never been written as never updated", async function () {
+    const provider = new MemoryTreeDataProvider(statsService({ ...stats, lastUpdated: 0 }).service, contextHost());
+    const labels = (await provider.getChildren()).map((item) => item.label);
+    expect(labels).to.include("Updated: never");
+    expect(labels.some((label) => String(label).includes("1970"))).to.equal(false);
+    provider.dispose();
+  });
+
+  // VS Code renders viewsWelcome only for an empty tree, so a first run has to
+  // produce no rows at all for the welcome content to appear.
+  it("renders no rows for an empty store so the welcome content can appear", async function () {
+    const provider = new MemoryTreeDataProvider(
+      statsService({
+        ...stats,
+        totalMemories: 0,
+        totalEntities: 0,
+        totalRelationships: 0,
+        byScope: { workspace: 0, branch: 0 },
+        branches: [],
+        lastUpdated: 0,
+      }).service,
+      contextHost(),
+    );
+    expect(await provider.getChildren()).to.deep.equal([]);
+    provider.dispose();
+  });
+
+  // The empty check must not hide a store that holds a graph but no memories.
+  it("still renders rows when only the graph has content", async function () {
+    const provider = new MemoryTreeDataProvider(
+      statsService({
+        ...stats,
+        totalMemories: 0,
+        byScope: { workspace: 0, branch: 0 },
+      }).service,
+      contextHost(),
+    );
+    const labels = (await provider.getChildren()).map((item) => item.label);
+    expect(labels).to.have.length(8);
+    expect(labels).to.include("Memories: 0");
+    expect(labels).to.include("Entities: 3");
+    provider.dispose();
+  });
+
+  it("reports a failed stats read as a row instead of a generic tree error", async function () {
+    const execute = sinon.stub().rejects(new Error("stats failed for /Users/someone/ragnarok/memories.db"));
+    const provider = new MemoryTreeDataProvider(
+      { execute } as unknown as Pick<MemoryService, "execute">,
+      contextHost(),
+    );
+
+    const labels = (await provider.getChildren()).map((item) => String(item.label));
+
+    expect(labels).to.have.length(1);
+    expect(labels[0]).to.include("Memory statistics unavailable");
+    expect(labels[0]).to.include("<path>");
+    expect(labels[0]).to.not.include("/Users/someone");
     provider.dispose();
   });
 
@@ -272,6 +335,108 @@ describe("memory sidebar commands", function () {
     expect(harness.disposed).to.have.members([COMMANDS.RESET_MEMORY, COMMANDS.REFRESH_MEMORY]);
     subscription.dispose();
     harness.provider.dispose();
+  });
+});
+
+// deleteTopic logs before the delete, after success, and on failure
+// (commands.ts:369,372,377). An irreversible memory wipe leaves the same trace.
+describe("memory reset logging", function () {
+  let records: string[];
+
+  beforeEach(function () {
+    records = [];
+    const factory: ILoggerFactory = {
+      createLogger: () => ({
+        debug: () => undefined,
+        info: (message: string) => {
+          records.push(`info:${message}`);
+        },
+        warn: () => undefined,
+        error: (message: string) => {
+          records.push(`error:${message}`);
+        },
+      }),
+    };
+    setLoggerFactory(factory);
+  });
+
+  afterEach(function () {
+    setLoggerFactory(new VsCodeLoggerFactory());
+  });
+
+  function loggingHarness(resetError?: unknown) {
+    let handler: (() => Promise<void> | void) | undefined;
+    const host: MemoryCommandHost = {
+      registerCommand(command, callback) {
+        if (command === COMMANDS.RESET_MEMORY) {
+          handler = callback;
+        }
+        return { dispose: () => undefined };
+      },
+      showWarningMessage: async (_message, _options, action) => action,
+      showInformationMessage: async () => undefined,
+      showErrorMessage: async () => undefined,
+    };
+    const memoryService = {
+      reset: async () => {
+        records.push("reset");
+        if (resetError) {
+          throw resetError;
+        }
+        return { success: true };
+      },
+    } as unknown as Pick<MemoryService, "reset">;
+    const provider = new MemoryTreeDataProvider(statsService().service, contextHost());
+    const run: ExtensionOperationRunner = (_label, operation) => operation(new AbortController().signal);
+    registerMemoryCommands(memoryService, provider, run, host);
+    return { invoke: async () => handler!(), provider };
+  }
+
+  it("logs the wipe before it happens and its success afterwards", async function () {
+    const harness = loggingHarness();
+
+    await harness.invoke();
+
+    const reset = records.indexOf("reset");
+    expect(reset).to.be.greaterThan(-1);
+    expect(records.slice(0, reset).some((entry) => entry.startsWith("info:"))).to.equal(true);
+    expect(records.slice(reset + 1).some((entry) => entry.startsWith("info:"))).to.equal(true);
+    harness.provider.dispose();
+  });
+
+  it("logs a failed wipe as an error", async function () {
+    const harness = loggingHarness(new Error("disk on fire"));
+
+    await harness.invoke();
+
+    expect(records.some((entry) => entry.startsWith("error:"))).to.equal(true);
+    harness.provider.dispose();
+  });
+
+  it("logs nothing when the confirmation is declined", async function () {
+    let handler: (() => Promise<void> | void) | undefined;
+    const provider = new MemoryTreeDataProvider(statsService().service, contextHost());
+    registerMemoryCommands(
+      { reset: async () => ({ success: true }) } as unknown as Pick<MemoryService, "reset">,
+      provider,
+      (_label, operation) => operation(new AbortController().signal),
+      {
+        registerCommand(command, callback) {
+          if (command === COMMANDS.RESET_MEMORY) {
+            handler = callback;
+          }
+          return { dispose: () => undefined };
+        },
+        showWarningMessage: async () => undefined,
+        showInformationMessage: async () => undefined,
+        showErrorMessage: async () => undefined,
+      },
+    );
+
+    await handler!();
+
+    expect(records).to.deep.equal([]);
+    provider.dispose();
   });
 });
 

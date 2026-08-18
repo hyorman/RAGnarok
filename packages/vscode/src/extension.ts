@@ -224,7 +224,6 @@ export async function activateWithServiceFactory(
     // views below, so a failure after this point rolls the whole section back.
     const memorySidebar = runtimeFactory.registerMemorySidebar(memoryService, lifecycle.run);
     lifecycle.setResources({ memorySidebar });
-    context.subscriptions.push(memorySidebar);
     await runtimeFactory.afterMemorySurfacesRegistered?.();
 
     // Start model initialization in the background — don't block activation
