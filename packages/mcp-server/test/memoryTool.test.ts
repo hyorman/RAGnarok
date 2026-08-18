@@ -114,7 +114,8 @@ describe("MCP memory tools", () => {
       },
     },
     {
-      input: { action: "forget", id: "memory-1", olderThan: 4, expired: true, scope: "branch", branch: "dev" },
+      // untrimmed strings: the normalizer must trim them, so a pass-through is visible here too
+      input: { action: "forget", id: "  memory-1  ", olderThan: 4, expired: true, scope: "branch", branch: " dev\n" },
       forwarded: { action: "forget", id: "memory-1", olderThan: 4, expired: true, scope: "branch", branch: "dev" },
     },
     { input: { action: "stats", content: "ignored" }, forwarded: { action: "stats" } },

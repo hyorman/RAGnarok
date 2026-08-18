@@ -1,11 +1,39 @@
 import { expect } from "chai";
 import sinon from "sinon";
 import { MemoryServiceError, TOOL_LIMITS } from "@ragnarok/core";
-import { buildMemoryInputSchema } from "../src/tools";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { buildMemoryInputSchema, registerTools } from "../src/tools";
 import { invokeMemoryTool } from "../src/memoryToolAdapter";
 
 function makeServerContext(signal = new AbortController().signal): any {
   return { mcpReq: { signal } };
+}
+
+/**
+ * The schema the MCP SDK actually validates against for rag_memory, read back
+ * off the registration call, so a registration site that stopped using
+ * buildMemoryInputSchema() cannot pass unnoticed.
+ */
+function registeredMemoryInputSchema(): any {
+  const captured: Array<{ name: string; config: any }> = [];
+  const server = {
+    registerTool(name: string, config: any) {
+      captured.push({ name, config });
+      return { name };
+    },
+  } as unknown as McpServer;
+  registerTools(
+    server,
+    { getAllTopics: sinon.stub().returns([]), getVectorStore: sinon.stub().resolves(null) } as any,
+    {} as any,
+    { execute: sinon.stub(), reset: sinon.stub() } as any,
+    undefined,
+    { getCurrentBranch: sinon.stub().resolves(null) } as any,
+    { workingDir: "/project" } as any,
+  );
+  const memoryTool = captured.find(({ name }) => name === "rag_memory");
+  expect(memoryTool, "rag_memory was not registered").to.not.equal(undefined);
+  return memoryTool!.config.inputSchema;
 }
 
 function parseResponse(result: any): any {
@@ -24,6 +52,22 @@ function callMemoryTool(input: Record<string, unknown>, execute: sinon.SinonStub
 
 describe("rag_memory schema bounds", () => {
   const schema = buildMemoryInputSchema();
+
+  it("registers the bounded schema, not merely exports one", () => {
+    const registered = registeredMemoryInputSchema();
+
+    expect(registered.safeParse({ action: "recall", query: "x".repeat(TOOL_LIMITS.memoryQuery + 1) }).success).to.equal(
+      false,
+    );
+    expect(registered.safeParse({ action: "history", id: "x".repeat(TOOL_LIMITS.memoryId + 1) }).success).to.equal(
+      false,
+    );
+    expect(
+      registered.safeParse({ action: "promote", branch: "b", ids: ["x".repeat(TOOL_LIMITS.memoryId + 1)] }).success,
+    ).to.equal(false);
+    expect(registered.safeParse({ action: "recall", query: "ok" }).success).to.equal(true);
+    expect(registered.safeParse({ action: "bogus" }).success).to.equal(false);
+  });
 
   it("caps query, id, and ids items to the service limits", () => {
     expect(schema.safeParse({ action: "recall", query: "x".repeat(TOOL_LIMITS.memoryQuery + 1) }).success).to.equal(
