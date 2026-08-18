@@ -698,8 +698,9 @@ Performance depends on CPU architecture, model revision, corpus, storage, and
 Node version. Reproducible smoke and release-grade benchmark commands, pinned
 inputs, quality thresholds, latency/memory/package budgets, and the reviewed
 baseline update process are documented in
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md). Historical approximate timings are
-not treated as release evidence.
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md). Historical approximate timings live
+in [docs/BENCHMARK-HISTORY.md](docs/BENCHMARK-HISTORY.md) and are not treated
+as release evidence.
 
 ### Optimization Tips
 

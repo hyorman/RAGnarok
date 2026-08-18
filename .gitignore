@@ -28,6 +28,12 @@ node_modules/
 # npm
 npm-debug.log*
 
+# Local working notes and agent process artifacts (never committed)
+notes/
+docs/superpowers/
+.superpowers/
+.playwright-mcp/
+
 # Test artifacts
 coverage/
 .nyc_output/

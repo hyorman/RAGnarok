@@ -148,7 +148,7 @@ in `originalScoreKind`.
 Cross-encoder reranking is an orthogonal second stage available to all three.
 
 Measured quality for these strategies across SciFact, NFCorpus, FiQA, and FRAMES is in
-[BENCHMARKS.md](../BENCHMARKS.md); the enforced release thresholds are in
+[BENCHMARK-HISTORY.md](BENCHMARK-HISTORY.md); the enforced release thresholds are in
 [docs/BENCHMARKS.md](BENCHMARKS.md).
 
 ---
