@@ -127,6 +127,9 @@ export type { TopicManagerOptions, CreateTopicOptions, TopicStats, AddDocumentRe
 export { DocumentPipeline } from "./managers/documentPipeline";
 export type { PipelineOptions, PipelineProgress, PipelineResult } from "./managers/documentPipeline";
 
+// Shared tool contracts and executors
+export * from "./tools";
+
 // Standalone Memory Module
 export {
   MemoryStore,
