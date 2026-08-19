@@ -385,7 +385,7 @@ describe("graph app renderer", function () {
     expect(document.querySelector<HTMLElement>("#panel")!.hidden).to.equal(true);
     expect(document.querySelector("#truncation-banner")?.textContent).to.equal("");
     expect(document.querySelector("#status")?.textContent).not.to.include("2 nodes");
-    expect(document.querySelector("#graph")?.textContent).to.include("No memories yet in this scope/branch.");
+    expect(document.querySelector("#graph")?.textContent).to.include("No graph entities in this scope/branch yet.");
     expect(installed.resizeObservers[0].disconnected).to.equal(true);
     expect(installed.pointerReleases).to.deep.include({ element: oldNode, pointerId: 9 });
 

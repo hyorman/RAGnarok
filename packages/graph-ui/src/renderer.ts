@@ -269,7 +269,10 @@ function renderEmpty(): void {
     return;
   }
   initializeSvg(svgElement);
-  const message = "No memories yet in this scope/branch.";
+  // The graph plots extracted entities, not stored memories: a workspace can
+  // hold plenty of memories and still have no entities when extraction has not
+  // run or produced nothing. Saying "no memories" here misreports that state.
+  const message = "No graph entities in this scope/branch yet.";
   select(svgElement)
     .append("text")
     .attr("class", "empty")
@@ -277,7 +280,7 @@ function renderEmpty(): void {
     .attr("x", "50%")
     .attr("y", "50%")
     .text(message);
-  setText("#status", "Graph is empty.");
+  setText("#status", "Graph is empty — entities are extracted from stored memories by an LLM.");
   const status = document.querySelector<HTMLElement>("#status");
   status?.setAttribute("role", "status");
   status?.setAttribute("aria-live", "polite");

@@ -141,7 +141,7 @@ describe("graph app lifecycle", function () {
       await startGraphApp(bridge);
       expect(order).to.deep.equal(["setDocumentHandler", "connect"]);
       expect(installed.dom.window.document.querySelector("#graph")?.textContent).to.include(
-        "No memories yet in this scope/branch.",
+        "No graph entities in this scope/branch yet.",
       );
       expect(installed.dom.window.document.querySelector("#loading")?.hasAttribute("hidden")).to.equal(true);
     } finally {
