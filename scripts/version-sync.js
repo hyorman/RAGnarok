@@ -12,6 +12,7 @@
  *   - packages/core/package.json
  *   - packages/vscode/package.json
  *   - packages/mcp-server/package.json
+ *   - packages/graph-ui/package.json
  *   - Inter-package dependency pins (@ragnarok/core)
  */
 
@@ -25,6 +26,9 @@ const PACKAGE_FILES = [
   path.join(ROOT, "packages/core/package.json"),
   path.join(ROOT, "packages/vscode/package.json"),
   path.join(ROOT, "packages/mcp-server/package.json"),
+  // Private, but it pins @ragnarok/core: omitting it leaves that pin on the
+  // previous version and breaks `npm install` after every bump.
+  path.join(ROOT, "packages/graph-ui/package.json"),
 ];
 
 const INTERNAL_PACKAGES = ["@ragnarok/core"];
