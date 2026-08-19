@@ -71,4 +71,11 @@ describe("tool contracts", function () {
     expect(isToolErrorPayload(payload)).to.equal(true);
     expect(isToolErrorPayload({ results: [] })).to.equal(false);
   });
+
+  it("rejects an error payload whose message is missing or not a string", function () {
+    // Narrowing on code alone would hand callers an undefined at a string-typed site.
+    expect(isToolErrorPayload({ error: { code: "TOPIC_NOT_FOUND" } })).to.equal(false);
+    expect(isToolErrorPayload({ error: { code: "TOPIC_NOT_FOUND", message: 42 } })).to.equal(false);
+    expect(isToolErrorPayload({ error: { message: "no such topic" } })).to.equal(false);
+  });
 });

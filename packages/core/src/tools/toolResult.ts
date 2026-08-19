@@ -17,5 +17,7 @@ export function isToolErrorPayload(value: unknown): value is ToolErrorPayload {
     return false;
   }
   const error = (value as ToolErrorPayload).error;
-  return typeof error === "object" && error !== null && typeof error.code === "string";
+  return (
+    typeof error === "object" && error !== null && typeof error.code === "string" && typeof error.message === "string"
+  );
 }
