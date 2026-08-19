@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:e806a809-de87-49e5-af40-87ac6bbbe374",
+  "serialNumber": "urn:uuid:0fa36871-24ee-4416-a657-2c959d1b7abd",
   "version": 1,
   "metadata": {
     "component": { "type": "application", "name": "ragnarok", "version": "0.7.0" },
@@ -404,29 +404,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@vscode/vsce/node_modules/@babel/helper-validator-identifier"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2F%40bcoe%2Fv8-coverage",
-      "name": "@bcoe/v8-coverage",
-      "version": "1.0.2",
-      "purl": "pkg:npm/%40bcoe/v8-coverage@1.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "eb300193f10203f418482435346895c306d07ab50267e4d06e9eb843702099f36fbab1c7d23f13b576b5a9b4a15c0eaaaa4a408f85795bca4fea62ded6670ca8"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@bcoe/v8-coverage/-/v8-coverage-1.0.2.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/@bcoe/v8-coverage"
         }
       ]
     },
@@ -2824,104 +2801,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2F%40istanbuljs%2Fschema",
-      "name": "@istanbuljs/schema",
-      "version": "0.1.3",
-      "purl": "pkg:npm/%40istanbuljs/schema@0.1.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "657458e2336f56049543c0cbdcb4dc6a4680b57c13554c44f3586c96cc83d80b685d6ff05686f5d0790e2755ffa4095c23b0fed98a192a0e5da3c1bfc3a45880"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@istanbuljs/schema/-/schema-0.1.3.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/@istanbuljs/schema"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2F%40jridgewell%2Fresolve-uri",
-      "name": "@jridgewell/resolve-uri",
-      "version": "3.1.2",
-      "purl": "pkg:npm/%40jridgewell/resolve-uri@3.1.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6d12128022233f6d3fb5b5923d63048b9e1054f45913192e0fd9492fe508c542adc15240f305b54eb6f58ccb354455e8d42053359ff98690bd42f98a59da292b"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@jridgewell/resolve-uri/-/resolve-uri-3.1.2.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/@jridgewell/resolve-uri"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2F%40jridgewell%2Fsourcemap-codec",
-      "name": "@jridgewell/sourcemap-codec",
-      "version": "1.5.5",
-      "purl": "pkg:npm/%40jridgewell/sourcemap-codec@1.5.5",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "71843ddf5d20aeac6e7966e5f96b885086a251a0dc8fb58eab97d58449633558117ce52163d7f2db34ef7e8a96b2779b87c4a5ef45527056c80af2672ca0743a"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.5.5.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/@jridgewell/sourcemap-codec"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2F%40jridgewell%2Ftrace-mapping",
-      "name": "@jridgewell/trace-mapping",
-      "version": "0.3.31",
-      "purl": "pkg:npm/%40jridgewell/trace-mapping@0.3.31",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cf3351f9275048327373c8e869e3fc410a0242bf0db98c76748232b65d507811191c9f6e5ba85e6ecad881bcfc849c1441aa374d608cb667d5f0dbb5b7038b03"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@jridgewell/trace-mapping/-/trace-mapping-0.3.31.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/@jridgewell/trace-mapping"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40lancedb%2Flancedb-darwin-arm64",
       "name": "@lancedb/lancedb-darwin-arm64",
       "version": "0.19.1",
@@ -4537,24 +4416,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40types%2Fcheerio",
-      "name": "@types/cheerio",
-      "version": "0.22.35",
-      "purl": "pkg:npm/%40types/cheerio@0.22.35",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c83e7b05c84a46f4d5f890f9dd467a3c3f0a598e60e6bbef30b467651dc44010995e20d3fc747ea4aa4ccc51a558d845ad7968ed53d95ed2af204c1990058e20"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@types/cheerio/-/cheerio-0.22.35.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@types/cheerio" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fapache-arrow%2Fnode_modules%2F%40types%2Fcommand-line-args",
       "name": "@types/command-line-args",
       "version": "5.2.3",
@@ -4723,32 +4584,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/@types/estree" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2F%40types%2Fistanbul-lib-coverage",
-      "name": "@types/istanbul-lib-coverage",
-      "version": "2.0.6",
-      "purl": "pkg:npm/%40types/istanbul-lib-coverage@2.0.6",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d9017fb7f6ae5a6d25b32f17b4a54f1b5f6fdec48e42525efd81d981f8dbfca0411ce19257e276abf4baef5adcabdb9306b2c05e6669a8989a41b313fb3354d7"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@types/istanbul-lib-coverage/-/istanbul-lib-coverage-2.0.6.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/@types/istanbul-lib-coverage"
-        }
       ]
     },
     {
@@ -5673,24 +5508,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli",
-      "name": "@vscode/test-cli",
-      "version": "0.0.12",
-      "purl": "pkg:npm/%40vscode/test-cli@0.0.12",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8983747c3836f7e6b65de9657bf639e97befecd73c4e1ceae15c29cc017f48813af75f2b0e272a7ec43157ac35b6daf6f923a6fb5d25686b98f451b6a6d10ab1"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@vscode/test-cli/-/test-cli-0.0.12.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-electron",
       "name": "@vscode/test-electron",
       "version": "2.5.2",
@@ -6287,26 +6104,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fansi-regex",
-      "name": "ansi-regex",
-      "version": "5.0.1",
-      "purl": "pkg:npm/ansi-regex@5.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "aae2505e54d25062f62c7f52517a3c570b18e2ca1a9e1828e8b3529bce04d4b05c13cb373b4c29762473c91f73fd9649325316bf7eea38e6fda5d26531410a15"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/ansi-regex/-/ansi-regex-5.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/ansi-regex" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2F%40textlint%2Flinter-formatter%2Fnode_modules%2Fansi-regex",
       "name": "ansi-regex",
       "version": "5.0.1",
@@ -6526,26 +6323,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fansi-styles",
-      "name": "ansi-styles",
-      "version": "4.3.0",
-      "purl": "pkg:npm/ansi-styles@4.3.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cdb07dac22404f5adb8e25436f686a2851cd60bc60b64f0d511c59dc86700f717a36dc5b5d94029e74a2d4b931f880e885d3e5169db6db05402c885e64941212"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/ansi-styles/-/ansi-styles-4.3.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/ansi-styles" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fansi-styles",
       "name": "ansi-styles",
       "version": "4.3.0",
@@ -6665,26 +6442,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/ansi-styles" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fanymatch",
-      "name": "anymatch",
-      "version": "3.1.3",
-      "purl": "pkg:npm/anymatch@3.1.3",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "28c45e154af4078b7e0fe381923477298aafa1ca765da4b33b9e54701ea681031ddca6dc13e9964f2bd557b0ffcec7446cd9d5e9a71952eb64887417bd3af547"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/anymatch/-/anymatch-3.1.3.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/anymatch" }
       ]
     },
     {
@@ -7009,29 +6766,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fbalanced-match",
-      "name": "balanced-match",
-      "version": "1.0.2",
-      "purl": "pkg:npm/balanced-match@1.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "de849e50ed13315ebb84dd4099b5ec2b8c9aa94eed8e21e56f144364ea47d0a5bdf82797e1b440697d009f1b74b71d8cae94695b041a3f02252121098585393f"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/balanced-match"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fbalanced-match",
       "name": "balanced-match",
       "version": "1.0.2",
@@ -7153,29 +6887,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@typescript-eslint/parser/node_modules/balanced-match"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ftest-exclude%2Fnode_modules%2Fbalanced-match",
-      "name": "balanced-match",
-      "version": "4.0.4",
-      "purl": "pkg:npm/balanced-match@4.0.4",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "04bae011c453c17da8ea01b118e08dc8cbc64a9df96287ee633c3d87520c4d198aaadb40659554ebb6dd6fd3ebdaf50703cfa3de2dad25f8cee82ebee26c864c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/balanced-match/-/balanced-match-4.0.4.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/test-exclude/node_modules/balanced-match"
         }
       ]
     },
@@ -7510,29 +7221,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fbrace-expansion",
-      "name": "brace-expansion",
-      "version": "2.1.4",
-      "purl": "pkg:npm/brace-expansion@2.1.4",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8467d5ccfc6d85b7f7fb6ca383f441b3ad1c074161a814bfcef755ff8c27e3f0663746cd30c1cf73857f05b1627aa7f54ca0061801e76387928da8c29747f65e"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.4.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/brace-expansion"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fglob%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
       "version": "2.1.4",
@@ -7619,29 +7307,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ftest-exclude%2Fnode_modules%2Fbrace-expansion",
-      "name": "brace-expansion",
-      "version": "5.0.9",
-      "purl": "pkg:npm/brace-expansion@5.0.9",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/test-exclude/node_modules/brace-expansion"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fglob%2Fnode_modules%2Fbrace-expansion",
       "name": "brace-expansion",
       "version": "5.0.9",
@@ -7704,24 +7369,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/typescript-eslint/node_modules/brace-expansion"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fbraces",
-      "name": "braces",
-      "version": "3.0.3",
-      "purl": "pkg:npm/braces@3.0.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c906d780efce499543d88b222e5ae8fbb1dfe90d7c109aca484b1da0ccca78f29772dde0bc3f282dc390748cc6ba9af9163f840def203bf9717350737cca71bc"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/braces" }
       ]
     },
     {
@@ -7881,24 +7528,6 @@
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz" }],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/bytes" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fc8",
-      "name": "c8",
-      "version": "10.1.3",
-      "purl": "pkg:npm/c8@10.1.3",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2ef732ace01a3a7aeb94ca56db69faf743d4bf18aae147fd58c850c0d27dbe06a090bfe9875f83e2ebe3bc30395c26f292b734b31f9acbaa558bd619d469e1c8"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/c8/-/c8-10.1.3.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/c8" }
-      ]
     },
     {
       "type": "library",
@@ -8259,26 +7888,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fchokidar",
-      "name": "chokidar",
-      "version": "3.6.0",
-      "purl": "pkg:npm/chokidar@3.6.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "ed54f5ddf9a3a2d2a91a2a425bd244400bac10f13e122f2797afe0e050409889b418e38b32e6bd3430e8fc35a9d190310abddc3eae59a41aa63c04200dd6b63f"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/chokidar/-/chokidar-3.6.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/chokidar" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fchokidar",
       "name": "chokidar",
       "version": "4.0.3",
@@ -8382,24 +7991,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fcliui",
-      "name": "cliui",
-      "version": "8.0.1",
-      "purl": "pkg:npm/cliui@8.0.1",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "05278d9f2bacef90b8fff350f6042dd7f72c4d7ca8ffc49bf9a7cb024cc0a6d16e32ca1df4716890636e759a62fe8415ef786754afac47ee4f55131df83afb61"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/cliui/-/cliui-8.0.1.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/cliui" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fcliui",
       "name": "cliui",
       "version": "8.0.1",
@@ -8432,29 +8023,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/cockatiel" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fcolor-convert",
-      "name": "color-convert",
-      "version": "2.0.1",
-      "purl": "pkg:npm/color-convert@2.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4511023ec8fb8aeff16f9a0a61cb051d2a6914d9ec8ffe763954d129be333f9a275f0545df3566993a0d70e7c60be0910e97cafd4e7ce1f320dfc64709a12529"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/color-convert/-/color-convert-2.0.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/color-convert"
-        }
       ]
     },
     {
@@ -8555,26 +8123,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/color-convert" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fcolor-name",
-      "name": "color-name",
-      "version": "1.1.4",
-      "purl": "pkg:npm/color-name@1.1.4",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "74ecbedc0b96ddadb035b64722e319a537208c6b8b53fb812ffb9b71917d3976c3a3c7dfe0ef32569e417f479f4bcb84a18a39ab8171edd63d3a04065e002c40"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/color-name/-/color-name-1.1.4.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/color-name" }
       ]
     },
     {
@@ -8935,32 +8483,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fconvert-source-map",
-      "name": "convert-source-map",
-      "version": "2.0.0",
-      "purl": "pkg:npm/convert-source-map@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2afa78e7d1eb576144275080b22d4abbe318de46ac1f5f53172913cf6c5698c7aae9b936354dd75ef7c9f90eb59b4c64b56c2dfb51d261fdc966c4e6b3769126"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/convert-source-map/-/convert-source-map-2.0.0.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/convert-source-map"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcookie-signature",
       "name": "cookie-signature",
       "version": "1.2.2",
@@ -9055,26 +8577,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@modelcontextprotocol/client/node_modules/cross-spawn"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fcross-spawn",
-      "name": "cross-spawn",
-      "version": "7.0.6",
-      "purl": "pkg:npm/cross-spawn@7.0.6",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "b95d903963f69d6ceccb668ca7c69189b862f5d9731791e0879487681f4e893184c834e2249cb1d2ecb9d505ddc966ed00736e6b85c9cd429c6b73b3294777bc"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/cross-spawn" }
       ]
     },
     {
@@ -10221,26 +9723,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Femoji-regex",
-      "name": "emoji-regex",
-      "version": "8.0.0",
-      "purl": "pkg:npm/emoji-regex@8.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3128d8cdc58d380d1ec001e9cf4331a5816fc20eb28f2d4d1b7c6d7a8ab3eb8e150a8fd13e09ebd7f186b7e89cde2253cd0f04bb74dd335e126b09d5526184e8"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/emoji-regex/-/emoji-regex-8.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/emoji-regex" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Femoji-regex",
       "name": "emoji-regex",
       "version": "8.0.0",
@@ -10403,29 +9885,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/end-of-stream" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fenhanced-resolve",
-      "name": "enhanced-resolve",
-      "version": "5.20.1",
-      "purl": "pkg:npm/enhanced-resolve@5.20.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "42885c99eed5d629db01fbe322d830d046b1557e6adab7551191d106b110751653b2c2c31ac2fc2f0af39e5f2843fea4b9324e34b6837068e434fdb8ed712170"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/enhanced-resolve/-/enhanced-resolve-5.20.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/enhanced-resolve"
-        }
       ]
     },
     {
@@ -10923,26 +10382,6 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.1.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/esbuild" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fescalade",
-      "name": "escalade",
-      "version": "3.2.0",
-      "purl": "pkg:npm/escalade@3.2.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "5948f6aa5c5a42d3b883a3eae5cdbd193716183c9df22b4bf334e58a98040b3dc97ac02288e2a8b5df0953aa2d0773c00a01bac64254c9585ba0c4be6e37bf8c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/escalade" }
-      ]
     },
     {
       "type": "library",
@@ -11938,26 +11377,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ffill-range",
-      "name": "fill-range",
-      "version": "7.1.1",
-      "purl": "pkg:npm/fill-range@7.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "62c1a97b75872caf19622e2d583836272dde6d1cf6ad7a300f19e57786e4401d3471cff5670f405a70b48bdced0c98ad8afb50bda23d29a2f22ab73e8415b4ca"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/fill-range/-/fill-range-7.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/fill-range" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Ffill-range",
       "name": "fill-range",
       "version": "7.1.1",
@@ -12014,26 +11433,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/apache-arrow/node_modules/find-replace" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ffind-up",
-      "name": "find-up",
-      "version": "5.0.0",
-      "purl": "pkg:npm/find-up@5.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "efcfcf5d3d7094b2c3813cc3b3bb23abd873cf4bd70fece7fbbc32a447b87d74310a6766a9f1ac10f4319a2092408dda8c557dd5b552b2f36dac94625ba9c69e"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/find-up/-/find-up-5.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/find-up" }
       ]
     },
     {
@@ -12186,29 +11585,6 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/flatted/-/flatted-3.4.2.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/flatted" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fforeground-child",
-      "name": "foreground-child",
-      "version": "3.3.1",
-      "purl": "pkg:npm/foreground-child@3.3.1",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8085e32aab45b96120cc544903d58241e4892d90e380950e302333c6dbc5abfdfb2a88ccd41146b9faac0b2d2be2a4909982ec65831ec91ab321638cba9d37b3"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/foreground-child/-/foreground-child-3.3.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/foreground-child"
-        }
-      ]
     },
     {
       "type": "library",
@@ -12468,26 +11844,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ffsevents",
-      "name": "fsevents",
-      "version": "2.3.3",
-      "purl": "pkg:npm/fsevents@2.3.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e71a037d7f9f2fb7da0139da82658fa5b16dc21fd1efb5a630caaa1c64bae42defbc1d181eb805f81d58999df8e35b4c8f99fade4d36d765cda09c339617df43"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/fsevents" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Ffunction-bind",
       "name": "function-bind",
       "version": "1.1.2",
@@ -12544,29 +11900,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/function-bind" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fget-caller-file",
-      "name": "get-caller-file",
-      "version": "2.0.5",
-      "purl": "pkg:npm/get-caller-file@2.0.5",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0f214fdc133fdd81d340e0942ffc343991d1d25a4a786af1a2d70759ca8d11d9e5b6a1705d57e110143de1e228df801f429a34ac6922e1cc8889fb58d3a87616"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/get-caller-file/-/get-caller-file-2.0.5.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/get-caller-file"
-        }
       ]
     },
     {
@@ -12759,26 +12092,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@vscode/vsce/node_modules/github-from-package"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fglob-parent",
-      "name": "glob-parent",
-      "version": "5.1.2",
-      "purl": "pkg:npm/glob-parent@5.1.2",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "00e22049009ea62258c0fdc04671b1fb95674eed870587736c63f8e5e2f0d6faf7cc1def64b7b279dd6c0bd8676dc39cf7f4ab33233944f42b906cf8692f59a3"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/glob-parent/-/glob-parent-5.1.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/glob-parent" }
       ]
     },
     {
@@ -13028,26 +12341,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fgraceful-fs",
-      "name": "graceful-fs",
-      "version": "4.2.11",
-      "purl": "pkg:npm/graceful-fs@4.2.11",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "45b279fe398570d342703579a3d7939c12c9fc7b33595d0fef76dcf857f89d2feb263f98692e881b288e2f45680585fe9755ab97793ade1fcaac7fa7849d17bd"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/graceful-fs" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fgraceful-fs",
       "name": "graceful-fs",
       "version": "4.2.11",
@@ -13217,26 +12510,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@langchain/community/node_modules/handlebars"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fhas-flag",
-      "name": "has-flag",
-      "version": "4.0.0",
-      "purl": "pkg:npm/has-flag@4.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1329094ff4352a34d672da698080207d23b4b4a56e6548e180caf5ee4a93ba6325e807efdc421295e53ba99533a170c54c01d30c2e0d3a81bf67153712f94c3d"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/has-flag/-/has-flag-4.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/has-flag" }
       ]
     },
     {
@@ -13625,26 +12898,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/html-encoding-sniffer" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fhtml-escaper",
-      "name": "html-escaper",
-      "version": "2.0.2",
-      "purl": "pkg:npm/html-escaper@2.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1f688cb5dd08e0cb7979889aa517480e3a7e5f37a55d0d2d144e094bb605c057af5d73263a9f66c8dad4bc28340fac2cf22aa444f05f28781bc228354a694b7e"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/html-escaper/-/html-escaper-2.0.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/html-escaper" }
       ]
     },
     {
@@ -14173,29 +13426,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fis-binary-path",
-      "name": "is-binary-path",
-      "version": "2.1.0",
-      "purl": "pkg:npm/is-binary-path@2.1.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "64c11161eb3aa43c9dcae1a276c7bb3ac1f1b5b23b595794128ce047f83baddd31522998365bd9444fcad8c8194e35b2ef6e487de94b79570433dee69ad4465f"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/is-binary-path/-/is-binary-path-2.1.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/is-binary-path"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fis-docker",
       "name": "is-docker",
       "version": "3.0.0",
@@ -14212,26 +13442,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/is-docker" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fis-extglob",
-      "name": "is-extglob",
-      "version": "2.1.1",
-      "purl": "pkg:npm/is-extglob@2.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "49b29b00d90deb4dd58b88c466fe3d2de549327e321b0b1bcd9c28ac4a32122badb0dde725875b3b7eb37e1189e90103a4e6481640ed9eae494719af9778eca1"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/is-extglob/-/is-extglob-2.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/is-extglob" }
       ]
     },
     {
@@ -14272,32 +13482,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/is-extglob" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fis-fullwidth-code-point",
-      "name": "is-fullwidth-code-point",
-      "version": "3.0.0",
-      "purl": "pkg:npm/is-fullwidth-code-point@3.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cf29a6e7ebbeb02b125b20fda8d69e8d5dc316f84229c94a762cd868952e1c0f3744b8dbee74ae1a775d0871afd2193e298ec130096c59e2b851e83a115e9742"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/is-fullwidth-code-point/-/is-fullwidth-code-point-3.0.0.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/is-fullwidth-code-point"
-        }
       ]
     },
     {
@@ -14370,26 +13554,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/is-fullwidth-code-point" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fis-glob",
-      "name": "is-glob",
-      "version": "4.0.3",
-      "purl": "pkg:npm/is-glob@4.0.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c5e9526b21c7dfa66013b6568658bba56df884d6cd97c3a3bf92959a4243e2105d0f7b61f137e4f6f61ab0b33e99758e6611648197f184b4a7af046be1e9524a"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/is-glob/-/is-glob-4.0.3.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/is-glob" }
       ]
     },
     {
@@ -14477,26 +13641,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@vscode/test-electron/node_modules/is-interactive"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fis-number",
-      "name": "is-number",
-      "version": "7.0.0",
-      "purl": "pkg:npm/is-number@7.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e350a27e483a7bc4f2952a5db53a5e2d532abd20445734edb47bc4443ef8d7ea6767c00dbf4d34e0c44be3740a3c394af5c1af369e8d6566540656c65d8c719e"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/is-number" }
       ]
     },
     {
@@ -14741,24 +13885,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fisexe",
-      "name": "isexe",
-      "version": "2.0.0",
-      "purl": "pkg:npm/isexe@2.0.0",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "447c4c2e9f659ca1c61d19e0f5016144231b600715a67ebdb2648672addfdfac638155564e18f8aaa2db4cb96aed2b23f01f9f210d44b8210623694ab3241e23"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/isexe" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fisexe",
       "name": "isexe",
       "version": "2.0.0",
@@ -14822,81 +13948,6 @@
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz" }],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/isexe" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fistanbul-lib-coverage",
-      "name": "istanbul-lib-coverage",
-      "version": "3.2.2",
-      "purl": "pkg:npm/istanbul-lib-coverage@3.2.2",
-      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3bc769b05fabd1657ff0c35129f9e6aed09686e2a3c6bab6c3e8e9cc12f95192938b62de5569d63a6591c4595eb0938d99cfb02c01af29064439a9e4a342c54e"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/istanbul-lib-coverage/-/istanbul-lib-coverage-3.2.2.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/istanbul-lib-coverage"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fistanbul-lib-report",
-      "name": "istanbul-lib-report",
-      "version": "3.0.1",
-      "purl": "pkg:npm/istanbul-lib-report@3.0.1",
-      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1827c4d66b6c1c63842c253c7bf67b616ce99b26ebc7ff9d4937cbaef63ca9199a63acd74ca5a7e964088da005c34ebd89c9ba19530d920bb437323888f65437"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/istanbul-lib-report/-/istanbul-lib-report-3.0.1.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/istanbul-lib-report"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fistanbul-reports",
-      "name": "istanbul-reports",
-      "version": "3.2.0",
-      "purl": "pkg:npm/istanbul-reports@3.2.0",
-      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1c6616592fde86a4d5df1375d22db7b643e4a47e3a30b08830534269a28d6af0174c5d5192ac5ac043ed9e39c667a5ca4889c12a488e03904a4be699898dc0bc"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/istanbul-reports/-/istanbul-reports-3.2.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/istanbul-reports"
-        }
-      ]
     },
     {
       "type": "library",
@@ -15683,26 +14734,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Flocate-path",
-      "name": "locate-path",
-      "version": "6.0.0",
-      "purl": "pkg:npm/locate-path@6.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "88f64ae9e6236f146edee078fd667712c10830914ca80a28a65dd1fb3baad148dc026fcc3ba282c1e0e03df3f77a54f3b6828fdcab67547c539f63470520d553"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/locate-path/-/locate-path-6.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/locate-path" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Flocate-path",
       "name": "locate-path",
       "version": "6.0.0",
@@ -16167,26 +15198,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/lru-cache" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fmake-dir",
-      "name": "make-dir",
-      "version": "4.0.0",
-      "purl": "pkg:npm/make-dir@4.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8577544d960854eb75131fff8c0422fb04d9669529c018ffd10b0ecea7a06f7ac630c78989212ee712c79d87c1ad1578447dbe38248e3bde48b3fef1d562786f"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/make-dir/-/make-dir-4.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/make-dir" }
       ]
     },
     {
@@ -16685,29 +15696,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ftest-exclude%2Fnode_modules%2Fminimatch",
-      "name": "minimatch",
-      "version": "10.2.4",
-      "purl": "pkg:npm/minimatch@10.2.4",
-      "licenses": [{ "license": { "id": "BlueOak-1.0.0" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a118d3c3ff7b69304dd111db60276d1753107efbac488050334219120ce5eb8dbafbc8d20b49c5d5afc69a754ba5f07dcb2afa83a153a96aa26556f1aed68222"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/minimatch/-/minimatch-10.2.4.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/test-exclude/node_modules/minimatch"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fglob%2Fnode_modules%2Fminimatch",
       "name": "minimatch",
       "version": "10.2.4",
@@ -16807,26 +15795,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/minimatch" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fminimatch",
-      "name": "minimatch",
-      "version": "9.0.9",
-      "purl": "pkg:npm/minimatch@9.0.9",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "381c0137d00be1daa61139694b6cdab31faf4de59c956ce46e57d993b2930398f78de38e373fed4429d9a26532bcd83cdf02f966ff52b3a1cc2570202fc47662"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/minimatch/-/minimatch-9.0.9.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/minimatch" }
       ]
     },
     {
@@ -17552,29 +16520,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fnormalize-path",
-      "name": "normalize-path",
-      "version": "3.0.0",
-      "purl": "pkg:npm/normalize-path@3.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e9e66ce4bb375ad0a2b075a9f52d86532f1daa4a468b80554b3dc66aa884e9ecee6f4e75d844b3b57530501e82e8829b4246363e76ff983e166288c24707302c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/normalize-path/-/normalize-path-3.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/normalize-path"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fcheerio%2Fnode_modules%2Fnth-check",
       "name": "nth-check",
       "version": "2.1.1",
@@ -18052,26 +16997,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fp-limit",
-      "name": "p-limit",
-      "version": "3.1.0",
-      "purl": "pkg:npm/p-limit@3.1.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4d839a9ccdf01b0346b193767154d83c0af0e39e319d78f9aa6585d5b12801ce3e714fe897b19587ba1d7af8e9d4534776e1dcdca64c70576ec54e5773ab8945"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/p-limit/-/p-limit-3.1.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/p-limit" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fp-limit",
       "name": "p-limit",
       "version": "3.1.0",
@@ -18105,26 +17030,6 @@
         { "type": "distribution", "url": "https://registry.npmjs.org/p-limit/-/p-limit-3.1.0.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/p-limit" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fp-locate",
-      "name": "p-locate",
-      "version": "5.0.0",
-      "purl": "pkg:npm/p-locate@5.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2da363b51594058fbecc1e6713f37071aa0cca548f93e4be647341d53cdd6cc24c9f2e9dca7a401aded7fed97f418ab74c8784ea7c47a696e8d8b1b29ab1b93f"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/p-locate/-/p-locate-5.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/p-locate" }
-      ]
     },
     {
       "type": "library",
@@ -18532,26 +17437,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fpath-exists",
-      "name": "path-exists",
-      "version": "4.0.0",
-      "purl": "pkg:npm/path-exists@4.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6a4f50cb943b8d86f65b071ecb9169be0d8aa0073f64884b48b392066466ca03ec1b091556dd1f65ad2aaed333fa6ead2530077d943c167981e0c1b82d6cbbff"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/path-exists/-/path-exists-4.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/path-exists" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fpath-exists",
       "name": "path-exists",
       "version": "4.0.0",
@@ -18611,26 +17496,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@modelcontextprotocol/client/node_modules/path-key"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fpath-key",
-      "name": "path-key",
-      "version": "3.1.1",
-      "purl": "pkg:npm/path-key@3.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a2399e374a9dfb2d23b3312da18e3caf43deab97703049089423aee90e5fe3595f92cc17b8ab58ae18284e92e7c887079b6e1486ac7ee53aa6d889d2c0b844e9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/path-key" }
       ]
     },
     {
@@ -18919,26 +17784,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/picocolors" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fpicomatch",
-      "name": "picomatch",
-      "version": "2.3.2",
-      "purl": "pkg:npm/picomatch@2.3.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "57bfaf404274e99f9ce6d4b27bc4be9c751f239d71a172178c743df5c42d294910aaa3b590efca08951f657b81e3b87f60194385a8761f785d5065e7f227b4a0"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/picomatch/-/picomatch-2.3.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/picomatch" }
       ]
     },
     {
@@ -19546,26 +18391,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Freaddirp",
-      "name": "readdirp",
-      "version": "3.6.0",
-      "purl": "pkg:npm/readdirp@3.6.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "84e4b4f3da27f1176ea9d6e1bd0e59dfb0341128ecab3eaa9d171f7ec314df8f7916e4dda929beedb849dbd26f20eb010c41276a7e433eef6ddd3a3d55194ccc"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/readdirp/-/readdirp-3.6.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/readdirp" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Freaddirp",
       "name": "readdirp",
       "version": "4.1.2",
@@ -19602,29 +18427,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@lancedb/lancedb/node_modules/reflect-metadata"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Frequire-directory",
-      "name": "require-directory",
-      "version": "2.1.1",
-      "purl": "pkg:npm/require-directory@2.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "7c6c4423bfb0b06f71aef763b2b9662f6d8e3134e21d1c0032ba2211e320abc833a0b0bf3d0afb46c4434932d483f6d9019b45f9354890773aff84482abba2f9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/require-directory/-/require-directory-2.1.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/require-directory"
         }
       ]
     },
@@ -20139,24 +18941,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fsemver",
-      "name": "semver",
-      "version": "7.7.4",
-      "purl": "pkg:npm/semver@7.7.4",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "bc5282d8812d427561a53efc875629f30cf0adff0233e33328c1c62597c1b738593727111675ec1e4e84e53c4892432c80d4bb99d5f700607bc7640cd9d8b894"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/semver/-/semver-7.7.4.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/semver" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-electron%2Fnode_modules%2Fsemver",
       "name": "semver",
       "version": "7.7.4",
@@ -20380,29 +19164,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fshebang-command",
-      "name": "shebang-command",
-      "version": "2.0.0",
-      "purl": "pkg:npm/shebang-command@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "907c6bdb366962d766acdd6a0e3aeb5ff675ad1d641bc0f1fa09292b51b87979af5ecc26704d614d6056614ce5ada630d7fc99a7a62e0d8efb62dbdb3747660c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/shebang-command"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fshebang-command",
       "name": "shebang-command",
       "version": "2.0.0",
@@ -20501,29 +19262,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@modelcontextprotocol/client/node_modules/shebang-regex"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fshebang-regex",
-      "name": "shebang-regex",
-      "version": "3.0.0",
-      "purl": "pkg:npm/shebang-regex@3.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "efef9d161b5cc77df9dee05aabc0c347836ec417ad0730bb6503a19934089c711de9b4ab5dd884cb30af1b4ed9e3851874b4a1594c97b7933fca1cfc7a471bd4"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/shebang-regex"
         }
       ]
     },
@@ -20777,26 +19515,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/side-channel" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fsignal-exit",
-      "name": "signal-exit",
-      "version": "4.1.0",
-      "purl": "pkg:npm/signal-exit@4.1.0",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6f3c99d5ef3cc3d3b588d25b2a73a5bd84eb58f0e5e3a3b56c6d03dd7227bfef6d90faf1acdf235144e21650e4926296827d4ce827c8035dd2b86a8e6bd2a8af"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/signal-exit/-/signal-exit-4.1.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/signal-exit" }
       ]
     },
     {
@@ -21194,26 +19912,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fstring-width",
-      "name": "string-width",
-      "version": "4.2.3",
-      "purl": "pkg:npm/string-width@4.2.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c0ac90450a63274b08a7ad84ad265d1ac8cc256b1aa79a1136284786ee86ec954effd8c807a5327af2feb57b8eaab9e0f23fdcc4a4d6c96530bd24eb8a2673fe"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/string-width" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fstring-width",
       "name": "string-width",
       "version": "4.2.3",
@@ -21336,26 +20034,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/strip-ansi-cjs" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fstrip-ansi",
-      "name": "strip-ansi",
-      "version": "6.0.1",
-      "purl": "pkg:npm/strip-ansi@6.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "637f153d21dcaa416b0a916743dbee4979aabaebf9a1738aa46793e9a1abaf7a3719cf409556ba2417d448e0a76f1186645fbfd28a08ecaacfb944b3b54754e4"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/strip-ansi" }
       ]
     },
     {
@@ -21651,52 +20329,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fsupports-color",
-      "name": "supports-color",
-      "version": "10.2.2",
-      "purl": "pkg:npm/supports-color@10.2.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "492fa3c78e461754238045d0c78349655f489aa98ed8d3f3e4536c207aec0e387662c1e76b0a5a9fb48d435a3c36e86b6c7672f4066122809488279a5bf0bcd2"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/supports-color/-/supports-color-10.2.2.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/supports-color"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fistanbul-lib-report%2Fnode_modules%2Fsupports-color",
-      "name": "supports-color",
-      "version": "7.2.0",
-      "purl": "pkg:npm/supports-color@7.2.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "aa9080bd197db2db8e1ef78ab27ec79dc251befe74d6a21a70acd094effe2f0c5cf7ed2adb02f2bf80dfbedf34fc33e7da9a8e06c25d0e2a205c647df8ebf047"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/supports-color/-/supports-color-7.2.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/istanbul-lib-report/node_modules/supports-color"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fsupports-color",
       "name": "supports-color",
       "version": "7.2.0",
@@ -21904,26 +20536,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ftapable",
-      "name": "tapable",
-      "version": "2.3.2",
-      "purl": "pkg:npm/tapable@2.3.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d4c3a9317ba11b318be534c264522dc4273400045fd446454241aa326ec444a8fcf8782be682ef24e545702fa546647c8427b64b78c2e13e43ed583f77bfdf84"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/tapable/-/tapable-2.3.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/tapable" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Ftar-fs",
       "name": "tar-fs",
       "version": "2.1.4",
@@ -21996,26 +20608,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/terminal-link" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Ftest-exclude",
-      "name": "test-exclude",
-      "version": "7.0.2",
-      "purl": "pkg:npm/test-exclude@7.0.2",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "bbd13a03e64361da7b6b85a76ab9173d93b1f08973e3afa46f2ea9d7267ccec193cfd8186ba1484bb963da87b3ccd2a6b5dcb224d3669970e9a606b9181ee44b"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/test-exclude/-/test-exclude-7.0.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/test-exclude" }
       ]
     },
     {
@@ -22174,29 +20766,6 @@
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/tmp/-/tmp-0.2.7.tgz" }],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/tmp" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fto-regex-range",
-      "name": "to-regex-range",
-      "version": "5.0.1",
-      "purl": "pkg:npm/to-regex-range@5.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "eb93fb8b3e97e7212bd5cc1c82f4316db230ed493780ecb974876d678ac3bde2ea86b7493fe2e2fc7c7ab722b43446fed860b29de08c2621aaac00c248d93cb1"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/to-regex-range/-/to-regex-range-5.0.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/to-regex-range"
-        }
       ]
     },
     {
@@ -23054,29 +21623,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fv8-to-istanbul",
-      "name": "v8-to-istanbul",
-      "version": "9.3.0",
-      "purl": "pkg:npm/v8-to-istanbul@9.3.0",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9221946a558dfab80127fd4e1d9b01b54e2b5d939f8ffeeb290c542ca948cf0cd04af3095143603f0244121ee053ac445710b46a1a0e06f376608f061fa14d80"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/v8-to-istanbul/-/v8-to-istanbul-9.3.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@vscode/test-cli/node_modules/v8-to-istanbul"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fvalidate-npm-package-license",
       "name": "validate-npm-package-license",
       "version": "3.0.4",
@@ -23433,24 +21979,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fwhich",
-      "name": "which",
-      "version": "2.0.2",
-      "purl": "pkg:npm/which@2.0.2",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "04b2374e5d535b73ef97bd25df2ab763ae22f9ac29c17aac181616924a8cb676d782b303fb28fbae15b492e103c7325a6171a3116e6881aa4a34c10a34c8e26c"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/which/-/which-2.0.2.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/which" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fwhich",
       "name": "which",
       "version": "2.0.2",
@@ -23613,26 +22141,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/wrap-ansi-cjs" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fwrap-ansi",
-      "name": "wrap-ansi",
-      "version": "7.0.0",
-      "purl": "pkg:npm/wrap-ansi@7.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6151888f691a98b493c70e8db198e80717d2c2c9f4c9c75eb26738a7e436d5ce733ee675a65f8d7f155dc4fb5d1ef98d54e43a5d2606e0052dcadfc58bb0f5e9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/wrap-ansi/-/wrap-ansi-7.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/wrap-ansi" }
       ]
     },
     {
@@ -23822,24 +22330,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fy18n",
-      "name": "y18n",
-      "version": "5.0.8",
-      "purl": "pkg:npm/y18n@5.0.8",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d297c5cde81e0d62472480264cb44fd83c078dd179b3b8e8f6dbb3b5d43102120d09dbd2fb79c620da8f774d00a61a8947fd0b8403544baffeed209bf7c60e7c"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/y18n/-/y18n-5.0.8.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/y18n" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fy18n",
       "name": "y18n",
       "version": "5.0.8",
@@ -23899,7 +22389,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2Fyaml",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fyaml",
       "name": "yaml",
       "version": "2.9.0",
       "purl": "pkg:npm/yaml@2.9.0",
@@ -23911,29 +22401,7 @@
         }
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/community/node_modules/yaml" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fyargs-parser",
-      "name": "yargs-parser",
-      "version": "21.1.1",
-      "purl": "pkg:npm/yargs-parser@21.1.1",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "b55a6c256ec376379c0221696c80757b7ab1210b04e8da0f739fde4ddadb6c80b88742d5b16867a1ade0fa6d87725048ba31f3b31678549540f8652e736fcb07"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/yargs-parser/-/yargs-parser-21.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/yargs-parser" }
-      ]
+      "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/yaml" }]
     },
     {
       "type": "library",
@@ -23973,24 +22441,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/yargs-unparser" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fyargs",
-      "name": "yargs",
-      "version": "17.7.2",
-      "purl": "pkg:npm/yargs@17.7.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "edd4b3cd143ef822a7348fe4aca9d8455ec928a3d45cc121eb5b286872a0f66ad6121cc55a1167c4fc4697eebd703d4ebbadc2d773543c29e621caefa82b8ceb"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz" }],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/yargs" }
       ]
     },
     {
@@ -24060,26 +22510,6 @@
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/yazl/-/yazl-3.3.1.tgz" }],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/yazl" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-cli%2Fnode_modules%2Fyocto-queue",
-      "name": "yocto-queue",
-      "version": "0.1.0",
-      "purl": "pkg:npm/yocto-queue@0.1.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "ad592cbec9cd09d27fa2119ceb180fc3237c7a1782c6c88b33c9b1b84fedfe6395a897b03ee3b59a22e94c74224604ca08b7b12f831e00555a82db3b1e6359d9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/yocto-queue/-/yocto-queue-0.1.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-cli/node_modules/yocto-queue" }
-      ]
     },
     {
       "type": "library",
