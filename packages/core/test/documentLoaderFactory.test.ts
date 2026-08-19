@@ -294,7 +294,12 @@ describe("DocumentLoaderFactory", function () {
     });
 
     it("should handle empty directories", async function () {
+      // Created here rather than committed: git cannot track an empty directory, so a
+      // checked-in fixture would arrive missing on a fresh clone and this test would
+      // fail with "File not found" instead of exercising the empty-directory path.
       const emptyDir = path.join(fixturesPath, "empty-dir");
+      fs.mkdirSync(emptyDir, { recursive: true });
+
       const results = await factory.loadDocuments([{ filePath: emptyDir, recursiveDirectory: false }]);
       expect(results).to.have.length(0);
     });
