@@ -114,6 +114,36 @@ describe("VectorStoreFactory metadata persistence", function () {
     expect(md.sectionTitle).to.equal("Malloc");
   });
 
+  // getStoredStats counts chunks with a pushdown countRows() and derives the
+  // distinct document count from an id-column scan. Both numbers are reported
+  // to users and gate ingestion bookkeeping, so pin the exact values for a
+  // multi-document, multi-chunk table before and after a document removal.
+  it("reports exact stored document and chunk counts", async function () {
+    const statsTopic = "stored-stats";
+    const chunk = (documentId: string, index: number): LangChainDocument =>
+      new LangChainDocument({
+        pageContent: `${documentId} chunk ${index} about storage counters`,
+        metadata: { documentId, chunkId: `${documentId}-${index}`, source: `${documentId}.md` },
+      });
+
+    await factory.createStore({ topicId: statsTopic, storageDir }, [
+      chunk("alpha", 0),
+      chunk("alpha", 1),
+      chunk("alpha", 2),
+      chunk("beta", 0),
+      chunk("beta", 1),
+    ]);
+    expect(await factory.getStoredStats(statsTopic)).to.deep.equal({ documentCount: 2, chunkCount: 5 });
+
+    await factory.reconcileDocuments(statsTopic, [chunk("gamma", 0)]);
+    expect(await factory.getStoredStats(statsTopic)).to.deep.equal({ documentCount: 3, chunkCount: 6 });
+
+    expect(await factory.removeDocument(statsTopic, "alpha")).to.have.length(3);
+    expect(await factory.getStoredStats(statsTopic)).to.deep.equal({ documentCount: 2, chunkCount: 3 });
+
+    expect(await factory.getStoredStats("no-such-topic")).to.deep.equal({ documentCount: 0, chunkCount: 0 });
+  });
+
   it("refuses to write or stamp an existing table whose metadata is missing", async function () {
     const missingTopic = "metadata-missing";
     await factory.createStore({ topicId: missingTopic, storageDir }, [

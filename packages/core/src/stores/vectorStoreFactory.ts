@@ -592,11 +592,27 @@ export class VectorStoreFactory {
     }
     const table = await db.openTable(topicId);
     this.tables.add(table);
-    const rows = await table.query().select(["document_id"]).limit(1_000_000).toArray();
-    return {
-      documentCount: new Set(rows.map((row) => String(row.document_id))).size,
-      chunkCount: rows.length,
-    };
+    // The chunk count is a pushdown count — never materialize rows for it.
+    const chunkCount = await table.countRows();
+    if (chunkCount === 0) {
+      return { documentCount: 0, chunkCount: 0 };
+    }
+    // LanceDB (0.19) exposes no distinct/aggregate pushdown, so the distinct
+    // document count still needs a scan. Stream the single id column in Arrow
+    // record batches instead of materializing one JS object per chunk.
+    const documentIds = new Set<string>();
+    for await (const batch of table.query().select(["document_id"])) {
+      const column = batch.getChild("document_id");
+      if (!column) {
+        continue;
+      }
+      for (const value of column) {
+        if (value !== null && value !== undefined) {
+          documentIds.add(String(value));
+        }
+      }
+    }
+    return { documentCount: documentIds.size, chunkCount };
   }
 
   public async getDocumentChunkCount(topicId: string, documentId: string): Promise<number> {
