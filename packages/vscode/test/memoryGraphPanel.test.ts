@@ -141,6 +141,57 @@ describe("memory graph panel", function () {
     ).to.equal(true);
   });
 
+  it("posts the regenerated document when the webview asks to refresh", async function () {
+    const test = harness();
+    const refreshed = document("refreshed");
+    const onRefresh = sinon.stub().resolves(refreshed);
+    await test.manager.show(document("first"), onRefresh);
+    test.panels[0].send({ type: "ready" });
+    await Promise.resolve();
+    test.panels[0].webview.postMessage.resetHistory();
+
+    test.panels[0].send({ type: "refresh" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onRefresh.calledOnce).to.equal(true);
+    expect(
+      test.panels[0].webview.postMessage.calledOnceWithExactly({ type: "graphDocument", document: refreshed }),
+    ).to.equal(true);
+  });
+
+  it("answers a failed or empty refresh with the previous document so loading always clears", async function () {
+    const test = harness();
+    const first = document("first");
+    for (const handler of [sinon.stub().rejects(new Error("nope")), sinon.stub().resolves(undefined)]) {
+      await test.manager.show(first, handler);
+      test.panels[0].send({ type: "ready" });
+      await Promise.resolve();
+      test.panels[0].webview.postMessage.resetHistory();
+
+      test.panels[0].send({ type: "refresh" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(
+        test.panels[0].webview.postMessage.calledOnceWithExactly({ type: "graphDocument", document: first }),
+      ).to.equal(true);
+    }
+  });
+
+  it("ignores a refresh when the shown document came without a handler", async function () {
+    const test = harness();
+    await test.manager.show(document("first"));
+    test.panels[0].send({ type: "ready" });
+    await Promise.resolve();
+    test.panels[0].webview.postMessage.resetHistory();
+
+    test.panels[0].send({ type: "refresh" });
+    await Promise.resolve();
+
+    expect(test.panels[0].webview.postMessage.called).to.equal(false);
+  });
+
   it("uses a strict nonce CSP and only webview-local script and stylesheet URIs", async function () {
     const test = harness();
 
@@ -158,6 +209,7 @@ describe("memory graph panel", function () {
     expect(panel.webview.html).to.include('nonce="fixed-nonce" src="webview:/extension/media/memoryGraph.js"');
     expect(panel.webview.html).to.include("data-ragnarok-graph-app");
     expect(panel.webview.html).to.include('id="graph"');
+    expect(panel.webview.html).to.include('id="graph-refresh"');
   });
 
   it("clears cached state after manual close so a later show creates a new panel", async function () {

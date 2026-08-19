@@ -1,5 +1,6 @@
 import type { GraphVisualizationDocument } from "./documentTypes";
-import { clearVisualization, renderDocument, showEmpty, showError } from "./renderer";
+import { clearVisualization, renderDocument, showEmpty, showError, showLoading } from "./renderer";
+import { installGraphToolbar } from "./toolbar";
 
 export interface GraphAppBridge {
   setDocumentHandler(
@@ -7,16 +8,16 @@ export interface GraphAppBridge {
     errorHandler: (error: unknown) => void,
   ): void;
   connect(): Promise<void>;
+  /** Optional: hosts that can re-send the document on demand implement this. */
+  requestRefresh?(): void;
 }
 
 export async function startGraphApp(
   bridge: GraphAppBridge,
   connectionError = "Unable to connect to the graph host.",
 ): Promise<void> {
-  const loading = document.querySelector<HTMLElement>("#loading");
-  if (loading) {
-    loading.hidden = false;
-  }
+  showLoading();
+  installGraphToolbar({ requestRefresh: bridge.requestRefresh?.bind(bridge) });
 
   bridge.setDocumentHandler(displayGraphDocument, displayGraphError);
 

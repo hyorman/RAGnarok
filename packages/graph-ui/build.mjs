@@ -45,12 +45,12 @@ if (!composed.includes("ontoolresult")) {
 if (vscodeScript.includes("ontoolresult") || vscodeScript.includes("ui/initialize")) {
   throw new Error("build: VS Code UI bundle must not contain MCP Apps lifecycle markers");
 }
-for (const marker of ["graphDocument", "ready"]) {
+for (const marker of ["graphDocument", "ready", "refresh"]) {
   if (!vscodeScript.includes(marker)) {
     throw new Error(`build: VS Code UI bundle must contain ${marker}`);
   }
 }
-for (const requiredId of ["loading", "error", "status", "reset-view"]) {
+for (const requiredId of ["loading", "error", "status", "graph-refresh"]) {
   if (!composed.includes(`id="${requiredId}"`)) {
     throw new Error(`build: MCP UI bundle must contain #${requiredId}`);
   }

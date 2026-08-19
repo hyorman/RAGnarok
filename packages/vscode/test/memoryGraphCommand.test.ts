@@ -113,7 +113,9 @@ describe("memory graph command", function () {
       test.graphService.generate.calledOnceWithExactly({ scope: "branch", branch: "feature/graph" }, sinon.match.any),
     ).to.equal(true);
     expect(test.operationRunner.calledOnce).to.equal(true);
-    expect(test.panel.show.calledOnceWithExactly(graphDocument)).to.equal(true);
+    expect(test.panel.show.calledOnce).to.equal(true);
+    expect(test.panel.show.firstCall.args[0]).to.equal(graphDocument);
+    expect(test.panel.show.firstCall.args[1]).to.be.a("function");
   });
 
   it("generates a workspace graph without requiring a branch", async function () {
@@ -193,7 +195,8 @@ describe("memory graph command", function () {
     first.resolve(namedDocument("A"));
     await invocationA;
 
-    expect(test.panel.show.calledOnceWithExactly(documentB)).to.equal(true);
+    expect(test.panel.show.calledOnce).to.equal(true);
+    expect(test.panel.show.firstCall.args[0]).to.equal(documentB);
   });
 
   it("does not surface an error from an invocation superseded by a later success", async function () {
@@ -218,6 +221,70 @@ describe("memory graph command", function () {
     first.reject(new Error("stale failure"));
 
     expect(await invocationA).to.equal(undefined);
+  });
+
+  it("regenerates the same scope when the panel asks to refresh", async function () {
+    const test = harness([folder("one", "/one")]);
+    (test.host.showScopeQuickPick as sinon.SinonStub).callsFake(async (items) => items[1]);
+    await test.invoke();
+    const refresh = test.panel.show.firstCall.args[1] as () => Promise<GraphVisualizationDocument | undefined>;
+    const refreshed = namedDocument("refreshed");
+    test.graphService.generate.resolves(refreshed);
+
+    const result = await refresh();
+
+    expect(result).to.equal(refreshed);
+    expect(test.graphService.generate.secondCall.args[0]).to.deep.equal({
+      scope: "branch",
+      branch: "feature/graph",
+    });
+    // The user is not asked to pick a folder or a scope again.
+    expect((test.host.showScopeQuickPick as sinon.SinonStub).callCount).to.equal(1);
+    expect((test.host.showWorkspaceFolderPick as sinon.SinonStub).called).to.equal(false);
+  });
+
+  it("reports a failed refresh and returns no document so the panel keeps what it has", async function () {
+    const test = harness([folder("one", "/one")]);
+    (test.host.showScopeQuickPick as sinon.SinonStub).callsFake(async (items) => items[0]);
+    await test.invoke();
+    const refresh = test.panel.show.firstCall.args[1] as () => Promise<GraphVisualizationDocument | undefined>;
+    test.graphService.generate.rejects(new Error("refresh exploded"));
+
+    expect(await refresh()).to.equal(undefined);
+
+    expect((test.host.showErrorMessage as sinon.SinonSpy).calledOnce).to.equal(true);
+    expect((test.host.showErrorMessage as sinon.SinonSpy).firstCall.args[0]).to.include("refresh exploded");
+  });
+
+  // An invocation the user abandons at a picker never replaces what the panel
+  // shows, so it must not disable that panel's refresh either.
+  it("keeps refresh working after a later invocation is cancelled at the scope pick", async function () {
+    const test = harness([folder("one", "/one")]);
+    (test.host.showScopeQuickPick as sinon.SinonStub).onFirstCall().callsFake(async (items) => items[0]);
+    (test.host.showScopeQuickPick as sinon.SinonStub).onSecondCall().resolves(undefined);
+    await test.invoke();
+    const refresh = test.panel.show.firstCall.args[1] as () => Promise<GraphVisualizationDocument | undefined>;
+    await test.invoke();
+    const refreshed = namedDocument("refreshed");
+    test.graphService.generate.resolves(refreshed);
+
+    expect(await refresh()).to.equal(refreshed);
+
+    expect((test.host.showErrorMessage as sinon.SinonSpy).called).to.equal(false);
+  });
+
+  it("ignores a refresh from a panel state a later invocation has replaced", async function () {
+    const test = harness([folder("one", "/one")]);
+    (test.host.showScopeQuickPick as sinon.SinonStub).callsFake(async (items) => items[0]);
+    await test.invoke();
+    const staleRefresh = test.panel.show.firstCall.args[1] as () => Promise<GraphVisualizationDocument | undefined>;
+    await test.invoke();
+    test.graphService.generate.resetHistory();
+
+    expect(await staleRefresh()).to.equal(undefined);
+
+    expect(test.graphService.generate.called).to.equal(false);
+    expect((test.host.showErrorMessage as sinon.SinonSpy).called).to.equal(false);
   });
 
   it("does not show a missing-branch error from an invocation superseded while detecting Git context", async function () {

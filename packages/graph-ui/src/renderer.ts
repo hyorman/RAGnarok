@@ -25,6 +25,7 @@ const SHAPE_BY_TYPE: Record<string, "circle" | "rect" | "hex" | "rounded"> = {
 
 let destroyActiveRender: (() => void) | undefined;
 let activeEdgeUpdater: ((nodeId: string) => void) | undefined;
+let activeViewportReset: (() => void) | undefined;
 
 export function renderDocument(graph: GraphVisualizationDocument): void {
   clearVisualization();
@@ -181,9 +182,10 @@ export function renderDocument(graph: GraphVisualizationDocument): void {
   });
 
   let labelsVisible = true;
-  const resetButton = document.querySelector<HTMLButtonElement>("#reset-view");
+  // The toolbar owns the reset control, which outlives any single render; this
+  // only publishes the current viewport for it to drive.
+  activeViewportReset = () => viewport.reset();
   const labelsButton = document.querySelector<HTMLButtonElement>("#toggle-labels");
-  const onReset = (): void => viewport.reset();
   const onToggleLabels = (): void => {
     labelsVisible = !labelsVisible;
     nodeLabels.text((node) => (labelsVisible ? node.label : ""));
@@ -191,7 +193,6 @@ export function renderDocument(graph: GraphVisualizationDocument): void {
     labelsButton?.setAttribute("aria-pressed", String(labelsVisible));
     viewport.fit();
   };
-  resetButton?.addEventListener("click", onReset);
   labelsButton?.addEventListener("click", onToggleLabels);
   labelsButton?.setAttribute("aria-pressed", "true");
 
@@ -213,7 +214,6 @@ export function renderDocument(graph: GraphVisualizationDocument): void {
   viewport.fit();
 
   destroyActiveRender = () => {
-    resetButton?.removeEventListener("click", onReset);
     labelsButton?.removeEventListener("click", onToggleLabels);
     destroyInteractions();
     panel.destroy();
@@ -225,12 +225,25 @@ export function updateConnectedEdges(nodeId: string): void {
   activeEdgeUpdater?.(nodeId);
 }
 
+/** Refits the rendered graph. A no-op while the stage is empty or errored. */
+export function resetActiveView(): void {
+  activeViewportReset?.();
+}
+
+export function showLoading(): void {
+  const loading = document.querySelector<HTMLElement>("#loading");
+  if (loading) {
+    loading.hidden = false;
+  }
+}
+
 export function clearVisualization(): void {
   const panel = document.querySelector<HTMLElement>("#panel");
   const moveFocus = panel?.contains(document.activeElement) ?? false;
   destroyActiveRender?.();
   destroyActiveRender = undefined;
   activeEdgeUpdater = undefined;
+  activeViewportReset = undefined;
   const svg = document.querySelector<SVGSVGElement>("#graph");
   svg?.replaceChildren();
   if (svg) {

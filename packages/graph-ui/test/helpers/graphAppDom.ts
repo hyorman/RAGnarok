@@ -91,7 +91,7 @@ export function installGraphAppDom(): GraphAppDomHarness {
     `<!doctype html><html><body>
       <main id="app" data-ragnarok-graph-app>
         <header id="toolbar">
-          <button id="reset-view" type="button">Reset view</button>
+          <button id="graph-refresh" type="button">Reset view</button>
           <button id="toggle-labels" type="button" aria-pressed="true">Labels</button>
           <span id="truncation-banner"></span>
         </header>

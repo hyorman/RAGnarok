@@ -207,7 +207,7 @@ describe("stdio transport E2E", function () {
     expect(graphResource.text).to.be.a("string").and.not.equal("");
     expect(graphResource.text).to.include("data-ragnarok-graph-app");
     expect(graphResource.text).to.include("<svg");
-    expect(graphResource.text).to.include('id="reset-view"');
+    expect(graphResource.text).to.include('id="graph-refresh"');
     expect(graphResource.text).not.to.match(/<script\s+[^>]*src\s*=/i);
 
     expect(

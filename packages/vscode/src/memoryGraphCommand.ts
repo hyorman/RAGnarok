@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import { GitBranchDetector, type GraphVisualizationRequest, type GraphVisualizationService } from "@ragnarok/core";
+import {
+  GitBranchDetector,
+  type GraphVisualizationDocument,
+  type GraphVisualizationRequest,
+  type GraphVisualizationService,
+} from "@ragnarok/core";
 import { COMMANDS } from "./constants";
 import type { ExtensionOperationRunner } from "./extensionLifecycle";
 import type { MemoryGraphPanel } from "./memoryGraphPanel";
@@ -42,6 +47,11 @@ export function registerMemoryGraphCommand(
   host: MemoryGraphCommandHost = vscodeMemoryGraphCommandHost,
 ): vscode.Disposable {
   let latestGeneration = 0;
+  // Tracked apart from latestGeneration, which counts every invocation
+  // including the ones abandoned at a picker. Refresh keys off what the panel
+  // is actually showing, so cancelling a second command run cannot strand the
+  // open panel's button.
+  let shownGeneration = 0;
   return host.registerCommand(COMMANDS.SHOW_MEMORY_GRAPH, async () => {
     const generation = ++latestGeneration;
     try {
@@ -82,11 +92,35 @@ export function registerMemoryGraphCommand(
         request = scope.request;
       }
 
+      // Bound to the request this invocation resolved, so the panel's Refresh
+      // button re-reads the same scope without asking the user to pick again.
+      // A refresh from a panel another invocation has already re-scoped loses
+      // to that newer document, exactly as a late generate does.
+      const refresh = async (): Promise<GraphVisualizationDocument | undefined> => {
+        if (generation !== shownGeneration) {
+          return undefined;
+        }
+        try {
+          return await operationRunner("refresh memory graph", async (signal) => {
+            const next = await graphService.generate(request, signal);
+            signal.throwIfAborted();
+            return generation === shownGeneration ? next : undefined;
+          });
+        } catch (error) {
+          if (generation === shownGeneration) {
+            const message = error instanceof Error ? error.message : String(error);
+            await host.showErrorMessage(`RAGnarok could not refresh the memory graph: ${message}`);
+          }
+          return undefined;
+        }
+      };
+
       await operationRunner("show memory graph", async (signal) => {
         const document = await graphService.generate(request, signal);
         signal.throwIfAborted();
         if (generation === latestGeneration) {
-          await panel.show(document);
+          shownGeneration = generation;
+          await panel.show(document, refresh);
         }
       });
     } catch (error) {

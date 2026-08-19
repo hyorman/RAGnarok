@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { zoomTransform } from "d3-zoom";
-import { clearVisualization, renderDocument, showEmpty, showError } from "../src/renderer";
+import { clearVisualization, renderDocument, resetActiveView, showEmpty, showError } from "../src/renderer";
 import { createViewport } from "../src/viewport";
 import { dispatchPointer, graphDocument, installGraphAppDom, type GraphAppDomHarness } from "./helpers/graphAppDom";
 
@@ -110,7 +110,7 @@ describe("graph app renderer", function () {
 
     zoomToScale(installed, svg, 1);
     expect(root.getAttribute("transform")).not.to.equal(initialFit);
-    (document.querySelector("#reset-view") as HTMLButtonElement).click();
+    resetActiveView();
     expect(root.getAttribute("transform")).to.equal(initialFit);
 
     const labels = document.querySelector<HTMLButtonElement>("#toggle-labels")!;
@@ -125,7 +125,7 @@ describe("graph app renderer", function () {
     const resizedFit = root.getAttribute("transform");
     expect(resizedFit).not.to.equal(withoutLabels);
     zoomToScale(installed, svg, 1);
-    (document.querySelector("#reset-view") as HTMLButtonElement).click();
+    resetActiveView();
     expect(root.getAttribute("transform")).to.equal(resizedFit);
   });
 

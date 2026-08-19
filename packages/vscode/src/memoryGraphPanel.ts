@@ -21,9 +21,18 @@ interface ActivePanel {
   listeners: vscode.Disposable[];
 }
 
+/**
+ * Regenerates the graph the panel is currently showing. Resolves with the fresh
+ * document, or `undefined` when generation failed or was superseded — the panel
+ * then re-posts what it already had, so the webview's loading indicator clears
+ * either way.
+ */
+export type MemoryGraphRefresh = () => Promise<GraphVisualizationDocument | undefined>;
+
 export class MemoryGraphPanel implements vscode.Disposable {
   private active: ActivePanel | undefined;
   private latestDocument: GraphVisualizationDocument | undefined;
+  private refreshHandler: MemoryGraphRefresh | undefined;
   private ready = false;
   private disposed = false;
 
@@ -33,11 +42,12 @@ export class MemoryGraphPanel implements vscode.Disposable {
     private readonly createNonce: () => string = () => crypto.randomBytes(16).toString("base64"),
   ) {}
 
-  async show(document: GraphVisualizationDocument): Promise<void> {
+  async show(document: GraphVisualizationDocument, onRefresh?: MemoryGraphRefresh): Promise<void> {
     if (this.disposed) {
       return;
     }
     this.latestDocument = document;
+    this.refreshHandler = onRefresh;
     if (!this.active) {
       this.createPanel();
     } else {
@@ -54,6 +64,7 @@ export class MemoryGraphPanel implements vscode.Disposable {
     }
     this.disposed = true;
     this.latestDocument = undefined;
+    this.refreshHandler = undefined;
     const active = this.detachPanel();
     active?.panel.dispose();
   }
@@ -72,16 +83,19 @@ export class MemoryGraphPanel implements vscode.Disposable {
     this.ready = false;
     const listeners = [
       panel.webview.onDidReceiveMessage((message: unknown) => {
-        if (!this.isReadyMessage(message)) {
-          return;
+        const type = this.messageType(message);
+        if (type === "ready") {
+          this.ready = true;
+          void this.postLatestDocument();
+        } else if (type === "refresh") {
+          void this.handleRefresh();
         }
-        this.ready = true;
-        void this.postLatestDocument();
       }),
       panel.onDidDispose(() => {
         if (this.active?.panel === panel) {
           this.detachPanel();
           this.latestDocument = undefined;
+          this.refreshHandler = undefined;
         }
       }),
       panel.onDidChangeViewState(() => {
@@ -118,8 +132,38 @@ export class MemoryGraphPanel implements vscode.Disposable {
     await panel.webview.postMessage({ type: "graphDocument", document });
   }
 
-  private isReadyMessage(message: unknown): message is { type: "ready" } {
-    return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "ready";
+  /**
+   * Answers a webview refresh with a document unconditionally: on a failed or
+   * superseded regeneration the previous document goes back, because a webview
+   * left waiting would show its loading indicator forever.
+   */
+  private async handleRefresh(): Promise<void> {
+    const handler = this.refreshHandler;
+    if (!handler || this.disposed) {
+      return;
+    }
+    let next: GraphVisualizationDocument | undefined;
+    try {
+      next = await handler();
+    } catch {
+      // The refresh handler reports its own failures to the user.
+      next = undefined;
+    }
+    if (this.disposed) {
+      return;
+    }
+    if (next) {
+      this.latestDocument = next;
+    }
+    await this.postLatestDocument();
+  }
+
+  private messageType(message: unknown): string | undefined {
+    if (typeof message !== "object" || message === null) {
+      return undefined;
+    }
+    const type = (message as { type?: unknown }).type;
+    return typeof type === "string" ? type : undefined;
   }
 
   private createHtml(webview: vscode.Webview, mediaUri: vscode.Uri): string {
@@ -143,7 +187,7 @@ export class MemoryGraphPanel implements vscode.Disposable {
         <span id="title">RAGnarok Memory Graph</span>
       </div>
       <div class="toolbar-actions" aria-label="Graph controls">
-        <button id="reset-view" type="button">Reset view</button>
+        <button id="graph-refresh" type="button" title="Reload the graph and reset the view">Refresh</button>
         <button id="toggle-labels" type="button" aria-pressed="true">Labels</button>
       </div>
       <span id="truncation-banner" aria-live="polite"></span>

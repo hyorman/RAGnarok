@@ -64,7 +64,7 @@ function installDom(): { dom: JSDOM; restore(): void } {
         <div id="loading">Loading graph...</div>
         <div id="status" role="status"></div>
         <div id="error" role="alert" hidden></div>
-        <button id="reset-view" type="button">Reset view</button>
+        <button id="graph-refresh" type="button">Reset view</button>
         <button id="toggle-labels" type="button">Labels</button>
         <span id="truncation-banner">stale banner</span>
         <svg id="graph"><circle id="stale-node"></circle></svg>
