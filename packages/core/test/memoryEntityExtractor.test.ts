@@ -119,6 +119,56 @@ describe("MemoryEntityExtractor", function () {
       expect(result.relationships).to.have.length(2);
     });
 
+    // Copilot and other chat models routinely wrap the JSON in prose or put the
+    // fence somewhere other than offset 0. Anchoring the fence-strip at the
+    // start of the response made every such reply parse-fail, which silently
+    // produced a memory with no entities and an empty graph.
+    it("should handle a fenced block preceded by prose", async function () {
+      const response = "Here's the extracted data:\n\n```json\n" + validResponse + "\n```";
+      const extractor = new MemoryEntityExtractor(createMockLLMProvider(response));
+      const result = await extractor.extract("Some memory text");
+
+      expect(result.entities).to.have.length(3);
+      expect(result.relationships).to.have.length(2);
+    });
+
+    it("should handle a fenced block followed by prose", async function () {
+      const response = "```json\n" + validResponse + "\n```\n\nLet me know if you need more detail.";
+      const extractor = new MemoryEntityExtractor(createMockLLMProvider(response));
+      const result = await extractor.extract("Some memory text");
+
+      expect(result.entities).to.have.length(3);
+      expect(result.relationships).to.have.length(2);
+    });
+
+    it("should handle a bare JSON object surrounded by prose", async function () {
+      const response = "Sure! The entities are:\n" + validResponse + "\nThat covers everything.";
+      const extractor = new MemoryEntityExtractor(createMockLLMProvider(response));
+      const result = await extractor.extract("Some memory text");
+
+      expect(result.entities).to.have.length(3);
+      expect(result.relationships).to.have.length(2);
+    });
+
+    it("should handle a fence with no newline before the closing marker", async function () {
+      const response = "```" + validResponse + "```";
+      const extractor = new MemoryEntityExtractor(createMockLLMProvider(response));
+      const result = await extractor.extract("Some memory text");
+
+      expect(result.entities).to.have.length(3);
+      expect(result.relationships).to.have.length(2);
+    });
+
+    it("should not mistake a brace inside a string for the end of the object", async function () {
+      const response =
+        'Result:\n{"entities":[{"name":"a}b","type":"tool","description":"has } brace"}],"relationships":[]}';
+      const extractor = new MemoryEntityExtractor(createMockLLMProvider(response));
+      const result = await extractor.extract("Some memory text");
+
+      expect(result.entities).to.have.length(1);
+      expect(result.entities[0].name).to.equal("a}b");
+    });
+
     it("should return empty on malformed LLM response", async function () {
       const extractor = new MemoryEntityExtractor(createMockLLMProvider("this is not json at all!!!"));
       const result = await extractor.extract("Some memory text");
