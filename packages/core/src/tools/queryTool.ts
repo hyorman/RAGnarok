@@ -1,5 +1,8 @@
 import type { RAGQueryService } from "../agents/ragQueryService";
-import { TopicEmptyError } from "../agents/ragQueryService";
+// Imported from the leaf module, not from ragQueryService: this is the only value
+// import in the tools module, so routing it through the service would drag the whole
+// agent stack into anyone importing the contracts.
+import { TopicEmptyError } from "../agents/topicEmptyError";
 import type { RAGQueryResult, RetrievalStrategy } from "../utils/types";
 import { TOOL_LIMITS } from "./toolContracts";
 

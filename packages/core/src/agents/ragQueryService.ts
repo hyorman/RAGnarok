@@ -21,20 +21,10 @@ import { Logger } from "../logger";
 import { CONFIG, DEFAULTS } from "../constants";
 import { RAGQueryParams, RAGQueryResult, RetrievalStrategy } from "../utils/types";
 import type { Reranker } from "../rerankers/reranker";
+import { TopicEmptyError } from "./topicEmptyError";
 
-/**
- * Thrown when a topic exists but contains no documents.
- * Callers can catch this specifically to distinguish "empty topic" from real errors.
- */
-export class TopicEmptyError extends Error {
-  public readonly topicName: string;
-
-  constructor(topicName: string) {
-    super(`Topic "${topicName}" exists but has no documents. ` + `Add documents to the topic before querying.`);
-    this.name = "TopicEmptyError";
-    this.topicName = topicName;
-  }
-}
+// Re-exported so the long-standing `agents/ragQueryService` import path keeps working.
+export { TopicEmptyError };
 
 const MAX_CACHED_AGENTS = 10;
 
