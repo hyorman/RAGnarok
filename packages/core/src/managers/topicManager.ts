@@ -288,6 +288,11 @@ export class TopicManager {
   // Cache for topic documents
   private topicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
 
+  // Memoized topic-name embeddings used by fuzzy topic resolution, valid only
+  // for the embedding model recorded alongside them.
+  private topicNameVectorCache: Map<string, number[]> = new Map();
+  private topicNameVectorModel: string | null = null;
+
   // Common database support
   private commonTopicsIndex: TopicsIndex | null = null;
   private commonTopicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
@@ -758,20 +763,57 @@ export class TopicManager {
     // Semantic similarity across all topics
     this.logger.debug(`Computing semantic similarity for topic: ${requestedTopic}`);
     const requestedEmbedding = await this.embeddingService.embed(requestedTopic);
+    const topicEmbeddings = await this.embedTopicNames(topicNames);
 
-    const topicSimilarities = await Promise.all(
-      allTopics.map(async (topic) => {
-        const topicEmbedding = await this.embeddingService.embed(topic.name);
-        const similarity = this.embeddingService.cosineSimilarity(requestedEmbedding, topicEmbedding);
-        return { topic, similarity };
-      }),
-    );
+    const topicSimilarities = allTopics.map((topic, index) => ({
+      topic,
+      similarity: this.embeddingService.cosineSimilarity(requestedEmbedding, topicEmbeddings[index]),
+    }));
 
     topicSimilarities.sort((a, b) => b.similarity - a.similarity);
     const bestMatch = topicSimilarities[0];
 
     this.logger.debug(`Best matching topic: ${bestMatch.topic.name} (similarity: ${bestMatch.similarity.toFixed(3)})`);
     return { topic: bestMatch.topic, matchType: "similar", availableTopics: topicNames };
+  }
+
+  /**
+   * Embed topic names for fuzzy resolution, memoized per name and per embedding
+   * model.
+   *
+   * Topic names are stable, so recomputing every vector on every lookup costs
+   * one embedding round trip per topic per query for nothing.
+   *
+   * Keying the cache on the name is what makes create/rename/delete safe
+   * without a dedicated invalidation hook: a lookup only ever reads entries for
+   * names present in the freshly read topic list, so a renamed or deleted
+   * topic's vector can never be matched. Entries whose name is gone are pruned
+   * so the map stays bounded by the topic count. A model switch does need an
+   * explicit guard, because the same name embeds to a different vector.
+   */
+  private async embedTopicNames(names: string[]): Promise<number[][]> {
+    const currentModel = this.embeddingService.getCurrentModel();
+    if (currentModel !== this.topicNameVectorModel) {
+      this.topicNameVectorCache.clear();
+      this.topicNameVectorModel = currentModel;
+    }
+    const liveNames = new Set(names);
+    for (const cachedName of this.topicNameVectorCache.keys()) {
+      if (!liveNames.has(cachedName)) {
+        this.topicNameVectorCache.delete(cachedName);
+      }
+    }
+    return Promise.all(
+      names.map(async (name) => {
+        const cached = this.topicNameVectorCache.get(name);
+        if (cached) {
+          return cached;
+        }
+        const vector = await this.embeddingService.embed(name);
+        this.topicNameVectorCache.set(name, vector);
+        return vector;
+      }),
+    );
   }
 
   /**
@@ -1614,6 +1656,8 @@ export class TopicManager {
 
     this.vectorStoreCache.clear();
     this.topicDocuments.clear();
+    this.topicNameVectorCache.clear();
+    this.topicNameVectorModel = null;
     this.topicMutationMutexes.clear();
     this.topicsIndex = null;
     this.isInitialized = false;
@@ -2773,10 +2817,12 @@ export class TopicManager {
       topicCount: topicIds.length,
     });
 
+    // Each topic's metadata lives in its own file, so read them concurrently.
+    // Failure semantics are unchanged: any topic that fails to load rejects the
+    // whole load and leaves `topicDocuments` untouched.
+    const documentsByTopic = await Promise.all(topicIds.map((topicId) => this.loadTopicDocuments(topicId)));
     const loadedDocuments = new Map<string, Map<string, TopicDocument>>();
-    for (const topicId of topicIds) {
-      loadedDocuments.set(topicId, await this.loadTopicDocuments(topicId));
-    }
+    topicIds.forEach((topicId, index) => loadedDocuments.set(topicId, documentsByTopic[index]));
     this.topicDocuments = loadedDocuments;
   }
 
