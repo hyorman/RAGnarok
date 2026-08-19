@@ -10,7 +10,7 @@
  * degenerate value. (EmbeddingService.cosineSimilarity intentionally keeps a
  * stricter throwing contract for API consumers.)
  */
-export function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
   if (a.length !== b.length || a.length === 0) {
     return 0;
   }

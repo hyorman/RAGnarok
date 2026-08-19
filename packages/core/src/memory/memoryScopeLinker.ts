@@ -98,7 +98,10 @@ export class MemoryScopeLinker {
       }
       for (const ws of workspaceEntries) {
         if (ws.vector && ws.vector.length > 0) {
-          const similarity = cosineSimilarity(Array.from(e.vector), Array.from(ws.vector));
+          // cosineSimilarity reads by index, so typed vectors go in as-is:
+          // copying them here re-materialized the candidate once per workspace
+          // entry.
+          const similarity = cosineSimilarity(e.vector, ws.vector);
           if (similarity >= DUPLICATE_SIMILARITY_THRESHOLD) {
             return false;
           }
