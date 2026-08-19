@@ -79,20 +79,31 @@ export class HybridRetriever {
     });
 
     try {
-      // Step 1: Fetch vector candidates (more than needed for re-ranking)
       const candidateCount = k * 3;
-      const vectorResults = await this.vectorRetriever.search(query, candidateCount);
 
-      this.logger.debug("Vector search complete", {
-        candidateCount: vectorResults.length,
-      });
-
-      // Step 2: Extract keywords
+      // Step 1: Extract keywords (pure, synchronous, query-only)
       const keywords = extractKeywords(query);
 
       this.logger.debug("Keywords extracted", {
         keywords,
         count: keywords.length,
+      });
+
+      // Step 2: Start both searches. They are independent — the BM25 query is
+      // derived from the query string alone — so the keyword pass no longer
+      // waits out the vector search's query-embedding round trip. The vector
+      // arm is still awaited first, which keeps its failure the one that
+      // propagates when both arms fail.
+      const vectorSearch = this.vectorRetriever.search(query, candidateCount);
+      const bm25Search = this.keywordRetriever.isInitialized()
+        ? this.keywordRetriever.search(keywords.join(" ") || query, candidateCount)
+        : undefined;
+      bm25Search?.catch(() => undefined);
+
+      const vectorResults = await vectorSearch;
+
+      this.logger.debug("Vector search complete", {
+        candidateCount: vectorResults.length,
       });
 
       // Step 3: Build candidate map from vector results
@@ -106,9 +117,8 @@ export class HybridRetriever {
 
       // Step 4: Fetch BM25 candidates and their scores
       const bm25ScoreMap = new Map<string, number>();
-      if (this.keywordRetriever.isInitialized()) {
-        const bm25Query = keywords.join(" ") || query;
-        const bm25Results = await this.keywordRetriever.search(bm25Query, candidateCount);
+      if (bm25Search) {
+        const bm25Results = await bm25Search;
 
         // Build a map of BM25 scores for all BM25 results
         for (const { document: doc, score: bm25Score } of bm25Results) {
@@ -134,10 +144,17 @@ export class HybridRetriever {
       // Step 5: Score all candidates with hybrid formula
       // Normalize BM25 scores to [0,1] range using min-max normalization for fair fusion with vector scores
       const hybridResults: HybridSearchResult[] = [];
+      // One compile per keyword for the whole candidate set, not per candidate.
+      const keywordPatterns = KeywordRetriever.compileKeywordPatterns(keywords);
       for (const [key, { doc, vectorScore }] of candidateMap.entries()) {
         let keywordScore: number;
         const rawBm25 = bm25ScoreMap.get(key);
-        const lexicalScore = this.keywordRetriever.scoreDocument(doc.pageContent, keywords, options.keywordBoosting);
+        const lexicalScore = this.keywordRetriever.scoreDocument(
+          doc.pageContent,
+          keywords,
+          options.keywordBoosting,
+          keywordPatterns,
+        );
         if (rawBm25 !== undefined) {
           // BM25 can collapse to an all-zero score set for small corpora (for
           // example when IDF is non-positive). Preserve real literal-match

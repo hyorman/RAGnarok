@@ -116,24 +116,46 @@ export class KeywordRetriever {
   }
 
   /**
+   * Compile the per-keyword matchers {@link scoreDocument} uses.
+   *
+   * Callers that score many documents against one keyword set should compile
+   * once and pass the result in, instead of paying a regex compile per keyword
+   * per candidate. The returned patterns are `g`-flagged and only ever used
+   * with `String.prototype.match`, which resets `lastIndex`, so they are safe
+   * to reuse across documents.
+   */
+  public static compileKeywordPatterns(keywords: string[]): RegExp[] {
+    return keywords.map((keyword) => new RegExp(`\\b${keyword}\\b`, "gi"));
+  }
+
+  /**
    * Score a document against keywords using custom BM25-like scoring.
    * Uses log-scaled TF, length normalization, and optional position boosting.
+   *
+   * @param patterns - Optional pre-compiled matchers from
+   * {@link compileKeywordPatterns}, positionally aligned with `keywords`.
    */
-  public scoreDocument(text: string, keywords: string[], boosting: boolean = true): number {
+  public scoreDocument(
+    text: string,
+    keywords: string[],
+    boosting: boolean = true,
+    patterns?: readonly RegExp[],
+  ): number {
     if (keywords.length === 0) {
       return 0;
     }
 
+    const compiled = patterns ?? KeywordRetriever.compileKeywordPatterns(keywords);
     const textLower = text.toLowerCase();
     const textWords = textLower.split(/\s+/);
     const textLength = textWords.length;
 
     let score = 0;
 
-    for (const keyword of keywords) {
+    for (let index = 0; index < keywords.length; index++) {
+      const keyword = keywords[index];
       // Count occurrences
-      const regex = new RegExp(`\\b${keyword}\\b`, "gi");
-      const matches = textLower.match(regex);
+      const matches = textLower.match(compiled[index]);
       const termFrequency = matches ? matches.length : 0;
 
       if (termFrequency > 0) {
