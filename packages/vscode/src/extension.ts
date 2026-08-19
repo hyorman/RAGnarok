@@ -250,7 +250,7 @@ export async function activateWithServiceFactory(
     await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.LOADED, false);
 
     // Register Topics tree view
-    const treeDataProvider = new TopicTreeDataProvider(topicManager, embeddingService);
+    const treeDataProvider = new TopicTreeDataProvider(topicManager);
     const treeView = vscode.window.createTreeView(VIEWS.RAG_TOPICS, {
       treeDataProvider,
       showCollapseAll: true,

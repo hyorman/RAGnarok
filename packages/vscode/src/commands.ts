@@ -46,7 +46,6 @@ export class CommandHandler {
   private embeddingService: EmbeddingService;
   private memoryStore: MemoryStore;
   private treeDataProvider: TopicTreeDataProvider;
-  private configDataProvider: ConfigTreeDataProvider;
   private context: vscode.ExtensionContext;
   private tokenManager: GitHubTokenManager;
 
@@ -56,14 +55,12 @@ export class CommandHandler {
     embeddingService: EmbeddingService,
     memoryStore: MemoryStore,
     treeDataProvider: TopicTreeDataProvider,
-    configDataProvider: ConfigTreeDataProvider,
   ) {
     this.context = context;
     this.topicManager = topicManager;
     this.embeddingService = embeddingService;
     this.memoryStore = memoryStore;
     this.treeDataProvider = treeDataProvider;
-    this.configDataProvider = configDataProvider;
     this.tokenManager = GitHubTokenManager.getInstance();
   }
 
@@ -79,14 +76,7 @@ export class CommandHandler {
     configDataProvider: ConfigTreeDataProvider,
     operationRunner: ExtensionOperationRunner = async (_label, operation) => operation(new AbortController().signal),
   ): Promise<vscode.Disposable> {
-    const handler = new CommandHandler(
-      context,
-      topicManager,
-      embeddingService,
-      memoryStore,
-      treeDataProvider,
-      configDataProvider,
-    );
+    const handler = new CommandHandler(context, topicManager, embeddingService, memoryStore, treeDataProvider);
     const run = <T>(label: string, operation: (signal: AbortSignal) => Promise<T> | T): Promise<T> =>
       operationRunner(label, async (signal) => operation(signal));
 

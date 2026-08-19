@@ -75,13 +75,6 @@ export const VIEWS = {
 } as const;
 
 /**
- * Global state keys
- */
-export const STATE = {
-  HAS_SHOWN_WELCOME: "ragnarok.hasShownWelcome",
-} as const;
-
-/**
  * VS Code context keys
  */
 export const CONTEXT = {

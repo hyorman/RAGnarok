@@ -41,7 +41,6 @@ import { invokeGraphVisualizationTool } from "./graphVisualizationAdapter";
 import type { ToolRuntime } from "./toolRuntime";
 
 export type MutationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
-export type { ToolRuntime } from "./toolRuntime";
 
 export const MCP_LIMITS = Object.freeze({
   topicName: 200,

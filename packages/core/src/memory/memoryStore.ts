@@ -965,14 +965,6 @@ export class MemoryStore {
     return null;
   }
 
-  private async persistGraph(scope: MemoryScope, branch?: string): Promise<void> {
-    const key = this.scopeKey(scope, branch);
-    const graph = this.graphCache.get(key);
-    if (graph) {
-      await this.vectorStore.saveGraph(graph.toJSON(), scope, branch);
-    }
-  }
-
   private async persistEntries(scope: MemoryScope, branch?: string): Promise<void> {
     const key = this.scopeKey(scope, branch);
     const entries = this.entryCache.get(key);

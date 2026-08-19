@@ -344,18 +344,6 @@ export class MemoryVectorStore {
     await fs.unlink(journalPath);
   }
 
-  /**
-   * Drop a table if it exists. Persistence is drop-and-recreate, so an empty
-   * collection MUST drop the old table — skipping the write would leave stale
-   * rows on disk that resurrect after cache eviction or restart.
-   */
-  private async dropTableIfExists(db: Awaited<ReturnType<typeof connect>>, tableName: string): Promise<void> {
-    const tableNames = await db.tableNames();
-    if (tableNames.includes(tableName)) {
-      await db.dropTable(tableName);
-    }
-  }
-
   // ── Memory Entry CRUD ──────────────────────────────────────────────
 
   private async saveEntriesUnlocked(entries: MemoryEntry[], scope: MemoryScope, branch?: string): Promise<void> {

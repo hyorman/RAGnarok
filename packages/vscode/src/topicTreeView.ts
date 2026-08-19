@@ -29,12 +29,10 @@ export class TopicTreeDataProvider implements vscode.TreeDataProvider<TopicTreeI
   readonly onDidChangeTreeData: vscode.Event<TopicTreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
 
   private topicManager: TopicManager;
-  private embeddingService: EmbeddingService;
   private modelChangeSubscription: vscode.Disposable;
 
-  constructor(topicManager: TopicManager, embeddingService: EmbeddingService) {
+  constructor(topicManager: TopicManager) {
     this.topicManager = topicManager;
-    this.embeddingService = embeddingService;
 
     // Subscribe to model change events to auto-refresh the tree view
     const sub = EmbeddingService.onModelChanged.subscribe((newModel: string) => {

@@ -104,7 +104,6 @@ export class DocumentPipeline {
   private semanticChunker: SemanticChunker;
   private embeddingService: EmbeddingService;
   private vectorStoreFactory: VectorStoreFactory | null = null;
-  private config: IConfigProvider | undefined;
 
   constructor(
     private notifier: INotifier,
@@ -116,7 +115,6 @@ export class DocumentPipeline {
     this.documentLoader = new DocumentLoaderFactory();
     this.semanticChunker = new SemanticChunker(config);
     this.embeddingService = embeddingService;
-    this.config = config;
 
     this.logger.info("DocumentPipeline initialized");
   }
