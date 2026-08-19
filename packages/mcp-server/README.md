@@ -3,7 +3,7 @@
 MCP server exposing RAGnarōk tools to any MCP-compatible agent — Claude Desktop,
 Cursor, VS Code (via MCP client), CLI tools, and more.
 
-RAGnarok 0.7.0 serves MCP protocol `2026-07-28` only. Clients must use
+RAGnarok 0.4.0 serves MCP protocol `2026-07-28` only. Clients must use
 `server/discover` or modern version negotiation; legacy `initialize` is
 rejected and there is no compatibility mode.
 

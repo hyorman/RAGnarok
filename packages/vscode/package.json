@@ -1,6 +1,6 @@
 {
   "name": "@ragnarok/vscode",
-  "version": "0.7.0",
+  "version": "0.4.0",
   "description": "VS Code extension for RAGnarōk — wires @ragnarok/core to VS Code APIs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,7 @@
     "test": "echo 'VS Code extension tests must be run from root: npm test'"
   },
   "dependencies": {
-    "@ragnarok/core": "0.7.0"
+    "@ragnarok/core": "0.4.0"
   },
   "devDependencies": {
     "@types/vscode": "^1.105.0",

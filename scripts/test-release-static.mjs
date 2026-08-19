@@ -1183,7 +1183,14 @@ assert.equal(
 );
 assert.match(graphBundleSource, /data-ragnarok-graph-app/, "Generated graph app must retain its app marker");
 assert.match(graphBundleSource, /RAGnarok Graph/, "Generated graph app must retain the MCP app name marker");
-assert.match(graphBundleSource, /0\.6\.0/, "Generated graph app must retain the MCP app version marker");
+// Tracks the manifest rather than a literal: the previous hardcoded version
+// silently outlived two bumps, so the contract asserted a version the
+// repository no longer used anywhere.
+assert.match(
+  graphBundleSource,
+  new RegExp(graphUiPackage.version.replace(/\./g, "\\.")),
+  `Generated graph app must declare the graph UI package version (${graphUiPackage.version}) as its MCP app version marker`,
+);
 assertSingleGraphAppShell(graphBundleSource);
 for (const [name, mutated] of [
   ["duplicate html", `${graphBundleSource}<html>`],
