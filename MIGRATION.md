@@ -2,8 +2,13 @@
 
 ## 0.4.0 storage migration
 
-RAGnarōk 0.4 uses storage format v2. Existing 0.3 data must be migrated offline; startup never silently
-rewrites, resets, or discards an unversioned store.
+RAGnarōk 0.4 uses storage format v2. Existing 0.3 data must be converted before it can be opened.
+
+The VS Code extension converts a supported `v0.3-local` layout automatically on activation, without
+asking: conversion is staged, validated before cutover, and leaves the original tree as an immutable
+checksummed backup that `--rollback` restores, so there is nothing a prompt would have protected. Every
+other host — and every layout the automatic path does not accept — still fails closed and requires the
+CLI below. Nothing ever resets or discards a store; a reset is a separate, explicitly consented action.
 
 ## Supported source layouts
 
