@@ -534,7 +534,7 @@ contracts are in the [MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility
 
-Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty 0.3/unversioned storage fails closed and must be converted with the supported offline migrator; VS Code offers a preview before migration and never silently resets it. See [MIGRATION.md](MIGRATION.md). Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
+Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty 0.3/unversioned storage must be converted before it opens. VS Code converts a supported `v0.3-local` layout automatically on activation and reports where the immutable backup was kept; every other host and layout fails closed and must be converted with the supported offline migrator. Migration never resets or discards a store — a reset is a separate, explicitly consented action. See [MIGRATION.md](MIGRATION.md). Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
 
 **Single-writer constraint:** Only one process (VS Code window, MCP server
 instance, or CLI tool) may access a storage directory at a time. A second

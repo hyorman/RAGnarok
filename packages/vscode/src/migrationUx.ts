@@ -9,26 +9,23 @@ import {
   type TopicManager,
 } from "@ragnarok/core";
 
-export type MigrationChoice = "migrate" | "cancel";
-
 export interface MigrationUxDependencies {
   createTopicManager(): Promise<TopicManager>;
   plan(storageDir: string): Promise<StorageMigrationPlan>;
   status(storageDir: string, migrationId: string): ReturnType<typeof getStorageMigrationStatus>;
   apply(storageDir: string, options: { acceptedBackupPath: string; signal: AbortSignal }): Promise<MigrationReport>;
   resume(storageDir: string, migrationId: string): Promise<MigrationReport>;
-  choose(plan: StorageMigrationPlan, summary: string): Promise<MigrationChoice>;
   progress(resuming: boolean, task: (signal: AbortSignal) => Promise<void>): Promise<void>;
   showStorageFailure(message: string): Promise<void>;
-  showCancellation(message: string): Promise<void>;
+  showInformation(message: string): Promise<void>;
 }
 
 function migrationSummary(plan: StorageMigrationPlan): string {
   return (
-    `Legacy RAGnarōk 0.3 storage detected: ${plan.topics.length} topic(s), ` +
+    `Migrated legacy RAGnarōk 0.3 storage: ${plan.topics.length} topic(s), ` +
     `${plan.topics.reduce((sum, topic) => sum + topic.leafDocumentCount, 0)} document leaf/leaves, ` +
     `${plan.topics.reduce((sum, topic) => sum + topic.chunkCount, 0)} chunk(s). ` +
-    `Migration needs approximately ${plan.requiredBytes} bytes and preserves an immutable backup at ${plan.backupPath}.`
+    `The original storage is kept as an immutable backup at ${plan.backupPath}.`
   );
 }
 
@@ -50,17 +47,6 @@ export function createDefaultMigrationUx(createTopicManager: () => Promise<Topic
     status: getStorageMigrationStatus,
     apply: applyStorageMigration,
     resume: resumeStorageMigration,
-    choose: async (plan, summary) => {
-      let choice = await vscode.window.showWarningMessage(summary, { modal: true }, "Preview", "Migrate");
-      if (choice === "Preview") {
-        choice = await vscode.window.showInformationMessage(
-          `${summary}\n\n${plan.warnings.join("\n")}`,
-          { modal: true },
-          "Migrate",
-        );
-      }
-      return choice === "Migrate" ? "migrate" : "cancel";
-    },
     progress: async (resuming, task) => {
       await vscode.window.withProgress(
         {
@@ -87,15 +73,22 @@ export function createDefaultMigrationUx(createTopicManager: () => Promise<Topic
     showStorageFailure: async (message) => {
       await vscode.window.showErrorMessage(message, { modal: true });
     },
-    showCancellation: async (message) => {
+    showInformation: async (message) => {
       await vscode.window.showInformationMessage(message);
     },
   };
 }
 
 /**
- * Open storage, invoking the guided offline migrator only for a provable v0.3
- * local layout. Every other corruption/lock condition remains fail-closed.
+ * Open storage, converting a provable v0.3 local layout in place without asking.
+ * Every other corruption/lock condition remains fail-closed.
+ *
+ * Migration runs unattended because it is recoverable, not because it is
+ * trivial: conversion happens in a staging directory, is validated before
+ * cutover, and the original tree survives as an immutable checksummed backup
+ * that `ragnarok-migrate --rollback` restores. A prompt on every window open
+ * bought the user no safety they do not already have, and declining it left the
+ * extension unusable until the next reload.
  */
 export async function openTopicManagerWithMigration(
   storageDir: string,
@@ -138,12 +131,6 @@ export async function openTopicManagerWithMigration(
       throw new Error(`Legacy storage cannot be migrated automatically: ${unsupported}`);
     }
 
-    const summary = migrationSummary(plan);
-    if ((await dependencies.choose(plan, summary)) !== "migrate") {
-      await dependencies.showCancellation("RAGnarōk storage migration was cancelled. No data was changed.");
-      throw error;
-    }
-
     try {
       const status = await dependencies.status(storageDir, plan.migrationId);
       await dependencies.progress(Boolean(status.state), async (signal) => {
@@ -162,7 +149,7 @@ export async function openTopicManagerWithMigration(
         (migrationError instanceof Error && migrationError.name === "AbortError") ||
         (migrationError instanceof Error && migrationError.message.includes("cancelled before cutover"))
       ) {
-        await dependencies.showCancellation("RAGnarōk storage migration was cancelled before cutover.");
+        await dependencies.showInformation("RAGnarōk storage migration was cancelled before cutover.");
       } else {
         await dependencies.showStorageFailure(
           `RAGnarōk storage migration failed: ${
@@ -173,6 +160,9 @@ export async function openTopicManagerWithMigration(
       throw migrationError;
     }
 
+    // Unattended does not mean unannounced: the backup path is the user's only
+    // route back, so it is reported rather than left in the migration report.
+    await dependencies.showInformation(migrationSummary(plan));
     return dependencies.createTopicManager();
   }
 }

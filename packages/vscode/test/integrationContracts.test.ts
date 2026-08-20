@@ -52,10 +52,9 @@ function migrationDependencies(overrides: Partial<MigrationUxDependencies> = {})
     status: async () => ({ plan: legacyPlan() }),
     apply: async () => ({}) as any,
     resume: async () => ({}) as any,
-    choose: async () => "migrate",
     progress: async (_resuming, task) => task(new AbortController().signal),
     showStorageFailure: async () => undefined,
-    showCancellation: async () => undefined,
+    showInformation: async () => undefined,
     ...overrides,
   };
 }
@@ -202,7 +201,7 @@ describe("VS Code contribution and tree contracts", function () {
   });
 });
 
-describe("guided VS Code storage migration UX", function () {
+describe("automatic VS Code storage migration", function () {
   it("applies a previewed migration and opens the converted manager", async function () {
     let appliedSignal: AbortSignal | undefined;
     const dependencies = migrationDependencies({
@@ -235,27 +234,25 @@ describe("guided VS Code storage migration UX", function () {
     expect(applied).to.equal(0);
   });
 
-  it("leaves storage untouched when the user cancels", async function () {
+  it("converts a legacy store without asking and reports where the backup went", async function () {
     let applied = 0;
-    let cancellationMessage = "";
+    const messages: string[] = [];
     const dependencies = migrationDependencies({
-      choose: async () => "cancel",
       apply: async () => {
         applied++;
         return {} as any;
       },
-      showCancellation: async (message) => {
-        cancellationMessage = message;
+      showInformation: async (message) => {
+        messages.push(message);
       },
     });
-    try {
-      await openTopicManagerWithMigration("/legacy", dependencies);
-      expect.fail("expected cancellation");
-    } catch (error) {
-      expect((error as Error).message).to.include("unversioned");
-    }
-    expect(applied).to.equal(0);
-    expect(cancellationMessage).to.include("No data was changed");
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(applied).to.equal(1);
+    // The backup path is the only route back from an unattended migration.
+    expect(messages).to.have.lengthOf(1);
+    expect(messages[0]).to.include("/backup");
   });
 
   it("reports corrupt storage and two-window lease failures without planning", async function () {
@@ -300,7 +297,7 @@ describe("guided VS Code storage migration UX", function () {
         showStorageFailure: async (message) => {
           errorMessage = message;
         },
-        showCancellation: async (message) => {
+        showInformation: async (message) => {
           cancellationMessage = message;
         },
       });
