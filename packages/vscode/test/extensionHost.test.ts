@@ -170,6 +170,53 @@ describe("real VS Code extension host activation", function () {
     ]);
   });
 
+  // Without this the views keep "RAGnarōk is starting up..." forever, so a
+  // storage failure is indistinguishable from a slow start.
+  it("publishes the activation-failed context key instead of leaving the views mid-start", async function () {
+    const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-activation-failed-"));
+    const contexts: Array<[string, unknown]> = [];
+    const executeCommand = sinon
+      .stub(vscode.commands, "executeCommand")
+      .callsFake(async (command: string, ...args: unknown[]) => {
+        if (command === COMMANDS.SET_CONTEXT) {
+          contexts.push([args[0] as string, args[1]]);
+        }
+        return undefined as never;
+      });
+    const serviceFactory = {
+      createEmbeddingService: () => ({ registerBackend: sinon.spy(), dispose: async () => undefined }),
+      createTopicManager: async () => {
+        throw new Error("storage could not be opened");
+      },
+      createMemoryStore: () => ({ dispose: async () => undefined }),
+      createMemoryCoordinator: () => ({ stopAdmission: () => undefined, drain: async () => undefined }),
+      createMemoryService: () => ({ execute: sinon.stub(), reset: sinon.stub() }),
+      createGraphVisualizationService: () => ({ generate: sinon.stub() }),
+    };
+    const context = {
+      globalStorageUri: vscode.Uri.file(storageDir),
+      extensionUri: vscode.Uri.file("/extension"),
+      subscriptions: [],
+    };
+
+    let caught: unknown;
+    try {
+      await activateWithServiceFactory(context as any, serviceFactory as any);
+    } catch (error) {
+      caught = error;
+    } finally {
+      executeCommand.restore();
+      await fs.rm(storageDir, { recursive: true, force: true });
+    }
+
+    // The failure still propagates: this reports the state, it does not swallow it.
+    expect(caught).to.be.instanceOf(Error);
+    const failedStates = contexts.filter(([key]) => key === "ragnarok.activationFailed").map(([, value]) => value);
+    // Cleared on entry so a retry does not inherit the previous panel, set on failure.
+    expect(failedStates).to.deep.equal([false, true]);
+    expect(contexts.some(([key, value]) => key === "ragnarok.loaded" && value === true)).to.equal(false);
+  });
+
   it("offers an opt-in native create/query/delete installed-artifact smoke", async function () {
     if (process.env.RAGNAROK_RUN_INSTALLED_SMOKE !== "1") {
       this.skip();

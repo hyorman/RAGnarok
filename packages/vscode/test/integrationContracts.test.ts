@@ -201,6 +201,30 @@ describe("VS Code contribution and tree contracts", function () {
   });
 });
 
+describe("activation failure surface", function () {
+  // A welcome entry with no `when`, or a stale one that still matches, renders
+  // alongside the failure panel and contradicts it. The compiler sees none of
+  // this, so the mutual exclusivity is asserted here.
+  it("gives every view a failure panel and gates the optimistic entries behind it", async function () {
+    const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+    const welcome = manifest.contributes.viewsWelcome;
+
+    for (const view of [VIEWS.RAG_TOPICS, VIEWS.RAG_MEMORY]) {
+      const entries = welcome.filter((entry: any) => entry.view === view);
+      const failure = entries.filter((entry: any) => entry.when === "ragnarok.activationFailed");
+      expect(failure, `${view} needs exactly one activation-failure panel`).to.have.lengthOf(1);
+      expect(failure[0].contents).to.include("command:workbench.action.reloadWindow");
+      expect(failure[0].contents).to.include("was not changed");
+
+      for (const entry of entries.filter((candidate: any) => candidate !== failure[0])) {
+        expect(entry.when, `${view} entry "${entry.contents.slice(0, 24)}" must yield to the failure panel`).to.include(
+          "!ragnarok.activationFailed",
+        );
+      }
+    }
+  });
+});
+
 describe("automatic VS Code storage migration", function () {
   it("applies a previewed migration and opens the converted manager", async function () {
     let appliedSignal: AbortSignal | undefined;

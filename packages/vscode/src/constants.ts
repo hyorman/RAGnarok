@@ -80,6 +80,12 @@ export const VIEWS = {
 export const CONTEXT = {
   LOADED: "ragnarok.loaded",
   HAS_TOPICS: "ragnarok.hasTopics",
+  /**
+   * Activation failed before any view could be populated. Without it the views
+   * keep the pre-activation welcome text — "RAGnarōk is starting up..." — which
+   * never resolves, so a failed start is indistinguishable from a slow one.
+   */
+  ACTIVATION_FAILED: "ragnarok.activationFailed",
 } as const;
 
 /**
