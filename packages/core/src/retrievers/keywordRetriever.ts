@@ -1,0 +1,208 @@
+/**
+ * KeywordRetriever - Unified keyword-based search module
+ *
+ * Combines BM25 retrieval (via LangChain) with custom TF-based keyword scoring.
+ * Used as a building block by HybridRetriever, and directly for the pure
+ * BM25 retrieval strategy.
+ */
+
+import { Document as LangChainDocument } from "@langchain/core/documents";
+import { BM25Retriever } from "@langchain/community/retrievers/bm25";
+import { Logger } from "../logger";
+
+export interface KeywordSearchResult {
+  document: LangChainDocument;
+  /** Query-local BM25 score normalized into [0, 1]. */
+  score: number;
+  scoreKind: "bm25_normalized";
+  componentScores: { keyword: number };
+  /** Provider BM25 value retained for diagnostics, never used for cross-strategy fusion. */
+  rawScore: number;
+}
+
+/**
+ * Keyword retriever for BM25 search and custom keyword scoring
+ */
+export class KeywordRetriever {
+  private logger: Logger;
+  private bm25Retriever?: BM25Retriever;
+  private documents: LangChainDocument[] = [];
+
+  constructor() {
+    this.logger = new Logger("KeywordRetriever");
+  }
+
+  /**
+   * Initialize the BM25 retriever with documents.
+   * All documents must be loaded in memory for BM25 to work.
+   */
+  public async initialize(documents: LangChainDocument[]): Promise<void> {
+    this.logger.info("Initializing keyword retriever", { documentCount: documents.length });
+
+    if (!documents || documents.length === 0) {
+      throw new Error("KeywordRetriever requires documents to initialize");
+    }
+
+    this.documents = documents;
+    this.bm25Retriever = BM25Retriever.fromDocuments(this.documents, {
+      k: 100,
+      includeScore: true,
+    });
+
+    this.logger.info("Keyword retriever initialized", {
+      documentCount: this.documents.length,
+    });
+  }
+
+  /**
+   * Perform BM25 keyword search (ranked retrieval).
+   * Returns documents ordered by BM25 relevance.
+   */
+  public async search(query: string, k: number): Promise<KeywordSearchResult[]> {
+    if (!this.bm25Retriever) {
+      throw new Error("KeywordRetriever not initialized. Call initialize() first.");
+    }
+    if (!Number.isInteger(k) || k < 1) {
+      throw new Error("BM25 k must be a positive integer");
+    }
+
+    const startTime = Date.now();
+
+    this.logger.info("Starting BM25 search", {
+      query: query.substring(0, 100),
+      k,
+    });
+
+    try {
+      const results = await this.bm25Retriever.invoke(query);
+      const limitedResults = results.slice(0, k);
+      const rawScores = limitedResults.map((doc) => {
+        const value = Number(doc.metadata?.bm25Score);
+        return Number.isFinite(value) ? value : 0;
+      });
+      const minScore = rawScores.length > 0 ? Math.min(...rawScores) : 0;
+      const maxScore = rawScores.length > 0 ? Math.max(...rawScores) : 0;
+      const range = maxScore - minScore;
+      const searchTime = Date.now() - startTime;
+
+      this.logger.info("BM25 search complete", {
+        resultCount: limitedResults.length,
+        searchTime,
+      });
+
+      return limitedResults.map((doc: LangChainDocument, index: number) => {
+        const rawScore = rawScores[index];
+        // Strip bm25Score from metadata to avoid polluting downstream ID hashing
+        if (doc.metadata?.bm25Score !== undefined) {
+          const { bm25Score: _, ...cleanMeta } = doc.metadata;
+          doc.metadata = cleanMeta;
+        }
+        const score = range > 0 ? (rawScore - minScore) / range : maxScore > 0 ? 1 : 0;
+        return {
+          document: doc,
+          score,
+          scoreKind: "bm25_normalized",
+          componentScores: { keyword: score },
+          rawScore,
+        };
+      });
+    } catch (error) {
+      this.logger.error("BM25 search failed", {
+        error: error instanceof Error ? error.message : String(error),
+        query: query.substring(0, 100),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Compile the per-keyword matchers {@link scoreDocument} uses.
+   *
+   * Callers that score many documents against one keyword set should compile
+   * once and pass the result in, instead of paying a regex compile per keyword
+   * per candidate. The returned patterns are `g`-flagged and only ever used
+   * with `String.prototype.match`, which resets `lastIndex`, so they are safe
+   * to reuse across documents.
+   */
+  public static compileKeywordPatterns(keywords: string[]): RegExp[] {
+    return keywords.map((keyword) => new RegExp(`\\b${keyword}\\b`, "gi"));
+  }
+
+  /**
+   * Score a document against keywords using custom BM25-like scoring.
+   * Uses log-scaled TF, length normalization, and optional position boosting.
+   *
+   * @param patterns - Optional pre-compiled matchers from
+   * {@link compileKeywordPatterns}, positionally aligned with `keywords`.
+   */
+  public scoreDocument(
+    text: string,
+    keywords: string[],
+    boosting: boolean = true,
+    patterns?: readonly RegExp[],
+  ): number {
+    if (keywords.length === 0) {
+      return 0;
+    }
+
+    const compiled = patterns ?? KeywordRetriever.compileKeywordPatterns(keywords);
+    const textLower = text.toLowerCase();
+    const textWords = textLower.split(/\s+/);
+    const textLength = textWords.length;
+
+    let score = 0;
+
+    for (let index = 0; index < keywords.length; index++) {
+      const keyword = keywords[index];
+      // Count occurrences
+      const matches = textLower.match(compiled[index]);
+      const termFrequency = matches ? matches.length : 0;
+
+      if (termFrequency > 0) {
+        // TF component: log-scaled term frequency
+        const tfScore = Math.log(1 + termFrequency);
+
+        // Length normalization (penalize very long documents)
+        const lengthNorm = 1 / (1 + Math.log(1 + textLength / 100));
+
+        // Position boosting (keyword near start of document is weighted more)
+        let positionBoost = 1;
+        if (boosting) {
+          const firstOccurrence = textLower.indexOf(keyword);
+          if (firstOccurrence >= 0) {
+            positionBoost = 1 + (1 - firstOccurrence / textLength);
+          }
+        }
+
+        score += Math.min(1.0, tfScore * lengthNorm * positionBoost);
+      }
+    }
+
+    // Normalize by number of keywords (0-1 range)
+    return Math.min(1.0, score / keywords.length);
+  }
+
+  /**
+   * Check if the retriever is initialized with documents
+   */
+  public isInitialized(): boolean {
+    return this.bm25Retriever !== undefined;
+  }
+
+  /**
+   * Get the number of indexed documents
+   */
+  public getDocumentCount(): number {
+    return this.documents.length;
+  }
+
+  /**
+   * Refresh with new documents
+   */
+  public async refresh(documents: LangChainDocument[]): Promise<void> {
+    this.logger.info("Refreshing keyword retriever");
+    this.bm25Retriever = undefined;
+    this.documents = [];
+    await this.initialize(documents);
+  }
+}

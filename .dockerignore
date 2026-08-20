@@ -1,0 +1,39 @@
+# Deny development and generated content from the MCP image context.
+.git
+.github
+.vscode
+.vscode-test
+.vsce-staging-*
+node_modules
+**/node_modules
+dist
+**/dist
+out
+dist-test
+**/dist-test
+*.tsbuildinfo
+**/*.tsbuildinfo
+coverage
+test
+**/test
+*.vsix
+*.tgz
+*.log
+.env
+.env.*
+.docker-tls-*
+chunk-output
+DELIVERY-REMEDIATION-PLAN.md
+
+# The root lock and all three workspace manifests are explicit Docker inputs.
+# VS Code implementation files are not.
+packages/vscode/**
+!packages/vscode/package.json
+
+# Documentation is excluded except supply-chain metadata copied by Dockerfile.
+*.md
+**/*.md
+!NOTICE
+!THIRD_PARTY_MODELS.md
+!bom.cdx.json
+!bom.spdx.json

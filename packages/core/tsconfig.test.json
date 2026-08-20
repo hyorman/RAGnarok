@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "rootDir": ".",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["mocha", "node", "chai"]
+  },
+  "include": ["src/**/*", "test/**/*", "benchmarks/**/*"],
+  "exclude": ["node_modules", "dist", "dist-test"]
+}

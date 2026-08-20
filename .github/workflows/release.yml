@@ -1,0 +1,370 @@
+name: Release gates
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ${{ github.sha }}
+  NODE_OPTIONS: --enable-source-maps
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run test:release-static
+      - run: npm run test:fast
+
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            gate: linux
+          - os: macos-13
+            gate: macos
+          - os: windows-2022
+            gate: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npm run compile:tests:all
+      - run: npm run test:core:compiled
+      - run: npm run test:mcp:compiled
+      - run: npm run test:shutdown-soak
+
+  vscode-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: xvfb-run -a npm test
+
+  supply-chain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/audit-gate.mjs
+      - run: node scripts/check-licenses.mjs
+      - run: node scripts/check-secrets.mjs
+      - run: npm run verify:models
+      - run: npm run sbom:generate
+      - run: git diff --exit-code -- bom.cdx.json bom.spdx.json
+
+  benchmarks:
+    needs: artifact-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: benchmark-artifacts
+      - run: npm ci
+      - run: node scripts/verify-artifact-digests.mjs benchmark-artifacts/artifact-sha256.txt benchmark-artifacts
+      - run: npm run bench:acquire
+      - run: npm run bench:release
+        env:
+          RAGNAROK_BENCHMARK_RESULTS: benchmark-results/release-${{ github.sha }}.json
+          RAGNAROK_RELEASE_ARTIFACT_DIR: benchmark-artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: benchmark-results/*.json
+          if-no-files-found: error
+
+  artifact-build:
+    needs: [quality, native, vscode-tests, supply-chain]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm pack --workspace=@ragnarok/core --workspace=@ragnarok/mcp-server --pack-destination .
+      - run: node scripts/pack-smoke.mjs --artifacts=.
+      - run: npm run package
+      - run: npm run release:assets
+      - run: docker buildx build --tag ragnarok-mcp:ci --file packages/mcp-server/Dockerfile --output type=oci,dest=ragnarok-mcp.oci.tar .
+      - run: sha256sum *.tgz *.vsix ragnarok-mcp.oci.tar > artifact-sha256.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: |
+            *.tgz
+            *.vsix
+            ragnarok-mcp.oci.tar
+            artifact-sha256.txt
+            bom.cdx.json
+            bom.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  vsix-installed:
+    needs: artifact-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-24.04
+            cli: code
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            cli: code
+          - target: darwin-x64
+            os: macos-13
+            cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
+          - target: darwin-arm64
+            os: macos-14
+            cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
+          - target: win32-x64
+            os: windows-2022
+            cli: code.cmd
+          - target: win32-arm64
+            os: windows-11-arm
+            cli: code.cmd
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: artifacts
+      - run: npm ci
+      - run: node scripts/verify-artifact-digests.mjs artifacts/artifact-sha256.txt artifacts
+      - run: node scripts/vsix-smoke.mjs artifacts/*-${{ matrix.target }}.vsix
+        env:
+          VSCODE_CLI: ${{ matrix.cli }}
+
+  vscode-minimum:
+    needs: artifact-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: artifacts
+      - run: npm ci
+      - run: node scripts/vsix-smoke.mjs artifacts/*-linux-x64.vsix
+        env:
+          VSCODE_VERSION: 1.105.0
+
+  docker-smoke:
+    needs: artifact-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: artifacts
+      - run: npm ci
+      - run: node scripts/verify-artifact-digests.mjs artifacts/artifact-sha256.txt artifacts
+      - run: docker load --input artifacts/ragnarok-mcp.oci.tar
+      - run: node scripts/docker-gate.mjs
+
+  release-gate:
+    if: always()
+    needs:
+      [
+        quality,
+        native,
+        vscode-tests,
+        supply-chain,
+        benchmarks,
+        artifact-build,
+        vsix-installed,
+        vscode-minimum,
+        docker-smoke,
+      ]
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          test '${{ needs.quality.result }}' = success
+          test '${{ needs.native.result }}' = success
+          test '${{ needs.vscode-tests.result }}' = success
+          test '${{ needs.supply-chain.result }}' = success
+          test '${{ needs.benchmarks.result }}' = success
+          test '${{ needs.artifact-build.result }}' = success
+          test '${{ needs.vsix-installed.result }}' = success
+          test '${{ needs.vscode-minimum.result }}' = success
+          test '${{ needs.docker-smoke.result }}' = success
+
+  manifest:
+    if: github.ref_type == 'tag' && github.ref_protected == true && github.event_name != 'pull_request'
+    needs: [release-gate, artifact-build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: artifacts/evidence
+      - run: npm ci
+      - run: node scripts/create-release-manifest.mjs artifacts
+        env:
+          GITHUB_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: |
+            artifacts/*.tgz
+            artifacts/*.vsix
+            artifacts/ragnarok-mcp.oci.tar
+            artifacts/bom.cdx.json
+            artifacts/bom.spdx.json
+            artifacts/evidence/*.json
+            release-manifest.json
+            release-provenance.json
+      - run: node scripts/download-release-attestation.mjs release-manifest.json release-manifest.attestation.jsonl
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: |
+            release-manifest.json
+            release-provenance.json
+            release-manifest.attestation.jsonl
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag' && github.ref_protected == true && github.event_name != 'pull_request'
+    needs: manifest
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      attestations: read
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: artifacts/evidence
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: .
+      - run: npm ci
+      - run: node scripts/verify-artifact-digests.mjs artifacts/artifact-sha256.txt artifacts
+      - run: npm run release:verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: docker login ghcr.io --username "${{ github.actor }}" --password-stdin <<< "$DOCKER_PASSWORD"
+        env:
+          DOCKER_PASSWORD: ${{ github.token }}
+        shell: bash
+        # Keep the token out of argv and logs.
+      - run: npm run publish:all
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: release-publication-journal-${{ github.sha }}
+          path: release-publication-journal.json
+          if-no-files-found: warn

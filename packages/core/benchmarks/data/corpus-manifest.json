@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "seed": 1729,
+  "rankingContract": "squared-l2-unit-cosine-v1",
+  "model": {
+    "id": "Xenova/all-MiniLM-L6-v2",
+    "revision": "751bff37182d3f1213fa05d7196b954e230abad9",
+    "sha256": "759c3cd2b7fe7e93933ad23c4c9181b7396442a2ed746ec7c1d46192c469c46e",
+    "license": "Apache-2.0"
+  },
+  "corpora": [
+    {
+      "id": "ragnarok-eval-v1",
+      "source": "packages/core/test/helpers/evalCorpus.ts",
+      "revision": "repository-commit",
+      "sha256": "1ed6bded21566dd0dcf41446a6f3063b7a22274f024a56f23862355334e12a8d",
+      "license": "MIT"
+    },
+    {
+      "id": "beir-scifact-test",
+      "source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+      "revision": "cached-extracted-files-v1",
+      "license": "CC-BY-4.0",
+      "files": {
+        "corpus.jsonl": "dec31c8182f3d744c7d2c09423756fd1d17cbef75808db13ba01cc0aab4d1ac6",
+        "queries.jsonl": "8ff84a7c903f722981cd8d595c022660140c51867b27608a6d4910db86080313",
+        "qrels/test.tsv": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c"
+      }
+    },
+    {
+      "id": "google-frames-test",
+      "source": "https://huggingface.co/datasets/google/frames-benchmark/resolve/main/test.tsv",
+      "revision": "test.tsv-cached-v1",
+      "sha256": "4255093c93b595b5b04c7c8dde290b48ec87d72ca0fb0b760d9dd02740d669ff",
+      "sampleArticleCount": 35,
+      "sampleArticlesSha256": "f6cd207782d04ae3918a1f652d5bf5cfd75cffba0606825a89d2898c963f9616",
+      "license": "CC-BY-4.0"
+    }
+  ],
+  "config": {
+    "k": 5,
+    "beirSampleSize": 10,
+    "framesSampleSize": 10,
+    "rerankSampleSize": 10,
+    "strategies": ["vector", "hybrid", "bm25", "rerank"]
+  }
+}

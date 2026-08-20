@@ -1,0 +1,59 @@
+{
+  "name": "@ragnarok/mcp-server",
+  "version": "0.4.0",
+  "description": "MCP server exposing RAGnarōk tools to any MCP-compatible agent",
+  "main": "dist/index.js",
+  "bin": {
+    "ragnarok-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "NOTICE",
+    "THIRD_PARTY_MODELS.md",
+    "bom.cdx.json",
+    "bom.spdx.json"
+  ],
+  "scripts": {
+    "build": "npm run build:ui && tsc -p ./",
+    "build:ui": "npm run build --workspace=@ragnarok/graph-ui",
+    "lint": "eslint src test",
+    "lint:fix": "eslint --fix src test",
+    "clean": "rimraf dist dist-test tsconfig.tsbuildinfo",
+    "clean:all": "rimraf dist dist-test node_modules tsconfig.tsbuildinfo",
+    "clean:tests": "rimraf dist-test",
+    "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
+    "pretest": "npm run build && npm run compile:tests",
+    "test": "mocha",
+    "start": "node dist/index.js",
+    "prepack": "node ../../scripts/prepare-package-metadata.mjs && npm run clean && npm run build",
+    "release": "npm --prefix ../.. run publish:npm",
+    "docker:build": "docker build -f Dockerfile -t ragnarok-mcp ../../",
+    "docker:push": "npm --prefix ../.. run publish:docker"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.39.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@ragnarok/core": "0.4.0",
+    "openai": "4.104.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
+    "@types/sinon": "^21.0.0",
+    "adm-zip": "0.6.0",
+    "chai": "^5.1.2",
+    "mocha": "^11.0.1",
+    "rimraf": "^6.0.1",
+    "sinon": "^21.0.2",
+    "typescript": "^5.9.3"
+  }
+}

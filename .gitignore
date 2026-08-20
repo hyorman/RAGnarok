@@ -1,10 +1,13 @@
 # Compiled output
 out/
 dist/
+dist-test/
 *.js
 !esbuild.js
+!media/memoryGraph.js
 *.js.map
-!test/fixtures/**
+*.tsbuildinfo
+!packages/core/test/fixtures/**
 !scripts/**
 
 # Dependencies
@@ -24,14 +27,36 @@ node_modules/
 
 # npm
 npm-debug.log*
-package-lock.json
+
+# Local working notes and agent process artifacts (never committed)
+notes/
+docs/superpowers/
+.superpowers/
+.playwright-mcp/
 
 # Test artifacts
 coverage/
 .nyc_output/
-test/chunk-output/
-test/.temp-storage/
+packages/core/test/chunk-output/
+
+benchmark-results/
+release-manifest.json
+release-provenance.json
+release-manifest.attestation.jsonl
+release-publication-journal.json
 
 # Environment
 .env
 .env.local
+.docker-tls-*
+.vsce-staging-*/
+
+# Generated package metadata (canonical copies live at repository root)
+packages/core/NOTICE
+packages/core/THIRD_PARTY_MODELS.md
+packages/core/bom.cdx.json
+packages/core/bom.spdx.json
+packages/mcp-server/NOTICE
+packages/mcp-server/THIRD_PARTY_MODELS.md
+packages/mcp-server/bom.cdx.json
+packages/mcp-server/bom.spdx.json

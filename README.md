@@ -35,22 +35,25 @@ Why install?
 
 RAGnarōk supports multiple embedding providers via a pluggable backend system:
 
-| Mode | Setting value | Description |
-|------|--------------|-------------|
-| **Auto** | `auto` (default) | Tries VS Code LM embeddings first; falls back to HuggingFace when unavailable |
-| **VS Code LM** | `vscodeLM` | Uses the proposed `vscode.lm.computeEmbeddings` API (requires a registered provider such as GitHub Copilot) |
-| **HuggingFace** | `huggingface` | Local Transformers.js ONNX/WASM inference — fully offline, no external services |
+| Mode            | Setting value    | Description                                                                                                 |
+| --------------- | ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Auto**        | `auto` (default) | Tries registered backends in order; uses first available                                                    |
+| **VS Code LM**  | `vscodeLM`       | Uses the proposed `vscode.lm.computeEmbeddings` API (requires a registered provider such as GitHub Copilot) |
+| **HuggingFace** | `huggingface`    | Local Transformers.js ONNX/WASM inference — fully offline, no external services                             |
+| **Remote**      | `remote`         | OpenAI or Ollama-compatible embedding API (MCP server only)                                                 |
 
 **Configuration:**
-- `ragnarok.embeddingBackend` — select `auto`, `vscodeLM`, or `huggingface`
+
+- `ragnarok.embeddingBackend` — select `auto`, `vscodeLM`, `huggingface`, or any registered backend name
 - `ragnarok.embeddingVscodeModelId` — (optional) specific VS Code LM model ID; leave blank to auto-select
 
 **Prerequisites for VS Code LM embeddings:**
+
 - VS Code Insiders (or any build that supports the proposed embeddings API)
 - `"enabledApiProposals": ["embeddings"]` in the extension manifest (already configured)
 - An embeddings provider registered at runtime (e.g., GitHub Copilot with embeddings support)
 
-> ⚠️ **Known limitation:** The `vscode.lm.computeEmbeddings` API is a *proposed API* and may not be available on stable VS Code builds. When using `auto` mode, the extension shows user-visible warning/info notifications and falls back to HuggingFace if the API is unavailable.
+> ⚠️ **Known limitation:** The `vscode.lm.computeEmbeddings` API is a _proposed API_ and may not be available on stable VS Code builds. When using `auto` mode, the extension shows user-visible warning/info notifications and falls back to HuggingFace if the API is unavailable.
 
 ### 🔧 Enable VS Code LM embeddings (proposed API)
 
@@ -61,11 +64,12 @@ You can also add the same flag as a runtime argument in your VS Code.
 
 ```json
 {
-    "enable-proposed-api": ["hyorman.ragnarok"],
+  "enable-proposed-api": ["hyorman.ragnarok"]
 }
 ```
 
 Notes:
+
 - If you run VS Code remotely (WSL/Containers), run the `code`/`code-insiders` command on the host where the Extension Host will run.
 - After enabling proposed APIs restart the Extension Development Host.
 - A proposed API requires a runtime provider (e.g., GitHub Copilot) — ensure the provider is installed and active.
@@ -73,17 +77,17 @@ Notes:
 ### 🧠 **Agentic RAG with Query Planning**
 
 - **Intelligent Query Decomposition**: Automatically breaks complex queries into sub-queries
--- **LLM-Powered Planning**: Uses Copilot (VS Code LM API) models such as `gpt-4o` for advanced reasoning (Copilot required; no external API key). LLM usage is optional
+  -- **LLM-Powered Planning**: Uses Copilot (VS Code LM API) models such as `gpt-4o` for advanced reasoning (Copilot required; no external API key). LLM usage is optional
 - **Heuristic Fallback**: Works without LLM using rule-based planning
 - **Iterative Refinement**: Confidence-based iteration for high-quality results
 - **Parallel/Sequential Execution**: Smart execution strategy based on query complexity
 
 ### 🔍 **Multiple Retrieval Strategies**
 
-- **Hybrid Search** (recommended): Combines vector + keyword (70%/30% weights, configurable)
+- **Hybrid Search** (recommended): Combines vector + keyword (90%/10% weights, configurable)
 - **Vector Search**: Pure semantic similarity using embeddings
-- **Ensemble Search**: Advanced RRF (Reciprocal Rank Fusion) with BM25 for highest accuracy
 - **BM25 Search**: Pure keyword search using Okapi BM25 algorithm (no embeddings needed)
+- **Cross-Encoder Reranking**: Optional second-stage reranking over any strategy's candidates
 - **Position Boosting**: Keywords near document start weighted higher
 - **Result Explanations**: Human-readable scoring breakdown for all strategies
 
@@ -119,6 +123,43 @@ Notes:
 - **Error Handling**: Robust error recovery throughout
 - **Async-Safe**: Mutex locks prevent race conditions
 - **Configurable**: 15+ settings for customization
+
+### 🧠 **Standalone Memory Module**
+
+- **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing or automatic migration.
+- **Native VS Code Tools**: the extension contributes exactly three language-model tools — `ragQuery` to search a topic, `ragTopic` to list topics or inspect one topic's statistics and documents, and `ragMemory` for scoped memory operations. `ragQuery` and `ragTopic` are read-only. `ragMemory` stores, recalls, and forgets individual memories, but it has no reset action: wiping memory outright is **Reset Memory** in the RAG sidebar's **Memory** section, behind a modal confirmation, just as creating, renaming, exporting, importing, and deleting topics are sidebar actions. The three tools' input schemas are generated from the canonical JSON Schema contracts in `@ragnarok/core` by `npm run tools:manifest` and drift-checked by `npm run tools:manifest:check`.
+- **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
+- **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
+- **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
+- **LLM-Powered Entity Extraction**: Optionally extracts entities (facts, preferences, concepts, tools, conventions) from stored memories; the graph stays empty when no LLM provider is configured
+- **Markdown Export**: Automatically generates a `memories.md` file summarizing stored memories for human review
+- **MCP Integration**: Exposed as the `rag_memory` tool with store, recall, forget, stats, list, decay, history, promote, link, and community operations. `communities` clusters the memory entity graph and requires an LLM provider — without one the tool says so instead of returning an empty result. Memory TTL is supported; reserved `auto:` memories are hidden unless explicitly requested. Memory is written and recalled only through explicit `rag_memory` calls — there is no automatic query-time recall or write-back.
+
+#### Memory graph visualization
+
+Graphs exist only in the memory subsystem. There is no document knowledge
+graph, no entity extraction over ingested documents, and no `graph` or
+`graph_hybrid` retrieval strategy.
+
+The `rag_memory_visualize` tool exports the local user's own memory graph. It
+accepts exactly
+`{ source: "memory", memoryScope: "workspace", maxNodes? }` or
+`{ source: "memory", memoryScope: "branch", branch, maxNodes? }` and returns the
+deterministic `ragnarok.graph.visualization.v1` document. The default is 500
+nodes, the accepted range is 1 through 2,000, and output is capped at 10,000
+edges and the MCP response-byte limit. Failures surface as
+`GRAPH_VISUALIZATION_RECORD_TOO_LARGE` or `GRAPH_VISUALIZATION_FAILED`; an empty
+or unknown scope returns an empty document rather than fabricated data.
+
+Documents include full persisted node/edge descriptions, provenance,
+confidence, scope/branch fields, and arbitrary metadata, but never embedding
+vectors. In VS Code, run **RAGnarok: Show Memory Graph** to choose workspace or
+current-branch memory and open the interactive command webview. MCP Apps hosts
+instead load the self-contained `ui://ragnarok/graph` resource as
+`text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. Both surfaces use
+the shared renderer and deterministic graph document, but each reads its own
+host's storage. There is no cross-host data sharing. See the
+[MCP server graph contract](packages/mcp-server/README.md#memory-graph-visualization).
 
 ---
 
@@ -232,6 +273,7 @@ Cmd/Ctrl+Shift+P → RAG: Export Topic
 ```
 
 Or select a topic in the tree view and select the export icon. This creates a portable archive containing:
+
 - Topic metadata (name, description)
 - Vector embeddings and documents
 - Model configuration
@@ -354,7 +396,7 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   // Chunk overlap for context preservation
   "ragnarok.chunkOverlap": 50,
 
-  // Retrieval strategy: hybrid, vector, ensemble, bm25
+  // Retrieval strategy: vector, hybrid, bm25
   "ragnarok.retrievalStrategy": "hybrid",
 
   // Path to shared/common RAG database (read-only topics)
@@ -400,6 +442,123 @@ Any models you place under `ragnarok.localModelPath` show up in the tree view al
 - `gpt-4o` (default) - Most intelligent
 - `gpt-4o-mini` - Faster, still capable
 - `gpt-3.5-turbo` - Fastest, most economical
+
+---
+
+## 📦 Project Structure
+
+RAGnarōk is organized as an **npm workspaces monorepo** with four packages:
+
+```
+copilot-rag/
+├── packages/
+│   ├── core/          # @ragnarok/core — portable RAG engine (no VS Code dependency)
+│   ├── graph-ui/      # @ragnarok/graph-ui — private shared graph renderer/build
+│   ├── vscode/        # @ragnarok/vscode — VS Code extension adapters and UI
+│   └── mcp-server/    # @ragnarok/mcp-server — MCP server for CLI/TUI/GUI agents
+├── test/              # VS Code extension test infrastructure and fixtures
+├── assets/            # Extension icon and bundled embedding models
+└── scripts/           # Build and packaging helpers
+```
+
+| Package                    | Description                                                                                                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`@ragnarok/core`**       | Loaders, chunkers, embeddings, retrievers, agents, stores — all platform-agnostic with dependency injection                                                 |
+| **`@ragnarok/graph-ui`**   | Private browser source and build that generates the VS Code JS/CSS and self-contained MCP App HTML                                                          |
+| **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                |
+| **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio transport only) |
+
+### MCP 0.4.0 protocol
+
+RAGnarok 0.4.0 serves MCP protocol `2026-07-28` only. Clients must use
+`server/discover` or modern version negotiation; legacy `initialize` is
+rejected. There is no compatibility mode and no `Mcp-Session-Id`.
+
+**Stdio is the only transport.** The HTTP transport, shared deployment mode,
+bearer roles, and upload/download handles were removed; the server is a child
+process of one MCP client, running as the user who spawned it. Environment
+variables belonging to the removed transport are rejected at startup, with an
+error naming every one that was set. Cacheable discovery,
+list, and resource-read results advertise `ttlMs=0` and `cacheScope=private`.
+See the [MCP server guide](packages/mcp-server/README.md) for the complete tool
+surface and configuration.
+
+MCP server settings live in `config.json` in the storage directory, which the
+server generates on first run. That file is the only place they are set — a key
+present in it pins your value, a key absent uses the current built-in default,
+and there is no environment variable for any of them. The environment carries
+only credentials, the two bootstrap paths, and the two one-shot switches. The
+[key table](packages/mcp-server/README.md#configuration) lists both sets.
+
+_(These are the MCP server's settings. The VS Code extension is configured
+separately through the `ragnarok.*` settings above.)_
+
+### Build & Test Commands
+
+```bash
+npm install              # Install all workspace dependencies
+npm run compile          # Build all packages (tsc -b)
+npm run test:all         # Run all tests (core → vscode → mcp-server)
+npm run test:core        # Run core package tests only
+npm test                 # Run VS Code extension tests only
+npm run test:mcp         # Run MCP server tests only
+npm run bench:smoke      # Fast deterministic retrieval/reranker gate
+npm run bench:release    # Pinned release benchmark; missing inputs fail
+npm run test:docs        # Validate canonical documentation links/contracts
+npm run lint             # Lint all packages
+npm run format           # Format all source and test files
+npm run clean            # Clean all build artifacts
+```
+
+### MCP Tools
+
+The MCP server exposes these tools to any MCP-compatible agent:
+
+| Tool                   | Description                                                                                                                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rag_query`            | Query a topic with agentic RAG (supports all retrieval strategies); shares one executor with the VS Code `ragQuery` tool                                                                      |
+| `rag_ingest`           | Add content to a topic from local files, one public HTTP(S) page, or an allowlisted GitHub/GHES repository                                                                                    |
+| `rag_topic`            | Manage topics: `list`, `stats` (statistics plus indexed documents), `create`, `rename`, `export`, and `import` (`list` and `stats` share one implementation with the VS Code `ragTopic` tool) |
+| `rag_delete_topic`     | Delete a topic after explicit confirmation                                                                                                                                                    |
+| `rag_remove_document`  | Remove a document and reconcile its chunks                                                                                                                                                    |
+| `rag_memory`           | Store, recall, forget, list, or get stats for project memories (workspace/branch-scoped); shares its input normalizer and `MemoryService` with the VS Code `ragMemory` tool                   |
+| `rag_reset_memory`     | Reset incompatible or unwanted standalone memory after confirmation. It has no VS Code counterpart: a headless agent has no sidebar to click, so this stays a tool guarded by `confirm: true` |
+| `rag_memory_visualize` | Return a deterministic memory graph document and associate the MCP App                                                                                                                        |
+
+That is the complete surface: 8 tools, all registered unconditionally on every
+connection. There are no roles and no capability tiers — the client already runs
+with the owner's authority. For the MCP server, the embedding model, the
+reranker, and the LLM provider are configured exclusively through `config.json`
+and expose no tools. Parameters and error
+contracts are in the [MCP server guide](packages/mcp-server/README.md).
+
+### Storage compatibility
+
+Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty 0.3/unversioned storage fails closed and must be converted with the supported offline migrator; VS Code offers a preview before migration and never silently resets it. See [MIGRATION.md](MIGRATION.md). Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
+
+**Single-writer constraint:** Only one process (VS Code window, MCP server
+instance, or CLI tool) may access a storage directory at a time. A second
+process fails fast instead of silently corrupting data. See
+[the architecture](ARCHITECTURE.md#storage) for the complete concurrency and
+locking model.
+
+### Delivery and operations
+
+- [Architecture](ARCHITECTURE.md)
+- [Storage migration](MIGRATION.md)
+- [Operations and recovery](docs/OPERATIONS.md)
+- [Security](docs/SECURITY.md)
+- [Benchmark gates](docs/BENCHMARKS.md)
+- [Release evidence and publication](docs/RELEASE.md)
+
+Release evidence is truthful by construction: required jobs are recorded as
+passed, failed, or unrun. Docker runtime and all six installed VSIX platform
+combinations are release blockers until their designated CI environments
+execute them; a local compile or package build does not imply those gates
+passed. The release benchmark also exits nonzero with `status: "blocked"` when
+child-process peak RSS, isolated index time, or exact package-size
+measurements are absent; deterministic smoke tests do not stand in for those
+declared measurements.
 
 ---
 
@@ -535,17 +694,13 @@ Complete: Documents ready for retrieval
 
 ## 📊 Performance
 
-### Benchmarks (M1 Mac, 16GB RAM)
-
-| Operation                       | Time   | Notes                       |
-| ------------------------------- | ------ | --------------------------- |
-| Load PDF (10 pages)             | ~2s    | Using PDFLoader             |
-| Chunk document (50 chunks)      | ~100ms | Semantic chunking           |
-| Generate embeddings (50 chunks) | ~3-5s  | Local Transformers.js model |
-| Store in LanceDB                | ~100ms | File-based persistence      |
-| Hybrid search (k=5)             | ~50ms  | Vector + BM25               |
-| Query planning (LLM)            | ~2s    | GPT-4o via Copilot          |
-| Query planning (heuristic)      | <10ms  | Rule-based                  |
+Performance depends on CPU architecture, model revision, corpus, storage, and
+Node version. Reproducible smoke and release-grade benchmark commands, pinned
+inputs, quality thresholds, latency/memory/package budgets, and the reviewed
+baseline update process are documented in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md). Historical approximate timings live
+in [docs/BENCHMARK-HISTORY.md](docs/BENCHMARK-HISTORY.md) and are not treated
+as release evidence.
 
 ### Optimization Tips
 
@@ -554,7 +709,8 @@ Complete: Documents ready for retrieval
 3. **Adjust chunk size** based on document type
 4. **Use simple mode** for fast queries
 5. **Batch document uploads** for efficiency
-6. **LanceDB scales well** - no size limits like in-memory stores
+6. **Measure your corpus** — capacity and latency are bounded by local storage,
+   memory, native dependencies, and workload shape
 
 ---
 
@@ -562,13 +718,13 @@ Complete: Documents ready for retrieval
 
 ### Embedding Backend Issues
 
-| Problem | Solution |
-|---------|----------|
-| **"No embeddings provider registered"** | Ensure a provider (e.g., GitHub Copilot) is installed and active. Set `ragnarok.embeddingBackend` to `huggingface` as a workaround. |
-| **"Proposed API not enabled"** | The `vscode.lm.computeEmbeddings` API requires `"enabledApiProposals": ["embeddings"]` in the extension manifest. Use VS Code Insiders for full support. |
-| **VS Code LM embedding dimension mismatch** | Switching backends may change the embedding dimension. Existing vector stores need re-indexing after backend changes. Delete the topic and re-add documents. |
-| **Fallback warnings appearing frequently** | If you see repeated "falling back to HuggingFace" messages, either set `ragnarok.embeddingBackend` to `huggingface` explicitly, or check that your VS Code LM provider is running. |
-| **Model not found in VS Code LM** | Verify the model ID in `ragnarok.embeddingVscodeModelId` matches one listed in `vscode.lm.embeddingModels`. Leave blank to auto-select. |
+| Problem                                     | Solution                                                                                                                                                                           |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **"No embeddings provider registered"**     | Ensure a provider (e.g., GitHub Copilot) is installed and active. Set `ragnarok.embeddingBackend` to `huggingface` as a workaround.                                                |
+| **"Proposed API not enabled"**              | The `vscode.lm.computeEmbeddings` API requires `"enabledApiProposals": ["embeddings"]` in the extension manifest. Use VS Code Insiders for full support.                           |
+| **VS Code LM embedding dimension mismatch** | Switching backends may change the embedding dimension. Existing vector stores need re-indexing after backend changes. Delete the topic and re-add documents.                       |
+| **Fallback warnings appearing frequently**  | If you see repeated "falling back to HuggingFace" messages, either set `ragnarok.embeddingBackend` to `huggingface` explicitly, or check that your VS Code LM provider is running. |
+| **Model not found in VS Code LM**           | Verify the model ID in `ragnarok.embeddingVscodeModelId` matches one listed in `vscode.lm.embeddingModels`. Leave blank to auto-select.                                            |
 
 ---
 
@@ -584,7 +740,8 @@ npm test
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Open an issue before large changes and include the relevant compile, lint,
+test, benchmark, migration, or packaging evidence with the pull request.
 
 ### Development Setup
 

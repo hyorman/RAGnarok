@@ -2,7 +2,13 @@
   "name": "ragnarok",
   "displayName": "RAGnarōk - Local RAG for Copilot",
   "description": "Retrieval-Augmented Generation extension for VSCode with local sentence transformers and semantic chunking",
-  "version": "0.3.0",
+  "version": "0.4.0",
+  "workspaces": [
+    "packages/core",
+    "packages/graph-ui",
+    "packages/vscode",
+    "packages/mcp-server"
+  ],
   "publisher": "hyorman",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -11,6 +17,7 @@
     "url": "https://github.com/hyorman/ragnarok"
   },
   "engines": {
+    "node": ">=20",
     "vscode": "^1.105.0"
   },
   "categories": [
@@ -23,7 +30,7 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./out/src/extension.js",
+  "main": "./dist/extension.js",
   "enabledApiProposals": [
     "embeddings"
   ],
@@ -34,7 +41,7 @@
         "ragnarok.embeddingBackend": {
           "type": "string",
           "default": "auto",
-          "markdownDescription": "**Embedding backend** to use for generating vectors:\n\n- **auto** (default): Try VS Code LM embeddings first; fall back to local HuggingFace if unavailable.\n- **vscodeLM**: Force VS Code Language Model API embeddings (requires a registered embedding provider such as GitHub Copilot).\n- **huggingface**: Force local HuggingFace Transformers.js embeddings (ONNX/WASM, fully offline).\n\n⚠️ Switching backends may change the embedding dimension. Existing vector stores built with a different backend/model will need to be re-indexed.",
+          "markdownDescription": "**Embedding backend** to use for generating vectors:\n\n- **auto** (default): Try VS Code LM embeddings first; fall back to local HuggingFace if unavailable.\n- **vscodeLM**: Force VS Code Language Model API embeddings. This uses the proposed `embeddings` API, so it requires VS Code Insiders (or another build exposing the proposal), `--enable-proposed-api=hyorman.ragnarok`, and a registered embedding provider such as GitHub Copilot.\n- **huggingface**: Force local HuggingFace Transformers.js embeddings (ONNX/WASM, fully offline).\n\n⚠️ Switching backends may change the embedding dimension. Existing vector stores built with a different backend/model will need to be re-indexed.",
           "enum": [
             "auto",
             "vscodeLM",
@@ -50,7 +57,7 @@
         "ragnarok.embeddingVscodeModelId": {
           "type": "string",
           "default": "",
-          "markdownDescription": "**VS Code LM embedding model ID** to use when backend is `vscodeLM` or `auto`.\n\nLeave empty to auto-select the first available model. The available models depend on the registered embeddings provider (e.g., GitHub Copilot).\n\n💡 Check `Developer: Show Running Extensions` → Language Model API for available model IDs.",
+          "markdownDescription": "**VS Code LM embedding model ID** to use when backend is `vscodeLM` or `auto`.\n\nLeave empty to auto-select the first available model. The available models depend on the registered embeddings provider (e.g., GitHub Copilot).\n\n⚠️ This setting only works when the proposed `embeddings` API is enabled for `hyorman.ragnarok`.\n\n💡 Check `Developer: Show Running Extensions` → Language Model API for available model IDs.",
           "order": 1
         },
         "ragnarok.localModelPath": {
@@ -104,17 +111,15 @@
         "ragnarok.retrievalStrategy": {
           "type": "string",
           "default": "hybrid",
-          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): 70% semantic + 30% keyword\n- **vector**: Pure semantic similarity\n- **ensemble**: Advanced RRF fusion of vector + BM25 (slower, more accurate)\n- **bm25**: Pure keyword search with BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
+          "markdownDescription": "**Retrieval strategy** for RAG queries:\n\n- **hybrid** (recommended): semantic + keyword\n- **vector**: pure semantic similarity\n- **bm25**: pure keyword search with Okapi BM25 (no embeddings, fast exact matching)\n\n💡 _Can be overridden per query via LM tool parameter_",
           "enum": [
             "vector",
             "hybrid",
-            "ensemble",
             "bm25"
           ],
           "enumDescriptions": [
             "Pure semantic search using embeddings only",
             "Hybrid: Combines semantic + keyword matching (recommended)",
-            "Ensemble: Uses Reciprocal Rank Fusion with BM25 (most accurate, higher memory)",
             "BM25: Pure keyword search (Okapi BM25 algorithm, no embeddings needed)"
           ],
           "order": 7
@@ -152,6 +157,34 @@
           "default": "",
           "markdownDescription": "**Path to a shared/common RAG database folder.** Topics from this path are read-only and cannot be deleted or modified. Useful for team-shared knowledge bases.\n\n**Format:** Absolute path to a folder containing exported RAG database files.",
           "order": 12
+        },
+        "ragnarok.rerankerModel": {
+          "type": "string",
+          "default": "Xenova/ms-marco-MiniLM-L-6-v2",
+          "markdownDescription": "**Reranker Model** — The HuggingFace cross-encoder model to use for reranking. Default is `Xenova/ms-marco-MiniLM-L-6-v2` (23MB, fast). Alternatives: `Xenova/ms-marco-MiniLM-L-12-v2` (more accurate), `Xenova/ms-marco-TinyBERT-L-2-v2` (fastest).",
+          "order": 13
+        },
+        "ragnarok.memoryIncludeAuto": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show reserved auto-generated memory entries in memory listings.",
+          "order": 17
+        },
+        "ragnarok.rerankerMaxCandidates": {
+          "type": "number",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 100,
+          "markdownDescription": "**Reranker Max Candidates** — Maximum number of candidates to pass through the cross-encoder. Higher values improve recall but increase latency.",
+          "order": 14
+        },
+        "ragnarok.rerankerCandidateMultiplier": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 10,
+          "markdownDescription": "**Reranker Candidate Multiplier** — Over-fetch multiplier for initial retrieval when reranking is enabled. `topK * multiplier` candidates are retrieved before reranking.",
+          "order": 15
         }
       }
     },
@@ -236,6 +269,27 @@
         "title": "Rename Topic",
         "category": "RAG",
         "icon": "$(edit)"
+      },
+      {
+        "command": "ragnarok.selectRerankerModel",
+        "title": "RAGnarok: Select Reranker Model"
+      },
+      {
+        "command": "ragnarok.showMemoryGraph",
+        "title": "RAGnarok: Show Memory Graph",
+        "icon": "$(graph-scatter)"
+      },
+      {
+        "command": "ragnarok.resetMemory",
+        "title": "Reset Memory",
+        "category": "RAG",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "ragnarok.refreshMemory",
+        "title": "Refresh Memory",
+        "category": "RAG",
+        "icon": "$(refresh)"
       }
     ],
     "viewsContainers": {
@@ -255,6 +309,12 @@
           "icon": "$(files)"
         },
         {
+          "id": "ragMemory",
+          "name": "Memory",
+          "icon": "$(archive)",
+          "type": "tree"
+        },
+        {
           "id": "ragConfig",
           "name": "Configuration",
           "icon": "$(settings-gear)"
@@ -271,6 +331,10 @@
         "view": "ragTopics",
         "contents": "No topics yet.\n\nCreate a topic to start indexing your documents for semantic search and RAG queries with Copilot.\n\n[$(add) Create Topic](command:ragnarok.createTopic)\n[$(cloud-download) Import Topic](command:ragnarok.importTopic)\n\nNeed help? [Read the docs](https://github.com/hyorman/ragnarok#readme)",
         "when": "ragnarok.loaded && !ragnarok.hasTopics"
+      },
+      {
+        "view": "ragMemory",
+        "contents": "No memories stored yet.\nMemories are written through the ragMemory tool in Copilot Chat.\n[$(graph-scatter) Show Memory Graph](command:ragnarok.showMemoryGraph)"
       }
     ],
     "menus": {
@@ -288,6 +352,21 @@
         {
           "command": "ragnarok.refreshTopics",
           "when": "view == ragTopics",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ragnarok.showMemoryGraph",
+          "when": "view == ragMemory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ragnarok.refreshMemory",
+          "when": "view == ragMemory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ragnarok.resetMemory",
+          "when": "view == ragMemory",
           "group": "navigation@3"
         }
       ],
@@ -327,6 +406,12 @@
     "languageModelTools": [
       {
         "name": "ragQuery",
+        "toolReferenceName": "ragQuery",
+        "displayName": "RAG Query",
+        "modelDescription": "Query an indexed RAG topic to find relevant information. Use it when the user asks about material they have added to RAGnarok. The topic is matched exactly when possible and otherwise by the closest semantic match, reported in the 'topicMatched' field. Complex queries may be answered with multi-step agentic planning.",
+        "userDescription": "Search an indexed RAG topic",
+        "icon": "$(database)",
+        "canBeReferencedInPrompt": true,
         "tags": [
           "documentation",
           "search",
@@ -334,35 +419,35 @@
           "context",
           "rag"
         ],
-        "toolReferenceName": "ragQuery",
-        "displayName": "RAG Query",
-        "modelDescription": "Use this tool when the user asks questions about topics they have added to the RAG system. Supports both simple single-shot retrieval and advanced agentic RAG with multi-step query planning, iterative refinement, and intelligent result evaluation. The tool intelligently matches the requested topic: it first tries an exact match, then finds the most semantically similar topic if no exact match exists. In agentic mode, complex queries are automatically decomposed into sub-queries for comprehensive information gathering. Always check the 'topicMatched' field and 'agenticMetadata' in the response.",
-        "icon": "$(database)",
-        "canBeReferencedInPrompt": true,
         "inputSchema": {
           "type": "object",
           "properties": {
             "topic": {
               "type": "string",
-              "description": "The name of the topic to search within (e.g., 'React Documentation', 'Company Policy'). If exact match is not found, the most semantically similar topic will be automatically selected."
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "The name of the topic to search within. If no exact match is found, the most semantically similar topic is used."
             },
             "query": {
               "type": "string",
+              "minLength": 1,
+              "maxLength": 20000,
               "description": "The search query or question to find relevant information"
             },
             "topK": {
-              "type": "number",
-              "description": "Number of top results to return (optional, uses configured value if not provided)"
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "Number of top results to return. Optional - uses the configured value when omitted."
             },
             "retrievalStrategy": {
               "type": "string",
-              "description": "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), 'ensemble' (RRF fusion), or 'bm25' (keyword only). Optional - uses configured value if not provided.",
               "enum": [
                 "vector",
                 "hybrid",
-                "ensemble",
                 "bm25"
-              ]
+              ],
+              "description": "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). Optional - uses the configured value when omitted."
             }
           },
           "required": [
@@ -370,75 +455,279 @@
             "query"
           ]
         }
+      },
+      {
+        "name": "ragMemory",
+        "toolReferenceName": "ragMemory",
+        "displayName": "RAG Memory",
+        "modelDescription": "Store, recall, forget, list, or inspect project memories scoped to the workspace or the current git branch.",
+        "userDescription": "Work with project memories",
+        "icon": "$(archive)",
+        "canBeReferencedInPrompt": true,
+        "tags": [
+          "memory",
+          "context",
+          "rag"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "store",
+                "recall",
+                "forget",
+                "stats",
+                "list",
+                "decay",
+                "history",
+                "promote",
+                "links",
+                "communities"
+              ],
+              "description": "The memory operation to perform"
+            },
+            "content": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 50000,
+              "description": "Memory content to store (required for 'store')"
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 10000,
+              "description": "Search query (required for 'recall')"
+            },
+            "topK": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Maximum memories to recall (default 10)"
+            },
+            "includeEntities": {
+              "type": "boolean",
+              "description": "Include extracted entities in recall results"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "Memory id (used by 'forget', 'history', and 'promote')"
+            },
+            "olderThan": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650,
+              "description": "Forget memories older than N days"
+            },
+            "expired": {
+              "type": "boolean",
+              "description": "Forget expired memories"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "workspace",
+                "branch"
+              ],
+              "description": "Memory scope"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "description": "Branch name; auto-detected for branch scope when omitted"
+            },
+            "tags": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "description": "Tags to attach when storing"
+            },
+            "ttlDays": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 3650,
+              "description": "Time to live in days"
+            },
+            "includeAuto": {
+              "type": "boolean",
+              "description": "Include reserved automatic memories"
+            },
+            "reinforce": {
+              "type": "boolean",
+              "description": "Reinforce recalled memories (turns recall into a mutation)"
+            },
+            "ids": {
+              "type": "array",
+              "maxItems": 500,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "description": "Memory ids to promote"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "description": "Maximum memories to list (default 50)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "ragTopic",
+        "toolReferenceName": "ragTopic",
+        "displayName": "RAG Topics",
+        "modelDescription": "List the available RAG topics, or get one topic's statistics and indexed documents. Read-only: creating, renaming, exporting, importing, and deleting topics are user actions in the RAGnarok sidebar.",
+        "userDescription": "List RAG topics and inspect one topic",
+        "icon": "$(list-tree)",
+        "canBeReferencedInPrompt": true,
+        "tags": [
+          "documentation",
+          "search",
+          "rag"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "list",
+                "stats"
+              ],
+              "description": "'list' returns every topic; 'stats' returns one topic's statistics and indexed documents"
+            },
+            "topic": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Topic name (required for 'stats')"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
       }
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "compile:tests": "tsc -p ./tsconfig.test.json",
-    "watch": "tsc -watch -p ./",
+    "compile": "npm run build --workspaces && npm run version:sync",
+    "migrate:storage": "node packages/core/dist/migrationCli.js migrate",
+    "bundle": "node esbuild.mjs",
+    "bundle:watch": "node esbuild.mjs --watch",
+    "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
+    "compile:tests:all": "npm run compile:tests && npm run compile:tests --workspace=packages/core && npm run compile:tests --workspace=packages/graph-ui && npm run compile:tests --workspace=packages/mcp-server",
+    "watch": "tsc -b --watch",
     "watch:tests": "tsc -watch -p ./tsconfig.test.json",
-    "lint": "eslint src",
+    "lint": "npm run lint --workspaces --if-present",
+    "lint:fix": "npm run lint:fix --workspaces --if-present",
+    "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\" \"packages/vscode/test-harness/**/*.ts\" \"*.{json,mjs,md}\"",
+    "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\" \"packages/vscode/test-harness/**/*.ts\" \"*.{json,mjs,md}\"",
+    "version:sync": "node scripts/version-sync.js",
+    "tools:manifest": "node scripts/generate-tool-manifest.mjs",
+    "tools:manifest:check": "node scripts/generate-tool-manifest.mjs --check",
+    "vscode:prepublish": "npm run compile && npm run bundle",
     "package:dev": "node scripts/package-dev.js",
     "package": "npm run package:win32-x64 && npm run package:win32-arm64 && npm run package:darwin-x64 && npm run package:darwin-arm64 && npm run package:linux-x64 && npm run package:linux-arm64",
-    "package:win32-x64": "node scripts/install-platform-deps.js win32-x64 && vsce package --target win32-x64 --allow-proposed-apis embeddings",
-    "package:win32-arm64": "node scripts/install-platform-deps.js win32-arm64 && vsce package --target win32-arm64 --allow-proposed-apis embeddings",
-    "package:darwin-x64": "node scripts/install-platform-deps.js darwin-x64 && vsce package --target darwin-x64 --allow-proposed-apis embeddings",
-    "package:darwin-arm64": "node scripts/install-platform-deps.js darwin-arm64 && vsce package --target darwin-arm64 --allow-proposed-apis embeddings",
-    "package:linux-x64": "node scripts/install-platform-deps.js linux-x64 && vsce package --target linux-x64 --allow-proposed-apis embeddings",
-    "package:linux-arm64": "node scripts/install-platform-deps.js linux-arm64 && vsce package --target linux-arm64 --allow-proposed-apis embeddings",
-    "publish": "npm run publish:win32-x64 && npm run publish:win32-arm64 && npm run publish:darwin-x64 && npm run publish:darwin-arm64 && npm run publish:linux-x64 && npm run publish:linux-arm64",
-    "publish:win32-x64": "node scripts/install-platform-deps.js win32-x64 && vsce publish --target win32-x64 --allow-proposed-apis embeddings",
-    "publish:win32-arm64": "node scripts/install-platform-deps.js win32-arm64 && vsce publish --target win32-arm64 --allow-proposed-apis embeddings",
-    "publish:darwin-x64": "node scripts/install-platform-deps.js darwin-x64 && vsce publish --target darwin-x64 --allow-proposed-apis embeddings",
-    "publish:darwin-arm64": "node scripts/install-platform-deps.js darwin-arm64 && vsce publish --target darwin-arm64 --allow-proposed-apis embeddings",
-    "publish:linux-x64": "node scripts/install-platform-deps.js linux-x64 && vsce publish --target linux-x64 --allow-proposed-apis embeddings",
-    "publish:linux-arm64": "node scripts/install-platform-deps.js linux-arm64 && vsce publish --target linux-arm64 --allow-proposed-apis embeddings",
-    "pretest": "npm run compile && npm run compile:tests",
-    "test": "node ./out/test/test/runTest.js",
+    "package:win32-x64": "node scripts/build-vsix.js win32-x64",
+    "package:win32-arm64": "node scripts/build-vsix.js win32-arm64",
+    "package:darwin-x64": "node scripts/build-vsix.js darwin-x64",
+    "package:darwin-arm64": "node scripts/build-vsix.js darwin-arm64",
+    "package:linux-x64": "node scripts/build-vsix.js linux-x64",
+    "package:linux-arm64": "node scripts/build-vsix.js linux-arm64",
+    "publish:vscode": "node scripts/publish-release.mjs vscode",
+    "publish:win32-x64": "node scripts/publish-release.mjs vscode --target=win32-x64",
+    "publish:win32-arm64": "node scripts/publish-release.mjs vscode --target=win32-arm64",
+    "publish:darwin-x64": "node scripts/publish-release.mjs vscode --target=darwin-x64",
+    "publish:darwin-arm64": "node scripts/publish-release.mjs vscode --target=darwin-arm64",
+    "publish:linux-x64": "node scripts/publish-release.mjs vscode --target=linux-x64",
+    "publish:linux-arm64": "node scripts/publish-release.mjs vscode --target=linux-arm64",
+    "pretest": "npm run compile && npm run bundle && npm run compile:tests",
+    "test": "node ./dist-test/packages/vscode/test-harness/runTest.js",
+    "test:core": "npm test --workspace=packages/core",
+    "test:core:compiled": "npm exec --workspace=packages/core mocha",
+    "test:vscode:compiled": "node ./dist-test/packages/vscode/test-harness/runTest.js",
+    "test:mcp": "npm test --workspace=packages/mcp-server",
+    "test:mcp:compiled": "npm exec --workspace=packages/mcp-server mocha",
+    "test:graph-ui:compiled": "npm test --workspace=packages/graph-ui",
+    "test:all": "npm run compile && npm run bundle && npm run compile:tests:all && npm run test:core:compiled && npm run test:graph-ui:compiled && npm run test:vscode:compiled && npm run test:mcp:compiled",
+    "test:fast": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:graph-ui:compiled && npm run test:mcp:compiled",
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "test:release-static": "node scripts/test-release-static.mjs",
+    "test:docs": "node scripts/check-docs.mjs",
+    "test:shutdown-soak": "node scripts/shutdown-soak.mjs",
+    "verify:models": "node scripts/verify-model-manifest.mjs",
+    "sbom:generate": "node scripts/generate-sbom.mjs",
+    "audit:policy": "node scripts/audit-gate.mjs",
+    "release:assets": "node scripts/check-release-assets.mjs",
+    "release:verify": "node scripts/release-manifest.mjs verify",
+    "bench:beir": "npm run bench:beir --workspace=packages/core",
+    "bench:frames": "npm run bench:frames --workspace=packages/core",
+    "bench:smoke": "npm run bench:smoke --workspace=packages/core",
+    "bench:acquire": "node scripts/acquire-benchmark-corpora.mjs",
+    "bench:release": "node scripts/run-release-benchmarks.mjs",
+    "bench:update-baseline": "node scripts/update-benchmark-baseline.mjs",
     "inspect:chunks": "npm run compile && node scripts/inspect-chunks.js",
-    "clean": "rimraf out && rimraf node_modules",
-    "clean:test": "rimraf out/test"
+    "clean": "npm run clean --workspaces && rimraf dist out dist-test && rimraf node_modules",
+    "clean:test": "rimraf dist-test",
+    "docker:build": "docker build -f packages/mcp-server/Dockerfile -t ragnarok-mcp -t ragnarok-mcp:ci .",
+    "docker:run": "docker run -i --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:size=256m -v ragnarok-data:/data/ragnarok ragnarok-mcp",
+    "publish:npm": "node scripts/publish-release.mjs npm",
+    "publish:docker": "node scripts/publish-release.mjs docker",
+    "publish:all": "node scripts/publish-release.mjs all"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@types/adm-zip": "^0.5.7",
-    "@types/archiver": "^7.0.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/chai": "^5.2.3",
-    "@types/cheerio": "^0.22.35",
-    "@types/glob": "^7.2.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.10.5",
     "@types/sinon": "^21.0.0",
     "@types/vscode": "^1.105.0",
-    "@typescript-eslint/eslint-plugin": "^8.46.3",
-    "@typescript-eslint/parser": "^8.46.3",
-    "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.2",
     "chai": "^5.1.2",
+    "esbuild": "0.28.1",
     "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "glob": "10.5.0",
     "mocha": "^11.0.1",
+    "prettier": "^3.8.1",
     "rimraf": "^6.0.1",
     "sinon": "^21.0.2",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.47.0"
+    "typescript-eslint": "^8.47.0",
+    "yaml": "^2.9.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.7.6",
     "@lancedb/lancedb": "^0.19.1",
-    "@langchain/community": "^1.0.0",
-    "@langchain/core": "^1.0.0",
-    "@langchain/textsplitters": "^1.0.0",
-    "adm-zip": "^0.5.16",
+    "@langchain/community": "1.1.29",
+    "@langchain/core": "1.2.2",
+    "@langchain/textsplitters": "1.0.1",
+    "@napi-rs/canvas": "0.1.80",
+    "adm-zip": "0.6.0",
     "apache-arrow": "^18.1.0",
-    "archiver": "^7.0.1",
     "async-mutex": "^0.5.0",
+    "binary-extensions": "2.3.0",
     "cheerio": "^1.1.2",
-    "glob": "^10.4.5",
     "ignore": "^7.0.5",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "2.4.5",
+    "yazl": "3.3.1"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",
@@ -462,7 +751,9 @@
   },
   "overrides": {
     "diff": "8.0.3",
-    "serialize-javascript": "7.0.3",
+    "serialize-javascript": "7.0.5",
+    "form-data": "4.0.6",
+    "ws": "8.21.0",
     "@langchain/community": {
       "pdf-parse": "$pdf-parse"
     }

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "ac9ebb1859cb65b8481fd820b66cc122ea3585aa",
+  "corpusManifestSha256": "c5ff91ed7fefb87c2a2530dbd2c7e69c3db54155220a4736e8fe3879739333ed",
+  "rankingContract": "squared-l2-unit-cosine-v1",
+  "environment": {
+    "node": "20-or-22",
+    "platform": "linux-x64",
+    "seed": 1729,
+    "model": "Xenova/all-MiniLM-L6-v2@751bff37182d3f1213fa05d7196b954e230abad9"
+  },
+  "minimums": {
+    "vector": { "recallAt5": 0.7, "mrrAt10": 0.6, "ndcgAt5": 0.6 },
+    "hybrid": { "recallAt5": 0.65, "mrrAt10": 0.6, "ndcgAt5": 0.6 },
+    "bm25": { "recallAt5": 0.55, "mrrAt10": 0.35, "ndcgAt5": 0.4 },
+    "rerank": { "recallAt5": 0.5, "mrrAt10": 0.5, "ndcgAt10": 0.52 }
+  },
+  "maximums": {
+    "queryP50Ms": 1500,
+    "queryP95Ms": 5000,
+    "childPeakRssBytes": 805306368,
+    "indexTimeMs": 120000,
+    "coreTarballBytes": 104857600,
+    "mcpTarballBytes": 5242880
+  },
+  "allowedRegression": {
+    "absoluteQuality": 0.03,
+    "relativeLatency": 0.2,
+    "relativeMemory": 0.15,
+    "packageGrowthBytes": 0
+  }
+}

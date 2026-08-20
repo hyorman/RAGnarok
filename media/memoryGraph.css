@@ -1,0 +1,362 @@
+/*
+ * One stylesheet serves two hosts. Inside a VS Code webview the `--vscode-*`
+ * variables exist and the graph inherits the user's theme, light or dark; in
+ * the MCP app host they do not, and every fallback below carries a neutral dark
+ * value. Never reference a `--vscode-*` variable without one.
+ */
+:root {
+  color-scheme: light dark;
+  --bg: var(--vscode-editor-background, #1f1f1f);
+  --surface: var(--vscode-sideBar-background, #181818);
+  --surface-raised: var(--vscode-editorWidget-background, #252526);
+  --fg: var(--vscode-foreground, #cccccc);
+  --muted: var(--vscode-descriptionForeground, #9d9d9d);
+  --accent: var(--vscode-focusBorder, #0078d4);
+  --border: var(--vscode-panel-border, #3c3c3c);
+  --border-strong: var(--vscode-editorWidget-border, #454545);
+  --control-bg: var(--vscode-button-secondaryBackground, #313131);
+  --control-fg: var(--vscode-button-secondaryForeground, #cccccc);
+  --control-bg-hover: var(--vscode-button-secondaryHoverBackground, #3c3c3c);
+  --edge: var(--vscode-descriptionForeground, #9d9d9d);
+  --danger: var(--vscode-errorForeground, #f14c4c);
+  --font: var(--vscode-font-family, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
+  --font-mono: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  --radius: 4px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+button {
+  min-height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  background: var(--control-bg);
+  color: var(--control-fg);
+  font: inherit;
+  line-height: 24px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--control-bg-hover);
+}
+
+button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Touch hosts get the full 44px target; a mouse-driven editor does not need it. */
+@media (pointer: coarse) {
+  button {
+    min-width: 44px;
+    min-height: 44px;
+    line-height: 42px;
+  }
+}
+
+[hidden] {
+  display: none !important;
+}
+
+#app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+
+#toolbar {
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: calc(6px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 6px
+    calc(12px + env(safe-area-inset-left));
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand,
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand {
+  margin-right: 6px;
+}
+
+.brand-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+#title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+#truncation-banner {
+  min-width: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+#truncation-banner:empty {
+  display: none;
+}
+
+#graph-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#graph {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  touch-action: none;
+}
+
+#loading,
+#error,
+#status {
+  position: absolute;
+  z-index: 3;
+  left: calc(12px + env(safe-area-inset-left));
+  max-width: min(540px, calc(100% - 24px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 9px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+#loading,
+#error {
+  top: 12px;
+}
+
+#status {
+  bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+#status:empty,
+#loading:empty {
+  display: none;
+}
+
+#error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+#panel {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  right: calc(12px + env(safe-area-inset-right));
+  width: min(340px, calc(100vw - 32px));
+  max-height: calc(100% - 24px - env(safe-area-inset-bottom));
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--surface-raised);
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+#panel-title {
+  flex: 1;
+  margin: 2px 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Kept at a full touch target on every pointer type: the details panel is the
+   one surface an MCP app user closes on a phone. */
+#panel-close {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+}
+
+#panel-attrs {
+  margin: 0;
+}
+
+#panel-attrs dt {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+#panel-attrs dd {
+  margin: 2px 0 0;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.viewport-bounds {
+  fill: none;
+  stroke: none;
+  pointer-events: none;
+}
+
+.edge {
+  stroke: var(--edge);
+  stroke-opacity: 0.5;
+  cursor: pointer;
+}
+
+.edge:hover,
+.edge.selected {
+  stroke: var(--accent);
+  stroke-opacity: 1;
+}
+
+.edge:focus-visible {
+  outline: none;
+  stroke: var(--accent);
+  stroke-opacity: 1;
+}
+
+.edge-label {
+  fill: var(--muted);
+  font-size: 10px;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+
+/* The ring is painted in the stage colour so a node reads as separated from
+   whatever sits behind it in either theme. */
+.node {
+  cursor: grab;
+  stroke: var(--bg);
+  stroke-width: 1.5px;
+}
+
+.node:active {
+  cursor: grabbing;
+}
+
+.node:hover,
+.node.selected {
+  stroke: var(--accent);
+  stroke-width: 2px;
+}
+
+.node:focus-visible {
+  outline: none;
+  stroke: var(--accent);
+  stroke-width: 2.5px;
+}
+
+.node-label {
+  fill: var(--fg);
+  font-size: 11px;
+  font-weight: 500;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+
+.empty {
+  fill: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 560px) {
+  #toolbar {
+    align-items: flex-start;
+    padding-right: calc(8px + env(safe-area-inset-right));
+    padding-left: calc(8px + env(safe-area-inset-left));
+  }
+
+  .toolbar-actions {
+    margin-left: auto;
+  }
+
+  #truncation-banner {
+    flex-basis: 100%;
+    margin: -2px 0 2px;
+  }
+
+  #panel {
+    top: 12px;
+    right: calc(12px + env(safe-area-inset-right));
+    width: min(320px, calc(100vw - 24px));
+    max-height: calc(100% - 24px - env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 390px) {
+  #toolbar {
+    gap: 4px 8px;
+  }
+
+  #title {
+    font-size: 0.86rem;
+  }
+
+  button {
+    padding: 0 8px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button,
+  .edge,
+  .node {
+    transition:
+      background-color 100ms ease,
+      stroke 100ms ease;
+  }
+}

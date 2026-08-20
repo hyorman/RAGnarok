@@ -1,0 +1,68 @@
+{
+  "name": "@ragnarok/core",
+  "version": "0.4.0",
+  "description": "Portable RAG engine - document loading, embedding, vector storage, and retrieval",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "ragnarok-migrate": "dist/migrationCli.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "NOTICE",
+    "THIRD_PARTY_MODELS.md",
+    "bom.cdx.json",
+    "bom.spdx.json"
+  ],
+  "scripts": {
+    "build": "tsc -p ./",
+    "lint": "eslint src test",
+    "lint:fix": "eslint --fix src test",
+    "clean": "rimraf dist dist-test tsconfig.tsbuildinfo",
+    "prepack": "node ../../scripts/prepare-package-metadata.mjs && node ../../scripts/verify-model-manifest.mjs && npm run clean && npm run build",
+    "clean:tests": "rimraf dist-test",
+    "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
+    "pretest": "npm run compile:tests",
+    "test": "mocha",
+    "bench:beir": "npm run compile:tests && BEIR_BENCHMARK=1 mocha --grep 'BEIR' --timeout 0",
+    "bench:frames": "npm run compile:tests && FRAMES_BENCHMARK=1 mocha --grep 'FRAMES' --timeout 0",
+    "bench:smoke": "npm run compile:tests && mocha --no-config --require dist-test/test/setup.js --reporter spec --timeout 120000 dist-test/benchmarks/retrievalBenchmark.test.js dist-test/test/vectorRetriever.test.js dist-test/test/crossEncoderReranker.test.js",
+    "bench:release": "node ../../scripts/run-release-benchmarks.mjs"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1",
+    "@lancedb/lancedb": "0.19.1",
+    "@langchain/community": "1.1.29",
+    "@langchain/core": "1.2.2",
+    "@langchain/textsplitters": "1.0.1",
+    "@napi-rs/canvas": "0.1.80",
+    "adm-zip": "0.6.0",
+    "apache-arrow": "18.1.0",
+    "async-mutex": "0.5.0",
+    "cheerio": "1.2.0",
+    "graphology": "0.26.0",
+    "graphology-communities-louvain": "2.0.2",
+    "graphology-types": "0.24.8",
+    "ignore": "7.0.5",
+    "pdf-parse": "2.4.5",
+    "yazl": "3.3.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
+    "@types/sinon": "^21.0.0",
+    "@types/yazl": "^3.3.0",
+    "chai": "^5.1.2",
+    "mocha": "^11.0.1",
+    "rimraf": "^6.0.1",
+    "sinon": "^21.0.2",
+    "typescript": "^5.9.3"
+  }
+}
