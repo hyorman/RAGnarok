@@ -325,16 +325,27 @@
       {
         "view": "ragTopics",
         "contents": "RAGnarōk is starting up...\n\nReady in just a moment.",
-        "when": "!ragnarok.loaded"
+        "when": "!ragnarok.loaded && !ragnarok.activationFailed"
       },
       {
         "view": "ragTopics",
         "contents": "No topics yet.\n\nCreate a topic to start indexing your documents for semantic search and RAG queries with Copilot.\n\n[$(add) Create Topic](command:ragnarok.createTopic)\n[$(cloud-download) Import Topic](command:ragnarok.importTopic)\n\nNeed help? [Read the docs](https://github.com/hyorman/ragnarok#readme)",
-        "when": "ragnarok.loaded && !ragnarok.hasTopics"
+        "when": "ragnarok.loaded && !ragnarok.hasTopics && !ragnarok.activationFailed"
       },
       {
         "view": "ragMemory",
-        "contents": "No memories stored yet.\nMemories are written through the ragMemory tool in Copilot Chat.\n[$(graph-scatter) Show Memory Graph](command:ragnarok.showMemoryGraph)"
+        "contents": "No memories stored yet.\nMemories are written through the ragMemory tool in Copilot Chat.\n[$(graph-scatter) Show Memory Graph](command:ragnarok.showMemoryGraph)",
+        "when": "!ragnarok.activationFailed"
+      },
+      {
+        "view": "ragTopics",
+        "contents": "RAGnarōk could not open its storage, so no topics or memories are available. Your data was not changed.\n\nCheck the RAGnarōk output channel for the cause, then reload to retry. A storage conversion that stopped midway may need `ragnarok-migrate --resume`.\n\n[$(refresh) Reload Window](command:workbench.action.reloadWindow)\n\n[Storage and migration guide](https://github.com/hyorman/ragnarok/blob/main/MIGRATION.md)",
+        "when": "ragnarok.activationFailed"
+      },
+      {
+        "view": "ragMemory",
+        "contents": "RAGnarōk could not open its storage, so no topics or memories are available. Your data was not changed.\n\nCheck the RAGnarōk output channel for the cause, then reload to retry. A storage conversion that stopped midway may need `ragnarok-migrate --resume`.\n\n[$(refresh) Reload Window](command:workbench.action.reloadWindow)\n\n[Storage and migration guide](https://github.com/hyorman/ragnarok/blob/main/MIGRATION.md)",
+        "when": "ragnarok.activationFailed"
       }
     ],
     "menus": {

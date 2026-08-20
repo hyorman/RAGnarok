@@ -123,6 +123,20 @@ export function createMemoryServices(
 
 let activeLifecycle: ExtensionLifecycle | undefined;
 
+/**
+ * Never allowed to throw: it runs on the activation failure path, where a
+ * second error would replace the original cause with a setContext failure.
+ */
+async function setActivationFailed(failed: boolean): Promise<void> {
+  try {
+    await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.ACTIVATION_FAILED, failed);
+  } catch (error) {
+    logger.error("Failed to publish the activation state context key", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<RagnarokExtensionApi> {
   return activateWithServiceFactory(context, defaultServiceFactory);
 }
@@ -142,6 +156,10 @@ export async function activateWithServiceFactory(
   activeLifecycle = lifecycle;
 
   try {
+    // Cleared first: a retry after a failed activation must not inherit the
+    // previous attempt's failure panel.
+    await setActivationFailed(false);
+
     // Create adapter instances
     const configProvider = new VsCodeConfigProvider();
     const notifier = new VsCodeNotifier();
@@ -631,6 +649,10 @@ export async function activateWithServiceFactory(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error("Failed to activate extension", { error: errorMessage });
+    // Before cleanup: the views are already visible, and leaving them on the
+    // "starting up" text is the difference between a reported failure and a
+    // hang the user cannot diagnose.
+    await setActivationFailed(true);
     try {
       await lifecycle.dispose();
     } catch (cleanupError) {
