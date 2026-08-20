@@ -196,6 +196,110 @@ describe("VectorStoreFactory metadata persistence", function () {
     expect(error).to.be.instanceOf(VectorStoreMetadataCorruptionError);
     expect(await fs.readFile(metadataPath, "utf8")).to.equal(corruptBytes);
   });
+
+  /**
+   * Byte-for-byte what the 0.3 release wrote. A store already marked v2 still
+   * acquires these files — an older build writing into it, or a 0.3-era `.rag`
+   * archive imported by topicManager, which rewrites only `topicId`. The
+   * whole-storage migrator normalizes this shape but never sees those, so the
+   * read boundary has to.
+   */
+  const legacyMetadata = (topicId: string) => ({
+    topicId,
+    documentCount: 1,
+    chunkCount: 1386,
+    embeddingModel: "vscodeLM:copilot.text-embedding-3-small",
+    createdAt: 1787169289626,
+    updatedAt: 1787169289626,
+  });
+
+  it("adopts pre-v2 metadata instead of rejecting it, without inventing a fingerprint", async function () {
+    const legacyTopic = "metadata-pre-v2";
+    await factory.createStore({ topicId: legacyTopic, storageDir });
+    const metadataPath = path.join(storageDir, `vector-${legacyTopic}-metadata.json`);
+    await fs.writeFile(metadataPath, JSON.stringify(legacyMetadata(legacyTopic), null, 2));
+
+    const metadata = await factory.getStoreMetadata(legacyTopic);
+
+    expect(metadata).to.deep.equal({
+      schemaVersion: STORAGE_FORMAT_VERSION,
+      topicId: legacyTopic,
+      documentCount: 1,
+      chunkCount: 1386,
+      embeddingModel: "vscodeLM:copilot.text-embedding-3-small",
+      embeddingBackend: "",
+      createdAt: 1787169289626,
+      updatedAt: 1787169289626,
+      migrationRequiresFingerprintOnReindex: true,
+    });
+    // Adoption is a read-path concern; it must not write.
+    expect(JSON.parse(await fs.readFile(metadataPath, "utf8"))).to.deep.equal(legacyMetadata(legacyTopic));
+  });
+
+  it("still refuses to extend adopted vectors whose embedding space is unverifiable", async function () {
+    const legacyTopic = "metadata-pre-v2-mutation";
+    await factory.createStore({ topicId: legacyTopic, storageDir });
+    const metadataPath = path.join(storageDir, `vector-${legacyTopic}-metadata.json`);
+    await fs.writeFile(metadataPath, JSON.stringify(legacyMetadata(legacyTopic), null, 2));
+
+    // Both guarded entry points, because adoption must not open either one.
+    for (const mutate of [
+      () => factory.validateEmbeddingModel(legacyTopic),
+      () =>
+        factory.reconcileDocuments(legacyTopic, [
+          new LangChainDocument({ pageContent: "new chunk", metadata: { source: "new.md" } }),
+        ]),
+    ]) {
+      let error: unknown;
+      try {
+        await mutate();
+      } catch (caught) {
+        error = caught;
+      }
+      // Reads recover the topic; only extension waits for an explicit reindex.
+      expect(error).to.be.instanceOf(EmbeddingReindexRequiredError);
+    }
+  });
+
+  it("persists the adopted shape on the next legitimate metadata write", async function () {
+    const legacyTopic = "metadata-pre-v2-persist";
+    await factory.createStore({ topicId: legacyTopic, storageDir });
+    const metadataPath = path.join(storageDir, `vector-${legacyTopic}-metadata.json`);
+    await fs.writeFile(metadataPath, JSON.stringify(legacyMetadata(legacyTopic), null, 2));
+
+    await factory.saveStore(legacyTopic, { documentCount: 1, chunkCount: 1386 });
+
+    const persisted = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(persisted.schemaVersion).to.equal(STORAGE_FORMAT_VERSION);
+    // The flag survives the write, so the topic does not silently become mutable.
+    expect(persisted.migrationRequiresFingerprintOnReindex).to.equal(true);
+    expect(persisted.embeddingFingerprint).to.equal(undefined);
+    expect(persisted.embeddingModel).to.equal("vscodeLM:copilot.text-embedding-3-small");
+  });
+
+  it("rejects damage that only resembles pre-v2 metadata", async function () {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["a future schema version", { ...legacyMetadata("x"), schemaVersion: 99 }],
+      ["a mismatched topic id", { ...legacyMetadata("someone-else") }],
+      ["a non-finite chunk count", { ...legacyMetadata("x"), chunkCount: "1386" }],
+      ["a missing embedding model", { ...legacyMetadata("x"), embeddingModel: undefined }],
+      ["a missing timestamp", { ...legacyMetadata("x"), updatedAt: undefined }],
+    ];
+
+    for (const [name, payload] of cases) {
+      const topicId = "x";
+      const metadataPath = path.join(storageDir, `vector-${topicId}-metadata.json`);
+      await fs.writeFile(metadataPath, JSON.stringify({ ...payload, topicId: payload.topicId ?? topicId }));
+
+      let error: unknown;
+      try {
+        await factory.getStoreMetadata(topicId);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error, `${name} must stay a corruption refusal`).to.be.instanceOf(VectorStoreMetadataCorruptionError);
+    }
+  });
 });
 
 /**

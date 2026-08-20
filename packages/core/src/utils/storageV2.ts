@@ -80,6 +80,50 @@ export async function assertNoInterruptedStorageMigration(storageDir: string): P
   }
 }
 
+/** The six fields the 0.3 release wrote into `vector-<topic>-metadata.json`. */
+export interface LegacyVectorStoreMetadata {
+  topicId: string;
+  documentCount: number;
+  chunkCount: number;
+  embeddingModel: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Structurally a `VectorStoreMetadata`, narrowed to what adoption can promise. */
+export interface AdoptedVectorStoreMetadata extends LegacyVectorStoreMetadata {
+  schemaVersion: typeof STORAGE_FORMAT_VERSION;
+  embeddingBackend: string;
+  migrationRequiresFingerprintOnReindex: true;
+}
+
+/**
+ * Lift pre-v2 vector metadata to v2 without touching a single vector.
+ *
+ * The recorded model is preserved and no fingerprint is invented — the
+ * embedding space of these vectors is genuinely unknown, so the topic reads
+ * back for recovery while every extension waits for an explicit reindex.
+ *
+ * Shared deliberately. The whole-storage migrator applies this to the topics it
+ * converts, and the vector store applies it to pre-v2 files that appear in a
+ * store already marked v2 — an older build writing into it, or a 0.3-era `.rag`
+ * archive being imported. Two copies of this rule would drift, and the halves
+ * that drifted would disagree about whether a topic may be written to.
+ */
+export function adoptLegacyVectorStoreMetadata(fields: LegacyVectorStoreMetadata): AdoptedVectorStoreMetadata {
+  return {
+    schemaVersion: STORAGE_FORMAT_VERSION,
+    topicId: fields.topicId,
+    documentCount: fields.documentCount,
+    chunkCount: fields.chunkCount,
+    embeddingModel: fields.embeddingModel,
+    embeddingBackend: "",
+    createdAt: fields.createdAt,
+    updatedAt: fields.updatedAt,
+    migrationRequiresFingerprintOnReindex: true,
+  };
+}
+
 /** Durably replace a UTF-8 file using a same-directory atomic rename. */
 export async function atomicWriteFile(filePath: string, contents: string): Promise<void> {
   const directory = path.dirname(filePath);

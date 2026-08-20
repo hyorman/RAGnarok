@@ -7,10 +7,12 @@ import { EXTENSION } from "../constants";
 import type { Document, Topic, TopicsIndex } from "./types";
 import { acquireStorageLock, STORAGE_LOCK_FILENAME, type StorageLockHandle } from "./storageLock";
 import {
+  adoptLegacyVectorStoreMetadata,
   atomicWriteFile,
   atomicWriteJson,
   STORAGE_FORMAT_FILENAME,
   STORAGE_FORMAT_VERSION,
+  type AdoptedVectorStoreMetadata,
   type StorageFormatMarker,
 } from "./storageV2";
 
@@ -180,7 +182,7 @@ interface ConvertedTopic {
   topic: Topic;
   documents: Document[];
   rows: Array<Record<string, unknown>>;
-  metadata: Record<string, unknown>;
+  metadata: AdoptedVectorStoreMetadata;
   sourceContentDigest: string;
   targetContentDigest: string;
   vectorDimension?: number;
@@ -726,17 +728,16 @@ async function convertTopic(
     topic,
     documents: converted.documents,
     rows: converted.rows,
-    metadata: {
-      schemaVersion: STORAGE_FORMAT_VERSION,
+    // Counts are recomputed from what conversion actually produced rather than
+    // trusted from the legacy file, then lifted by the shared adoption rule.
+    metadata: adoptLegacyVectorStoreMetadata({
       topicId: targetTopicId,
       documentCount: converted.documents.length,
       chunkCount: converted.rows.length,
       embeddingModel,
-      embeddingBackend: "",
       createdAt: Number(legacyMetadata.createdAt ?? sourceTopic.createdAt),
       updatedAt: Number(legacyMetadata.updatedAt ?? sourceTopic.updatedAt),
-      migrationRequiresFingerprintOnReindex: true,
-    },
+    }),
     sourceContentDigest: contentDigest(rows),
     targetContentDigest: contentDigest(converted.rows),
     vectorDimension: converted.vectorDimension,

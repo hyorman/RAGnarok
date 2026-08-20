@@ -25,7 +25,12 @@ import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { hasRemoteEndpoint, type EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { Logger } from "../logger";
-import { atomicWriteJson, STORAGE_FORMAT_VERSION } from "../utils/storageV2";
+import {
+  adoptLegacyVectorStoreMetadata,
+  atomicWriteJson,
+  STORAGE_FORMAT_VERSION,
+  type LegacyVectorStoreMetadata,
+} from "../utils/storageV2";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 export interface VectorStoreConfig {
@@ -365,10 +370,18 @@ export class VectorStoreFactory {
     try {
       const metadataJson = await fs.readFile(metadataPath, "utf-8");
       const metadata = JSON.parse(metadataJson) as unknown;
-      if (!this.isVectorStoreMetadata(metadata, topicId)) {
-        throw new VectorStoreMetadataCorruptionError(topicId, "malformed or incomplete");
+      if (this.isVectorStoreMetadata(metadata, topicId)) {
+        return metadata;
       }
-      return metadata;
+      // A pre-v2 file is old, not damaged. Adopting it in memory recovers the
+      // topic for reading without re-embedding anything; the adoption marks the
+      // embedding space unverifiable, so extension still fails closed below.
+      const adopted = this.adoptIfLegacyMetadata(metadata, topicId);
+      if (adopted) {
+        this.logger.info("Adopted pre-v2 vector store metadata", { topicId, embeddingModel: adopted.embeddingModel });
+        return adopted;
+      }
+      throw new VectorStoreMetadataCorruptionError(topicId, "malformed or incomplete");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return null;
@@ -464,7 +477,11 @@ export class VectorStoreFactory {
         topicId,
         documentCount: metadata.documentCount || 0,
         chunkCount: metadata.chunkCount || 0,
-        embeddingModel: metadata.embeddingModel || this.embeddingModel,
+        // The topic's own recorded model outranks this factory's default: a
+        // caller that omits the field is refreshing counts, not re-labelling
+        // the embedding space. Falling straight through to the default would
+        // silently re-attribute adopted and migrated vectors.
+        embeddingModel: metadata.embeddingModel || previousMetadata?.embeddingModel || this.embeddingModel,
         embeddingBackend: metadata.embeddingBackend || "",
         embeddingFingerprint,
         migrationRequiresFingerprintOnReindex,
@@ -675,6 +692,39 @@ export class VectorStoreFactory {
     const metadataPath = this.getMetadataPath(topicId);
     await fs.mkdir(path.dirname(metadataPath), { recursive: true });
     await atomicWriteJson(metadataPath, metadata);
+  }
+
+  /**
+   * Recognizes metadata written before the schema was versioned, and only that.
+   *
+   * `schemaVersion` must be absent rather than merely unequal: a file claiming a
+   * version this build does not know is a forward-compatibility problem, not a
+   * legacy one, and guessing at it would be exactly the silent reinterpretation
+   * the corruption refusal exists to prevent.
+   */
+  private adoptIfLegacyMetadata(value: unknown, topicId: string): VectorStoreMetadata | null {
+    if (!value || typeof value !== "object" || "schemaVersion" in value) {
+      return null;
+    }
+    const legacy = value as Partial<LegacyVectorStoreMetadata>;
+    if (
+      legacy.topicId !== topicId ||
+      !Number.isFinite(legacy.documentCount) ||
+      !Number.isFinite(legacy.chunkCount) ||
+      typeof legacy.embeddingModel !== "string" ||
+      !Number.isFinite(legacy.createdAt) ||
+      !Number.isFinite(legacy.updatedAt)
+    ) {
+      return null;
+    }
+    return adoptLegacyVectorStoreMetadata({
+      topicId,
+      documentCount: legacy.documentCount as number,
+      chunkCount: legacy.chunkCount as number,
+      embeddingModel: legacy.embeddingModel,
+      createdAt: legacy.createdAt as number,
+      updatedAt: legacy.updatedAt as number,
+    });
   }
 
   private isVectorStoreMetadata(value: unknown, topicId: string): value is VectorStoreMetadata {
