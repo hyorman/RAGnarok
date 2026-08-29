@@ -7,7 +7,6 @@ import { promisify } from "util";
 import { connect } from "@lancedb/lancedb";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
-  EmbeddingReindexRequiredError,
   EmbeddingServiceRegistry,
   MIGRATION_REPORT_FILENAME,
   STORAGE_FORMAT_FILENAME,
@@ -245,8 +244,11 @@ describe("offline v0.3 storage migration", function () {
       getCurrentModel: () => "Xenova/all-MiniLM-L6-v2",
       getFingerprint: async () => ({
         backendKind: "huggingface",
+        providerFormat: "huggingface",
         model: "Xenova/all-MiniLM-L6-v2",
+        revision: "test",
         dimension: 3,
+        endpointHash: "local",
         normalized: true,
       }),
       // The registry initializes and may dispose the services it hands out, so
@@ -254,6 +256,11 @@ describe("offline v0.3 storage migration", function () {
       // concrete backend initializes through that backend.
       initialize: async () => undefined,
       initializeForBackend: async () => undefined,
+      // The migrated topic's own model resolves here, and adoption writes
+      // through it on the very next line: the stub has to answer both the
+      // fingerprint probe and the real embed the healed write performs.
+      embedBatch: async (texts: string[]) => texts.map(() => [0, 0, 1]),
+      embedBatchWithBackend: async (_backendType: string, texts: string[]) => texts.map(() => [0, 0, 1]),
       dispose: async () => undefined,
     } as unknown as EmbeddingService;
     const config: IConfigProvider = { get: <T>(_key: string, fallback: T) => fallback };
@@ -295,17 +302,23 @@ describe("offline v0.3 storage migration", function () {
       embeddingRegistry,
     );
     (manager as any).vectorStoreFactory = vectorStoreFactory;
-    try {
-      await vectorStoreFactory.reconcileDocuments(fixture.topicId, [
-        new LangChainDocument({
-          pageContent: "must not be mixed into unverifiable vectors",
-          metadata: { documentId: "new-document", chunkId: "new-chunk" },
-        }),
-      ]);
-      expect.fail("expected migrated-vector quarantine");
-    } catch (error) {
-      expect(error).to.be.instanceOf(EmbeddingReindexRequiredError);
-    }
+    // The migrated topic's own recorded model ("Xenova/all-MiniLM-L6-v2")
+    // resolves, and it yields dimension 3 -- exactly what the live table
+    // holds. First write must self-heal rather than quarantine forever.
+    await vectorStoreFactory.reconcileDocuments(fixture.topicId, [
+      new LangChainDocument({
+        pageContent: "adopted into the healed embedding space",
+        metadata: { documentId: "new-document", chunkId: "new-chunk", source: "new-document.md" },
+      }),
+    ]);
+    const healedMetadata = JSON.parse(
+      await fs.readFile(path.join(fixture.storageDir, "database", `vector-${fixture.topicId}-metadata.json`), "utf8"),
+    );
+    expect(healedMetadata.migrationRequiresFingerprintOnReindex, "first write must clear the migration flag").to.equal(
+      false,
+    );
+    expect(healedMetadata.embeddingFingerprint, "first write must stamp a verified fingerprint").to.be.an("object");
+    expect(healedMetadata.embeddingFingerprint.dimension).to.equal(3);
     const removed = await manager.removeDocument(fixture.topicId, documents[0].id);
     expect(removed.chunksRemoved).to.be.greaterThan(0);
     const archivePath = path.join(parent, "migrated-topic.rag");

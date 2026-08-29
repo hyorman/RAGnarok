@@ -971,42 +971,62 @@ describe("VectorStoreFactory embedding-model guard", function () {
     return makeFactory();
   }
 
+  /**
+   * A migrated topic backed by a REAL table, so adoption's dimension check has
+   * something genuine to fail against: the table is built at CONFIGURED_MODEL's
+   * dimension (4), but "model-x" -- the topic's own recorded model -- now
+   * yields 8. Adoption must resolve model-x, discover the mismatch, and refuse;
+   * it must never fall back to trusting the flag alone.
+   */
   async function makeFactoryWithUnfingerprintedVectors(topicId: string): Promise<VectorStoreFactory> {
+    const factory = await makeFactory({ [CONFIGURED_MODEL]: 4, "model-x": 8 });
+    await factory.createStore({ topicId, storageDir });
     await writeMetadata(topicId, {
       embeddingModel: "model-x",
       migrationRequiresFingerprintOnReindex: true,
     });
-    return makeFactory();
+    return factory;
   }
 
   /**
-   * The reindex FLAG alone, with a perfectly valid fingerprint present.
+   * The reindex FLAG alone, with a stale-but-present fingerprint that *claims*
+   * to match the real table -- proving the flag forces re-verification through
+   * adoption rather than letting a recorded-but-untrustworthy fingerprint wave
+   * the write through.
    *
    * Pins the first disjunct of the write-path guard on its own: with a
    * fingerprint recorded, the missing-fingerprint disjunct cannot carry the
-   * refusal, so only the flag can.
+   * refusal, so only the flag can route the mutation through adoption, which
+   * then genuinely refuses because model-x now yields 8, not the table's 4.
    */
   async function makeFactoryWithReindexFlagOnly(topicId: string): Promise<VectorStoreFactory> {
+    const factory = await makeFactory({ [CONFIGURED_MODEL]: 4, "model-x": 8 });
+    await factory.createStore({ topicId, storageDir });
     await writeMetadata(topicId, {
       embeddingModel: "model-x",
+      // Stale: claims to match the table (4), but model-x now yields 8.
       embeddingFingerprint: fingerprintOf("model-x", 4),
       migrationRequiresFingerprintOnReindex: true,
     });
-    return makeFactory();
+    return factory;
   }
 
   /**
-   * A MISSING fingerprint alone, with the reindex flag clear.
+   * A MISSING fingerprint alone, with the reindex flag clear, against a REAL
+   * table whose dimension model-x no longer matches.
    *
    * Pins the second disjunct on its own: with the flag down, only the absent
-   * fingerprint can carry the refusal.
+   * fingerprint can route the mutation through adoption, which then genuinely
+   * refuses on the real dimension mismatch.
    */
   async function makeFactoryWithMissingFingerprintOnly(topicId: string): Promise<VectorStoreFactory> {
+    const factory = await makeFactory({ [CONFIGURED_MODEL]: 4, "model-x": 8 });
+    await factory.createStore({ topicId, storageDir });
     await writeMetadata(topicId, {
       embeddingModel: "model-x",
       migrationRequiresFingerprintOnReindex: false,
     });
-    return makeFactory();
+    return factory;
   }
 
   /** A single document, enough to get past reconcileDocuments' empty-input early return. */
@@ -1099,6 +1119,119 @@ describe("VectorStoreFactory embedding-model guard", function () {
     const error = await rejectionOf(() => factory.reconcileDocuments("t", oneDocument()));
     expect(error, "an absent fingerprint alone must refuse the write").to.be.instanceOf(EmbeddingReindexRequiredError);
     expect(error?.message).to.match(/reindex/i);
+  });
+});
+
+/**
+ * The migrator (and the read-path legacy adopter) never invent a fingerprint —
+ * they stamp `migrationRequiresFingerprintOnReindex: true` and leave the topic
+ * permanently unwritable. This is where that dead end turns into self-healing:
+ * a migrated topic's first write resolves its OWN recorded model, verifies its
+ * dimension against the REAL live table, and only then stamps the fingerprint
+ * the migrator refused to invent. A genuine mismatch still refuses.
+ */
+describe("fingerprint adoption on first write", function () {
+  this.timeout(60000);
+
+  const CONFIGURED_MODEL = "model-x";
+  const TEST_DIMENSION = 4;
+  let storageDir: string;
+  let factory: VectorStoreFactory;
+  let topicId: string;
+  let metadataPath: string;
+  let dimensions: Record<string, number>;
+
+  beforeEach(async function () {
+    storageDir = path.join(os.tmpdir(), `vsf-adopt-${crypto.randomUUID()}`);
+    await fs.mkdir(storageDir, { recursive: true });
+
+    // Mutable and shared by reference with every service the registry hands
+    // out, so a test can change what CONFIGURED_MODEL yields AFTER the real
+    // table has already been built at the original dimension.
+    dimensions = { [CONFIGURED_MODEL]: TEST_DIMENSION };
+    const configured = new DimensionRecordingService(dimensions);
+    await configured.initialize(CONFIGURED_MODEL);
+    factory = new VectorStoreFactory(
+      storageDir,
+      CONFIGURED_MODEL,
+      configured as unknown as EmbeddingService,
+      new EmbeddingServiceRegistry({
+        createService: () => new DimensionRecordingService(dimensions) as unknown as EmbeddingService,
+        maxResidentLocal: 4,
+      }),
+    );
+    await factory.initialize();
+
+    // A REAL LanceDB table, built normally at TEST_DIMENSION.
+    topicId = "migrated-topic";
+    await factory.createStore({ topicId, storageDir });
+    metadataPath = path.join(storageDir, `vector-${topicId}-metadata.json`);
+    // Drop the cached store so every call below re-reads metadata from disk.
+    (factory as any).storeCache.clear();
+  });
+
+  afterEach(async function () {
+    factory?.dispose();
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("stamps the fingerprint and clears the migration flag when dimensions match", async function () {
+    // Arrange: rewrite the normally-created metadata into the migrated shape:
+    // fingerprint removed, flag set. (getStoreMetadata reads the JSON from
+    // disk on every call, so no cache invalidation is needed beyond the clear
+    // in beforeEach.)
+    const raw = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    delete raw.embeddingFingerprint;
+    raw.migrationRequiresFingerprintOnReindex = true;
+    await fs.writeFile(metadataPath, JSON.stringify(raw));
+
+    await factory.validateEmbeddingModel(topicId); // must NOT throw
+
+    const healed = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(healed.migrationRequiresFingerprintOnReindex).to.equal(false);
+    expect(healed.embeddingFingerprint).to.be.an("object");
+    expect(healed.embeddingFingerprint.dimension).to.equal(TEST_DIMENSION);
+  });
+
+  it("still refuses when the topic's model produces a different dimension", async function () {
+    const raw = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    delete raw.embeddingFingerprint;
+    raw.migrationRequiresFingerprintOnReindex = true;
+    await fs.writeFile(metadataPath, JSON.stringify(raw));
+
+    // The real table stays at TEST_DIMENSION; the topic's own model now
+    // yields something else. A genuine, verified mismatch.
+    dimensions[CONFIGURED_MODEL] = TEST_DIMENSION + 8;
+
+    let error: unknown;
+    try {
+      await factory.validateEmbeddingModel(topicId);
+      expect.fail("should have thrown");
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as Error).name).to.equal("EmbeddingReindexRequiredError");
+    const untouched = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(untouched.migrationRequiresFingerprintOnReindex).to.equal(true);
+  });
+
+  it("adopted pre-v2 metadata heals the same way (schemaVersion absent on disk)", async function () {
+    const raw = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    const legacy = {
+      topicId: raw.topicId,
+      documentCount: raw.documentCount,
+      chunkCount: raw.chunkCount,
+      embeddingModel: raw.embeddingModel,
+      createdAt: raw.createdAt,
+      updatedAt: raw.updatedAt,
+    };
+    await fs.writeFile(metadataPath, JSON.stringify(legacy));
+
+    await factory.validateEmbeddingModel(topicId);
+
+    const healed = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(healed.schemaVersion).to.equal(STORAGE_FORMAT_VERSION);
+    expect(healed.migrationRequiresFingerprintOnReindex).to.equal(false);
   });
 });
 

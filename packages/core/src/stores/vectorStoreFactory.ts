@@ -417,17 +417,26 @@ export class VectorStoreFactory {
     if (!metadata) {
       return;
     }
-    // Checked first, and before anything is resolved: a topic whose space
-    // cannot be verified must not cause a model to be loaded on its behalf.
-    this.assertMetadataAllowsMutation(topicId, metadata);
-    const recorded = metadata.embeddingFingerprint;
+    let verified = metadata;
+    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
+      const migrationBackend = metadata.embeddingBackend ?? "";
+      if (hasRemoteEndpoint(migrationBackend)) {
+        const recordedHash = metadata.embeddingFingerprint?.endpointHash;
+        if (recordedHash && recordedHash !== (await this.configuredEndpointHash())) {
+          return; // foreign endpoint: loadStore's refusal handles it; never resolve here
+        }
+      }
+      verified = await this.adoptFingerprintForMigratedTopic(topicId, metadata);
+    }
+    const recorded = verified.embeddingFingerprint;
     if (!recorded) {
-      // Unreachable — assertMetadataAllowsMutation refuses a missing
-      // fingerprint — but the space stays unverifiable either way.
+      // Unreachable — adoptFingerprintForMigratedTopic always returns
+      // metadata carrying a fingerprint, or throws — but the space stays
+      // unverifiable either way.
       throw new EmbeddingReindexRequiredError(topicId);
     }
 
-    const backend = metadata.embeddingBackend ?? "";
+    const backend = verified.embeddingBackend ?? "";
     if (hasRemoteEndpoint(backend) && recorded.endpointHash !== (await this.configuredEndpointHash())) {
       // A foreign endpoint is loadStore's refusal to raise, one step later.
       // Resolving the topic's service here would first register it — and open a
@@ -435,7 +444,7 @@ export class VectorStoreFactory {
       return;
     }
 
-    const model = metadata.embeddingModel || this.embeddingModel;
+    const model = verified.embeddingModel || this.embeddingModel;
     const current = await (await this.resolveEmbeddingService(model, backend)).getFingerprint();
     if (recorded.dimension !== current.dimension) {
       this.logger.error("Embedding dimension mismatch detected", {
@@ -673,14 +682,70 @@ export class VectorStoreFactory {
       }
       throw new Error(`Vector store table not found for topic ${topicId}`);
     }
-    this.assertMetadataAllowsMutation(topicId, metadata);
+    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
+      return this.adoptFingerprintForMigratedTopic(topicId, metadata);
+    }
     return metadata;
   }
 
-  private assertMetadataAllowsMutation(topicId: string, metadata: VectorStoreMetadata): void {
-    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
+  /**
+   * A migrated or adopted topic reaches its first write here. The topic's own
+   * recorded model is resolved and its produced dimension checked against the
+   * live table; only a verified match may stamp the fingerprint the migrator
+   * refused to invent. A mismatch is the genuine reindex case.
+   */
+  private async adoptFingerprintForMigratedTopic(
+    topicId: string,
+    metadata: VectorStoreMetadata,
+  ): Promise<VectorStoreMetadata> {
+    let fingerprint: EmbeddingFingerprint;
+    try {
+      const service = await this.resolveEmbeddingService(
+        metadata.embeddingModel || this.embeddingModel,
+        metadata.embeddingBackend ?? "",
+      );
+      fingerprint = await service.getFingerprint();
+    } catch (error) {
+      this.logger.error("Cannot resolve recorded model for migrated topic", {
+        topicId,
+        model: metadata.embeddingModel,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw new EmbeddingReindexRequiredError(topicId);
     }
+    const tableDimension = await this.getTableDimension(topicId);
+    if (tableDimension !== null && tableDimension !== fingerprint.dimension) {
+      throw new EmbeddingReindexRequiredError(topicId);
+    }
+    await this.saveStore(topicId, {
+      ...metadata,
+      embeddingFingerprint: fingerprint,
+      embeddingBackend: fingerprint.backendKind,
+      migrationRequiresFingerprintOnReindex: false,
+    });
+    const healed = await this.getStoreMetadata(topicId);
+    if (!healed || healed.migrationRequiresFingerprintOnReindex || !healed.embeddingFingerprint) {
+      throw new EmbeddingReindexRequiredError(topicId);
+    }
+    return healed;
+  }
+
+  /** Vector dimension of the live table, or null when the table is empty/absent. */
+  private async getTableDimension(topicId: string): Promise<number | null> {
+    const db = await this.getConnection(this.lanceDbUri);
+    if (!(await db.tableNames()).includes(topicId)) {
+      return null;
+    }
+    const table = await db.openTable(topicId);
+    const schema = await table.schema();
+    const vectorField = schema.fields.find((field: { name: string }) => field.name === "vector");
+    const listSize = (vectorField?.type as { listSize?: number } | undefined)?.listSize;
+    if (typeof listSize === "number" && listSize > 0) {
+      return listSize;
+    }
+    const rows = await table.query().limit(1).toArray();
+    const vector = rows[0]?.vector;
+    return vector ? Array.from(vector as ArrayLike<number>).length : null;
   }
 
   private async hasTable(topicId: string): Promise<boolean> {
