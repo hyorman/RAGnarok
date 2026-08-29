@@ -8,6 +8,7 @@ import {
   ensureStorageFormatV2,
   resetStorageToV2,
   STORAGE_FORMAT_FILENAME,
+  STORAGE_FORMAT_VERSION,
   STORAGE_CONFIG_FILENAME,
   STORAGE_RESET_JOURNAL_FILENAME,
 } from "../src/utils/storageV2";
@@ -99,6 +100,72 @@ describe("storage format v2", () => {
     const backup = await resetStorageToV2(directory);
     expect(backup).to.be.a("string");
     expect(await fs.readFile(path.join(backup!, "database", "topics.json"), "utf8")).to.equal("legacy");
+    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+  });
+
+  it("restores the format marker and clears the journal when a reset failure fully rolls back", async () => {
+    // A healthy v2 store, not a v0.3 layout: resetting it is the "wipe my
+    // corpus" path, not a migration. Two top-level entries so the forced
+    // failure below lands after at least one has already moved.
+    await fs.mkdir(path.join(directory, "database"), { recursive: true });
+    await fs.writeFile(path.join(directory, "database", "topics.json"), "v2 data");
+    await fs.writeFile(path.join(directory, "extra.txt"), "more v2 data");
+    const marker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: 999 };
+    await atomicWriteJson(path.join(directory, STORAGE_FORMAT_FILENAME), marker);
+
+    // Force the *second* forward move (storageDir entry -> backup-v1-* dir)
+    // to fail, simulating a transient error mid-reset after one entry has
+    // already been relocated. Restore-direction renames (backup -> storageDir)
+    // and unrelated atomic-write renames (journal/marker) are untouched --
+    // only a rename landing one level inside a fresh "backup-v1-*" child of
+    // this test's storage dir is intercepted.
+    //
+    // The `import * as fs` binding above is a getter-only ES namespace view
+    // (TypeScript's __importStar), so it cannot be assigned to directly; the
+    // underlying CommonJS module object -- the one storageV2.ts's own
+    // namespace view reads through -- is mutable and shared process-wide.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fsModule: typeof fs = require("fs/promises");
+    const originalRename = fsModule.rename;
+    let forwardMoveCalls = 0;
+    fsModule.rename = (async (src: unknown, dest: unknown) => {
+      const destParent = path.dirname(String(dest));
+      const isForwardMove =
+        path.dirname(destParent) === directory && path.basename(destParent).startsWith("backup-v1-");
+      if (isForwardMove) {
+        forwardMoveCalls += 1;
+        if (forwardMoveCalls === 2) {
+          throw new Error("simulated transient rename failure");
+        }
+      }
+      return originalRename(src as any, dest as any);
+    }) as typeof fs.rename;
+
+    let caught: any;
+    try {
+      try {
+        await resetStorageToV2(directory);
+        expect.fail("expected resetStorageToV2 to throw");
+      } catch (error) {
+        caught = error;
+      }
+    } finally {
+      fsModule.rename = originalRename;
+    }
+    expect(caught?.message).to.equal("simulated transient rename failure");
+    expect(forwardMoveCalls).to.equal(2);
+
+    // The rollback was provably complete, so the store must be genuinely
+    // healthy again: marker restored verbatim, journal gone, data untouched.
+    expect(await fs.readdir(directory)).to.not.include(STORAGE_RESET_JOURNAL_FILENAME);
+    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(
+      marker,
+    );
+    expect(await fs.readFile(path.join(directory, "database", "topics.json"), "utf8")).to.equal("v2 data");
+    expect(await fs.readFile(path.join(directory, "extra.txt"), "utf8")).to.equal("more v2 data");
+
+    // And the store opens normally afterward instead of throwing
+    // StorageResetInterruptedError -- no lingering fail-closed state.
     expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
   });
 

@@ -303,9 +303,25 @@ export async function resetStorageToV2(storageDir: string): Promise<string | nul
   const journalPath = resetJournalPath(storageDir);
   const backupDir =
     entries.length === 0 ? null : path.join(storageDir, `backup-v1-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+
+  // Preserve the current marker (if it is a genuinely valid v2 marker) in the
+  // journal. A rollback that restores every moved entry can then reinstate
+  // this exact marker and clear the journal -- proving the transient failure
+  // never actually left the store unversioned -- instead of leaving a
+  // perfectly healthy store permanently fail-closed.
+  let priorMarker: StorageFormatMarker | null = null;
+  try {
+    const parsed = JSON.parse(await fs.readFile(markerPath(storageDir), "utf8")) as Partial<StorageFormatMarker>;
+    if (parsed.formatVersion === STORAGE_FORMAT_VERSION && typeof parsed.initializedAt === "number") {
+      priorMarker = parsed as StorageFormatMarker;
+    }
+  } catch {
+    // No marker, or unreadable/invalid -- nothing to preserve.
+  }
+
   // Journaled before the marker is unlinked: a crash from here on must fail
   // closed as an interrupted reset, never be mistaken for unversioned data.
-  await atomicWriteJson(journalPath, { startedAt: Date.now(), backupDir });
+  await atomicWriteJson(journalPath, { startedAt: Date.now(), backupDir, marker: priorMarker });
   await fs.unlink(markerPath(storageDir)).catch(() => undefined);
 
   if (entries.length === 0) {
@@ -325,14 +341,29 @@ export async function resetStorageToV2(storageDir: string): Promise<string | nul
     await fs.unlink(journalPath).catch(() => undefined);
     return backupDir;
   } catch (error) {
-    // The journal is left in place on purpose: even though the moved entries
-    // are rolled back below, the marker stays unlinked (see above), so the
-    // directory is not provably back to its pre-reset state. Fail closed
-    // until an operator confirms it and clears the journal by hand.
+    // Best-effort restore, but its completeness is tracked explicitly: only a
+    // *fully* successful rollback proves the directory is genuinely back to
+    // its pre-reset state.
+    let fullyRestored = true;
     for (const entry of moved.reverse()) {
-      await fs.rename(path.join(backupDir!, entry), path.join(storageDir, entry)).catch(() => undefined);
+      try {
+        await fs.rename(path.join(backupDir!, entry), path.join(storageDir, entry));
+      } catch {
+        fullyRestored = false;
+      }
     }
     await fs.rmdir(backupDir!).catch(() => undefined);
+    if (fullyRestored && priorMarker) {
+      // A provably complete rollback with a known-good prior marker means
+      // this was a transient failure, not real data loss: restore the exact
+      // marker and clear the journal rather than leaving the store
+      // permanently misclassified as an interrupted reset.
+      await atomicWriteJson(markerPath(storageDir), priorMarker);
+      await fs.unlink(journalPath).catch(() => undefined);
+    }
+    // Otherwise -- an incomplete restore, or no valid prior marker was ever
+    // recorded -- the journal (and any leftover partial backup dir) are left
+    // in place on purpose: fail closed until an operator inspects it.
     throw error;
   }
 }
