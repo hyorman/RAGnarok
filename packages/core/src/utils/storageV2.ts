@@ -10,6 +10,8 @@ export const STORAGE_FORMAT_FILENAME = "storage-format.json";
  * has to be made here, in the storage layer.
  */
 export const STORAGE_CONFIG_FILENAME = "config.json";
+/** Marks an in-flight `resetStorageToV2` so a crash mid-reset fails closed instead of reading as unversioned data. */
+export const STORAGE_RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
 
 export class StorageMigrationInterruptedError extends Error {
   readonly name = "StorageMigrationInterruptedError";
@@ -46,6 +48,28 @@ export class StorageFormatVersionError extends Error {
 }
 
 /**
+ * A reset (`resetStorageToV2`) started and never finished -- most likely the
+ * process died mid-move, between renaming managed entries into the backup
+ * directory and re-marking the storage as v2. Data may now be split between
+ * the storage dir and a partial backup, so this must never read as plain
+ * unversioned 0.3 data: it fails closed until an operator inspects and
+ * clears the journal by hand.
+ */
+export class StorageResetInterruptedError extends Error {
+  readonly name = "StorageResetInterruptedError";
+  constructor(
+    public readonly storageDir: string,
+    public readonly backupDir: string | null,
+  ) {
+    super(
+      `A RAGnarōk storage reset at ${storageDir} was interrupted before completing` +
+        `${backupDir ? `, possibly mid-move into ${backupDir}` : ""}. ` +
+        `Inspect the directory manually before retrying; data may be split between it and the backup.`,
+    );
+  }
+}
+
+/**
  * Files that are infrastructure, not managed data — never version-gated, never backed up.
  *
  * config.json earns its place on both counts. The MCP server generates it on
@@ -59,6 +83,7 @@ function isInfrastructureEntry(entry: string): boolean {
     entry === STORAGE_FORMAT_FILENAME ||
     entry === STORAGE_LOCK_FILENAME ||
     entry === STORAGE_CONFIG_FILENAME ||
+    entry === STORAGE_RESET_JOURNAL_FILENAME ||
     entry.startsWith("backup-v1-")
   );
 }
@@ -198,6 +223,27 @@ function markerPath(storageDir: string): string {
   return path.join(storageDir, STORAGE_FORMAT_FILENAME);
 }
 
+function resetJournalPath(storageDir: string): string {
+  return path.join(storageDir, STORAGE_RESET_JOURNAL_FILENAME);
+}
+
+/** Throws StorageResetInterruptedError if a reset journal is present; a no-op otherwise. */
+async function checkResetJournal(storageDir: string): Promise<void> {
+  const journalPath = resetJournalPath(storageDir);
+  let journal: { backupDir?: string | null } = {};
+  try {
+    journal = JSON.parse(await fs.readFile(journalPath, "utf8")) as { backupDir?: string | null };
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      return;
+    }
+    // A corrupt journal still proves a reset was interrupted; fail closed
+    // even though the intended backup directory cannot be recovered from it.
+    throw new StorageResetInterruptedError(storageDir, null);
+  }
+  throw new StorageResetInterruptedError(storageDir, journal.backupDir ?? null);
+}
+
 async function hasManagedData(storageDir: string): Promise<boolean> {
   let entries: string[];
   try {
@@ -213,6 +259,16 @@ async function hasManagedData(storageDir: string): Promise<boolean> {
 
 /** Validate storage format v2, initializing only a genuinely empty directory. */
 export async function ensureStorageFormatV2(storageDir: string): Promise<StorageFormatMarker> {
+  await checkResetJournal(storageDir);
+  return ensureStorageFormatV2Unjournaled(storageDir);
+}
+
+/**
+ * The actual v2 validation/initialization, without the reset-journal check.
+ * `resetStorageToV2` calls this directly -- it writes the journal itself and
+ * must not immediately trip over it via the public entry point above.
+ */
+async function ensureStorageFormatV2Unjournaled(storageDir: string): Promise<StorageFormatMarker> {
   await assertNoInterruptedStorageMigration(storageDir);
   await fs.mkdir(storageDir, { recursive: true });
   const formatPath = markerPath(storageDir);
@@ -244,29 +300,39 @@ export async function ensureStorageFormatV2(storageDir: string): Promise<Storage
 export async function resetStorageToV2(storageDir: string): Promise<string | null> {
   await fs.mkdir(storageDir, { recursive: true });
   const entries = (await fs.readdir(storageDir)).filter((entry) => !isInfrastructureEntry(entry));
+  const journalPath = resetJournalPath(storageDir);
+  const backupDir =
+    entries.length === 0 ? null : path.join(storageDir, `backup-v1-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+  // Journaled before the marker is unlinked: a crash from here on must fail
+  // closed as an interrupted reset, never be mistaken for unversioned data.
+  await atomicWriteJson(journalPath, { startedAt: Date.now(), backupDir });
   await fs.unlink(markerPath(storageDir)).catch(() => undefined);
 
   if (entries.length === 0) {
-    await ensureStorageFormatV2(storageDir);
+    await ensureStorageFormatV2Unjournaled(storageDir);
+    await fs.unlink(journalPath).catch(() => undefined);
     return null;
   }
 
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const backupDir = path.join(storageDir, `backup-v1-${stamp}`);
-  await fs.mkdir(backupDir);
+  await fs.mkdir(backupDir!);
   const moved: string[] = [];
   try {
     for (const entry of entries) {
-      await fs.rename(path.join(storageDir, entry), path.join(backupDir, entry));
+      await fs.rename(path.join(storageDir, entry), path.join(backupDir!, entry));
       moved.push(entry);
     }
-    await ensureStorageFormatV2(storageDir);
+    await ensureStorageFormatV2Unjournaled(storageDir);
+    await fs.unlink(journalPath).catch(() => undefined);
     return backupDir;
   } catch (error) {
+    // The journal is left in place on purpose: even though the moved entries
+    // are rolled back below, the marker stays unlinked (see above), so the
+    // directory is not provably back to its pre-reset state. Fail closed
+    // until an operator confirms it and clears the journal by hand.
     for (const entry of moved.reverse()) {
-      await fs.rename(path.join(backupDir, entry), path.join(storageDir, entry)).catch(() => undefined);
+      await fs.rename(path.join(backupDir!, entry), path.join(storageDir, entry)).catch(() => undefined);
     }
-    await fs.rmdir(backupDir).catch(() => undefined);
+    await fs.rmdir(backupDir!).catch(() => undefined);
     throw error;
   }
 }

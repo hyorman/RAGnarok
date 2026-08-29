@@ -25,7 +25,9 @@ function migrationSummary(plan: StorageMigrationPlan): string {
     `Migrated legacy RAGnarōk 0.3 storage: ${plan.topics.length} topic(s), ` +
     `${plan.topics.reduce((sum, topic) => sum + topic.leafDocumentCount, 0)} document leaf/leaves, ` +
     `${plan.topics.reduce((sum, topic) => sum + topic.chunkCount, 0)} chunk(s). ` +
-    `The original storage is kept as an immutable backup at ${plan.backupPath}.`
+    `The original storage is kept as an immutable backup at ${plan.backupPath}.` +
+    (plan.warnings.length ? " Warnings: " + plan.warnings.join(" ") : "") +
+    (plan.remaps.length > 0 ? ` ${plan.remaps.length} ID(s) were remapped (see migration report).` : "")
   );
 }
 

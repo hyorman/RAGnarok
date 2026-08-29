@@ -219,6 +219,25 @@ function backupPathFor(sourcePath: string, inventory: MigrationInventory, migrat
   return path.join(path.dirname(sourcePath), `backup-v0.3-${timestamp}-${migrationId}`);
 }
 
+/**
+ * Dedupe a computed backup path against a leftover backup from an earlier
+ * attempt on the same source (e.g. re-migrating after a rollback). The
+ * immutable prior backup is never touched; the new one just gets a fresh
+ * name (`-r2`, `-r3`, ...).
+ */
+async function uniqueBackupPath(candidate: string): Promise<string> {
+  if (!(await exists(candidate))) {
+    return candidate;
+  }
+  let suffix = 2;
+  let suffixed = `${candidate}-r${suffix}`;
+  while (await exists(suffixed)) {
+    suffix += 1;
+    suffixed = `${candidate}-r${suffix}`;
+  }
+  return suffixed;
+}
+
 async function writeChecksummedJson(filePath: string, value: unknown): Promise<void> {
   await atomicWriteJson(filePath, value);
   const contents = await fs.readFile(filePath);
@@ -790,7 +809,7 @@ async function preparePlan(
         warnings: [],
         requiredBytes: inventory.totalBytes * 2 + 16 * 1024 * 1024,
         availableBytes: Number((await fs.statfs(parent)).bavail * (await fs.statfs(parent)).bsize),
-        backupPath: backupPathFor(sourcePath, inventory, migrationId),
+        backupPath: await uniqueBackupPath(backupPathFor(sourcePath, inventory, migrationId)),
         stagingPath: path.join(parent, `${base}.migrating-${migrationId}`),
         statePath: statePathFor(sourcePath, migrationId),
         dryRun: true,
@@ -830,7 +849,7 @@ async function preparePlan(
       "Legacy knowledge graphs are not copied because their embedding identity cannot be proven; rebuild is required.",
     );
   }
-  const backupPath = backupPathFor(sourcePath, inventory, migrationId);
+  const backupPath = await uniqueBackupPath(backupPathFor(sourcePath, inventory, migrationId));
   const stagingPath = path.join(parent, `${base}.migrating-${migrationId}`);
   const plan: StorageMigrationPlan = {
     migrationId,
@@ -1366,6 +1385,7 @@ export async function applyStorageMigration(
   const sourcePath = path.resolve(storageDir);
   const migrationLock = await acquireMigrationLock(sourcePath);
   let storageLock: StorageLockHandle | undefined;
+  let state: MigrationState | undefined;
   try {
     options.signal?.throwIfAborted();
     let plan: StorageMigrationPlan;
@@ -1440,7 +1460,7 @@ export async function applyStorageMigration(
       throw new StorageMigrationError("MIG_COLLISION", `Backup path already exists: ${plan.backupPath}`);
     }
     storageLock = await acquireStorageLock(sourcePath);
-    const state: MigrationState = {
+    state = {
       stateVersion: MIGRATION_STATE_VERSION,
       migrationId: plan.migrationId,
       sourcePath,
@@ -1479,6 +1499,13 @@ export async function applyStorageMigration(
     return JSON.parse(await fs.readFile(path.join(sourcePath, MIGRATION_REPORT_FILENAME), "utf8")) as MigrationReport;
   } catch (error) {
     await storageLock?.release().catch(() => undefined);
+    // Nothing has moved out of the source yet at these stages -- a bare retry
+    // must not trip over its own leftovers (MIG_COLLISION on stale staging).
+    // cutoverPrepared and later are left untouched; resume owns that recovery.
+    if (state && (state.stage === "planned" || state.stage === "staged" || state.stage === "validated")) {
+      await fs.rm(state.stagingPath, { recursive: true, force: true }).catch(() => undefined);
+      await fs.unlink(statePathFor(state.sourcePath, state.migrationId)).catch(() => undefined);
+    }
     throw error;
   } finally {
     await releaseMigrationLock(sourcePath, migrationLock);

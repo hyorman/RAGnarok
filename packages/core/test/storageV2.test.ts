@@ -9,6 +9,7 @@ import {
   resetStorageToV2,
   STORAGE_FORMAT_FILENAME,
   STORAGE_CONFIG_FILENAME,
+  STORAGE_RESET_JOURNAL_FILENAME,
 } from "../src/utils/storageV2";
 import { STORAGE_LOCK_FILENAME } from "../src/utils/storageLock";
 
@@ -161,6 +162,25 @@ describe("typed storage errors", () => {
     } catch (error: any) {
       expect(error.name).to.equal("StorageFormatVersionError");
       expect(error.foundVersion).to.equal(3);
+    }
+  });
+
+  it("throws StorageResetInterruptedError when a reset journal is present, naming the backup dir", async () => {
+    const storageDir = path.join(dir, "storage");
+    await fs.mkdir(storageDir, { recursive: true });
+    const backupDir = path.join(storageDir, "backup-v1-fake");
+    await atomicWriteJson(path.join(storageDir, STORAGE_RESET_JOURNAL_FILENAME), {
+      startedAt: Date.now(),
+      backupDir,
+    });
+    try {
+      await ensureStorageFormatV2(storageDir);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.name).to.equal("StorageResetInterruptedError");
+      expect(error.storageDir).to.equal(storageDir);
+      expect(error.backupDir).to.equal(backupDir);
+      expect(error.message).to.include(backupDir);
     }
   });
 });

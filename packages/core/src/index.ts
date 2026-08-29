@@ -161,6 +161,7 @@ export {
   StorageMigrationInterruptedError,
   UnversionedStorageError,
   StorageFormatVersionError,
+  StorageResetInterruptedError,
   atomicWriteFile,
   atomicWriteJson,
   ensureStorageFormatV2,

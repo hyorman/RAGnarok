@@ -397,7 +397,7 @@ describe("offline v0.3 storage migration", function () {
     expect(await fs.readFile(path.join(storageDir, "unknown.bin"), "utf8")).to.equal("do not overwrite");
   });
 
-  it("resumes idempotently after failures at planned and staged boundaries", async function () {
+  it("cleans up its own leftovers after failures at planned, staged, and validated boundaries so a bare retry succeeds", async function () {
     for (const failAfterStage of ["planned", "staged", "validated"] as const) {
       const fixtureParent = path.join(parent, failAfterStage);
       await fs.mkdir(fixtureParent);
@@ -410,17 +410,50 @@ describe("offline v0.3 storage migration", function () {
           failAfterStage,
         }),
       );
-      const status = await getStorageMigrationStatus(fixture.storageDir, plan.migrationId);
-      expect(status.state?.stage).to.equal(failAfterStage);
-      const report = await resumeStorageMigration(fixture.storageDir, plan.migrationId);
+      // Nothing moved out of the source at these stages, so the failure must
+      // not leave the staging dir or state file behind to block a retry.
+      expect(
+        (await getStorageMigrationStatus(fixture.storageDir, plan.migrationId)).state,
+        `${failAfterStage}: state file must be removed`,
+      ).to.equal(undefined);
+      let stagingExists = true;
+      try {
+        await fs.access(plan.stagingPath);
+      } catch {
+        stagingExists = false;
+      }
+      expect(stagingExists, `${failAfterStage}: staging dir must be removed`).to.equal(false);
+
+      const report = await applyStorageMigration(fixture.storageDir, {
+        nonInteractive: true,
+        acceptedBackupPath: plan.backupPath,
+      });
       expect(report.migrationId).to.equal(plan.migrationId);
       expect((await getStorageMigrationStatus(fixture.storageDir, plan.migrationId)).state?.stage).to.equal(
         "committed",
       );
-      expect((await resumeStorageMigration(fixture.storageDir, plan.migrationId)).migrationId).to.equal(
-        plan.migrationId,
-      );
     }
+  });
+
+  it("dedupes a colliding backup path with -r2 while leaving the earlier backup untouched", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    const basePlan = await planStorageMigration(fixture.storageDir);
+    // Simulate a leftover backup from an earlier attempt on this same source
+    // (e.g. after a rollback re-migrates it) occupying the deterministic path.
+    await fs.mkdir(basePlan.backupPath);
+
+    const plan = await planStorageMigration(fixture.storageDir);
+    expect(plan.migrationId).to.equal(basePlan.migrationId);
+    expect(plan.backupPath).to.equal(`${basePlan.backupPath}-r2`);
+
+    const report = await applyStorageMigration(fixture.storageDir, {
+      nonInteractive: true,
+      acceptedBackupPath: plan.backupPath,
+    });
+    expect(report.migrationId).to.equal(plan.migrationId);
+    await fs.access(plan.backupPath);
+    // The pre-existing backup at the base (unsuffixed) path is left alone.
+    expect(await fs.readdir(basePlan.backupPath)).to.deep.equal([]);
   });
 
   it("persists cutover intent, blocks normal initialization, and resumes every rename boundary", async function () {

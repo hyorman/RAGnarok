@@ -279,6 +279,27 @@ describe("automatic VS Code storage migration", function () {
     expect(messages[0]).to.include("/backup");
   });
 
+  it("surfaces plan warnings and remap counts in the reported summary", async function () {
+    const plan = {
+      ...legacyPlan(),
+      warnings: ["Legacy knowledge graphs are not copied because their embedding identity cannot be proven."],
+      remaps: [{ kind: "topic", from: "old", to: "new", reason: "namespace" }],
+    };
+    const messages: string[] = [];
+    const dependencies = migrationDependencies({
+      plan: async () => plan,
+      showInformation: async (message) => {
+        messages.push(message);
+      },
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(messages).to.have.lengthOf(1);
+    expect(messages[0]).to.include("Warnings: Legacy knowledge graphs are not copied");
+    expect(messages[0]).to.include("1 ID(s) were remapped");
+  });
+
   it("reports corrupt storage and two-window lease failures without planning", async function () {
     for (const [error, expected] of [
       [new Error("corrupt topics index"), "could not be opened safely"],
