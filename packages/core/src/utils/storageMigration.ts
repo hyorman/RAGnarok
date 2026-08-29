@@ -167,6 +167,13 @@ export interface MigrationRollbackOptions {
     | "rollbackLegacyPublished";
 }
 
+/** One prepared plan, reusable by apply without re-running conversion. */
+export interface PreparedStorageMigration {
+  plan: StorageMigrationPlan;
+  // parsed + converted stay internal; the handle is opaque outside this module
+  // (recovered via the module-level WeakMap keyed by `plan`).
+}
+
 interface ParsedLegacy {
   layout: "v0.3-local" | "v0.3-common";
   databaseDir: string;
@@ -745,6 +752,15 @@ async function convertTopic(
   };
 }
 
+/**
+ * Holds the parsed/converted conversion payload for a prepared plan, keyed by
+ * the plan object itself so the public handle stays opaque. A handle that
+ * crossed a serialization boundary (e.g. sent through IPC and rehydrated as a
+ * fresh object) has no entry here and must be rejected, never silently
+ * re-planned.
+ */
+const preparedConversions = new WeakMap<StorageMigrationPlan, { parsed?: ParsedLegacy; converted: ConvertedTopic[] }>();
+
 async function preparePlan(
   storageDir: string,
 ): Promise<{ plan: StorageMigrationPlan; parsed?: ParsedLegacy; converted: ConvertedTopic[] }> {
@@ -852,6 +868,17 @@ export async function planStorageMigration(storageDir: string): Promise<StorageM
   return (await preparePlan(storageDir)).plan;
 }
 
+/**
+ * Runs the full conversion pass once and hands back an opaque handle that
+ * `applyStorageMigration` can reuse via `{ prepared }` without converting
+ * again, as long as the source has not changed since.
+ */
+export async function prepareStorageMigration(storageDir: string): Promise<PreparedStorageMigration> {
+  const { plan, parsed, converted } = await preparePlan(path.resolve(storageDir));
+  preparedConversions.set(plan, { parsed, converted });
+  return { plan };
+}
+
 export async function getStorageMigrationStatus(
   storageDir: string,
   migrationId?: string,
@@ -886,6 +913,39 @@ export async function getStorageMigrationStatus(
     }
   }
   return { plan, state };
+}
+
+/** Newest migration-state file for this storage dir, or null. Read-only, no planning. */
+export async function findLatestMigrationState(
+  storageDir: string,
+): Promise<{ state: MigrationState; statePath: string } | null> {
+  const sourcePath = path.resolve(storageDir);
+  const parent = path.dirname(sourcePath);
+  const prefix = `.${path.basename(sourcePath)}.migration-`;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(parent);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  let best: { state: MigrationState; statePath: string } | null = null;
+  for (const entry of entries
+    .filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(".json"))
+    .sort()) {
+    const statePath = path.join(parent, entry);
+    try {
+      const state = JSON.parse(await fs.readFile(statePath, "utf8")) as MigrationState;
+      if (state.sourcePath === sourcePath && (!best || state.updatedAt > best.state.updatedAt)) {
+        best = { state, statePath };
+      }
+    } catch {
+      // Read-only discovery is best-effort: ignore unparsable/corrupt state files.
+    }
+  }
+  return best;
 }
 
 async function writeState(state: MigrationState): Promise<void> {
@@ -1301,15 +1361,51 @@ async function applyPreparedCutover(
 /** Apply a planned migration. The source is never edited in place. */
 export async function applyStorageMigration(
   storageDir: string,
-  options: MigrationApplyOptions = {},
+  options: MigrationApplyOptions & { prepared?: PreparedStorageMigration } = {},
 ): Promise<MigrationReport> {
   const sourcePath = path.resolve(storageDir);
   const migrationLock = await acquireMigrationLock(sourcePath);
   let storageLock: StorageLockHandle | undefined;
   try {
     options.signal?.throwIfAborted();
-    const prepared = await preparePlan(sourcePath);
-    const { plan, parsed, converted } = prepared;
+    let plan: StorageMigrationPlan;
+    let parsed: ParsedLegacy | undefined;
+    let converted: ConvertedTopic[];
+    if (options.prepared) {
+      const cached = preparedConversions.get(options.prepared.plan);
+      if (!cached) {
+        throw new StorageMigrationError(
+          "MIG_CHANGED",
+          "Prepared migration handle is not recognized in this process; re-run prepareStorageMigration",
+        );
+      }
+      if (options.prepared.plan.sourcePath !== sourcePath) {
+        throw new StorageMigrationError(
+          "MIG_CHANGED",
+          "Prepared migration handle targets a different storage directory; re-run prepareStorageMigration",
+        );
+      }
+      // Cheap staleness check: recompute only the inventory digest (no legacy
+      // parse, no row conversion) and compare against the prepared plan's
+      // migrationId. A mismatch means the source moved under us -- fail
+      // closed rather than silently re-planning.
+      const freshInventory = await inventoryDirectory(sourcePath);
+      const freshMigrationId = `mig-${freshInventory.digest.slice(0, 20)}`;
+      if (freshMigrationId !== options.prepared.plan.migrationId) {
+        throw new StorageMigrationError(
+          "MIG_CHANGED",
+          "Legacy storage changed since the migration was prepared; re-run prepareStorageMigration",
+        );
+      }
+      plan = options.prepared.plan;
+      parsed = cached.parsed;
+      converted = cached.converted;
+    } else {
+      const freshlyPrepared = await preparePlan(sourcePath);
+      plan = freshlyPrepared.plan;
+      parsed = freshlyPrepared.parsed;
+      converted = freshlyPrepared.converted;
+    }
     if (plan.layout === "v2") {
       throw new StorageMigrationError("MIG_ALREADY_V2", "Storage already uses format v2");
     }

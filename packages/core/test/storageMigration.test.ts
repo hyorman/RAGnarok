@@ -5,22 +5,27 @@ import * as path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { connect } from "@lancedb/lancedb";
+import * as lancedbModule from "@lancedb/lancedb";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   EmbeddingServiceRegistry,
   MIGRATION_REPORT_FILENAME,
+  MIGRATION_STATE_VERSION,
   STORAGE_FORMAT_FILENAME,
   StorageMigrationError,
   applyStorageMigration,
   ensureStorageFormatV2,
+  findLatestMigrationState,
   getStorageMigrationStatus,
   planStorageMigration,
+  prepareStorageMigration,
   resumeStorageMigration,
   rollbackStorageMigration,
   TopicManager,
   VectorStoreFactory,
   type IConfigProvider,
   type INotifier,
+  type MigrationState,
 } from "../src/index";
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
 
@@ -550,5 +555,98 @@ describe("offline v0.3 storage migration", function () {
     }
     expect(rejected?.code).to.equal(33);
     expect(JSON.parse(rejected.stdout).error.code).to.equal("MIG_CONFIRMATION");
+  });
+
+  it("apply with a prepared plan performs conversion exactly once", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    const prepared = await prepareStorageMigration(fixture.storageDir);
+    const sourceLanceDir = path.resolve(fixture.databaseDir, "lancedb");
+
+    // Instrument the shared lancedb module (same cached instance the
+    // implementation requires) to prove apply never re-opens the *source*
+    // table -- i.e. it never re-runs preparePlan/legacyRows -- once a
+    // prepared handle is reused. Installed after prepare so only apply's
+    // behavior is measured.
+    const lancedbAny = lancedbModule as any;
+    const originalConnect = lancedbAny.connect;
+    let sourceConnectCalls = 0;
+    lancedbAny.connect = async (uri: string, ...rest: unknown[]) => {
+      if (path.resolve(String(uri)) === sourceLanceDir) {
+        sourceConnectCalls += 1;
+      }
+      return originalConnect(uri, ...rest);
+    };
+    try {
+      const report = await applyStorageMigration(fixture.storageDir, {
+        prepared,
+        nonInteractive: true,
+        acceptedBackupPath: prepared.plan.backupPath,
+      });
+      expect(
+        sourceConnectCalls,
+        "apply must not re-open the source lancedb table when reusing a prepared plan",
+      ).to.equal(0);
+      expect(report.migrationId).to.equal(prepared.plan.migrationId);
+      expect(
+        JSON.parse(await fs.readFile(path.join(fixture.storageDir, STORAGE_FORMAT_FILENAME), "utf8")).formatVersion,
+      ).to.equal(2);
+      await fs.access(prepared.plan.backupPath);
+    } finally {
+      lancedbAny.connect = originalConnect;
+    }
+  });
+
+  it("apply with a stale prepared plan throws MIG_CHANGED", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    const prepared = await prepareStorageMigration(fixture.storageDir);
+    await fs.writeFile(path.join(fixture.databaseDir, "extra.json"), "{}");
+
+    const error = await captureError(() =>
+      applyStorageMigration(fixture.storageDir, {
+        prepared,
+        nonInteractive: true,
+        acceptedBackupPath: prepared.plan.backupPath,
+      }),
+    );
+    expect((error as StorageMigrationError).code).to.equal("MIG_CHANGED");
+  });
+
+  it("findLatestMigrationState returns null with no state and the newest with two", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    expect(await findLatestMigrationState(fixture.storageDir)).to.equal(null);
+
+    const plan = await planStorageMigration(fixture.storageDir);
+    const sourcePath = path.resolve(fixture.storageDir);
+    const baseState: MigrationState = {
+      stateVersion: MIGRATION_STATE_VERSION,
+      migrationId: plan.migrationId,
+      sourcePath,
+      layout: plan.layout,
+      stage: "planned",
+      sourceInventoryDigest: plan.inventory.digest,
+      backupPath: plan.backupPath,
+      stagingPath: plan.stagingPath,
+      updatedAt: 1000,
+    };
+    const olderPath = path.join(parent, `.${path.basename(fixture.storageDir)}.migration-${plan.migrationId}.json`);
+    await fs.writeFile(olderPath, JSON.stringify(baseState));
+
+    const newerState: MigrationState = { ...baseState, migrationId: `${plan.migrationId}-2`, updatedAt: 2000 };
+    const newerPath = path.join(
+      parent,
+      `.${path.basename(fixture.storageDir)}.migration-${newerState.migrationId}.json`,
+    );
+    await fs.writeFile(newerPath, JSON.stringify(newerState));
+
+    const corruptPath = path.join(
+      parent,
+      `.${path.basename(fixture.storageDir)}.migration-${plan.migrationId}-corrupt.json`,
+    );
+    await fs.writeFile(corruptPath, "not json");
+
+    const found = await findLatestMigrationState(fixture.storageDir);
+    expect(found).to.not.equal(null);
+    expect(found!.state.updatedAt).to.equal(2000);
+    expect(found!.statePath).to.equal(newerPath);
   });
 });

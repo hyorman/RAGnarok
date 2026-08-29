@@ -172,8 +172,10 @@ export {
   MIGRATION_STATE_VERSION,
   StorageMigrationError,
   applyStorageMigration,
+  findLatestMigrationState,
   getStorageMigrationStatus,
   planStorageMigration,
+  prepareStorageMigration,
   resumeStorageMigration,
   rollbackStorageMigration,
 } from "./utils/storageMigration";
@@ -188,6 +190,7 @@ export type {
   MigrationStage,
   MigrationState,
   MigrationTopicPlan,
+  PreparedStorageMigration,
   StorageMigrationPlan,
 } from "./utils/storageMigration";
 export { acquireStorageLock, StorageLockHeldError, STORAGE_LOCK_FILENAME } from "./utils/storageLock";
