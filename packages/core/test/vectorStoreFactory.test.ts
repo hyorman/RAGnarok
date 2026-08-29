@@ -303,6 +303,88 @@ describe("VectorStoreFactory metadata persistence", function () {
 });
 
 /**
+ * A table that exists but fails to load must abort whatever called loadStore,
+ * not hand back null. Returning null here is exactly what used to let
+ * documentPipeline treat "exists but broken" as "does not exist yet" and call
+ * createStore, which drops the table. createStore itself gets the same
+ * guarantee directly: it must refuse to touch an existing table unless the
+ * caller explicitly opts into recreation.
+ */
+describe("non-destructive load and create", function () {
+  this.timeout(120000);
+
+  let factory: VectorStoreFactory;
+  let storageDir: string;
+  let metadataPath: string;
+  const topicId = "non-destructive";
+
+  before(async function () {
+    const embeddingService = new EmbeddingService({ config: mockConfig, notifier: mockNotifier });
+    const modelRegistry = ModelRegistry.getInstance();
+    embeddingService.registerBackend(new HuggingFaceBackend(modelRegistry, mockNotifier));
+
+    storageDir = path.join(os.tmpdir(), `vsf-non-destructive-${crypto.randomUUID()}`);
+    await fs.mkdir(storageDir, { recursive: true });
+
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => embeddingService,
+      maxResidentLocal: 2,
+    });
+    factory = new VectorStoreFactory(storageDir, modelRegistry.getDefaultModel(), embeddingService, embeddingRegistry);
+    await factory.initialize();
+
+    metadataPath = path.join(storageDir, `vector-${topicId}-metadata.json`);
+    await factory.createStore({ topicId, storageDir }, [
+      new LangChainDocument({
+        pageContent: "the original semantic space, never to be dropped silently",
+        metadata: { documentId: "original", chunkId: "original-0" },
+      }),
+    ]);
+  });
+
+  after(async function () {
+    factory?.dispose();
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("loadStore rethrows load failures as VectorStoreLoadError instead of null", async function () {
+    // The store created in before() is still cache-resident; a cache hit
+    // would never touch the (about to be corrupted) metadata file.
+    (factory as any).storeCache.clear();
+    await fs.writeFile(metadataPath, "not json{{");
+    try {
+      await factory.loadStore(topicId);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.name).to.equal("VectorStoreLoadError");
+      expect(error.topicId).to.equal(topicId);
+    }
+  });
+
+  it("loadStore still returns null when the table genuinely does not exist", async function () {
+    expect(await factory.loadStore("no-such-topic")).to.equal(null);
+  });
+
+  it("createStore refuses to drop an existing table without recreate: true", async function () {
+    try {
+      await factory.createStore({ topicId, storageDir: "" }, []);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.message).to.include("already exists");
+    }
+    // and the original rows are still there
+    const stats = await factory.getStoredStats(topicId);
+    expect(stats.chunkCount).to.be.greaterThan(0);
+  });
+
+  it("createStore with recreate: true still rebuilds", async function () {
+    await factory.createStore({ topicId, storageDir: "" }, [], undefined, { recreate: true });
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(metadata.documentCount).to.equal(0);
+  });
+});
+
+/**
  * Records every model it is pointed at, so a test can ask which model actually
  * served an embed. Mirrors the real service closely enough for the property
  * under test: `initializeForBackend` re-points the (per-service) backend, so a

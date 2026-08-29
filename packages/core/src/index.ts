@@ -82,6 +82,7 @@ export {
   VectorStoreMetadataCorruptionError,
   EmbeddingFingerprintMismatchError,
   EmbeddingEndpointMismatchError,
+  VectorStoreLoadError,
 } from "./stores/vectorStoreFactory";
 export type { VectorStoreConfig, VectorStoreMetadata } from "./stores/vectorStoreFactory";
 

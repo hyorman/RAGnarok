@@ -7,6 +7,8 @@ import { expect } from "chai";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import * as sinon from "sinon";
+import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   DocumentPipeline,
   PipelineProgress,
@@ -379,6 +381,68 @@ describe("DocumentPipeline", function () {
       await verifier.initialize();
       expect(await verifier.loadStore(topicId)).to.equal(null);
       verifier.dispose();
+    });
+
+    /**
+     * documentPipeline treats a null return from loadStore as "no store
+     * yet" and calls createStore — which used to unconditionally drop
+     * whatever table already existed. loadStore must therefore fail the
+     * whole ingestion instead of returning null when a table exists but
+     * cannot be loaded.
+     *
+     * validateEmbeddingModel already reads (and fails closed on) the same
+     * metadata file before storeDocuments ever reaches loadStore, so a
+     * corrupted-metadata scenario run end-to-end would be rejected one step
+     * earlier, by a different error type, without ever exercising loadStore.
+     * That earlier check is not what this test is about, so it is stubbed
+     * to a no-op here, letting the real, corrupted-metadata loadStore path
+     * run — this is the interaction documented on VectorStoreFactory: a
+     * table that exists but fails to load must surface as
+     * VectorStoreLoadError, not null.
+     */
+    it("aborts ingestion on a load failure without touching the existing table", async function () {
+      const topicId = "test-topic-load-failure";
+      const testFile = path.join(fixturesPath, "sample-text.txt");
+
+      const initial = await pipeline.processDocument(testFile, topicId);
+      expect(initial.success).to.be.true;
+
+      const factory = (pipeline as any).vectorStoreFactory as VectorStoreFactory;
+      const metadataPath = path.join(tempStorageDir, `vector-${topicId}-metadata.json`);
+      const originalMetadata = fs.readFileSync(metadataPath, "utf8");
+      const statsBefore = await factory.getStoredStats(topicId);
+      expect(statsBefore.chunkCount).to.be.greaterThan(0);
+
+      await fs.promises.writeFile(metadataPath, "not json{{");
+      (factory as any).storeCache.clear();
+      const validateStub = sinon.stub(factory, "validateEmbeddingModel").resolves();
+
+      let caught: unknown;
+      try {
+        await (pipeline as any).storeDocuments(
+          [
+            new LangChainDocument({
+              pageContent: "must never be embedded once the load has failed",
+              metadata: { documentId: "extra", chunkId: "extra-0" },
+            }),
+          ],
+          topicId,
+          {},
+        );
+        expect.fail("storeDocuments should have rejected");
+      } catch (error) {
+        caught = error;
+      } finally {
+        validateStub.restore();
+      }
+
+      expect((caught as Error)?.name).to.equal("VectorStoreLoadError");
+
+      // The table must be untouched: same chunk count as before the failed load.
+      const statsAfter = await factory.getStoredStats(topicId);
+      expect(statsAfter).to.deep.equal(statsBefore);
+
+      fs.writeFileSync(metadataPath, originalMetadata);
     });
 
     it("should collect and report errors", async function () {

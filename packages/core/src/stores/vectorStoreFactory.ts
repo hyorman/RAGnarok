@@ -81,6 +81,27 @@ export class VectorStoreMetadataCorruptionError extends Error {
   }
 }
 
+/**
+ * A table exists but could not be loaded (corrupt/unreadable metadata, an
+ * unopenable LanceDB table, or any other failure short of a genuine
+ * endpoint refusal). This must never be swallowed into a `null` return:
+ * documentPipeline treats `null` from loadStore as "no store yet" and calls
+ * createStore, which would drop the very table that failed to load.
+ */
+export class VectorStoreLoadError extends Error {
+  readonly name = "VectorStoreLoadError";
+  constructor(
+    public readonly topicId: string,
+    public readonly cause: unknown,
+  ) {
+    super(
+      `Vector store for topic ${topicId} exists but failed to load: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}. ` +
+        `The table was left untouched.`,
+    );
+  }
+}
+
 export class EmbeddingFingerprintMismatchError extends Error {
   constructor(
     public readonly topicId: string,
@@ -183,6 +204,7 @@ export class VectorStoreFactory {
     config: VectorStoreConfig,
     initialDocuments?: LangChainDocument[],
     signal?: AbortSignal,
+    options?: { recreate?: boolean },
   ): Promise<void> {
     signal?.throwIfAborted();
     this.logger.info("Creating vector store", {
@@ -195,13 +217,18 @@ export class VectorStoreFactory {
       const db = await this.getConnection(this.lanceDbUri);
       signal?.throwIfAborted();
 
-      // Check if table exists and drop it to start fresh
       const tableNames = await db.tableNames();
       signal?.throwIfAborted();
       if (tableNames.includes(config.topicId)) {
+        if (!options?.recreate) {
+          throw new Error(
+            `Vector store table for topic ${config.topicId} already exists; ` +
+              `refusing to drop it outside an explicit recreate path.`,
+          );
+        }
         await db.dropTable(config.topicId);
         signal?.throwIfAborted();
-        this.logger.debug("Dropped existing table", { topicId: config.topicId });
+        this.logger.debug("Dropped existing table for recreate", { topicId: config.topicId });
       }
 
       const docs = initialDocuments && initialDocuments.length > 0 ? initialDocuments : [];
@@ -353,7 +380,7 @@ export class VectorStoreFactory {
       // createStore, which DROPS the existing table and re-embeds it against
       // this deployment's endpoint. The silent loss this check exists to
       // prevent would then be caused by the check itself.
-      if (error instanceof EmbeddingEndpointMismatchError) {
+      if (error instanceof EmbeddingEndpointMismatchError || error instanceof VectorStoreLoadError) {
         throw error;
       }
       this.logger.error("Failed to load vector store", {
@@ -361,7 +388,9 @@ export class VectorStoreFactory {
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
-      return null;
+      // A table that exists but cannot be loaded must surface as a failure:
+      // returning null here is what used to let ingestion drop the table.
+      throw new VectorStoreLoadError(topicId, error);
     }
   }
 
