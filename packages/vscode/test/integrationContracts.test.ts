@@ -34,24 +34,20 @@ function legacyPlan(): any {
     availableBytes: 100,
     backupPath: "/backup",
     stagingPath: "/stage",
+    statePath: "/legacy-state.json",
   };
 }
 
 function migrationDependencies(overrides: Partial<MigrationUxDependencies> = {}): MigrationUxDependencies {
   const manager = {} as any;
-  let creates = 0;
   return {
-    createTopicManager: async () => {
-      creates++;
-      if (creates === 1) {
-        throw new Error("non-empty unversioned RAGnarōk storage");
-      }
-      return manager;
-    },
-    plan: async () => legacyPlan(),
-    status: async () => ({ plan: legacyPlan() }),
+    createTopicManager: async () => manager,
+    inspect: async () => ({ status: "legacy" }) as any,
+    prepare: async () => ({ plan: legacyPlan() }) as any,
+    findState: async () => null,
     apply: async () => ({}) as any,
     resume: async () => ({}) as any,
+    rollback: async () => ({}) as any,
     progress: async (_resuming, task) => task(new AbortController().signal),
     showStorageFailure: async () => undefined,
     showInformation: async () => undefined,
@@ -239,24 +235,9 @@ describe("automatic VS Code storage migration", function () {
     expect(appliedSignal?.aborted).to.equal(false);
   });
 
-  it("resumes durable state instead of applying again", async function () {
-    let resumed = 0;
-    let applied = 0;
-    const dependencies = migrationDependencies({
-      status: async () => ({ plan: legacyPlan(), state: { stage: "staged" } as any }),
-      resume: async () => {
-        resumed++;
-        return {} as any;
-      },
-      apply: async () => {
-        applied++;
-        return {} as any;
-      },
-    });
-    await openTopicManagerWithMigration("/legacy", dependencies);
-    expect(resumed).to.equal(1);
-    expect(applied).to.equal(0);
-  });
+  // "resumes durable state instead of applying again" moved to the proactive
+  // recovery suite below, where the pre-cutover state now arrives via
+  // findState rather than being rediscovered after a failed open.
 
   it("converts a legacy store without asking and reports where the backup went", async function () {
     let applied = 0;
@@ -287,7 +268,7 @@ describe("automatic VS Code storage migration", function () {
     };
     const messages: string[] = [];
     const dependencies = migrationDependencies({
-      plan: async () => plan,
+      prepare: async () => ({ plan }) as any,
       showInformation: async (message) => {
         messages.push(message);
       },
@@ -303,17 +284,18 @@ describe("automatic VS Code storage migration", function () {
   it("reports corrupt storage and two-window lease failures without planning", async function () {
     for (const [error, expected] of [
       [new Error("corrupt topics index"), "could not be opened safely"],
-      [Object.assign(new Error("locked by another RAGnarōk process"), { name: "StorageLockHeldError" }), "another"],
+      [Object.assign(new Error("locked"), { name: "StorageLockHeldError" }), "another"],
     ] as const) {
       let planned = 0;
       let failure = "";
       const dependencies = migrationDependencies({
+        inspect: async () => ({ status: "current" }) as any,
         createTopicManager: async () => {
           throw error;
         },
-        plan: async () => {
+        prepare: async () => {
           planned++;
-          return legacyPlan();
+          return { plan: legacyPlan() } as any;
         },
         showStorageFailure: async (message) => {
           failure = message;
@@ -356,9 +338,203 @@ describe("automatic VS Code storage migration", function () {
         expect(cancellationMessage).to.include("before cutover");
         expect(errorMessage).to.equal("");
       } else {
-        expect(errorMessage).to.include("Inspect migration status");
+        expect(errorMessage).to.include("resume or retry automatically");
       }
     }
+  });
+});
+
+// Activation inspects before it opens, so an interrupted migration is finished
+// on the next window open instead of waiting for a hand-run CLI. Which recovery
+// entry point a stage routes to is the whole safety property here: a rollback
+// stage sent through resume() would re-run the forward migration over a
+// half-restored tree.
+describe("proactive activation recovery", function () {
+  it("auto-resumes an interrupted forward migration without re-planning", async function () {
+    const calls: string[] = [];
+    let resumedId = "";
+    const dependencies = migrationDependencies({
+      inspect: async () =>
+        ({
+          status: "interrupted",
+          migrationId: "mig-forward",
+          stage: "cutoverPrepared",
+          statePath: "/parent/.storage.migration-mig-forward.json",
+        }) as any,
+      resume: async (_dir, migrationId) => {
+        calls.push("resume");
+        resumedId = migrationId;
+        return {} as any;
+      },
+      rollback: async () => {
+        calls.push("rollback");
+        return {} as any;
+      },
+      prepare: async () => {
+        calls.push("prepare");
+        return { plan: legacyPlan() } as any;
+      },
+      apply: async () => {
+        calls.push("apply");
+        return {} as any;
+      },
+    });
+
+    const manager = await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(calls).to.deep.equal(["resume"]);
+    expect(resumedId).to.equal("mig-forward");
+    expect(manager).to.be.an("object");
+  });
+
+  it("completes an interrupted rollback with rollback(), then re-enters and migrates the restored legacy tree", async function () {
+    const calls: string[] = [];
+    let inspections = 0;
+    const dependencies = migrationDependencies({
+      inspect: async () => {
+        inspections++;
+        return inspections === 1
+          ? ({
+              status: "interrupted",
+              migrationId: "mig-rollback",
+              stage: "rollbackV2BackedUp",
+              statePath: "/parent/.storage.migration-mig-rollback.json",
+            } as any)
+          : ({ status: "legacy" } as any);
+      },
+      resume: async () => {
+        calls.push("resume");
+        return {} as any;
+      },
+      rollback: async () => {
+        calls.push("rollback");
+        return {} as any;
+      },
+      prepare: async () => {
+        calls.push("prepare");
+        return { plan: legacyPlan() } as any;
+      },
+      apply: async () => {
+        calls.push("apply");
+        return {} as any;
+      },
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    // Never resume(): it knows nothing about rollback stages.
+    expect(calls).to.deep.equal(["rollback", "prepare", "apply"]);
+    expect(inspections).to.equal(2);
+  });
+
+  it("resumes a pre-cutover state instead of starting a second migration", async function () {
+    const calls: string[] = [];
+    let resumedId = "";
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "legacy" }) as any,
+      findState: async () =>
+        ({
+          state: { migrationId: "mig-staged", stage: "staged" },
+          statePath: "/parent/.storage.migration-mig-staged.json",
+        }) as any,
+      resume: async (_dir, migrationId) => {
+        calls.push("resume");
+        resumedId = migrationId;
+        return {} as any;
+      },
+      prepare: async () => {
+        calls.push("prepare");
+        return { plan: legacyPlan() } as any;
+      },
+      apply: async () => {
+        calls.push("apply");
+        return {} as any;
+      },
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(calls).to.deep.equal(["resume"]);
+    expect(resumedId).to.equal("mig-staged");
+  });
+
+  it("prepares once and applies that same handle, never converting twice", async function () {
+    let prepared = 0;
+    const handle = { plan: legacyPlan() } as any;
+    let appliedPrepared: unknown;
+    const dependencies = migrationDependencies({
+      findState: async () => null,
+      prepare: async () => {
+        prepared++;
+        return handle;
+      },
+      apply: async (_dir, options) => {
+        appliedPrepared = (options as any).prepared;
+        return {} as any;
+      },
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(prepared).to.equal(1);
+    expect(appliedPrepared).to.equal(handle);
+  });
+
+  it("names the state file when recovery fails, and lets activation fail", async function () {
+    let failure = "";
+    const dependencies = migrationDependencies({
+      inspect: async () =>
+        ({
+          status: "interrupted",
+          migrationId: "mig-forward",
+          stage: "legacyBackedUp",
+          statePath: "/parent/.storage.migration-mig-forward.json",
+        }) as any,
+      resume: async () => {
+        throw new Error("resume exploded");
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
+      },
+    });
+
+    let thrown: any;
+    try {
+      await openTopicManagerWithMigration("/legacy", dependencies);
+      expect.fail("expected recovery failure to propagate");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown?.message).to.equal("resume exploded");
+    expect(failure).to.include("/parent/.storage.migration-mig-forward.json");
+    expect(failure).to.include("mig-forward");
+    expect(failure).to.include("Your data is intact");
+  });
+
+  it("tells the loser of a two-window migration race to wait rather than reporting a failure", async function () {
+    let failure = "";
+    const dependencies = migrationDependencies({
+      apply: async () => {
+        throw Object.assign(new Error("migration lock held"), {
+          name: "StorageMigrationError",
+          code: "MIG_BUSY",
+        });
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
+      },
+    });
+
+    try {
+      await openTopicManagerWithMigration("/legacy", dependencies);
+      expect.fail("expected the busy migration to propagate");
+    } catch {
+      // expected
+    }
+
+    expect(failure).to.include("Another VS Code window is migrating");
+    expect(failure).to.not.include("storage migration failed");
   });
 });
 

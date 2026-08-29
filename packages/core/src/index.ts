@@ -165,9 +165,10 @@ export {
   atomicWriteFile,
   atomicWriteJson,
   ensureStorageFormatV2,
+  inspectStorage,
   resetStorageToV2,
 } from "./utils/storageV2";
-export type { StorageFormatMarker } from "./utils/storageV2";
+export type { StorageFormatMarker, StorageInspection } from "./utils/storageV2";
 export {
   MIGRATION_REPORT_FILENAME,
   MIGRATION_STATE_VERSION,

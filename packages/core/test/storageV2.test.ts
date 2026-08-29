@@ -6,6 +6,7 @@ import {
   atomicWriteJson,
   assertNoInterruptedStorageMigration,
   ensureStorageFormatV2,
+  inspectStorage,
   resetStorageToV2,
   STORAGE_FORMAT_FILENAME,
   STORAGE_FORMAT_VERSION,
@@ -249,5 +250,81 @@ describe("typed storage errors", () => {
       expect(error.backupDir).to.equal(backupDir);
       expect(error.message).to.include(backupDir);
     }
+  });
+});
+
+// The activation path has to know what it is looking at *before* it takes a
+// lock or writes anything, so every classification below is reached by reading
+// the directory alone.
+describe("inspectStorage", () => {
+  let dir: string;
+  let storageDir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-inspect-"));
+    storageDir = path.join(dir, "storage");
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("reports an empty directory as empty", async () => {
+    await fs.mkdir(storageDir, { recursive: true });
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "empty" });
+  });
+
+  it("reports a v2 marker as current", async () => {
+    await fs.mkdir(storageDir, { recursive: true });
+    await atomicWriteJson(path.join(storageDir, STORAGE_FORMAT_FILENAME), {
+      formatVersion: STORAGE_FORMAT_VERSION,
+      initializedAt: Date.now(),
+    });
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "current" });
+  });
+
+  it("reports a newer marker as future-version, carrying the found version", async () => {
+    await fs.mkdir(storageDir, { recursive: true });
+    await atomicWriteJson(path.join(storageDir, STORAGE_FORMAT_FILENAME), { formatVersion: 3 });
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "future-version", foundVersion: 3 });
+  });
+
+  it("reports marker-less managed data as legacy", async () => {
+    await fs.mkdir(path.join(storageDir, "database"), { recursive: true });
+    await fs.writeFile(path.join(storageDir, "database", "topics.json"), "{}");
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "legacy" });
+  });
+
+  it("reports an interrupted migration with its id, stage, and state path", async () => {
+    await fs.mkdir(storageDir, { recursive: true });
+    const statePath = path.join(dir, ".storage.migration-mig-xyz.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ sourcePath: storageDir, migrationId: "mig-xyz", stage: "cutoverPrepared" }),
+    );
+    expect(await inspectStorage(storageDir)).to.deep.equal({
+      status: "interrupted",
+      migrationId: "mig-xyz",
+      stage: "cutoverPrepared",
+      statePath,
+    });
+  });
+
+  it("never writes: inspecting an absent directory neither creates it nor marks it", async () => {
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "empty" });
+    await fs.access(storageDir).then(
+      () => expect.fail("inspectStorage must not create the storage directory"),
+      () => undefined,
+    );
+  });
+
+  it("reports an interrupted reset ahead of the data it left behind", async () => {
+    await fs.mkdir(path.join(storageDir, "database"), { recursive: true });
+    await atomicWriteJson(path.join(storageDir, STORAGE_RESET_JOURNAL_FILENAME), {
+      startedAt: Date.now(),
+      backupDir: null,
+      marker: null,
+    });
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "reset-interrupted" });
   });
 });

@@ -103,11 +103,18 @@ const INTERRUPTED_MIGRATION_STAGES = new Set([
 ]);
 
 /**
- * Refuse normal initialization while an external migration state records an
- * incomplete namespace cutover. The state is outside storage because the
- * source directory can be absent between atomic renames.
+ * The one scan behind both the fail-closed assertion and the read-only
+ * inspection: whether an external migration state records an incomplete
+ * namespace cutover for this directory. The state lives outside storage
+ * because the source directory can be absent between atomic renames.
+ *
+ * A corrupt state file throws rather than resolving to `null` — an unreadable
+ * record of an in-flight cutover is exactly the case that must not be waved
+ * through as "no migration here". Both callers inherit that.
  */
-export async function assertNoInterruptedStorageMigration(storageDir: string): Promise<void> {
+async function findInterruptedStorageMigration(
+  storageDir: string,
+): Promise<{ migrationId: string; stage: string; statePath: string } | null> {
   const sourcePath = path.resolve(storageDir);
   const parent = path.dirname(sourcePath);
   const prefix = `.${path.basename(sourcePath)}.migration-`;
@@ -116,7 +123,7 @@ export async function assertNoInterruptedStorageMigration(storageDir: string): P
     entries = await fs.readdir(parent);
   } catch (error: any) {
     if (error?.code === "ENOENT") {
-      return;
+      return null;
     }
     throw error;
   }
@@ -131,9 +138,79 @@ export async function assertNoInterruptedStorageMigration(storageDir: string): P
       throw new Error(`Migration state is corrupt at ${path.join(parent, entry)}; storage initialization aborted.`);
     }
     if (path.resolve(state.sourcePath ?? "") === sourcePath && INTERRUPTED_MIGRATION_STAGES.has(state.stage ?? "")) {
-      throw new StorageMigrationInterruptedError(state.migrationId ?? "unknown", state.stage ?? "unknown", path.join(parent, entry));
+      return {
+        migrationId: state.migrationId ?? "unknown",
+        stage: state.stage ?? "unknown",
+        statePath: path.join(parent, entry),
+      };
     }
   }
+  return null;
+}
+
+/**
+ * Refuse normal initialization while an external migration state records an
+ * incomplete namespace cutover.
+ */
+export async function assertNoInterruptedStorageMigration(storageDir: string): Promise<void> {
+  const interrupted = await findInterruptedStorageMigration(storageDir);
+  if (interrupted) {
+    throw new StorageMigrationInterruptedError(interrupted.migrationId, interrupted.stage, interrupted.statePath);
+  }
+}
+
+export type StorageInspection =
+  | { status: "current" | "empty" }
+  | { status: "legacy" }
+  | { status: "interrupted"; migrationId: string; stage: string; statePath: string }
+  | { status: "future-version"; foundVersion: unknown }
+  | { status: "reset-interrupted" };
+
+/**
+ * Read-only, lock-free classification of a storage directory.
+ *
+ * Activation needs to know what it is looking at *before* it opens anything,
+ * so that an interrupted migration is resumed rather than rediscovered as an
+ * open failure. Nothing here writes, creates the directory, or takes a lock —
+ * which also means two windows can inspect the same store concurrently and
+ * both decide to migrate; the migration lock, not this function, is what
+ * settles that race.
+ *
+ * Order is by severity, not convenience: an interrupted migration or reset
+ * describes the directory more truthfully than whatever files it currently
+ * happens to contain.
+ */
+export async function inspectStorage(storageDir: string): Promise<StorageInspection> {
+  const interrupted = await findInterruptedStorageMigration(storageDir);
+  if (interrupted) {
+    return { status: "interrupted", ...interrupted };
+  }
+
+  // Existence only. A corrupt journal still proves a reset was interrupted,
+  // and inspection has no use for the backup path it would have named.
+  try {
+    await fs.access(resetJournalPath(storageDir));
+    return { status: "reset-interrupted" };
+  } catch {
+    // No journal: a completed or never-started reset.
+  }
+
+  try {
+    const parsed = JSON.parse(await fs.readFile(markerPath(storageDir), "utf8")) as Partial<StorageFormatMarker>;
+    return parsed.formatVersion === STORAGE_FORMAT_VERSION
+      ? { status: "current" }
+      : { status: "future-version", foundVersion: parsed.formatVersion };
+  } catch (error: any) {
+    // A present-but-unreadable marker is not "no marker": fail closed the same
+    // way ensureStorageFormatV2 does rather than classifying it as legacy.
+    if (error?.code !== "ENOENT") {
+      throw error instanceof SyntaxError
+        ? new Error(`Invalid ${STORAGE_FORMAT_FILENAME}; storage initialization aborted.`)
+        : error;
+    }
+  }
+
+  return (await hasManagedData(storageDir)) ? { status: "legacy" } : { status: "empty" };
 }
 
 /** The six fields the 0.3 release wrote into `vector-<topic>-metadata.json`. */

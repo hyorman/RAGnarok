@@ -284,5 +284,15 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error("Fatal error starting MCP server:", error);
+  // Two startup refusals have a concrete next action, and a stdio client shows
+  // the operator nothing but this stream. Naming the action beats making them
+  // decode a storage-format error out of a stack trace.
+  if ((error as Error)?.name === "UnversionedStorageError") {
+    console.error(
+      "This storage contains pre-0.4 data. Open it once in VS Code to migrate it automatically, or run ragnarok-migrate.",
+    );
+  } else if ((error as Error)?.name === "StorageMigrationInterruptedError") {
+    console.error("A storage migration is mid-flight. Open the storage in VS Code to resume it automatically.");
+  }
   process.exitCode = 1;
 });
