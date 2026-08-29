@@ -11,6 +11,40 @@ export const STORAGE_FORMAT_FILENAME = "storage-format.json";
  */
 export const STORAGE_CONFIG_FILENAME = "config.json";
 
+export class StorageMigrationInterruptedError extends Error {
+  readonly name = "StorageMigrationInterruptedError";
+  constructor(
+    public readonly migrationId: string,
+    public readonly stage: string,
+    public readonly statePath: string,
+  ) {
+    super(
+      `Storage migration ${migrationId} is interrupted at ${stage}. ` +
+        `Opening the storage in VS Code resumes it automatically; ragnarok-migrate resume is the manual fallback.`,
+    );
+  }
+}
+
+export class UnversionedStorageError extends Error {
+  readonly name = "UnversionedStorageError";
+  constructor(public readonly storageDir: string) {
+    super(
+      `Existing unversioned RAGnarōk storage was found at ${storageDir}. ` +
+        `It must be migrated to format v2 before it can be opened.`,
+    );
+  }
+}
+
+export class StorageFormatVersionError extends Error {
+  readonly name = "StorageFormatVersionError";
+  constructor(
+    public readonly foundVersion: unknown,
+    public readonly expectedVersion: number,
+  ) {
+    super(`Unsupported RAGnarōk storage format ${String(foundVersion)}. Expected ${expectedVersion}.`);
+  }
+}
+
 /**
  * Files that are infrastructure, not managed data — never version-gated, never backed up.
  *
@@ -72,10 +106,7 @@ export async function assertNoInterruptedStorageMigration(storageDir: string): P
       throw new Error(`Migration state is corrupt at ${path.join(parent, entry)}; storage initialization aborted.`);
     }
     if (path.resolve(state.sourcePath ?? "") === sourcePath && INTERRUPTED_MIGRATION_STAGES.has(state.stage ?? "")) {
-      throw new Error(
-        `Storage migration ${state.migrationId ?? "unknown"} is interrupted at ${state.stage}. ` +
-          "Run ragnarok-migrate resume before starting normal storage services.",
-      );
+      throw new StorageMigrationInterruptedError(state.migrationId ?? "unknown", state.stage ?? "unknown", path.join(parent, entry));
     }
   }
 }
@@ -188,9 +219,7 @@ export async function ensureStorageFormatV2(storageDir: string): Promise<Storage
   try {
     const parsed = JSON.parse(await fs.readFile(formatPath, "utf8")) as Partial<StorageFormatMarker>;
     if (parsed.formatVersion !== STORAGE_FORMAT_VERSION) {
-      throw new Error(
-        `Unsupported RAGnarōk storage format ${String(parsed.formatVersion)}. Expected ${STORAGE_FORMAT_VERSION}.`,
-      );
+      throw new StorageFormatVersionError(parsed.formatVersion, STORAGE_FORMAT_VERSION);
     }
     return parsed as StorageFormatMarker;
   } catch (error: any) {
@@ -203,11 +232,7 @@ export async function ensureStorageFormatV2(storageDir: string): Promise<Storage
   }
 
   if (await hasManagedData(storageDir)) {
-    throw new Error(
-      `Existing unversioned RAGnarōk storage was found at ${storageDir}. ` +
-        `Run "ragnarok-migrate --storage ${storageDir} --dry-run" to preview the supported v0.3 migration. ` +
-        `Reset is destructive continuity loss and requires separate explicit consent.`,
-    );
+    throw new UnversionedStorageError(storageDir);
   }
 
   const marker: StorageFormatMarker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: Date.now() };

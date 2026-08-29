@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import {
   atomicWriteJson,
+  assertNoInterruptedStorageMigration,
   ensureStorageFormatV2,
   resetStorageToV2,
   STORAGE_FORMAT_FILENAME,
@@ -34,8 +35,7 @@ describe("storage format v2", () => {
       await ensureStorageFormatV2(directory);
       expect.fail("expected format validation to fail");
     } catch (error) {
-      expect((error as Error).message).to.include("unversioned");
-      expect((error as Error).message).to.include("ragnarok-migrate");
+      expect((error as Error).name).to.equal("UnversionedStorageError");
     }
   });
 
@@ -74,7 +74,7 @@ describe("storage format v2", () => {
       await ensureStorageFormatV2(directory);
       expect.fail("expected format validation to fail");
     } catch (error) {
-      expect((error as Error).message).to.include("unversioned");
+      expect((error as Error).name).to.equal("UnversionedStorageError");
     }
   });
 
@@ -107,5 +107,60 @@ describe("storage format v2", () => {
     await atomicWriteJson(target, { value: 2 });
     expect(JSON.parse(await fs.readFile(target, "utf8"))).to.deep.equal({ value: 2 });
     expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).to.deep.equal([]);
+  });
+});
+
+describe("typed storage errors", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-typed-errors-"));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("throws StorageMigrationInterruptedError with id, stage, and statePath", async () => {
+    const storageDir = path.join(dir, "storage");
+    await fs.mkdir(storageDir, { recursive: true });
+    const statePath = path.join(dir, ".storage.migration-mig-abc.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ sourcePath: storageDir, migrationId: "mig-abc", stage: "cutoverPrepared" }),
+    );
+    try {
+      await assertNoInterruptedStorageMigration(storageDir);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.name).to.equal("StorageMigrationInterruptedError");
+      expect(error.migrationId).to.equal("mig-abc");
+      expect(error.stage).to.equal("cutoverPrepared");
+      expect(error.statePath).to.equal(statePath);
+    }
+  });
+
+  it("throws UnversionedStorageError for a marker-less dir with managed data", async () => {
+    const storageDir = path.join(dir, "storage");
+    await fs.mkdir(path.join(storageDir, "database"), { recursive: true });
+    await fs.writeFile(path.join(storageDir, "database", "topics.json"), "{}");
+    try {
+      await ensureStorageFormatV2(storageDir);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.name).to.equal("UnversionedStorageError");
+      expect(error.storageDir).to.equal(storageDir);
+    }
+  });
+
+  it("throws StorageFormatVersionError for a future formatVersion", async () => {
+    const storageDir = path.join(dir, "storage");
+    await fs.mkdir(storageDir, { recursive: true });
+    await fs.writeFile(path.join(storageDir, "storage-format.json"), JSON.stringify({ formatVersion: 3 }));
+    try {
+      await ensureStorageFormatV2(storageDir);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.name).to.equal("StorageFormatVersionError");
+      expect(error.foundVersion).to.equal(3);
+    }
   });
 });
