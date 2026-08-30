@@ -59,6 +59,16 @@ import {
   validateAndStageTopicArchive,
 } from "../utils/topicArchive";
 
+/**
+ * Revision stand-in for a topics index file that does not exist yet.
+ *
+ * The index is published by the first storage write transaction, so a store
+ * that has never been mutated has no `topics.json` at all — reader paths no
+ * longer write one back on load. Not a valid sha256 digest, so it can never
+ * collide with a real hash.
+ */
+const ABSENT_TOPICS_INDEX_HASH = "absent";
+
 export interface TopicManagerOptions {
   storageDir: string;
   config: IConfigProvider;
@@ -2012,7 +2022,7 @@ export class TopicManager {
       // Captured before the lease is taken: this guards the staging window
       // above, not live cross-process races (the lease already excludes
       // those once we hold it).
-      const expectedIndexSha256 = await this.hashFile(this.getTopicsIndexPath());
+      const expectedIndexSha256 = await this.hashTopicsIndexOrAbsent();
       const preparedMetadataFinalPath = (await this.pathExists(preparedMetadataPath))
         ? preparedMetadataPath
         : undefined;
@@ -2262,6 +2272,27 @@ export class TopicManager {
     );
   }
 
+  /**
+   * Revision hash of the topics index, or {@link ABSENT_TOPICS_INDEX_HASH}
+   * when the file has not been written yet.
+   *
+   * Import captures this before staging and re-checks it under the write
+   * lease, so both sides must agree on how "no index yet" is spelled:
+   * absent-then-still-absent compares equal and the import proceeds, while
+   * absent-then-present compares unequal — a foreign writer published an
+   * index during the staging window, which is a genuine concurrent change.
+   */
+  private async hashTopicsIndexOrAbsent(): Promise<string> {
+    try {
+      return await this.hashFile(this.getTopicsIndexPath());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return ABSENT_TOPICS_INDEX_HASH;
+      }
+      throw error;
+    }
+  }
+
   private async hashFile(filePath: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const hash = createHash("sha256");
@@ -2318,7 +2349,7 @@ export class TopicManager {
         throw new Error(`Import destination already exists: ${operation.destination}`);
       }
     }
-    if ((await this.hashFile(this.getTopicsIndexPath())) !== commit.expectedIndexSha256) {
+    if ((await this.hashTopicsIndexOrAbsent()) !== commit.expectedIndexSha256) {
       throw new Error("Topics index changed during import; retry after active writes finish");
     }
     // Retained as a deterministic failure-injection seam for archive tests.

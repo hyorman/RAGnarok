@@ -491,9 +491,9 @@ describe("topic archive safety", function () {
     });
 
     try {
-      // The topics index belongs to the first write transaction: a genuinely
-      // untouched store has no topics.json yet. Seed one so the import's
-      // pre-lease revision hash has a real file to read.
+      // Seed a topic so the import runs against a store whose topics index
+      // has already been published; the fresh-store case (no topics.json at
+      // all) is covered by the test below.
       await manager.createTopic({ name: "seed" });
 
       const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
@@ -520,6 +520,42 @@ describe("topic archive safety", function () {
       expect(persisted.topics).to.have.property(imported.id);
       expect(manager.getTopic(imported.id)).to.not.equal(null);
       expect(await lockFileGone(storageDir)).to.equal(true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("imports into a store whose topics index has never been written", async function () {
+    const storageDir = path.join(temporaryDir, "storage-import-fresh");
+    const manager = await TopicManager.create({
+      storageDir,
+      config,
+      notifier,
+      embeddingService: stubEmbeddingServiceForInit(),
+      embeddingRegistry: stubEmbeddingRegistryForInit(),
+    });
+
+    try {
+      // Nothing has mutated this store, so `topics.json` does not exist yet:
+      // the reader path that loads the index no longer writes one back.
+      const topicsIndexPath = path.join(storageDir, "database", "topics.json");
+      expect(
+        await fs
+          .access(topicsIndexPath)
+          .then(() => true)
+          .catch(() => false),
+        "a freshly created store must not have a topics index yet",
+      ).to.equal(false);
+
+      const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
+      await writeArchive(archivePath, new Map([["topic.json", topicBytes]]));
+
+      const imported = await manager.importTopic(archivePath);
+
+      expect(imported.name).to.include("Archive topic");
+      expect(manager.getTopic(imported.id)).to.not.equal(null);
+      const persisted = JSON.parse(await fs.readFile(topicsIndexPath, "utf8")) as TopicsIndex;
+      expect(persisted.topics).to.have.property(imported.id);
     } finally {
       await manager.dispose();
     }
