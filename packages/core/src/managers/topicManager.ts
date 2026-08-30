@@ -481,7 +481,14 @@ export class TopicManager {
    * Create a new topic
    */
   public async createTopic(options: CreateTopicOptions): Promise<Topic> {
-    return this.runManagedOperation(() => this.runStorageWriteTransaction(() => this.createTopicUnlocked(options)));
+    const topic = await this.runManagedOperation(() =>
+      this.runStorageWriteTransaction(() => this.createTopicUnlocked(options)),
+    );
+    // Outside the transaction, so a share scan never widens the window in which
+    // a concurrent writer sees StorageBusyError. On the success path only: a
+    // throw above propagates before this runs.
+    await this.refreshSharedTopics();
+    return topic;
   }
 
   private async createTopicUnlocked(options: CreateTopicOptions): Promise<Topic> {
@@ -538,10 +545,6 @@ export class TopicManager {
         );
       }
 
-      // A shared topic whose name the newly created one now occupies must be
-      // renamed, or it becomes unreachable by name.
-      await this.refreshSharedTopics();
-
       this.logger.info("Topic created successfully", {
         topicId: topic.id,
         name: topic.name,
@@ -561,11 +564,14 @@ export class TopicManager {
    * Delete a topic and its vector store
    */
   public async deleteTopic(topicId: string): Promise<void> {
-    return this.runManagedOperation(() =>
+    await this.runManagedOperation(() =>
       this.runStorageWriteTransaction((tx) =>
         this.getTopicMutationMutex(topicId).runExclusive(() => this.deleteTopicUnlocked(topicId, tx.coordinator)),
       ),
     );
+    // The deleted name is free again, so a shared topic that was suffixed out
+    // of its way can take it back. Outside the transaction: see createTopic.
+    await this.refreshSharedTopics();
   }
 
   private async deleteTopicUnlocked(topicId: string, coordinator: StorageTransactionCoordinator): Promise<void> {
@@ -680,9 +686,13 @@ export class TopicManager {
    * Update topic metadata
    */
   public async updateTopic(topicId: string, updates: Partial<Pick<Topic, "name" | "description">>): Promise<Topic> {
-    return this.runManagedOperation(() =>
+    const topic = await this.runManagedOperation(() =>
       this.runStorageWriteTransaction(() => this.updateTopicUnlocked(topicId, updates)),
     );
+    // A shared topic whose name this rename now occupies must be renamed, or it
+    // becomes unreachable by name. Outside the transaction: see createTopic.
+    await this.refreshSharedTopics();
+    return topic;
   }
 
   private async updateTopicUnlocked(
@@ -724,10 +734,6 @@ export class TopicManager {
       // Save index
       this.topicsIndex.lastUpdated = Date.now();
       await this.saveTopicsIndex();
-
-      // A shared topic whose name the renamed one now occupies must be
-      // renamed, or it becomes unreachable by name.
-      await this.refreshSharedTopics();
 
       this.logger.info("Topic updated successfully", { topicId });
 
@@ -2397,7 +2403,9 @@ export class TopicManager {
       if (sources) {
         this.sharedTopics.setSources(sources);
       }
-      const previousIds = this.sharedTopics.listTopics().map((topic) => topic.id);
+      const previous = this.sharedTopics
+        .listTopics()
+        .map((topic) => ({ id: topic.id, storeDir: this.sharedTopics.getStoreDir(topic.id) }));
       const localNames = Object.values(this.topicsIndex?.topics ?? {}).map((topic) => topic.name);
       try {
         await this.sharedTopics.refresh(localNames);
@@ -2407,8 +2415,34 @@ export class TopicManager {
       }
       // A topic that is gone, or whose unpack moved, must not keep being served
       // from a directory that has been pruned.
-      for (const topicId of previousIds) {
-        this.invalidateVectorStoreCache(topicId);
+      for (const entry of previous) {
+        this.invalidateVectorStoreCache(entry.id);
+      }
+      // The manager's cache is not the only thing holding the old directory:
+      // VectorStoreFactory keeps a LanceDB connection per lancedb URI and the
+      // tables opened through it, neither of which the per-topic invalidation
+      // above can reach. A shared unpack is content-addressed, so a republished
+      // archive retires its predecessor's directory -- which the cache then
+      // prunes from disk, out from under those handles.
+      const liveStoreDirs = new Set(
+        this.sharedTopics
+          .listTopics()
+          .map((topic) => this.sharedTopics.getStoreDir(topic.id))
+          .filter((storeDir): storeDir is string => storeDir !== undefined),
+      );
+      const retiredStoreDirs = new Set<string>();
+      for (const entry of previous) {
+        if (entry.storeDir === undefined || entry.storeDir === this.sharedTopics.getStoreDir(entry.id)) {
+          continue;
+        }
+        // Two topics from one archive share a directory; only retire one no
+        // surviving topic is still served from.
+        if (!liveStoreDirs.has(entry.storeDir)) {
+          retiredStoreDirs.add(entry.storeDir);
+        }
+      }
+      for (const storeDir of retiredStoreDirs) {
+        await this.vectorStoreFactory?.closeConnection(storeDir);
       }
     });
   }
@@ -2658,6 +2692,12 @@ export class TopicManager {
       if (this.watcherStopped) {
         return;
       }
+      // The local names just changed underneath us, so a shared topic may now
+      // collide with one -- the very hole this feature closes for local
+      // mutations, reopened from outside. Safe here: the watch is on
+      // getDatabaseDir(), and the shared cache lives outside it, so a refresh
+      // cannot retrigger the watcher.
+      await this.refreshSharedTopics();
       this.emitExternalChange({ kind: "topics-changed" });
     } catch (error: any) {
       if (this.watcherStopped) {
@@ -2748,6 +2788,12 @@ export class TopicManager {
       if (this.watcherStopped) {
         return;
       }
+      // The local names just changed underneath us, so a shared topic may now
+      // collide with one -- the very hole this feature closes for local
+      // mutations, reopened from outside. Safe here: the watch is on
+      // getDatabaseDir(), and the shared cache lives outside it, so a refresh
+      // cannot retrigger the watcher.
+      await this.refreshSharedTopics();
       this.emitExternalChange({ kind: "topics-changed" });
     } catch (error) {
       if (this.watcherStopped) {

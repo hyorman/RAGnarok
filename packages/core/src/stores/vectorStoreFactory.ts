@@ -148,7 +148,10 @@ export class VectorStoreFactory {
   private endpointHashCache?: Promise<string>;
   private embeddingService: EmbeddingService;
   private connections = new Map<string, Connection>();
-  private tables = new Set<Table>();
+  // Keyed by lancedb URI, not a flat set: a shared topic's unpack directory is
+  // content-addressed, so a republished archive yields a new URI whose
+  // predecessor must be closed on its own rather than at dispose() time.
+  private tables = new Map<string, Set<Table>>();
 
   constructor(
     storageDir: string,
@@ -237,7 +240,7 @@ export class VectorStoreFactory {
       const fingerprint = await this.embeddingService.getFingerprint(signal);
       const table = await db.createEmptyTable(config.topicId, this.createDocumentSchema(fingerprint.dimension));
       signal?.throwIfAborted();
-      this.tables.add(table);
+      this.trackTable(this.lanceDbUri, table);
       // The backend must come from the same fingerprint that is about to be
       // stamped into metadata, not be defaulted: `embeddingModel` may carry a
       // backend prefix ("vscodeLM:<id>"), which only the backend that produced
@@ -359,7 +362,7 @@ export class VectorStoreFactory {
 
       // Open existing table
       const table = await db.openTable(topicId);
-      this.tables.add(table);
+      this.trackTable(targetLanceDbUri, table);
 
       // Create vector store from existing table (per LangChain docs)
       const store = new LanceDB(embeddings, { table });
@@ -605,7 +608,7 @@ export class VectorStoreFactory {
     const normalized = this.normalizeDocumentMetadata(documents);
     const db = await this.getConnection(this.lanceDbUri);
     const table = await db.openTable(topicId);
-    this.tables.add(table);
+    this.trackTable(this.lanceDbUri, table);
     signal?.throwIfAborted();
     const vectors = await this.embedForTopic(
       metadata,
@@ -646,7 +649,7 @@ export class VectorStoreFactory {
       return { documentCount: 0, chunkCount: 0 };
     }
     const table = await db.openTable(topicId);
-    this.tables.add(table);
+    this.trackTable(this.lanceDbUri, table);
     // The chunk count is a pushdown count — never materialize rows for it.
     const chunkCount = await table.countRows();
     if (chunkCount === 0) {
@@ -676,7 +679,7 @@ export class VectorStoreFactory {
       return 0;
     }
     const table = await db.openTable(topicId);
-    this.tables.add(table);
+    this.trackTable(this.lanceDbUri, table);
     const escaped = documentId.replace(/'/g, "''");
     return (await table.query().where(`document_id = '${escaped}'`).select(["chunk_id"]).toArray()).length;
   }
@@ -687,7 +690,7 @@ export class VectorStoreFactory {
       return [];
     }
     const table = await db.openTable(topicId);
-    this.tables.add(table);
+    this.trackTable(this.lanceDbUri, table);
     const escaped = documentId.replace(/'/g, "''");
     const rows = await table.query().where(`document_id = '${escaped}'`).select(["chunkId"]).toArray();
     if (rows.length > 0) {
@@ -874,7 +877,7 @@ export class VectorStoreFactory {
       }
 
       const table = await db.openTable(topicId);
-      this.tables.add(table);
+      this.trackTable(targetUri, table);
       const rows = await table.query().limit(limit).toArray();
 
       // Debug: log first row's column keys and text preview
@@ -924,8 +927,10 @@ export class VectorStoreFactory {
 
     // Clear all cached stores
     this.storeCache.clear();
-    for (const table of this.tables) {
-      table.close();
+    for (const tables of this.tables.values()) {
+      for (const table of tables) {
+        table.close();
+      }
     }
     this.tables.clear();
     for (const connection of this.connections.values()) {
@@ -1037,6 +1042,65 @@ export class VectorStoreFactory {
 
   private getMetadataPath(topicId: string, customStorageDir?: string): string {
     return path.join(customStorageDir ?? this.storageDir, `vector-${topicId}-metadata.json`);
+  }
+
+  private trackTable(uri: string, table: Table): void {
+    let tables = this.tables.get(uri);
+    if (!tables) {
+      tables = new Set<Table>();
+      this.tables.set(uri, tables);
+    }
+    tables.add(table);
+  }
+
+  /**
+   * Close and forget everything this factory holds open under one store
+   * directory: its LanceDB connection, every table opened through it, and the
+   * cached stores wrapping those tables.
+   *
+   * For shared topics, whose unpack directory is content-addressed: a
+   * republished archive resolves to a new directory and the old one is pruned
+   * from disk, so without this the connection and tables against the deleted
+   * directory would be retained until dispose() -- an unbounded leak
+   * proportional to republish count, and on Windows a set of open handles that
+   * keeps the prune from succeeding at all.
+   *
+   * Deliberately narrower than dispose(): the caller runs this on every share
+   * refresh, and must not drop the connection every local topic is served
+   * through.
+   */
+  public async closeConnection(storeDir: string): Promise<void> {
+    const uri = path.join(storeDir, "lancedb");
+
+    const tables = this.tables.get(uri);
+    if (tables) {
+      for (const table of tables) {
+        try {
+          table.close();
+        } catch (error) {
+          this.logger.debug("Failed to close table for a retired store directory", { uri, error });
+        }
+      }
+      this.tables.delete(uri);
+    }
+
+    const connection = this.connections.get(uri);
+    if (connection) {
+      try {
+        connection.close();
+      } catch (error) {
+        this.logger.debug("Failed to close connection for a retired store directory", { uri, error });
+      }
+      this.connections.delete(uri);
+    }
+
+    // The cached stores wrap tables that were just closed; the key is
+    // `${uri}::${topicId}` (see loadStore).
+    for (const key of [...this.storeCache.keys()]) {
+      if (key.startsWith(`${uri}::`)) {
+        this.storeCache.delete(key);
+      }
+    }
   }
 
   private async getConnection(uri: string): Promise<Connection> {

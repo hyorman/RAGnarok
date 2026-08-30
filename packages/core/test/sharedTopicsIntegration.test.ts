@@ -18,6 +18,7 @@ import {
   ModelRegistry,
   SHARED_TOPIC_CACHE_DIRNAME,
   TopicManager,
+  atomicWriteJson,
   type IConfigProvider,
   type INotifier,
   type SharedTopicSource,
@@ -171,6 +172,108 @@ describe("shared topics end to end", function () {
     expect(topics.find((entry) => entry.source === "common")?.name).to.equal("API Docs (share)");
     const names = topics.map((entry) => entry.name);
     expect(new Set(names).size).to.equal(names.length);
+
+    await consumer.dispose();
+  });
+
+  it("closes the LanceDB connection to a shared unpack that a republish retired", async function () {
+    const publisher = await createTestTopicManager(publisherDir);
+    const topic = await publisher.createTopic({ name: "API Docs" });
+    const firstSource = path.join(publisherDir, "guide.md");
+    await fs.writeFile(firstSource, "# Rate limits\n\nThe API allows 100 requests per minute.\n", "utf8");
+    await publisher.addDocuments(topic.id, [firstSource]);
+    const archivePath = path.join(shareDir, "api-docs.rag");
+    await publisher.exportTopic(topic.id, archivePath);
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    const sharedId = consumer.getAllTopics()[0].id;
+
+    // Opening the store is what makes the factory hold a connection and a table
+    // against the unpack directory.
+    const firstStore = await consumer.getVectorStore(sharedId);
+    expect(firstStore).to.not.equal(null);
+
+    const registry = (consumer as any).sharedTopics;
+    const factory = (consumer as any).vectorStoreFactory;
+    const retiredStoreDir: string = registry.getStoreDir(sharedId);
+    const retiredUri = path.join(retiredStoreDir, "lancedb");
+    expect(factory.connections.has(retiredUri), "connection open before republish").to.equal(true);
+    expect(factory.tables.has(retiredUri), "table open before republish").to.equal(true);
+
+    // Republish: different content means a different fingerprint, so the unpack
+    // is content-addressed to a new directory and the old one is pruned.
+    const secondSource = path.join(publisherDir, "quotas.md");
+    await fs.writeFile(secondSource, "# Quotas\n\nBurst quota is 500 requests per hour.\n", "utf8");
+    await publisher.addDocuments(topic.id, [secondSource]);
+    await fs.rm(archivePath);
+    await publisher.exportTopic(topic.id, archivePath);
+    await publisher.dispose();
+
+    await consumer.refreshSharedTopics();
+
+    const currentStoreDir: string = registry.getStoreDir(sharedId);
+    expect(currentStoreDir).to.not.equal(retiredStoreDir);
+    // Without the targeted close, both of these stay behind until dispose() --
+    // one leaked connection and table set per republish, against a directory
+    // the cache has already deleted.
+    expect(factory.connections.has(retiredUri), "connection closed after republish").to.equal(false);
+    expect(factory.tables.has(retiredUri), "table closed after republish").to.equal(false);
+
+    // And the topic is still served, from the new directory.
+    const republishedStore = await consumer.getVectorStore(sharedId);
+    expect(republishedStore).to.not.equal(null);
+    const hits = await republishedStore!.similaritySearch("what is the burst quota", 4);
+    expect(hits.map((hit) => hit.pageContent).join(" ")).to.contain("500 requests");
+
+    await consumer.dispose();
+  });
+
+  it("renames a shared topic when an external process takes its name in topics.json", async function () {
+    const publisher = await createTestTopicManager(publisherDir);
+    const published = await publisher.createTopic({ name: "API Docs" });
+    await publisher.exportTopic(published.id, path.join(shareDir, "api-docs.rag"));
+    await publisher.dispose();
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    expect(consumer.getAllTopics().map((entry) => entry.name)).to.deep.equal(["API Docs"]);
+
+    const changed = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no topics-changed event within 30s")), 30_000);
+      const subscription = consumer.onExternalChange((change) => {
+        if (change.kind !== "topics-changed") {
+          return;
+        }
+        clearTimeout(timer);
+        subscription.dispose();
+        resolve();
+      });
+    });
+
+    // A second window writing topics.json underneath us -- exactly the
+    // cross-process case this feature exists for.
+    await atomicWriteJson(path.join(consumerDir, "database", "topics.json"), {
+      topics: {
+        "topic-1700000000000-abcdef": {
+          id: "topic-1700000000000-abcdef",
+          name: "API Docs",
+          createdAt: 1,
+          updatedAt: 1,
+          documentCount: 0,
+        },
+      },
+      modelName: (consumer as any).topicsIndex.modelName,
+      lastUpdated: Date.now(),
+    });
+
+    await changed;
+
+    const names = consumer
+      .getAllTopics()
+      .map((entry) => entry.name)
+      .sort();
+    // Without the watcher-side refresh both are "API Docs" and the shared one
+    // is unreachable by any name resolveTopicByName can return.
+    expect(names).to.deep.equal(["API Docs", "API Docs (share)"]);
 
     await consumer.dispose();
   });
