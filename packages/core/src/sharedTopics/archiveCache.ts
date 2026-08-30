@@ -23,6 +23,14 @@ import type { ResolvedSharedTopic } from "./types";
 
 const ENTRIES_FILENAME = "entries.json";
 const ENTRIES_VERSION = 1;
+/**
+ * How long a dot-prefixed transient (our own ".staging-<uuid>" unpack
+ * directory, or an atomicWriteJson ".*.tmp") may sit unpublished before
+ * `prune()` treats it as orphaned by a crash rather than in-flight from a
+ * live concurrent process. Far beyond any real unpack duration, so it cannot
+ * race a genuinely live writer.
+ */
+const STALE_TRANSIENT_MS = 60 * 60 * 1000;
 
 interface CacheEntry {
   /** Basename of the archive inside its folder. */
@@ -130,7 +138,7 @@ export class SharedArchiveCache {
     };
   }
 
-  private async unpackExists(entry: CacheEntry): Promise<boolean> {
+  private async unpackExists(entry: Pick<CacheEntry, "sharedId" | "fingerprint">): Promise<boolean> {
     try {
       await fs.access(path.join(this.unpackDir(entry), "topic.json"));
       return true;
@@ -208,10 +216,16 @@ export class SharedArchiveCache {
       const destination = this.unpackDir({ sharedId, fingerprint });
       try {
         await fs.rename(content, destination);
-      } catch (error: any) {
-        // EEXIST/ENOTEMPTY means another process published the identical
-        // content first. Its bytes are ours, so adopt them.
-        if (error?.code !== "EEXIST" && error?.code !== "ENOTEMPTY") {
+      } catch (error) {
+        // The destination name is deterministic (sharedId + fingerprint), so
+        // a rename failure here almost always means another process
+        // published the identical content first — its bytes are ours, so
+        // adopt them. Don't dispatch on the error code: POSIX raises
+        // EEXIST/ENOTEMPTY for a rename onto a non-empty directory, but
+        // Windows raises EPERM for a rename onto ANY existing directory
+        // regardless of emptiness. Probe for the destination directly and
+        // rethrow only when it turns out not to be there.
+        if (!(await this.unpackExists({ sharedId, fingerprint }))) {
           throw error;
         }
       }
@@ -235,13 +249,27 @@ export class SharedArchiveCache {
       return;
     }
     for (const name of names) {
-      // A leading dot is always transient — our own ".staging-<uuid>" unpack
-      // directories, or an atomicWriteJson ".<file>....tmp" in flight — and
-      // may belong to a concurrent process. Never sweep those.
-      if (name === ENTRIES_FILENAME || name.startsWith(".") || keep.has(name)) {
+      if (name === ENTRIES_FILENAME || keep.has(name)) {
         continue;
       }
-      await fs.rm(path.join(this.cacheDir, name), { recursive: true, force: true }).catch(() => undefined);
+      const fullPath = path.join(this.cacheDir, name);
+      if (name.startsWith(".")) {
+        // A leading dot is our own ".staging-<uuid>" unpack directory, or an
+        // atomicWriteJson ".*.tmp" — either may belong to a live concurrent
+        // process, so only reclaim one old enough that no real unpack or
+        // atomic write could still be using it. A crash is the only way one
+        // survives past that age.
+        let mtimeMs: number;
+        try {
+          mtimeMs = (await fs.stat(fullPath)).mtimeMs;
+        } catch {
+          continue;
+        }
+        if (Date.now() - mtimeMs < STALE_TRANSIENT_MS) {
+          continue;
+        }
+      }
+      await fs.rm(fullPath, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 }

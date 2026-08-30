@@ -136,4 +136,51 @@ describe("shared archive cache", function () {
     }
     expect(present).to.equal(false);
   });
+
+  it("adopts a destination directory that already holds a valid unpack, regardless of the rename error code", async function () {
+    // The destination name is deterministic (sharedId + fingerprint), so an
+    // unchanged archive that gets re-unpacked (e.g. because entries.json was
+    // lost) lands on the exact same directory it already populated. The
+    // rename onto that non-empty directory must fail and be treated as
+    // "someone already published this" rather than a fatal error — on POSIX
+    // that's ENOTEMPTY, on Windows it's EPERM, and the fix must not dispatch
+    // on the error code to tell them apart.
+    const archive = path.join(folder, "api.rag");
+    await writeTopicArchive(archive);
+    const cache = new SharedArchiveCache(cacheDir, "archiveFolder:test", logger);
+    const [first] = await cache.sync([archive]);
+
+    await fs.rm(path.join(cacheDir, "entries.json"), { force: true });
+
+    const [second] = await cache.sync([archive]);
+
+    expect(second).to.not.equal(undefined);
+    expect(second.storeDir).to.equal(first.storeDir);
+    await fs.access(path.join(second.storeDir, "topic.json"));
+  });
+
+  it("sweeps a staging directory orphaned by a crash, but leaves a recent one alone", async function () {
+    const archive = path.join(folder, "api.rag");
+    await writeTopicArchive(archive);
+    const cache = new SharedArchiveCache(cacheDir, "archiveFolder:test", logger);
+
+    await fs.mkdir(cacheDir, { recursive: true });
+    const staleStaging = path.join(cacheDir, ".staging-stale");
+    const freshStaging = path.join(cacheDir, ".staging-fresh");
+    await fs.mkdir(staleStaging, { recursive: true });
+    await fs.mkdir(freshStaging, { recursive: true });
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fs.utimes(staleStaging, old, old);
+
+    await cache.sync([archive]);
+
+    let stalePresent = true;
+    try {
+      await fs.access(staleStaging);
+    } catch {
+      stalePresent = false;
+    }
+    expect(stalePresent).to.equal(false);
+    await fs.access(freshStaging);
+  });
 });
