@@ -12,7 +12,13 @@ import * as crypto from "crypto";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { acquireStorageLock, StorageLockHeldError, STORAGE_LOCK_FILENAME } from "../src/utils/storageLock";
+import {
+  acquireStorageLock,
+  acquireOperationLease,
+  StorageLockHeldError,
+  StorageBusyError,
+  STORAGE_LOCK_FILENAME,
+} from "../src/utils/storageLock";
 import { MemoryStore } from "../src/memory/memoryStore";
 import { EmbeddingService } from "../src/embeddings/embeddingService";
 
@@ -177,11 +183,10 @@ describe("acquireStorageLock", function () {
     expect(written.ownerId).to.match(/^[0-9a-f-]{36}$/);
 
     await lock.release();
-    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
-    expect(released.ownerId).to.equal(written.ownerId);
-    expect(released.releasedAt).to.be.a("number");
+    // The last holder in the process unlinks the lock file (unlink-at-zero).
+    expect(await exists(lockPath)).to.equal(false);
 
-    // Released leases are reclaimed immediately by the next owner.
+    // The next acquirer simply creates a fresh lock file.
     const next = await acquireStorageLock(tempDir);
     const replacement = JSON.parse(await fs.readFile(lockPath, "utf8"));
     expect(replacement.ownerId).to.not.equal(written.ownerId);
@@ -196,8 +201,8 @@ describe("acquireStorageLock", function () {
     expect(await exists(lockPath), "released too early — second holder still active").to.equal(true);
 
     await second.release();
-    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
-    expect(released.releasedAt).to.be.a("number");
+    // The last holder in the process unlinks the lock file (unlink-at-zero).
+    expect(await exists(lockPath)).to.equal(false);
   });
 
   it("release is idempotent per handle", async function () {
@@ -209,8 +214,7 @@ describe("acquireStorageLock", function () {
     expect(await exists(lockPath)).to.equal(true);
 
     await second.release();
-    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
-    expect(released.releasedAt).to.be.a("number");
+    expect(await exists(lockPath)).to.equal(false);
   });
 
   it("fails fast naming the holder when a live same-host process owns the lock", async function () {
@@ -474,6 +478,84 @@ describe("acquireStorageLock", function () {
   });
 });
 
+describe("operation leases", function () {
+  this.timeout(15000);
+
+  let dir: string;
+
+  beforeEach(async function () {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "storage-lease-test-"));
+  });
+
+  afterEach(async function () {
+    delete process.env.RAGNAROK_IGNORE_LOCK;
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("unlinks the lock file when the last holder releases", async () => {
+    const a = await acquireOperationLease(dir);
+    const b = await acquireOperationLease(dir); // same process: joins, no wait
+    await a.release();
+    expect(await exists(path.join(dir, STORAGE_LOCK_FILENAME)), "still held by b").to.equal(true);
+    await b.release();
+    expect(await exists(path.join(dir, STORAGE_LOCK_FILENAME))).to.equal(false);
+  });
+
+  it("a released handle's assertOwned throws while another holder remains", async () => {
+    const a = await acquireOperationLease(dir);
+    const b = await acquireOperationLease(dir);
+    await a.release();
+    let threw = false;
+    try {
+      await a.assertOwned();
+    } catch {
+      threw = true;
+    }
+    expect(threw).to.equal(true);
+    await b.assertOwned(); // still fine
+    await b.release();
+  });
+
+  it("joins a session lease held by the same process", async () => {
+    const session = await acquireStorageLock(dir);
+    const op = await acquireOperationLease(dir, { waitMs: 0 }); // must NOT throw StorageBusyError
+    await op.release();
+    await session.release();
+  });
+
+  it("throws StorageBusyError with holder info after waitMs against a live foreign holder", async () => {
+    // Simulate a foreign holder: write a live lock file with a different pid
+    // (this process's pid + 1 is unreliable; use pid: process.pid and hostname: "other-host"
+    // with a fresh mtime so it reads as a live foreign holder).
+    await fs.writeFile(
+      path.join(dir, STORAGE_LOCK_FILENAME),
+      JSON.stringify({ version: 2, ownerId: "x", pid: 99999, hostname: "other-host", acquiredAt: Date.now() }),
+    );
+    const started = Date.now();
+    try {
+      await acquireOperationLease(dir, { waitMs: 300, pollIntervalMs: 50 });
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error).to.be.instanceOf(StorageBusyError);
+      expect(error.name).to.equal("StorageBusyError");
+      expect(error.holder?.hostname).to.equal("other-host");
+      expect(Date.now() - started).to.be.greaterThanOrEqual(250);
+    }
+  });
+
+  it("acquire/release stays cheap", async function () {
+    this.timeout(20_000);
+    const started = Date.now();
+    for (let i = 0; i < 50; i++) {
+      const lease = await acquireOperationLease(dir);
+      await lease.release();
+    }
+    const mean = (Date.now() - started) / 50;
+    console.log(`operation lease acquire+release mean: ${mean.toFixed(1)}ms`);
+    expect(mean).to.be.lessThan(50);
+  });
+});
+
 describe("MemoryStore storage lock integration", function () {
   this.timeout(30000);
 
@@ -502,8 +584,8 @@ describe("MemoryStore storage lock integration", function () {
     expect(await exists(lockPath)).to.equal(true);
 
     await store.dispose();
-    const released = JSON.parse(await fs.readFile(lockPath, "utf8"));
-    expect(released.releasedAt).to.be.a("number");
+    // The last holder in the process unlinks the lock file (unlink-at-zero).
+    expect(await exists(lockPath)).to.equal(false);
   });
 
   it("fails fast when another live process holds the storage dir", async function () {

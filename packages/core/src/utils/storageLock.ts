@@ -13,17 +13,32 @@
  *   created with an atomic exclusive open ("wx") and containing the holder's
  *   pid/hostname plus a cryptographically random owner id.
  * - Within one process the lock is refcounted per resolved directory, so
- *   TopicManager and MemoryStore sharing a storage dir share one lock.
+ *   TopicManager and MemoryStore sharing a storage dir share one lock — and
+ *   so do full-exclusion session leases (`acquireStorageLock`) and
+ *   operation-scoped leases (`acquireOperationLease`): both draw from the
+ *   same refcount, so an op lease joins a session (or another op) this
+ *   process already holds instead of contending with itself.
  * - The holder refreshes its originally-opened file descriptor, never the
  *   pathname. A displaced holder therefore cannot touch a replacement lock.
  *   On the same host, a live pid remains authoritative even if the machine
  *   slept beyond `staleMs`. Foreign-host leases use heartbeat age.
- * - Release writes an owner-tokened release marker through that same file
- *   descriptor. The next acquirer removes the released lease. This avoids
+ * - A graceful release first writes an owner-tokened release marker through
+ *   that same file descriptor, then — once the process's refcount reaches
+ *   zero — unlinks the lock file (verified by inode so a reclaimer that won
+ *   the race in between is never deleted). A concurrent acquirer racing the
+ *   unlink simply retries and creates a fresh lock file. This still avoids
  *   the unsafe read-check-unlink race where an old owner could unlink a new
- *   owner's lock.
- * - `RAGNAROK_IGNORE_LOCK=1|true` bypasses locking entirely (escape hatch
- *   for advanced setups; documented as unsafe for concurrent writers).
+ *   owner's lock: an exit crash between the marker write and the unlink
+ *   deliberately leaves the marker in place, immediately reclaimable, never
+ *   unlinked, never live-looking stale.
+ * - `acquireOperationLease` waits (bounded by `waitMs`/`pollIntervalMs`,
+ *   default 5000/100ms) against a live foreign holder before throwing
+ *   {@link StorageBusyError}; `acquireStorageLock` fails fast instead with
+ *   {@link StorageLockHeldError}. Both reclaim an abandoned/released holder
+ *   immediately, without waiting.
+ * - `RAGNAROK_IGNORE_LOCK=1|true` bypasses locking entirely for both lease
+ *   kinds (escape hatch for advanced setups; documented as unsafe for
+ *   concurrent writers).
  * - Locks release on dispose and, as a backstop, via a process exit hook.
  */
 
@@ -77,12 +92,41 @@ export class StorageLockHeldError extends Error {
       : "an unknown process";
     super(
       `Storage directory is locked by another RAGnarōk process (${who}). ` +
-        `Each storage directory supports one process at a time — close the other instance, ` +
-        `or set RAGNAROK_IGNORE_LOCK=1 to override (unsafe with concurrent writers). Lock file: ${lockPath}`,
+        `A full-exclusion storage operation (migration, reset, or rollback) is in progress in another process. ` +
+        `Retry when it completes, or set RAGNAROK_IGNORE_LOCK=1 to override (unsafe with concurrent writers). Lock file: ${lockPath}`,
     );
     this.name = "StorageLockHeldError";
   }
 }
+
+export class StorageBusyError extends Error {
+  readonly name = "StorageBusyError";
+  constructor(
+    public readonly lockPath: string,
+    public readonly holder: LockFileInfo | null,
+  ) {
+    const who = holder
+      ? `pid ${holder.pid}${holder.hostname === os.hostname() ? "" : ` on ${holder.hostname}`}`
+      : "another process";
+    super(
+      `Storage is busy: a write is in progress by ${who}. ` +
+        `Reads are unaffected; retry the operation when the current write finishes. Lock file: ${lockPath}`,
+    );
+  }
+}
+
+export interface OperationLeaseOptions {
+  /** How long to wait for a live foreign holder before throwing StorageBusyError. Default 5000. */
+  waitMs?: number;
+  /** Poll interval while waiting. Default 100. */
+  pollIntervalMs?: number;
+  /** Passed through to the underlying lock (staleness/heartbeat). */
+  staleMs?: number;
+  heartbeatMs?: number;
+}
+
+const DEFAULT_WAIT_MS = 5000;
+const DEFAULT_POLL_INTERVAL_MS = 100;
 
 interface InternalLock {
   lockPath: string;
@@ -268,13 +312,33 @@ function activateOwnedLock(
     release: async () => {
       clearInterval(heartbeat);
       const current = await readLockInfo(lockPath);
-      if (ownerMatches(current, info)) {
+      const stillOwned = ownerMatches(current, info);
+      if (stillOwned) {
         const released = { ...info, releasedAt: Date.now() };
         await handle.truncate(0);
         await handle.write(serializeLockInfo(released), 0, "utf8");
         await handle.sync();
       }
       heldLockFiles.delete(lockPath);
+      if (stillOwned) {
+        // This is the process's last holder of any kind (session or
+        // operation) for this lock: remove the lock file now that the
+        // releasedAt marker is durably written. Guard with an inode check so
+        // a reclaimer that already renamed a fresh lease over this pathname
+        // — in the narrow window between the marker write above and this
+        // unlink — is never deleted: the path would then resolve to a
+        // different inode than the one this handle opened, so we leave it
+        // alone (matching the file's fd-vs-pathname discipline elsewhere).
+        try {
+          const [fdStat, pathStat] = await Promise.all([handle.stat(), fs.lstat(lockPath)]);
+          if (fdStat.dev === pathStat.dev && fdStat.ino === pathStat.ino) {
+            await fs.unlink(lockPath).catch(() => undefined);
+          }
+        } catch {
+          // Path already vanished (e.g. a concurrent reclaimer's rename beat
+          // us here, or another unlink already ran) — nothing to clean up.
+        }
+      }
       await handle.close().catch(() => undefined);
     },
   };
@@ -388,86 +452,170 @@ async function replaceReclaimableGeneration(
   }
 }
 
-async function acquireFileLock(storageDir: string, options?: StorageLockOptions): Promise<InternalLock> {
+type AcquireAttemptResult =
+  | { status: "acquired"; lock: InternalLock }
+  | { status: "retry" } // vanished/raced with a reclaimer — retry immediately, counts toward the churn budget
+  | { status: "busy"; holder: LockFileInfo | null }; // a live foreign holder currently owns the lease
+
+/**
+ * One attempt at acquiring `lockPath`: creates it if absent, reclaims it if
+ * the current holder is abandoned/released, or reports that a live foreign
+ * holder currently owns it. Never waits — callers decide what to do with a
+ * "busy" result.
+ */
+async function tryAcquireOnce(
+  lockPath: string,
+  staleMs: number,
+  heartbeatMs: number,
+): Promise<AcquireAttemptResult> {
+  try {
+    const handle = await fs.open(lockPath, "wx", 0o600);
+    const info: LockFileInfo = {
+      version: 2,
+      ownerId: crypto.randomUUID(),
+      pid: process.pid,
+      hostname: os.hostname(),
+      acquiredAt: Date.now(),
+    };
+    try {
+      await initializeLeaseHandle(handle, info);
+    } catch (error) {
+      // Never unlink by pathname here: even this short initialization
+      // window must not be able to remove a replacement. Best-effort mark
+      // the originally opened inode released so a later acquisition can
+      // reclaim it without waiting for staleness.
+      const released = { ...info, releasedAt: Date.now() };
+      await handle
+        .truncate(0)
+        .then(() => handle.write(serializeLockInfo(released), 0, "utf8"))
+        .then(() => handle.sync())
+        .catch(() => undefined);
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+
+    return { status: "acquired", lock: activateOwnedLock(lockPath, handle, info, heartbeatMs) };
+  } catch (error: any) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+
+    const holder = await readLockInfo(lockPath);
+    const stats = await fs.stat(lockPath).catch(() => null);
+    if (!stats) {
+      return { status: "retry" }; // Lock vanished between open and stat — retry.
+    }
+
+    const heartbeatAge = Date.now() - stats.mtimeMs;
+    if (isReclaimable(holder, heartbeatAge, staleMs)) {
+      const replacement = await replaceReclaimableGeneration(lockPath, holder, stats, staleMs, heartbeatMs);
+      if (!replacement) {
+        return { status: "retry" };
+      }
+      return { status: "acquired", lock: replacement };
+    }
+
+    return { status: "busy", holder };
+  }
+}
+
+interface WaitPolicy {
+  waitMs: number;
+  pollIntervalMs: number;
+}
+
+/**
+ * Acquire the on-disk lease at `storageDir`, retrying reclaim/vanish races
+ * up to `MAX_ACQUIRE_ATTEMPTS` (unrelated to contention — a symptom of a
+ * crashed reclaimer or heavy churn) and, when `wait` is given, additionally
+ * polling a live foreign holder up to `wait.waitMs` before giving up.
+ *
+ * `wait` undefined reproduces the legacy fail-fast behavior: a live foreign
+ * holder throws {@link StorageLockHeldError} immediately. `wait` present
+ * throws {@link StorageBusyError} once `wait.waitMs` has elapsed (0 = a
+ * single try-lock attempt).
+ */
+async function acquireFileLock(
+  storageDir: string,
+  options: StorageLockOptions | undefined,
+  wait: WaitPolicy | undefined,
+): Promise<InternalLock> {
   const staleMs = options?.staleMs ?? DEFAULT_STALE_MS;
   const heartbeatMs = options?.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const lockPath = path.join(storageDir, STORAGE_LOCK_FILENAME);
   await fs.mkdir(storageDir, { recursive: true });
 
-  for (let attempt = 0; attempt < MAX_ACQUIRE_ATTEMPTS; attempt++) {
-    try {
-      const handle = await fs.open(lockPath, "wx", 0o600);
-      const info: LockFileInfo = {
-        version: 2,
-        ownerId: crypto.randomUUID(),
-        pid: process.pid,
-        hostname: os.hostname(),
-        acquiredAt: Date.now(),
-      };
-      try {
-        await initializeLeaseHandle(handle, info);
-      } catch (error) {
-        // Never unlink by pathname here: even this short initialization
-        // window must not be able to remove a replacement. Best-effort mark
-        // the originally opened inode released so a later acquisition can
-        // reclaim it without waiting for staleness.
-        const released = { ...info, releasedAt: Date.now() };
-        await handle
-          .truncate(0)
-          .then(() => handle.write(serializeLockInfo(released), 0, "utf8"))
-          .then(() => handle.sync())
-          .catch(() => undefined);
-        await handle.close().catch(() => undefined);
-        throw error;
-      }
+  const deadline = wait ? Date.now() + wait.waitMs : undefined;
+  let churnAttempts = 0;
 
-      return activateOwnedLock(lockPath, handle, info, heartbeatMs);
-    } catch (error: any) {
-      if (error?.code !== "EEXIST") {
-        throw error;
-      }
+  for (;;) {
+    const result = await tryAcquireOnce(lockPath, staleMs, heartbeatMs);
 
-      const holder = await readLockInfo(lockPath);
-      const stats = await fs.stat(lockPath).catch(() => null);
-      if (!stats) {
-        continue; // Lock vanished between open and stat — retry.
-      }
-
-      const heartbeatAge = Date.now() - stats.mtimeMs;
-      if (isReclaimable(holder, heartbeatAge, staleMs)) {
-        const replacement = await replaceReclaimableGeneration(lockPath, holder, stats, staleMs, heartbeatMs);
-        if (!replacement) {
-          continue;
-        }
-        return replacement;
-      }
-
-      throw new StorageLockHeldError(lockPath, holder);
+    if (result.status === "acquired") {
+      return result.lock;
     }
-  }
 
-  throw new Error(
-    `Unable to acquire storage lock at ${lockPath} after ${MAX_ACQUIRE_ATTEMPTS} attempts (high lock contention).`,
-  );
+    if (result.status === "retry") {
+      churnAttempts += 1;
+      if (churnAttempts >= MAX_ACQUIRE_ATTEMPTS) {
+        throw new Error(
+          `Unable to acquire storage lock at ${lockPath} after ${MAX_ACQUIRE_ATTEMPTS} attempts (high lock contention).`,
+        );
+      }
+      continue;
+    }
+
+    // result.status === "busy": a live foreign holder currently owns the lease.
+    if (!wait) {
+      throw new StorageLockHeldError(lockPath, result.holder);
+    }
+    if (Date.now() >= deadline!) {
+      throw new StorageBusyError(lockPath, result.holder);
+    }
+    const sleepMs = Math.max(0, Math.min(wait.pollIntervalMs, deadline! - Date.now()));
+    await new Promise((resolve) => setTimeout(resolve, sleepMs));
+    // Waiting on genuine contention never counts against the churn budget.
+  }
 }
 
+const NO_OP_HANDLE: StorageLockHandle = {
+  lockPath: "",
+  ownerId: "lock-ignored",
+  assertOwned: async () => undefined,
+  release: async () => undefined,
+};
+
 /**
- * Acquire the cross-process lock for a storage directory.
+ * Shared acquisition core for both {@link acquireStorageLock} and
+ * {@link acquireOperationLease}. Both lease kinds join the SAME
+ * process-wide refcount per resolved storage directory: whichever kind
+ * acquires first creates the on-disk lease, and every later call in this
+ * process — session or operation — simply increments the refcount and
+ * shares it. The lock file is unlinked only when that refcount reaches
+ * zero (see `activateOwnedLock`'s `release`), regardless of which kinds of
+ * holders contributed to it.
  *
- * Reentrant within a process (refcounted per resolved directory). Throws
- * {@link StorageLockHeldError} when another live process holds the lock.
+ * Each call returns its OWN handle: `release()` decrements the shared
+ * refcount exactly once (idempotent per handle), and `assertOwned()` fences
+ * on THIS handle's own release in addition to the underlying lease's
+ * ownership — a handle that has released must never be trusted again even
+ * while other holders keep the lease alive.
  */
-export async function acquireStorageLock(storageDir: string, options?: StorageLockOptions): Promise<StorageLockHandle> {
+async function acquireLease(
+  storageDir: string,
+  options: StorageLockOptions | undefined,
+  wait: WaitPolicy | undefined,
+): Promise<StorageLockHandle> {
   const key = path.resolve(storageDir);
   const lockPath = path.join(key, STORAGE_LOCK_FILENAME);
 
   if (lockIgnored()) {
-    return { lockPath, ownerId: "lock-ignored", assertOwned: async () => undefined, release: async () => undefined };
+    return { ...NO_OP_HANDLE, lockPath };
   }
 
   let entry = processLocks.get(key);
   if (!entry) {
-    const acquisition = acquireFileLock(key, options);
+    const acquisition = acquireFileLock(key, options, wait);
     entry = { refs: 0, acquisition };
     processLocks.set(key, entry);
     // A failed acquisition must not poison later attempts.
@@ -492,6 +640,11 @@ export async function acquireStorageLock(storageDir: string, options?: StorageLo
     lockPath,
     ownerId: acquired.info.ownerId ?? `${acquired.info.hostname}:${acquired.info.pid}`,
     assertOwned: async () => {
+      if (released) {
+        throw new Error(
+          `Storage lease ownership was lost for ${lockPath}; this handle already released its hold and cannot be used to fence a commit`,
+        );
+      }
       const current = await readLockInfo(lockPath);
       if (!ownerMatches(current, acquired.info) || current?.releasedAt !== undefined) {
         throw new Error(
@@ -512,4 +665,40 @@ export async function acquireStorageLock(storageDir: string, options?: StorageLo
       }
     },
   };
+}
+
+/**
+ * Acquire the cross-process lock for a storage directory.
+ *
+ * Reentrant within a process (refcounted per resolved directory, shared
+ * with any operation leases the process also holds). Throws
+ * {@link StorageLockHeldError} when another live process holds the lock.
+ */
+export async function acquireStorageLock(storageDir: string, options?: StorageLockOptions): Promise<StorageLockHandle> {
+  return acquireLease(storageDir, options, undefined);
+}
+
+/**
+ * Acquire an exclusive, operation-scoped write lease on a storage
+ * directory.
+ *
+ * Shares the process-wide refcount with {@link acquireStorageLock}: joining
+ * a lease this process already holds (session or operation) succeeds
+ * immediately, and the lock file is unlinked when the process's last
+ * holder of any kind releases. When this process does not already hold the
+ * lease and a live foreign process does, retries every `pollIntervalMs`
+ * (default 100) up to `waitMs` (default 5000; 0 = single try-lock attempt)
+ * before throwing {@link StorageBusyError}. A reclaimable holder (released,
+ * dead same-host pid, or stale foreign heartbeat) is reclaimed immediately
+ * and never waited on.
+ */
+export async function acquireOperationLease(
+  storageDir: string,
+  options?: OperationLeaseOptions,
+): Promise<StorageLockHandle> {
+  const wait: WaitPolicy = {
+    waitMs: options?.waitMs ?? DEFAULT_WAIT_MS,
+    pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+  };
+  return acquireLease(storageDir, { staleMs: options?.staleMs, heartbeatMs: options?.heartbeatMs }, wait);
 }

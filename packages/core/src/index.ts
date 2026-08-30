@@ -195,8 +195,14 @@ export type {
   PreparedStorageMigration,
   StorageMigrationPlan,
 } from "./utils/storageMigration";
-export { acquireStorageLock, StorageLockHeldError, STORAGE_LOCK_FILENAME } from "./utils/storageLock";
-export type { StorageLockHandle, StorageLockOptions } from "./utils/storageLock";
+export {
+  acquireStorageLock,
+  acquireOperationLease,
+  StorageLockHeldError,
+  StorageBusyError,
+  STORAGE_LOCK_FILENAME,
+} from "./utils/storageLock";
+export type { StorageLockHandle, StorageLockOptions, OperationLeaseOptions } from "./utils/storageLock";
 export { StorageTransactionCoordinator } from "./utils/storageTransactionCoordinator";
 export type { StorageTransactionFence, StorageTransactionOperation } from "./utils/storageTransactionCoordinator";
 export type {
