@@ -307,8 +307,6 @@ export class TopicManager {
   // lease, so a null value here means "not currently mutating storage".
   private activeLease: StorageLockHandle | null = null;
   private activeCoordinator: StorageTransactionCoordinator | null = null;
-  // Fallback coordinator for direct unit fixtures that never initialize.
-  private transactionCoordinator: StorageTransactionCoordinator | null = null;
   private acceptingManagedOperations = true;
   private activeManagedOperations = 0;
   private operationDrainWaiters: Array<() => void> = [];
@@ -1791,9 +1789,7 @@ export class TopicManager {
    */
   public async importTopic(archivePath: string): Promise<Topic> {
     return this.runManagedOperation(() =>
-      this.archiveMutex.runExclusive(() =>
-        this.storageMutationMutex.runExclusive(() => this.importTopicUnlocked(archivePath)),
-      ),
+      this.archiveMutex.runExclusive(() => this.importTopicUnlocked(archivePath)),
     );
   }
 
@@ -1813,6 +1809,12 @@ export class TopicManager {
       if (!this.topicsIndex.topics[topicId]) {
         throw new Error(`Topic not found: ${topicId}`);
       }
+
+      // Export takes no lease: it is a read. Capture the topics index
+      // revision now and re-check it once the archive is written, so a
+      // mutation that lands mid-export is caught instead of silently
+      // shipping a torn archive.
+      const indexHashBeforeExport = await this.hashFile(this.getTopicsIndexPath());
 
       await fs.mkdir(databaseDir, { recursive: true });
       stagingDir = await fs.mkdtemp(path.join(databaseDir, ".rag-export-"));
@@ -1859,6 +1861,11 @@ export class TopicManager {
       zip.end();
 
       await archivePromise;
+
+      if ((await this.hashFile(this.getTopicsIndexPath())) !== indexHashBeforeExport) {
+        throw new Error("Topic storage changed during export; retry the export");
+      }
+
       await fs.rename(temporaryArchivePath, exportPath);
       temporaryArchivePath = undefined;
 
@@ -1948,24 +1955,36 @@ export class TopicManager {
       };
       const preparedIndexPath = path.join(stagingDir, "prepared-topics.json");
       await atomicWriteJson(preparedIndexPath, nextTopicsIndex);
+      // Captured before the lease is taken: this guards the staging window
+      // above, not live cross-process races (the lease already excludes
+      // those once we hold it).
       const expectedIndexSha256 = await this.hashFile(this.getTopicsIndexPath());
+      const preparedMetadataFinalPath = (await this.pathExists(preparedMetadataPath))
+        ? preparedMetadataPath
+        : undefined;
 
-      await this.commitStagedTopicImport({
-        contentDir: stagedArchive.contentDir,
-        originalTopicId: exportData.topic.id,
-        newTopicId,
-        preparedDocumentsPath,
-        preparedMetadataPath: (await this.pathExists(preparedMetadataPath)) ? preparedMetadataPath : undefined,
-        preparedIndexPath,
-        expectedIndexSha256,
+      // Only the commit is a storage mutation: staging above needed no lease.
+      await this.runStorageWriteTransaction(async (tx) => {
+        await this.commitStagedTopicImport(
+          {
+            contentDir: stagedArchive.contentDir,
+            originalTopicId: exportData.topic.id,
+            newTopicId,
+            preparedDocumentsPath,
+            preparedMetadataPath: preparedMetadataFinalPath,
+            preparedIndexPath,
+            expectedIndexSha256,
+          },
+          tx.coordinator,
+        );
+
+        const documentsMap = new Map<string, TopicDocument>();
+        for (const document of newDocuments) {
+          documentsMap.set(document.id, document);
+        }
+        this.topicsIndex = nextTopicsIndex;
+        this.topicDocuments.set(newTopicId, documentsMap);
       });
-
-      const documentsMap = new Map<string, TopicDocument>();
-      for (const document of newDocuments) {
-        documentsMap.set(document.id, document);
-      }
-      this.topicsIndex = nextTopicsIndex;
-      this.topicDocuments.set(newTopicId, documentsMap);
 
       this.logger.info("Topic imported successfully", {
         originalId: exportData.topic.id,
@@ -2204,7 +2223,10 @@ export class TopicManager {
    * before the topics index; the index rename is the visibility point. Runtime
    * failures before that point move all payloads back into staging.
    */
-  private async commitStagedTopicImport(commit: StagedTopicImportCommit): Promise<void> {
+  private async commitStagedTopicImport(
+    commit: StagedTopicImportCommit,
+    coordinator: StorageTransactionCoordinator,
+  ): Promise<void> {
     const databaseDir = this.getDatabaseDir();
     const operations: StorageTransactionOperation[] = [];
     const tableMappings = [{ oldName: commit.originalTopicId, newName: commit.newTopicId }];
@@ -2248,7 +2270,6 @@ export class TopicManager {
     // Retained as a deterministic failure-injection seam for archive tests.
     await this.publishPreparedTopicsIndex(commit.preparedIndexPath);
     await this.assertStorageOwnership();
-    const coordinator = await this.ensureTransactionCoordinator();
     await coordinator.commit("import-topic", operations, {
       originalTopicId: commit.originalTopicId,
       newTopicId: commit.newTopicId,
@@ -3087,25 +3108,6 @@ export class TopicManager {
       }
       throw error;
     }
-  }
-
-  private async ensureTransactionCoordinator(): Promise<StorageTransactionCoordinator> {
-    // Inside a write transaction the transaction's own coordinator is the only
-    // valid one: it is fenced by the lease currently held.
-    if (this.activeCoordinator) {
-      return this.activeCoordinator;
-    }
-    if (!this.transactionCoordinator) {
-      const fence = {
-        ownerId: "unmanaged-test-fixture",
-        assertOwned: async () => {
-          await this.assertStorageOwnership();
-        },
-      };
-      this.transactionCoordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), fence);
-      await this.transactionCoordinator.initialize();
-    }
-    return this.transactionCoordinator;
   }
 
   private async runManagedOperation<T>(operation: () => Promise<T>): Promise<T> {
