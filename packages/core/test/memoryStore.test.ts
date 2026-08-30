@@ -1449,6 +1449,34 @@ describe("MemoryStore lock-free reads and operation leases", function () {
     expect(await exists(manifestPath()), "a mutation must stamp the manifest a read skipped").to.equal(true);
   });
 
+  it("skips a deferred reinforcement flush when a foreign writer holds the lease, without throwing", async function () {
+    const writer = makeStore();
+    await writer.store({ content: "reinforcement skip memory" });
+    await writer.dispose();
+    forget(writer);
+
+    await writeForeignLease();
+
+    const reader = makeStore();
+    // Default reinforce (true): this schedules a debounced reinforcement
+    // flush that must not throw when it later finds the lease busy.
+    const recalled = await reader.recall({ query: "reinforcement skip memory", scope: "workspace" });
+    expect(recalled.memories.length).to.be.greaterThan(0);
+
+    // Let the debounced flush (2s) fire and find the foreign lease busy.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    // The store keeps working normally after a skipped best-effort flush.
+    expect((await reader.list({ scope: "workspace" })).length).to.be.greaterThan(0);
+
+    // Disk truth is untouched by the skipped flush. Reads are lock-free, so
+    // this is checked through a completely fresh store while the foreign
+    // lease is still held.
+    const verifier = makeStore();
+    const [onDisk] = await verifier.list({ scope: "workspace" });
+    expect(onDisk.accessCount, "a skipped reinforcement flush must not persist the access-count bump").to.equal(0);
+  });
+
   it("drops cached scopes when another process changes the memory storage directory", async function () {
     const current = makeStore();
     await current.store({ content: "watched memory" });

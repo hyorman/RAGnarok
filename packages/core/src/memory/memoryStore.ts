@@ -57,6 +57,15 @@ const MEMORIES_MARKDOWN_FILENAME = "memories.md";
 const MEMORY_WATCH_DEBOUNCE_MS = 250;
 /** How long a mutation waits for a foreign writer before reporting StorageBusyError. */
 const MUTATION_LEASE_WAIT_MS = 5_000;
+/**
+ * Deferred writers (markdown regeneration, reinforcement persistence) are
+ * best-effort: they try-lock rather than wait, and back off with doubled
+ * delays across a bounded number of busy encounters before dropping the
+ * pending write. Access-count bumps and the markdown mirror are advisory —
+ * losing one is far cheaper than a reschedule loop that never quiesces.
+ */
+const DEFERRED_WRITER_RETRY_BASE_MS = 2_000;
+const DEFERRED_WRITER_MAX_BUSY_RETRIES = 3;
 
 export interface MemoryStoreOptions {
   /** LanceDB storage directory */
@@ -103,11 +112,18 @@ export class MemoryStore {
   private markdownDirty = false;
   private markdownFlushing = false;
   private markdownTimer: ReturnType<typeof setTimeout> | null = null;
+  // Consecutive busy-lease encounters for the markdown flush. Reset to 0 on
+  // any successful flush; capped at DEFERRED_WRITER_MAX_BUSY_RETRIES before
+  // the pending regeneration is dropped rather than rescheduled forever.
+  private markdownBusyRetries = 0;
 
   // Deferred recall-reinforcement persistence: bumping two counters used to
   // rewrite the entire scope table (all rows + vectors) on every read.
   private reinforcementDirty = new Set<string>();
   private reinforcementTimer: ReturnType<typeof setTimeout> | null = null;
+  // Shared across busy-lease AND partial-persist-failure retries — both are
+  // "the deferred write did not land", so both count against the same cap.
+  private reinforcementBusyRetries = 0;
   private memoryManifestPath: string;
   // Both memoise CONFIRMED outcomes only. A read path that deliberately
   // skipped a write (no marker/manifest, no lease) must leave them null so a
@@ -726,7 +742,9 @@ export class MemoryStore {
 
     this.invalidateAllCaches();
     this.reinforcementDirty.clear();
+    this.reinforcementBusyRetries = 0;
     this.markdownDirty = false;
+    this.markdownBusyRetries = 0;
     await this.regenerateMarkdown();
 
     const embeddingFingerprint = await this.embeddingService.getFingerprint();
@@ -1707,6 +1725,10 @@ export class MemoryStore {
       return;
     }
     this.markdownDirty = true;
+    this.scheduleMarkdownFlushTimer(1_000);
+  }
+
+  private scheduleMarkdownFlushTimer(delayMs: number): void {
     if (this.markdownTimer) {
       return;
     }
@@ -1714,7 +1736,7 @@ export class MemoryStore {
       this.markdownTimer = null;
       const task = this.trackBackgroundTask(this.flushMarkdown());
       void task.catch((err) => this.logger.debug("Markdown regeneration failed", err));
-    }, 1_000);
+    }, delayMs);
     this.markdownTimer.unref?.();
   }
 
@@ -1729,7 +1751,15 @@ export class MemoryStore {
     }
   }
 
-  /** Write memories.md if stale. Single-flight; safe to call at shutdown. */
+  /**
+   * Write memories.md if stale. Single-flight; safe to call at shutdown.
+   *
+   * Best-effort: acquires the storage lease with a single try-lock attempt
+   * (never waits) before writing, since the markdown mirror is advisory. A
+   * busy lease is not an error — it backs off and retries a bounded number
+   * of times (see `retryOrDropMarkdownFlush`) rather than writing unfenced
+   * while a foreign process may be mid-write.
+   */
   async flushMarkdown(): Promise<void> {
     if (this.markdownFlushing) {
       return;
@@ -1738,16 +1768,52 @@ export class MemoryStore {
     try {
       while (this.markdownDirty) {
         this.markdownDirty = false;
+        let lease: StorageLockHandle;
+        try {
+          lease = await acquireOperationLease(this.storageDir, { waitMs: 0 });
+        } catch (error) {
+          if (error instanceof StorageBusyError) {
+            this.logger.debug("Skipping memories.md regeneration: another process holds the storage lease");
+            this.markdownDirty = true;
+            this.retryOrDropMarkdownFlush();
+            return;
+          }
+          throw error;
+        }
         try {
           await this.regenerateMarkdown();
+          this.markdownBusyRetries = 0;
         } catch (err) {
           this.markdownDirty = true;
           throw err;
+        } finally {
+          await lease.release();
         }
       }
     } finally {
       this.markdownFlushing = false;
     }
+  }
+
+  /**
+   * On a busy lease, reschedule with doubled backoff (2s → 4s → 8s) and give
+   * up quietly — dropping the pending regeneration — after 3 attempts.
+   * Never reschedules while disposing: shutdown already cleared the pending
+   * timer, and a dropped write there is simply not retried.
+   */
+  private retryOrDropMarkdownFlush(): void {
+    if (this.disposing) {
+      return;
+    }
+    this.markdownBusyRetries += 1;
+    if (this.markdownBusyRetries > DEFERRED_WRITER_MAX_BUSY_RETRIES) {
+      this.logger.debug("Dropping pending memories.md regeneration after repeated busy retries");
+      this.markdownDirty = false;
+      this.markdownBusyRetries = 0;
+      return;
+    }
+    const delay = DEFERRED_WRITER_RETRY_BASE_MS * 2 ** (this.markdownBusyRetries - 1);
+    this.scheduleMarkdownFlushTimer(delay);
   }
 
   private async regenerateMarkdown(): Promise<void> {
@@ -1810,7 +1876,7 @@ export class MemoryStore {
   }
 
   /** Queue a scope for deferred reinforcement persistence. */
-  private scheduleReinforcementFlush(scope: MemoryScope, branch?: string): void {
+  private scheduleReinforcementFlush(scope: MemoryScope, branch?: string, delayMs = 2_000): void {
     this.reinforcementDirty.add(this.scopeKey(scope, branch));
     if (this.reinforcementTimer) {
       return;
@@ -1819,40 +1885,98 @@ export class MemoryStore {
       this.reinforcementTimer = null;
       const task = this.trackBackgroundTask(this.flushReinforcement());
       void task.catch((err) => this.logger.debug("Reinforcement flush failed", err));
-    }, 2_000);
+    }, delayMs);
     this.reinforcementTimer.unref?.();
   }
 
-  /** Persist scopes with pending access-counter updates. */
+  /**
+   * Persist scopes with pending access-counter updates.
+   *
+   * Best-effort: acquires the storage lease with a single try-lock attempt
+   * (never waits) before touching any table, since these writes are
+   * advisory. A busy lease skips the flush entirely (nothing is read or
+   * written) and backs off through `retryOrDropReinforcementFlush`, which
+   * also covers genuine partial-persist failures below — both mean "this
+   * deferred write did not land" and share the same bounded retry budget.
+   */
   async flushReinforcement(): Promise<void> {
     return this.mutationMutex.runExclusive(() => this.flushReinforcementUnlocked());
   }
 
   private async flushReinforcementUnlocked(): Promise<void> {
-    const dirty = [...this.reinforcementDirty];
-    this.reinforcementDirty.clear();
-    const failures: unknown[] = [];
-    for (const key of dirty) {
-      const { scope, branch } = this.parseScopeKey(key);
-      try {
-        await this.persistEntries(scope, branch);
-      } catch (err) {
-        this.reinforcementDirty.add(key);
-        failures.push(err);
-        this.logger.debug(`Reinforcement flush failed for ${key}`, err);
+    // Checked before taking the lease: an empty flush (e.g. a pure reader's
+    // dispose) must not transiently create and unlink the lock file.
+    if (this.reinforcementDirty.size === 0) {
+      return;
+    }
+
+    let lease: StorageLockHandle;
+    try {
+      lease = await acquireOperationLease(this.storageDir, { waitMs: 0 });
+    } catch (error) {
+      if (error instanceof StorageBusyError) {
+        this.logger.debug("Skipping reinforcement flush: another process holds the storage lease");
+        this.retryOrDropReinforcementFlush();
+        return;
       }
-    }
-    if (this.reinforcementDirty.size > 0 && !this.disposing) {
-      const { scope, branch } = this.parseScopeKey(this.reinforcementDirty.values().next().value as string);
-      this.scheduleReinforcementFlush(scope, branch);
-    }
-    if (failures.length > 0) {
-      const error = new Error(`Failed to persist ${failures.length} reinforced memory scope(s)`) as Error & {
-        failures: unknown[];
-      };
-      error.failures = failures;
       throw error;
     }
+
+    try {
+      const dirty = [...this.reinforcementDirty];
+      this.reinforcementDirty.clear();
+      const failures: unknown[] = [];
+      for (const key of dirty) {
+        const { scope, branch } = this.parseScopeKey(key);
+        try {
+          await this.persistEntries(scope, branch);
+        } catch (err) {
+          this.reinforcementDirty.add(key);
+          failures.push(err);
+          this.logger.debug(`Reinforcement flush failed for ${key}`, err);
+        }
+      }
+      if (this.reinforcementDirty.size > 0) {
+        this.retryOrDropReinforcementFlush();
+      } else {
+        this.reinforcementBusyRetries = 0;
+      }
+      if (failures.length > 0) {
+        const error = new Error(`Failed to persist ${failures.length} reinforced memory scope(s)`) as Error & {
+          failures: unknown[];
+        };
+        error.failures = failures;
+        throw error;
+      }
+    } finally {
+      await lease.release();
+    }
+  }
+
+  /**
+   * Shared cap for a busy lease AND a genuine partial-persist failure: both
+   * back off with doubled delays (2s → 4s → 8s) and, after 3 attempts, give
+   * up quietly and drop the pending scopes rather than reschedule forever.
+   * Never reschedules while disposing.
+   */
+  private retryOrDropReinforcementFlush(): void {
+    if (this.disposing) {
+      return;
+    }
+    this.reinforcementBusyRetries += 1;
+    if (this.reinforcementBusyRetries > DEFERRED_WRITER_MAX_BUSY_RETRIES) {
+      this.logger.debug("Dropping pending reinforcement flush after repeated busy retries");
+      this.reinforcementDirty.clear();
+      this.reinforcementBusyRetries = 0;
+      return;
+    }
+    const next = this.reinforcementDirty.values().next();
+    if (next.done) {
+      return;
+    }
+    const delay = DEFERRED_WRITER_RETRY_BASE_MS * 2 ** (this.reinforcementBusyRetries - 1);
+    const { scope, branch } = this.parseScopeKey(next.value);
+    this.scheduleReinforcementFlush(scope, branch, delay);
   }
 
   private parseScopeKey(key: string): { scope: MemoryScope; branch?: string } {
