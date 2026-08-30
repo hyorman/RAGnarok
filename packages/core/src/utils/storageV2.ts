@@ -22,7 +22,7 @@ export class StorageMigrationInterruptedError extends Error {
   ) {
     super(
       `Storage migration ${migrationId} is interrupted at ${stage}. ` +
-        `Opening the storage in VS Code resumes it automatically; ragnarok-migrate resume is the manual fallback.`,
+        `Opening the storage in VS Code resumes it automatically; ragnarok-migrate --resume ${migrationId} is the manual fallback.`,
     );
   }
 }
@@ -407,9 +407,9 @@ export async function resetStorageToV2(storageDir: string): Promise<string | nul
     return null;
   }
 
-  await fs.mkdir(backupDir!);
   const moved: string[] = [];
   try {
+    await fs.mkdir(backupDir!);
     for (const entry of entries) {
       await fs.rename(path.join(storageDir, entry), path.join(backupDir!, entry));
       moved.push(entry);

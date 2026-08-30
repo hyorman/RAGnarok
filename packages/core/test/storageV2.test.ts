@@ -170,6 +170,57 @@ describe("storage format v2", () => {
     expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
   });
 
+  it("restores the format marker and clears the journal when backup-dir mkdir fails", async () => {
+    // A healthy v2 store; resetting it will fail at mkdir, which should
+    // trigger a complete rollback (moved is empty).
+    await fs.mkdir(path.join(directory, "database"), { recursive: true });
+    await fs.writeFile(path.join(directory, "database", "topics.json"), "v2 data");
+    const marker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: 999 };
+    await atomicWriteJson(path.join(directory, STORAGE_FORMAT_FILENAME), marker);
+
+    // Force fs.mkdir to fail. We only want to intercept the backup-dir mkdir,
+    // not any other mkdir calls (e.g., mkdtemp in beforeEach).
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fsModule: typeof fs = require("fs/promises");
+    const originalMkdir = fsModule.mkdir;
+    let mkdirCalls = 0;
+    fsModule.mkdir = (async (dir: unknown, options?: unknown) => {
+      const dirStr = String(dir);
+      const isBackupDir = path.dirname(dirStr) === directory && path.basename(dirStr).startsWith("backup-v1-");
+      if (isBackupDir) {
+        mkdirCalls += 1;
+        throw new Error("simulated backup-dir mkdir failure");
+      }
+      return originalMkdir(dir as any, options as any);
+    }) as typeof fs.mkdir;
+
+    let caught: any;
+    try {
+      try {
+        await resetStorageToV2(directory);
+        expect.fail("expected resetStorageToV2 to throw");
+      } catch (error) {
+        caught = error;
+      }
+    } finally {
+      fsModule.mkdir = originalMkdir;
+    }
+    expect(caught?.message).to.equal("simulated backup-dir mkdir failure");
+    expect(mkdirCalls).to.equal(1);
+
+    // The rollback was provably complete (moved was empty), so the store must
+    // be healthy again: marker restored verbatim, journal gone, data untouched.
+    expect(await fs.readdir(directory)).to.not.include(STORAGE_RESET_JOURNAL_FILENAME);
+    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(
+      marker,
+    );
+    expect(await fs.readFile(path.join(directory, "database", "topics.json"), "utf8")).to.equal("v2 data");
+
+    // And the store opens normally afterward instead of throwing
+    // StorageResetInterruptedError -- no lingering fail-closed state.
+    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+  });
+
   it("atomically replaces JSON without leaving temporary files", async () => {
     const target = path.join(directory, "topics.json");
     await atomicWriteJson(target, { value: 1 });

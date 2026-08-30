@@ -10,7 +10,7 @@ checksummed backup that `--rollback` restores, so there is nothing a prompt woul
 other host — and every layout the automatic path does not accept — still fails closed and requires the
 CLI below. Nothing ever resets or discards a store; a reset is a separate, explicitly consented action.
 
-An interrupted migration resumes automatically on the next VS Code activation; `ragnarok-migrate resume`
+An interrupted migration resumes automatically on the next VS Code activation; `ragnarok-migrate --resume <migration-id>`
 remains available for manual control and for common-layout stores.
 
 ## Supported source layouts
