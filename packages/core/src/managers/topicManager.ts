@@ -42,8 +42,9 @@ import {
   ensureStorageFormatV2,
   inspectStorage,
   resetStorageToV2,
+  STORAGE_RESET_JOURNAL_FILENAME,
 } from "../utils/storageV2";
-import { acquireOperationLease } from "../utils/storageLock";
+import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import {
   StorageTransactionCoordinator,
@@ -96,6 +97,17 @@ export interface AddDocumentResult {
   document: TopicDocument;
   pipelineResult: PipelineResult;
 }
+
+/**
+ * Notifications about storage state changed by something other than this
+ * manager's own write transactions: a foreign process editing topics.json or
+ * a topic-documents file, or the whole storage tree becoming unreachable
+ * because a full-exclusion operation (migration/reset) elsewhere is holding
+ * it.
+ */
+export type StorageExternalChange =
+  | { kind: "topics-changed" }
+  | { kind: "storage-unavailable" };
 
 interface IngestionJournalEntry {
   id: string;
@@ -313,6 +325,20 @@ export class TopicManager {
   private managedOperationContext = new AsyncLocalStorage<{ active: boolean }>();
   private disposePromise: Promise<void> | null = null;
 
+  // Cross-process freshness: a directory watch on the database dir (never a
+  // file watch -- atomicWriteJson's rename-over-destination orphans an
+  // inode-following handle after the first replacement). Instance-scoped,
+  // unlike the static onAgentCacheCleanup emitter above, because "another
+  // process touched storage" is only meaningful to the manager instance whose
+  // caches it might invalidate.
+  private readonly externalChangeEmitter = new EventEmitter();
+  private storageWatcher: fsSync.FSWatcher | null = null;
+  private watcherDebounceTimer: NodeJS.Timeout | null = null;
+  private watcherHealthTimer: NodeJS.Timeout | null = null;
+  private watcherRetryTimer: NodeJS.Timeout | null = null;
+  private watcherUnavailable = false;
+  private watcherStopped = false;
+
   /**
    * Create and initialize a TopicManager
    */
@@ -396,6 +422,7 @@ export class TopicManager {
       await this.loadCommonDatabase();
 
       this.isInitialized = true;
+      this.startExternalChangeWatcher();
       this.logger.info("TopicManager initialized successfully", {
         topicCount: Object.keys(this.topicsIndex?.topics || {}).length,
         commonTopicCount: Object.keys(this.commonTopicsIndex?.topics || {}).length,
@@ -1654,6 +1681,31 @@ export class TopicManager {
   }
 
   /**
+   * Subscribe to storage changes this manager did not itself make: a foreign
+   * process editing topics.json/a topic-documents file (`topics-changed`), or
+   * the storage tree going unreachable because a full-exclusion operation
+   * elsewhere is holding it (`storage-unavailable`).
+   */
+  public onExternalChange(listener: (change: StorageExternalChange) => void): { dispose(): void } {
+    this.externalChangeEmitter.on("change", listener);
+    return {
+      dispose: () => {
+        this.externalChangeEmitter.off("change", listener);
+      },
+    };
+  }
+
+  private emitExternalChange(change: StorageExternalChange): void {
+    try {
+      this.externalChangeEmitter.emit("change", change);
+    } catch (error) {
+      this.logger.warn("onExternalChange listener threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Reinitialize with the currently configured embedding model
    * Called when the embedding model configuration changes
    */
@@ -1733,6 +1785,7 @@ export class TopicManager {
   private async disposeOnce(): Promise<void> {
     this.logger.info("Disposing TopicManager");
     this.acceptingManagedOperations = false;
+    this.stopExternalChangeWatcher();
     await this.waitForManagedOperationsToDrain();
 
     const failures: unknown[] = [];
@@ -1759,6 +1812,7 @@ export class TopicManager {
     this.topicsIndex = null;
     this.isInitialized = false;
     TopicManager._onAgentCacheCleanup.removeAllListeners();
+    this.externalChangeEmitter.removeAllListeners();
 
     // No session lease exists to release: every lease is released by the
     // transaction that took it, and the drain above waited for those.
@@ -2516,6 +2570,220 @@ export class TopicManager {
    */
   private async reloadCanonicalState(): Promise<void> {
     await this.loadTopicsIndex();
+  }
+
+  // ==================== External-change watcher ====================
+  //
+  // Watches the database directory (never a specific file: atomicWriteJson
+  // publishes topics.json and each topic-documents file via rename-over, and
+  // an inode-following file watch goes silent after the first replacement).
+  // Events are filtered to topics.json / topic-<id>-documents.json, debounced
+  // 250ms, and skipped while this process's own write transaction is active
+  // -- the trailing debounce covers the release edge for any interleaved
+  // event that slips past that check. A watch failure, or the directory going
+  // missing, is reported as `storage-unavailable` and retried every 2s until
+  // storage returns, at which point the watch is re-established, the caches
+  // reloaded, and `topics-changed` emitted.
+
+  /** Start (or restart) the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
+  private startExternalChangeWatcher(): void {
+    if (this.watcherStopped) {
+      return;
+    }
+    let watcher: fsSync.FSWatcher;
+    try {
+      watcher = fsSync.watch(this.getDatabaseDir(), (_eventType, filename) => {
+        this.onRawWatchEvent(filename);
+      });
+    } catch (error) {
+      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    watcher.on("error", (error) => {
+      this.logger.warn("Storage directory watch reported an error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.handleWatchOutage();
+    });
+    this.storageWatcher = watcher;
+    this.startWatcherHealthCheck();
+  }
+
+  private stopExternalChangeWatcher(): void {
+    this.watcherStopped = true;
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+      this.watcherDebounceTimer = null;
+    }
+    if (this.watcherRetryTimer) {
+      clearTimeout(this.watcherRetryTimer);
+      this.watcherRetryTimer = null;
+    }
+    this.closeWatcher();
+  }
+
+  private closeWatcher(): void {
+    if (this.storageWatcher) {
+      try {
+        this.storageWatcher.close();
+      } catch {
+        // Already closed or the underlying handle is gone; nothing to do.
+      }
+      this.storageWatcher = null;
+    }
+    if (this.watcherHealthTimer) {
+      clearInterval(this.watcherHealthTimer);
+      this.watcherHealthTimer = null;
+    }
+  }
+
+  /**
+   * fs.watch on a directory that is later removed does not reliably error on
+   * every platform (inotify does; FSEvents-backed watches on macOS can simply
+   * go quiet). A periodic existence check makes outage detection independent
+   * of that platform difference, at the cost of at most one health-check
+   * interval of latency.
+   */
+  private startWatcherHealthCheck(): void {
+    if (this.watcherHealthTimer) {
+      clearInterval(this.watcherHealthTimer);
+    }
+    this.watcherHealthTimer = setInterval(() => {
+      void this.checkStorageHealth();
+    }, 2_000);
+    this.watcherHealthTimer.unref?.();
+  }
+
+  private async checkStorageHealth(): Promise<void> {
+    if (this.watcherStopped || this.watcherUnavailable) {
+      return;
+    }
+    if (!(await this.databaseDirExists())) {
+      this.handleWatchOutage();
+    }
+  }
+
+  private async databaseDirExists(): Promise<boolean> {
+    try {
+      return await this.pathExists(this.getDatabaseDir());
+    } catch {
+      return false;
+    }
+  }
+
+  private onRawWatchEvent(filename: string | Buffer | null): void {
+    if (this.watcherStopped) {
+      return;
+    }
+    const name = filename ? filename.toString() : null;
+    if (name !== null && name !== EXTENSION.TOPICS_INDEX_FILENAME && !/^topic-.*-documents\.json$/.test(name)) {
+      return;
+    }
+    if (this.activeLease !== null) {
+      // Our own transaction is writing; its reload already applies the
+      // change and there is nothing external to report.
+      return;
+    }
+    this.scheduleDebouncedReload();
+  }
+
+  private scheduleDebouncedReload(): void {
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+    }
+    this.watcherDebounceTimer = setTimeout(() => {
+      this.watcherDebounceTimer = null;
+      void this.handleDebouncedChange();
+    }, 250);
+    this.watcherDebounceTimer.unref?.();
+  }
+
+  private async handleDebouncedChange(): Promise<void> {
+    if (this.watcherStopped || this.activeLease !== null) {
+      return;
+    }
+    if (!(await this.databaseDirExists())) {
+      this.handleWatchOutage();
+      return;
+    }
+    try {
+      await this.storageMutationMutex.runExclusive(() => this.reloadCanonicalState());
+      this.emitExternalChange({ kind: "topics-changed" });
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        this.handleWatchOutage();
+        return;
+      }
+      this.logger.warn("Failed to reload storage state after an external change notification", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Enter (or stay in) the unavailable state: emit once, tear the watch down, and retry every 2s until storage returns. */
+  private handleWatchOutage(): void {
+    if (this.watcherStopped || this.watcherUnavailable) {
+      return;
+    }
+    this.watcherUnavailable = true;
+    this.closeWatcher();
+    void this.announceUnavailability();
+    this.scheduleOutageRetry();
+  }
+
+  /**
+   * Diagnostic only: whether a lock file or reset journal is present does not
+   * change the retry behaviour (either way storage is unavailable and gets
+   * retried), it only distinguishes "a full-exclusion operation elsewhere has
+   * the tree" from "storage is genuinely gone" for the log line.
+   */
+  private async announceUnavailability(): Promise<void> {
+    let reason = "the storage directory is unreachable";
+    try {
+      const lockPath = path.join(this.storageDir, STORAGE_LOCK_FILENAME);
+      const journalPath = path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME);
+      if ((await this.pathExists(lockPath)) || (await this.pathExists(journalPath))) {
+        reason = "a full-exclusion storage operation (migration/reset) appears to be in progress elsewhere";
+      }
+    } catch {
+      // Best-effort diagnostic only; never let this block the notification.
+    }
+    this.logger.warn("Storage became unavailable; external-change tracking will retry until it returns", { reason });
+    this.emitExternalChange({ kind: "storage-unavailable" });
+  }
+
+  private scheduleOutageRetry(): void {
+    if (this.watcherStopped) {
+      return;
+    }
+    this.watcherRetryTimer = setTimeout(() => {
+      this.watcherRetryTimer = null;
+      void this.attemptWatcherRecovery();
+    }, 2_000);
+    this.watcherRetryTimer.unref?.();
+  }
+
+  private async attemptWatcherRecovery(): Promise<void> {
+    if (this.watcherStopped) {
+      return;
+    }
+    if (!(await this.databaseDirExists())) {
+      this.scheduleOutageRetry();
+      return;
+    }
+    this.watcherUnavailable = false;
+    this.startExternalChangeWatcher();
+    try {
+      await this.storageMutationMutex.runExclusive(() => this.reloadCanonicalState());
+      this.emitExternalChange({ kind: "topics-changed" });
+    } catch (error) {
+      this.logger.warn("Storage directory returned but reload failed; retrying", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.handleWatchOutage();
+    }
   }
 
   /**

@@ -124,7 +124,13 @@ export type { QueryPlannerOptions, QueryPlan, SubQuery } from "./agents/queryPla
 
 // Managers
 export { TopicManager } from "./managers/topicManager";
-export type { TopicManagerOptions, CreateTopicOptions, TopicStats, AddDocumentResult } from "./managers/topicManager";
+export type {
+  TopicManagerOptions,
+  CreateTopicOptions,
+  TopicStats,
+  AddDocumentResult,
+  StorageExternalChange,
+} from "./managers/topicManager";
 export { DocumentPipeline } from "./managers/documentPipeline";
 export type { PipelineOptions, PipelineProgress, PipelineResult } from "./managers/documentPipeline";
 
