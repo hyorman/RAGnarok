@@ -39,9 +39,10 @@ import {
   assertNoInterruptedStorageMigration,
   atomicWriteJson,
   ensureStorageFormatV2,
+  inspectStorage,
   resetStorageToV2,
 } from "../utils/storageV2";
-import { acquireStorageLock } from "../utils/storageLock";
+import { acquireOperationLease } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import {
   StorageTransactionCoordinator,
@@ -301,7 +302,11 @@ export class TopicManager {
   private archiveMutex = new Mutex();
   private storageMutationMutex = new Mutex();
   private topicMutationMutexes = new Map<string, Mutex>();
-  private storageLock: StorageLockHandle | null = null;
+  // Set only for the duration of a write transaction. Reads never take a
+  // lease, so a null value here means "not currently mutating storage".
+  private activeLease: StorageLockHandle | null = null;
+  private activeCoordinator: StorageTransactionCoordinator | null = null;
+  // Fallback coordinator for direct unit fixtures that never initialize.
   private transactionCoordinator: StorageTransactionCoordinator | null = null;
   private acceptingManagedOperations = true;
   private activeManagedOperations = 0;
@@ -348,23 +353,21 @@ export class TopicManager {
     this.logger.info("Initializing TopicManager");
 
     try {
-      // Cross-process single-writer guard: a second OS process on the same
-      // storage dir would race whole-table rewrites the in-process
-      // serializers cannot see. Fail fast naming the holder instead.
+      // Opening a store is a read. Cross-process exclusion is now per write
+      // operation (see runStorageWriteTransaction), so initialization takes a
+      // lease only for the two startup steps that genuinely write: stamping
+      // the format marker of an empty directory, and an explicit reset.
       await assertNoInterruptedStorageMigration(this.storageDir);
-      this.storageLock = await acquireStorageLock(this.storageDir);
 
       if (this.options.resetStorage) {
-        const backupPath = await resetStorageToV2(this.storageDir);
+        const backupPath = await this.withOperationLease(() => resetStorageToV2(this.storageDir));
         this.logger.warn("Storage reset completed", { backupPath: backupPath ?? "empty storage" });
       } else {
-        await ensureStorageFormatV2(this.storageDir);
+        await this.ensureStorageFormatMarker();
       }
 
       // Ensure storage directory exists
       await this.ensureStorageDirectory();
-      this.transactionCoordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), this.storageLock);
-      await this.transactionCoordinator.initialize();
 
       // Ensure embedding service is initialized so we know the active model
       await this.embeddingService.initialize();
@@ -382,8 +385,13 @@ export class TopicManager {
         this.embeddingService,
         this.embeddingRegistry,
       );
-      await this.recoverPostCommitCleanupJournal();
-      await this.recoverIngestionJournal();
+      // Recovery writes. Probe read-only first so the overwhelmingly common
+      // clean start never touches the lock file; only a store with something
+      // to repair pays for a transaction (whose prologue is the recovery
+      // itself, so the body has nothing left to do).
+      if (await this.hasPendingStorageRecovery()) {
+        await this.runStorageWriteTransaction(async () => undefined);
+      }
 
       // Load common database if configured
       await this.loadCommonDatabase();
@@ -416,11 +424,6 @@ export class TopicManager {
         this.vectorStoreFactory = null;
         await close(() => factory.dispose());
       }
-      if (this.storageLock) {
-        const lock = this.storageLock;
-        this.storageLock = null;
-        await close(() => lock.release());
-      }
       if (cleanupFailures.length > 0) {
         this.logger.warn("TopicManager initialization cleanup encountered failures", {
           failures: cleanupFailures.map((cleanupError) =>
@@ -436,9 +439,7 @@ export class TopicManager {
    * Create a new topic
    */
   public async createTopic(options: CreateTopicOptions): Promise<Topic> {
-    return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() => this.createTopicUnlocked(options)),
-    );
+    return this.runManagedOperation(() => this.runStorageWriteTransaction(() => this.createTopicUnlocked(options)));
   }
 
   private async createTopicUnlocked(options: CreateTopicOptions): Promise<Topic> {
@@ -518,13 +519,13 @@ export class TopicManager {
    */
   public async deleteTopic(topicId: string): Promise<void> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
-        this.getTopicMutationMutex(topicId).runExclusive(() => this.deleteTopicUnlocked(topicId)),
+      this.runStorageWriteTransaction((tx) =>
+        this.getTopicMutationMutex(topicId).runExclusive(() => this.deleteTopicUnlocked(topicId, tx.coordinator)),
       ),
     );
   }
 
-  private async deleteTopicUnlocked(topicId: string): Promise<void> {
+  private async deleteTopicUnlocked(topicId: string, coordinator: StorageTransactionCoordinator): Promise<void> {
     this.logger.info("Deleting topic", { topicId });
 
     try {
@@ -539,7 +540,6 @@ export class TopicManager {
 
       const topicName = this.topicsIndex.topics[topicId].name;
       await this.assertStorageOwnership();
-      const coordinator = await this.ensureTransactionCoordinator();
 
       // The topics index is the visibility boundary and is published first.
       // Once it no longer advertises the topic, remaining table directories
@@ -564,16 +564,13 @@ export class TopicManager {
       // topic, so clear the complete cache before reopening it.
       this.invalidateVectorStoreCache();
       this.vectorStoreFactory.dispose();
-      const previousTopicsIndex = this.topicsIndex;
-      this.topicsIndex = nextTopicsIndex;
-      let committed = false;
       try {
         await coordinator.commit("delete-topic", operations, { topicId });
-        committed = true;
+        // Publish only what the commit made durable. Deriving next-state from
+        // the reloaded index and applying it after the commit removes the
+        // window in which the cache advertised a deletion that never landed.
+        this.topicsIndex = nextTopicsIndex;
       } finally {
-        if (!committed) {
-          this.topicsIndex = previousTopicsIndex;
-        }
         await fs.rm(preparedIndex, { force: true }).catch(() => undefined);
         this.vectorStoreFactory = new VectorStoreFactory(
           this.getDatabaseDir(),
@@ -641,7 +638,7 @@ export class TopicManager {
    */
   public async updateTopic(topicId: string, updates: Partial<Pick<Topic, "name" | "description">>): Promise<Topic> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() => this.updateTopicUnlocked(topicId, updates)),
+      this.runStorageWriteTransaction(() => this.updateTopicUnlocked(topicId, updates)),
     );
   }
 
@@ -1549,9 +1546,13 @@ export class TopicManager {
    */
   public async refresh(): Promise<void> {
     return this.runManagedOperation(() =>
+      // A refresh is a read: it republishes what is on disk and writes
+      // nothing, so it takes no lease. It still serializes against local
+      // mutations, because republishing the caches between a mutation's
+      // in-memory apply and its flush would silently drop that mutation.
       this.storageMutationMutex.runExclusive(async () => {
         this.logger.info("Refreshing topics");
-        await this.loadTopicsIndex();
+        await this.reloadCanonicalState();
       }),
     );
   }
@@ -1562,7 +1563,7 @@ export class TopicManager {
    */
   public async reinitializeWithNewModel(): Promise<void> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() => this.reinitializeWithNewModelUnlocked()),
+      this.runStorageWriteTransaction(() => this.reinitializeWithNewModelUnlocked()),
     );
   }
 
@@ -1663,11 +1664,8 @@ export class TopicManager {
     this.isInitialized = false;
     TopicManager._onAgentCacheCleanup.removeAllListeners();
 
-    if (this.storageLock) {
-      const lock = this.storageLock;
-      this.storageLock = null;
-      await close(() => lock.release());
-    }
+    // No session lease exists to release: every lease is released by the
+    // transaction that took it, and the drain above waited for those.
 
     this.logger.info("TopicManager disposed");
     if (failures.length > 0) {
@@ -2363,15 +2361,20 @@ export class TopicManager {
       // Only a genuinely missing index may initialize empty storage. Parse,
       // schema, permission, and other I/O errors must leave the source intact
       // and abort initialization.
-      this.logger.info("Topics index not found, creating new one");
-      this.topicsIndex = {
-        topics: {},
-        modelName: this.embeddingService.getCurrentModel(),
-        lastUpdated: Date.now(),
-      };
-
-      await this.saveTopicsIndex();
-      this.topicDocuments = new Map();
+      //
+      // This is a reader path and must not write: persisting the empty index
+      // here would be an unleased mutation. The first real mutation's
+      // transaction saves it. An index already in memory is kept as-is — on
+      // reload it is the pending canonical state, not something to discard.
+      if (!this.topicsIndex) {
+        this.logger.info("Topics index not found, starting from an empty in-memory index");
+        this.topicsIndex = {
+          topics: {},
+          modelName: this.embeddingService.getCurrentModel(),
+          lastUpdated: Date.now(),
+        };
+        this.topicDocuments = new Map();
+      }
       return;
     }
 
@@ -2385,6 +2388,15 @@ export class TopicManager {
     this.logger.info("Topics index loaded", {
       topicCount: Object.keys(parsedIndex.topics).length,
     });
+  }
+
+  /**
+   * Read-only reload of topics.json and every topic-<id>-documents.json into
+   * the caches. Reads take no lease, so this is also what a write transaction
+   * runs before deriving next-state from cached values.
+   */
+  private async reloadCanonicalState(): Promise<void> {
+    await this.loadTopicsIndex();
   }
 
   /**
@@ -2852,20 +2864,130 @@ export class TopicManager {
   }
 
   private async assertStorageOwnership(): Promise<void> {
-    if (this.storageLock) {
-      await this.storageLock.assertOwned();
+    if (this.activeLease) {
+      await this.activeLease.assertOwned();
       return;
     }
     // Direct unit fixtures construct the private manager without running
-    // initialization. A live initialized manager must never commit unlocked.
+    // initialization. A live initialized manager must never commit outside a
+    // write transaction: without a lease nothing excludes another process.
     if (this.isInitialized) {
       throw new Error("Storage lease is unavailable; refusing to commit");
     }
   }
 
+  /**
+   * Run `operation` under an exclusive, operation-scoped write lease.
+   *
+   * Every storage mutation goes through here. Reads take no lease at all, so
+   * the canonical files may have moved under our caches since they were
+   * loaded; the lease is therefore followed by a reload before any next-state
+   * is derived. The transaction coordinator is per operation on purpose: its
+   * `initialize()` is WAL recovery, which under this design must run while we
+   * hold the lease rather than once at startup.
+   */
+  private async runStorageWriteTransaction<T>(
+    operation: (tx: { coordinator: StorageTransactionCoordinator; lease: StorageLockHandle }) => Promise<T>,
+    options?: { waitMs?: number },
+  ): Promise<T> {
+    return this.storageMutationMutex.runExclusive(async () => {
+      const lease = await acquireOperationLease(this.storageDir, { waitMs: options?.waitMs ?? 5_000 });
+      this.activeLease = lease;
+      try {
+        // Write-side safety: another process may have written since our caches
+        // were loaded. Reload the canonical files before deriving next-state.
+        await this.reloadCanonicalState();
+        const coordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), lease);
+        await coordinator.initialize();
+        this.activeCoordinator = coordinator;
+        await this.recoverPostCommitCleanupJournal();
+        await this.recoverIngestionJournal();
+        return await operation({ coordinator, lease });
+      } finally {
+        this.activeCoordinator = null;
+        this.activeLease = null;
+        await lease.release();
+      }
+    });
+  }
+
+  /** Take an operation lease for a single startup write, then give it back. */
+  private async withOperationLease<T>(operation: () => Promise<T>): Promise<T> {
+    const lease = await acquireOperationLease(this.storageDir, { waitMs: 5_000 });
+    this.activeLease = lease;
+    try {
+      return await operation();
+    } finally {
+      this.activeLease = null;
+      await lease.release();
+    }
+  }
+
+  /**
+   * Validate the storage format marker, stamping it only for a genuinely
+   * empty directory.
+   *
+   * Classification is read-only, so two windows opening the same healthy store
+   * never contend. Only the fresh-install case writes, and it waits for the
+   * lease rather than try-locking: a first run that silently skipped the stamp
+   * would leave the store unversioned. Any other classification is handed to
+   * `ensureStorageFormatV2` unleased purely so it raises its own typed error —
+   * it cannot write on those paths, and taking a lease first would let a
+   * StorageBusyError mask the real diagnosis.
+   */
+  private async ensureStorageFormatMarker(): Promise<void> {
+    const inspection = await inspectStorage(this.storageDir);
+    if (inspection.status === "current") {
+      return;
+    }
+    if (inspection.status !== "empty") {
+      await ensureStorageFormatV2(this.storageDir);
+      return;
+    }
+    await this.withOperationLease(async () => {
+      // Re-check under the lease: another process may have stamped it while
+      // we waited.
+      await ensureStorageFormatV2(this.storageDir);
+    });
+  }
+
+  /**
+   * Read-only probe: has a previous run left anything to recover?
+   *
+   * Startup used to roll interrupted work back unconditionally, because it
+   * held a session lock and a session coordinator anyway. Recovery writes, so
+   * it now needs a lease — and a clean open must not take one. Probing keeps
+   * the old guarantee (an interrupted write is repaired when the store is
+   * opened, not deferred to whenever someone happens to write next) while a
+   * healthy store still opens without touching the lock file.
+   */
+  private async hasPendingStorageRecovery(): Promise<boolean> {
+    for (const journalPath of [this.getPostCommitCleanupJournalPath(), this.getIngestionJournalPath()]) {
+      if (await this.pathExists(journalPath)) {
+        return true;
+      }
+    }
+    // A crashed transaction leaves its WAL, or an orphaned staging directory,
+    // under the coordinator root.
+    try {
+      const staged = await fs.readdir(path.join(this.getDatabaseDir(), ".transactions"));
+      return staged.length > 0;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   private async ensureTransactionCoordinator(): Promise<StorageTransactionCoordinator> {
+    // Inside a write transaction the transaction's own coordinator is the only
+    // valid one: it is fenced by the lease currently held.
+    if (this.activeCoordinator) {
+      return this.activeCoordinator;
+    }
     if (!this.transactionCoordinator) {
-      const fence = this.storageLock ?? {
+      const fence = {
         ownerId: "unmanaged-test-fixture",
         assertOwned: async () => {
           await this.assertStorageOwnership();
