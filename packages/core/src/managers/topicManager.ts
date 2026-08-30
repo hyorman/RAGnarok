@@ -2590,6 +2590,10 @@ export class TopicManager {
     if (this.watcherStopped) {
       return;
     }
+    // Idempotent re-entry: a caller re-establishing the watch (recovery,
+    // or any future accidental double-start) must never leak the previous
+    // handle/health-timer pair.
+    this.closeWatcher();
     let watcher: fsSync.FSWatcher;
     try {
       watcher = fsSync.watch(this.getDatabaseDir(), (_eventType, filename) => {
@@ -2640,11 +2644,21 @@ export class TopicManager {
   }
 
   /**
-   * fs.watch on a directory that is later removed does not reliably error on
-   * every platform (inotify does; FSEvents-backed watches on macOS can simply
-   * go quiet). A periodic existence check makes outage detection independent
-   * of that platform difference, at the cost of at most one health-check
-   * interval of latency.
+   * Deliberate poll-augmentation, not an incidental helper: fs.watch alone
+   * cannot satisfy the unavailability contract on every platform. Linux's
+   * inotify backend emits an 'error' when the watched directory disappears,
+   * but macOS's FSEvents-backed watch does not -- it simply stops emitting
+   * events, with no signal that the directory is gone. A purely reactive
+   * design (relying only on `watcher.on("error", ...)`) would leave
+   * `storage-unavailable` undetectable on macOS until some unrelated
+   * qualifying file event happened to fire, which may never happen after a
+   * directory removal/rename -- exactly the scenario acceptance criterion 6
+   * exists to cover.
+   *
+   * The cost of closing that gap: one unref'd `fs.lstat` per manager every 2
+   * seconds while the watcher is otherwise healthy. Negligible, and it never
+   * keeps the process alive -- the timer is `unref()`'d here and explicitly
+   * cleared by `closeWatcher()` on outage or dispose.
    */
   private startWatcherHealthCheck(): void {
     if (this.watcherHealthTimer) {
@@ -2700,18 +2714,42 @@ export class TopicManager {
     this.watcherDebounceTimer.unref?.();
   }
 
+  /**
+   * Every await below is a point where dispose() may have run to completion
+   * (cleared caches, removed listeners) while this call was suspended. Each
+   * one is followed by a fresh `watcherStopped` check that bails silently --
+   * a disposed manager must never have its caches repopulated by, or emit an
+   * event from, a reload that was already in flight when dispose() ran.
+   */
   private async handleDebouncedChange(): Promise<void> {
     if (this.watcherStopped || this.activeLease !== null) {
       return;
     }
-    if (!(await this.databaseDirExists())) {
+    const dirExists = await this.databaseDirExists();
+    if (this.watcherStopped) {
+      return;
+    }
+    if (!dirExists) {
       this.handleWatchOutage();
       return;
     }
     try {
-      await this.storageMutationMutex.runExclusive(() => this.reloadCanonicalState());
+      await this.storageMutationMutex.runExclusive(async () => {
+        // Checked again inside the mutex: dispose() may have run while this
+        // call was queued waiting for a concurrent transaction/refresh.
+        if (this.watcherStopped) {
+          return;
+        }
+        await this.reloadCanonicalState();
+      });
+      if (this.watcherStopped) {
+        return;
+      }
       this.emitExternalChange({ kind: "topics-changed" });
     } catch (error: any) {
+      if (this.watcherStopped) {
+        return;
+      }
       if (error?.code === "ENOENT") {
         this.handleWatchOutage();
         return;
@@ -2728,6 +2766,13 @@ export class TopicManager {
       return;
     }
     this.watcherUnavailable = true;
+    // A pending debounced reload targets storage that is (or is about to be)
+    // gone; letting it fire later could race a duplicate topics-changed with
+    // the recovery path's own reload-and-emit.
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+      this.watcherDebounceTimer = null;
+    }
     this.closeWatcher();
     void this.announceUnavailability();
     this.scheduleOutageRetry();
@@ -2765,20 +2810,36 @@ export class TopicManager {
     this.watcherRetryTimer.unref?.();
   }
 
+  /** Same dispose-race discipline as handleDebouncedChange: re-check `watcherStopped` after every await and bail silently. */
   private async attemptWatcherRecovery(): Promise<void> {
     if (this.watcherStopped) {
       return;
     }
-    if (!(await this.databaseDirExists())) {
+    const dirExists = await this.databaseDirExists();
+    if (this.watcherStopped) {
+      return;
+    }
+    if (!dirExists) {
       this.scheduleOutageRetry();
       return;
     }
     this.watcherUnavailable = false;
     this.startExternalChangeWatcher();
     try {
-      await this.storageMutationMutex.runExclusive(() => this.reloadCanonicalState());
+      await this.storageMutationMutex.runExclusive(async () => {
+        if (this.watcherStopped) {
+          return;
+        }
+        await this.reloadCanonicalState();
+      });
+      if (this.watcherStopped) {
+        return;
+      }
       this.emitExternalChange({ kind: "topics-changed" });
     } catch (error) {
+      if (this.watcherStopped) {
+        return;
+      }
       this.logger.warn("Storage directory returned but reload failed; retrying", {
         error: error instanceof Error ? error.message : String(error),
       });

@@ -179,4 +179,47 @@ describe("TopicManager external-change watcher", function () {
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(events).to.have.length(0);
   });
+
+  it("does not repopulate caches or emit an event when dispose() runs while a watcher-triggered reload is mid-flight", async function () {
+    this.timeout(10_000);
+    const created = await createManagerInTmpDir();
+    await created.createTopic({ name: "mine" });
+
+    const events: StorageExternalChange[] = [];
+    created.onExternalChange((change) => events.push(change));
+
+    // Stall the handler's very first await point (the database-dir existence
+    // check) so we control exactly when it resumes, relative to dispose().
+    // handleDebouncedChange is invoked directly here -- bypassing fs.watch
+    // timing entirely -- because it is not tracked by the managed-operation
+    // drain, which is precisely the gap this test exercises.
+    let releaseStall: () => void = () => undefined;
+    const stall = new Promise<void>((resolve) => {
+      releaseStall = resolve;
+    });
+    let stallEntered = false;
+    const originalDatabaseDirExists = ((created as any).databaseDirExists as () => Promise<boolean>).bind(created);
+    (created as any).databaseDirExists = async (): Promise<boolean> => {
+      stallEntered = true;
+      await stall;
+      return originalDatabaseDirExists();
+    };
+
+    const pending: Promise<void> = (created as any).handleDebouncedChange();
+
+    await pollUntil(() => stallEntered, 2_000);
+
+    await created.dispose();
+    manager = null;
+    // Dispose must have cleared the cache before the stalled reload resumes.
+    expect((created as any).topicsIndex).to.equal(null);
+
+    releaseStall();
+    await pending;
+
+    // The resumed handler must have bailed out on the post-await
+    // watcherStopped check instead of reloading and republishing state.
+    expect((created as any).topicsIndex).to.equal(null);
+    expect(events).to.have.length(0);
+  });
 });
