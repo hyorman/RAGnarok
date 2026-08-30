@@ -538,6 +538,10 @@ export class TopicManager {
         );
       }
 
+      // A shared topic whose name the newly created one now occupies must be
+      // renamed, or it becomes unreachable by name.
+      await this.refreshSharedTopics();
+
       this.logger.info("Topic created successfully", {
         topicId: topic.id,
         name: topic.name,
@@ -720,6 +724,10 @@ export class TopicManager {
       // Save index
       this.topicsIndex.lastUpdated = Date.now();
       await this.saveTopicsIndex();
+
+      // A shared topic whose name the renamed one now occupies must be
+      // renamed, or it becomes unreachable by name.
+      await this.refreshSharedTopics();
 
       this.logger.info("Topic updated successfully", { topicId });
 

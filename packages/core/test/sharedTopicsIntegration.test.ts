@@ -124,6 +124,57 @@ describe("shared topics end to end", function () {
     await consumer.dispose();
   });
 
+  it("renames a shared topic when a new local topic takes its name", async function () {
+    const publisher = await createTestTopicManager(publisherDir);
+    const published = await publisher.createTopic({ name: "API Docs" });
+    await publisher.exportTopic(published.id, path.join(shareDir, "api-docs.rag"));
+    await publisher.dispose();
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    // Nothing local owns the name yet, so the share is served under it.
+    expect(consumer.getAllTopics().map((entry) => entry.name)).to.deep.equal(["API Docs"]);
+
+    await consumer.createTopic({ name: "API Docs" });
+
+    const topics = consumer.getAllTopics();
+    const local = topics.find((entry) => entry.source === "local");
+    const shared = topics.find((entry) => entry.source === "common");
+    expect(local?.name).to.equal("API Docs");
+    expect(shared?.name).to.equal("API Docs (share)");
+    // Without the post-create refresh both would still be called "API Docs",
+    // and resolveTopicByName would never reach the shared one.
+    const names = topics.map((entry) => entry.name);
+    expect(new Set(names).size).to.equal(names.length);
+
+    await consumer.dispose();
+  });
+
+  it("renames a shared topic when a local topic is renamed onto its name", async function () {
+    const publisher = await createTestTopicManager(publisherDir);
+    const published = await publisher.createTopic({ name: "API Docs" });
+    await publisher.exportTopic(published.id, path.join(shareDir, "api-docs.rag"));
+    await publisher.dispose();
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    const local = await consumer.createTopic({ name: "Internal Notes" });
+    expect(
+      consumer
+        .getAllTopics()
+        .map((entry) => entry.name)
+        .sort(),
+    ).to.deep.equal(["API Docs", "Internal Notes"]);
+
+    await consumer.updateTopic(local.id, { name: "API Docs" });
+
+    const topics = consumer.getAllTopics();
+    expect(topics.find((entry) => entry.source === "local")?.name).to.equal("API Docs");
+    expect(topics.find((entry) => entry.source === "common")?.name).to.equal("API Docs (share)");
+    const names = topics.map((entry) => entry.name);
+    expect(new Set(names).size).to.equal(names.length);
+
+    await consumer.dispose();
+  });
+
   it("stops serving a topic whose archive was removed", async function () {
     const publisher = await createTestTopicManager(publisherDir);
     const topic = await publisher.createTopic({ name: "API Docs" });
