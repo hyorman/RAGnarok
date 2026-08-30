@@ -4,6 +4,8 @@ import * as os from "os";
 import * as path from "path";
 import { Logger } from "../src/logger";
 import { ArchiveFolderSource } from "../src/sharedTopics/archiveFolderSource";
+import { SharedTopicRegistry } from "../src/sharedTopics/registry";
+import type { ResolvedSharedTopic, SharedTopicSource } from "../src/sharedTopics/types";
 import { writeTopicArchive } from "./helpers/sharedTopicFixtures";
 
 describe("archive folder source", function () {
@@ -59,5 +61,117 @@ describe("archive folder source", function () {
     const source = new ArchiveFolderSource(path.join(root, "absent"));
 
     expect(await source.resolve({ cacheDir, logger })).to.deep.equal([]);
+  });
+});
+
+function stubSource(id: string, label: string, topics: Array<{ nativeId: string; name: string }>): SharedTopicSource {
+  return {
+    id,
+    label,
+    async resolve(): Promise<ResolvedSharedTopic[]> {
+      return topics.map((entry) => ({
+        nativeId: entry.nativeId,
+        sharedId: `shared-${entry.nativeId}`,
+        topic: {
+          id: `shared-${entry.nativeId}`,
+          name: entry.name,
+          createdAt: 1,
+          updatedAt: 1,
+          documentCount: 0,
+        },
+        documents: [],
+        storeDir: `/cache/${id}/${entry.nativeId}`,
+      }));
+    },
+  };
+}
+
+describe("shared topic registry", function () {
+  let cacheRoot: string;
+  const logger = new Logger("test");
+
+  beforeEach(async function () {
+    cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-registry-"));
+  });
+
+  afterEach(async function () {
+    await fs.rm(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("keeps a name that collides with nothing", async function () {
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([stubSource("src-a", "team-share", [{ nativeId: "n1", name: "API Docs" }])]);
+
+    await registry.refresh(["Local Notes"]);
+
+    expect(registry.listTopics().map((topic) => topic.name)).to.deep.equal(["API Docs"]);
+  });
+
+  it("appends the source label when a local topic already owns the name", async function () {
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([stubSource("src-a", "team-share", [{ nativeId: "n1", name: "API Docs" }])]);
+
+    await registry.refresh(["api docs"]);
+
+    expect(registry.listTopics()[0].name).to.equal("API Docs (team-share)");
+  });
+
+  it("numbers a second collision from a second source", async function () {
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([
+      stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs" }]),
+      stubSource("src-b", "share", [{ nativeId: "n2", name: "API Docs" }]),
+    ]);
+
+    await registry.refresh(["API Docs"]);
+
+    expect(registry.listTopics().map((topic) => topic.name)).to.deep.equal([
+      "API Docs (share)",
+      "API Docs (share 2)",
+    ]);
+  });
+
+  it("answers lookups and tags every topic as common", async function () {
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs" }])]);
+    await registry.refresh([]);
+
+    const [topic] = registry.listTopics();
+
+    expect(registry.has(topic.id)).to.equal(true);
+    expect(registry.has("topic-local")).to.equal(false);
+    expect(topic.source).to.equal("common");
+    expect(registry.getStoreDir(topic.id)).to.equal("/cache/src-a/n1");
+    expect(registry.getStoreDir("topic-local")).to.equal(undefined);
+  });
+
+  it("drops every topic when the sources are cleared", async function () {
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs" }])]);
+    await registry.refresh([]);
+
+    registry.setSources([]);
+    await registry.refresh([]);
+
+    expect(registry.listTopics()).to.deep.equal([]);
+  });
+
+  it("contributes nothing when a source throws", async function () {
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs" }])]);
+    await registry.refresh([]);
+
+    registry.setSources([
+      {
+        id: "src-a",
+        label: "share",
+        resolve: async () => {
+          throw new Error("network share vanished");
+        },
+      },
+    ]);
+    await registry.refresh([]);
+
+    expect(registry.listTopics()).to.deep.equal([]);
   });
 });
