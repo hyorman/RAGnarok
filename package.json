@@ -339,12 +339,12 @@
       },
       {
         "view": "ragTopics",
-        "contents": "RAGnarōk could not open its storage, so no topics or memories are available. Your data was not changed.\n\nCheck the RAGnarōk output channel for the cause, then reload to retry. A storage conversion that stopped midway may need `ragnarok-migrate --resume`.\n\n[$(refresh) Reload Window](command:workbench.action.reloadWindow)\n\n[Storage and migration guide](https://github.com/hyorman/ragnarok/blob/main/MIGRATION.md)",
+        "contents": "RAGnarōk could not open its storage, so no topics or memories are available. Your data was not changed.\n\nCheck the RAGnarōk output channel for the cause. If a storage conversion stopped midway, reload the window to resume automatically.\n\n[$(refresh) Reload Window](command:workbench.action.reloadWindow)\n\n[Storage and migration guide](https://github.com/hyorman/ragnarok/blob/main/MIGRATION.md)",
         "when": "ragnarok.activationFailed"
       },
       {
         "view": "ragMemory",
-        "contents": "RAGnarōk could not open its storage, so no topics or memories are available. Your data was not changed.\n\nCheck the RAGnarōk output channel for the cause, then reload to retry. A storage conversion that stopped midway may need `ragnarok-migrate --resume`.\n\n[$(refresh) Reload Window](command:workbench.action.reloadWindow)\n\n[Storage and migration guide](https://github.com/hyorman/ragnarok/blob/main/MIGRATION.md)",
+        "contents": "RAGnarōk could not open its storage, so no topics or memories are available. Your data was not changed.\n\nCheck the RAGnarōk output channel for the cause. If a storage conversion stopped midway, reload the window to resume automatically.\n\n[$(refresh) Reload Window](command:workbench.action.reloadWindow)\n\n[Storage and migration guide](https://github.com/hyorman/ragnarok/blob/main/MIGRATION.md)",
         "when": "ragnarok.activationFailed"
       }
     ],

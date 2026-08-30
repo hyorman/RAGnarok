@@ -10,6 +10,9 @@ checksummed backup that `--rollback` restores, so there is nothing a prompt woul
 other host — and every layout the automatic path does not accept — still fails closed and requires the
 CLI below. Nothing ever resets or discards a store; a reset is a separate, explicitly consented action.
 
+An interrupted migration resumes automatically on the next VS Code activation; `ragnarok-migrate resume`
+remains available for manual control and for common-layout stores.
+
 ## Supported source layouts
 
 The migrator deliberately supports only layouts emitted by the 0.3 release:
@@ -30,8 +33,10 @@ count as unknown structure, but they are never copied: vectors and documents are
 the legacy graph was not copied; that flag is vestigial, because document knowledge graphs no longer
 exist and graphs now live only in the memory subsystem. Ignore it — there is nothing to rebuild and
 no strategy that would consume the result. Legacy vector model names are preserved, but no backend
-fingerprint is invented; reindexing is required before adding vectors under a new embedding
-configuration.
+fingerprint is invented; additions verify the topic's recorded model against the table dimension on
+first write and stamp the fingerprint automatically, so no manual reindex step is needed. A true
+dimension change — the recorded model no longer produces vectors matching the live table — still
+requires reindex.
 
 ## CLI
 
