@@ -251,7 +251,7 @@ export async function openTopicManagerWithMigration(
   } catch (error) {
     if (isStorageLockError(error)) {
       await dependencies.showStorageFailure(
-        "RAGnarōk storage is already open in another VS Code window. Close that window and retry. No data was changed.",
+        "A RAGnarōk storage migration or reset is running in another window. Wait for it to finish, then reload this window.",
       );
     } else {
       await dependencies.showStorageFailure(

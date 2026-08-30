@@ -39,6 +39,7 @@ export { TopicTreeDataProvider, TopicTreeItem, ConfigTreeDataProvider } from "./
 export {
   activateWithServiceFactory,
   createMemoryServices,
+  wireExternalStorageChangeRefresh,
   type ActivationRuntimeFactory,
   type ActivationServiceFactory,
   type RagnarokExtensionApi,

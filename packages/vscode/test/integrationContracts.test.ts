@@ -13,6 +13,7 @@ import {
   COMMANDS,
   VIEWS,
   openTopicManagerWithMigration,
+  wireExternalStorageChangeRefresh,
   TOOLS,
   TopicTreeItem,
   type MigrationUxDependencies,
@@ -281,36 +282,78 @@ describe("automatic VS Code storage migration", function () {
     expect(messages[0]).to.include("1 ID(s) were remapped");
   });
 
-  it("reports corrupt storage and two-window lease failures without planning", async function () {
-    for (const [error, expected] of [
-      [new Error("corrupt topics index"), "could not be opened safely"],
-      [Object.assign(new Error("locked"), { name: "StorageLockHeldError" }), "another"],
-    ] as const) {
-      let planned = 0;
-      let failure = "";
-      const dependencies = migrationDependencies({
-        inspect: async () => ({ status: "current" }) as any,
-        createTopicManager: async () => {
-          throw error;
-        },
-        prepare: async () => {
-          planned++;
-          return { plan: legacyPlan() } as any;
-        },
-        showStorageFailure: async (message) => {
-          failure = message;
-        },
-      });
-      try {
-        await openTopicManagerWithMigration("/legacy", dependencies);
-        expect.fail("expected storage failure");
-      } catch {
-        // expected
-      }
-      expect(planned).to.equal(0);
-      expect(failure).to.include(expected);
-      expect(failure).to.include("No data was changed");
+  it("reports corrupt storage without planning", async function () {
+    let planned = 0;
+    let failure = "";
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "current" }) as any,
+      createTopicManager: async () => {
+        throw new Error("corrupt topics index");
+      },
+      prepare: async () => {
+        planned++;
+        return { plan: legacyPlan() } as any;
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
+      },
+    });
+    try {
+      await openTopicManagerWithMigration("/legacy", dependencies);
+      expect.fail("expected storage failure");
+    } catch {
+      // expected
     }
+    expect(planned).to.equal(0);
+    expect(failure).to.include("could not be opened safely");
+    expect(failure).to.include("No data was changed");
+  });
+
+  // TopicManager.create no longer takes a session lease, so StorageLockHeldError
+  // on open means only a full-exclusion migration/reset running elsewhere —
+  // never a second window merely having the storage open for reads/writes.
+  it("tells the loser of a two-window full-exclusion race to wait, without planning", async function () {
+    let planned = 0;
+    let failure = "";
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "current" }) as any,
+      createTopicManager: async () => {
+        throw Object.assign(new Error("locked"), { name: "StorageLockHeldError" });
+      },
+      prepare: async () => {
+        planned++;
+        return { plan: legacyPlan() } as any;
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
+      },
+    });
+    try {
+      await openTopicManagerWithMigration("/legacy", dependencies);
+      expect.fail("expected storage failure");
+    } catch {
+      // expected
+    }
+    expect(planned).to.equal(0);
+    expect(failure).to.equal(
+      "A RAGnarōk storage migration or reset is running in another window. Wait for it to finish, then reload this window.",
+    );
+  });
+
+  it("never surfaces a storage failure when createTopicManager resolves normally", async function () {
+    let failureShown = false;
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "current" }) as any,
+      createTopicManager: async () => ({}) as any,
+      showStorageFailure: async () => {
+        failureShown = true;
+      },
+    });
+
+    const result = await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(result).to.be.an("object");
+    expect(failureShown).to.equal(false);
   });
 
   it("surfaces apply failure and cancellation before cutover", async function () {
@@ -535,6 +578,52 @@ describe("proactive activation recovery", function () {
 
     expect(failure).to.include("Another VS Code window is migrating");
     expect(failure).to.not.include("storage migration failed");
+  });
+});
+
+describe("external storage change wiring", function () {
+  function fakeTopicManager() {
+    let listener: ((change: { kind: "topics-changed" | "storage-unavailable" }) => void) | undefined;
+    let disposed = 0;
+    return {
+      onExternalChange: (l: (change: { kind: "topics-changed" | "storage-unavailable" }) => void) => {
+        listener = l;
+        return { dispose: () => (disposed += 1) };
+      },
+      emit: (change: { kind: "topics-changed" | "storage-unavailable" }) => listener?.(change),
+      get disposeCount() {
+        return disposed;
+      },
+    };
+  }
+
+  it("refreshes both tree providers on topics-changed and warns only on storage-unavailable", function () {
+    const manager = fakeTopicManager();
+    let topicRefreshes = 0;
+    let configRefreshes = 0;
+    const warnings: string[] = [];
+
+    const subscription = wireExternalStorageChangeRefresh(
+      manager as any,
+      { refresh: () => (topicRefreshes += 1) } as any,
+      { refresh: () => (configRefreshes += 1) } as any,
+      (message) => warnings.push(message),
+    );
+
+    manager.emit({ kind: "topics-changed" });
+    expect(topicRefreshes).to.equal(1);
+    expect(configRefreshes).to.equal(1);
+    expect(warnings).to.deep.equal([]);
+
+    manager.emit({ kind: "storage-unavailable" });
+    expect(topicRefreshes).to.equal(2);
+    expect(configRefreshes).to.equal(2);
+    expect(warnings).to.deep.equal([
+      "RAGnarōk storage is temporarily unavailable (another window is migrating or resetting it)",
+    ]);
+
+    subscription.dispose();
+    expect(manager.disposeCount).to.equal(1);
   });
 });
 

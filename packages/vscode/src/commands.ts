@@ -41,6 +41,32 @@ export async function addDocumentsWithLifecycleSignal(
   return results;
 }
 
+interface StorageBusyErrorLike extends Error {
+  holder?: { pid?: number } | null;
+}
+
+function isStorageBusyError(error: unknown): error is StorageBusyErrorLike {
+  return error instanceof Error && error.name === "StorageBusyError";
+}
+
+/**
+ * Shared failure reporting for every command handler's catch block. A
+ * StorageBusyError means a foreign writer still held the write lease when
+ * this mutation's bounded 5s wait expired — that reads as "try again
+ * shortly", not the generic per-operation failure message a corrupted
+ * operation would produce. Everything else keeps the existing
+ * `${operationLabel}: ${sanitizeErrorMessage(error)}` shape.
+ */
+function reportOperationFailure(operationLabel: string, error: unknown): void {
+  if (isStorageBusyError(error)) {
+    const pid = error.holder?.pid;
+    const holderSuffix = typeof pid === "number" ? ` (pid ${pid})` : "";
+    vscode.window.showErrorMessage(`Storage is busy — another window is writing${holderSuffix}. Retry in a moment.`);
+    return;
+  }
+  vscode.window.showErrorMessage(`${operationLabel}: ${sanitizeErrorMessage(error)}`);
+}
+
 export class CommandHandler {
   private topicManager: TopicManager;
   private embeddingService: EmbeddingService;
@@ -173,7 +199,7 @@ export class CommandHandler {
       this.treeDataProvider.refresh();
     } catch (err) {
       logger.error("Failed to set embedding model", err);
-      vscode.window.showErrorMessage(`Failed to set embedding model: ${sanitizeErrorMessage(err)}`);
+      reportOperationFailure("Failed to set embedding model", err);
     }
   }
 
@@ -250,7 +276,7 @@ export class CommandHandler {
       this.treeDataProvider.refresh();
     } catch (error) {
       logger.error(`Failed to rename topic: ${error}`);
-      vscode.window.showErrorMessage(`Failed to rename topic: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to rename topic", error);
     }
   }
 
@@ -300,7 +326,7 @@ export class CommandHandler {
         throw signal.reason ?? error;
       }
       logger.error(`Failed to create topic: ${error}`);
-      vscode.window.showErrorMessage(`Failed to create topic: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to create topic", error);
     }
   }
 
@@ -365,7 +391,7 @@ export class CommandHandler {
       }
     } catch (error) {
       logger.error(`Failed to delete topic: ${error}`);
-      vscode.window.showErrorMessage(`Failed to delete topic: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to delete topic", error);
     }
   }
 
@@ -570,7 +596,7 @@ export class CommandHandler {
         throw signal.reason ?? error;
       }
       logger.error(`Failed to add document: ${error}`);
-      vscode.window.showErrorMessage(`Failed to add document: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to add document", error);
     }
   }
 
@@ -858,7 +884,7 @@ export class CommandHandler {
         throw signal.reason ?? error;
       }
       logger.error(`Failed to add GitHub repository: ${error}`);
-      vscode.window.showErrorMessage(`Failed to add GitHub repository: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to add GitHub repository", error);
     }
   }
 
@@ -1016,7 +1042,7 @@ export class CommandHandler {
         throw signal.reason ?? error;
       }
       logger.error(`Failed to add web URL: ${error}`);
-      vscode.window.showErrorMessage(`Failed to add web URL: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to add web URL", error);
     }
   }
 
@@ -1035,7 +1061,7 @@ export class CommandHandler {
     try {
       await this.embeddingService.clearCache();
     } catch (error) {
-      vscode.window.showErrorMessage(`Failed to clear cache: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to clear cache", error);
     }
   }
 
@@ -1068,7 +1094,7 @@ export class CommandHandler {
       }
     } catch (error) {
       logger.error(`Failed to clear database: ${error}`);
-      vscode.window.showErrorMessage(`Failed to clear database: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to clear database", error);
     }
   }
 
@@ -1154,7 +1180,7 @@ export class CommandHandler {
       logger.info(`GitHub token added for host: ${host.trim()}`);
     } catch (error) {
       logger.error(`Failed to add GitHub token: ${error}`);
-      vscode.window.showErrorMessage(`Failed to add GitHub token: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to add GitHub token", error);
     }
   }
 
@@ -1180,7 +1206,7 @@ export class CommandHandler {
       });
     } catch (error) {
       logger.error(`Failed to list GitHub tokens: ${error}`);
-      vscode.window.showErrorMessage(`Failed to list GitHub tokens: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to list GitHub tokens", error);
     }
   }
 
@@ -1225,7 +1251,7 @@ export class CommandHandler {
       }
     } catch (error) {
       logger.error(`Failed to remove GitHub token: ${error}`);
-      vscode.window.showErrorMessage(`Failed to remove GitHub token: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to remove GitHub token", error);
     }
   }
 
@@ -1307,7 +1333,7 @@ export class CommandHandler {
       logger.info(`Topic exported: ${topicToExport.id}`);
     } catch (error) {
       logger.error(`Failed to export topic: ${error}`);
-      vscode.window.showErrorMessage(`Failed to export topic: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to export topic", error);
     }
   }
 
@@ -1353,7 +1379,7 @@ export class CommandHandler {
       }
     } catch (error) {
       logger.error(`Failed to import topic: ${error}`);
-      vscode.window.showErrorMessage(`Failed to import topic: ${sanitizeErrorMessage(error)}`);
+      reportOperationFailure("Failed to import topic", error);
     }
   }
 }

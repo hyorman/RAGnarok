@@ -11,6 +11,8 @@ import {
   type RagnarokExtensionApi,
 } from "../src/extension";
 import { COMMANDS, TOOLS, VIEWS } from "../src/constants";
+import { CommandHandler } from "../src/commands";
+import { GitHubTokenManager } from "../src/githubTokenManager";
 
 describe("real VS Code extension host activation", function () {
   this.timeout(120_000);
@@ -229,5 +231,63 @@ describe("real VS Code extension host activation", function () {
       queryExecuted: true,
       topicDeleted: true,
     });
+  });
+});
+
+// CommandHandler.registerCommands is exercised directly here (registerCommand
+// stubbed) rather than through a second activateWithServiceFactory: the
+// production activation in the describe block above already registered the
+// real "ragnarok.*" command ids on the live vscode.commands registry, and a
+// second real registration under the same ids throws.
+describe("command error mapping", function () {
+  afterEach(function () {
+    sinon.restore();
+  });
+
+  it("maps a StorageBusyError to the busy-writer notification instead of the generic failure message", async function () {
+    GitHubTokenManager.initialize({
+      secrets: {
+        get: async () => undefined,
+        store: async () => undefined,
+        delete: async () => undefined,
+        onDidChange: () => ({ dispose: () => undefined }),
+      },
+    } as unknown as vscode.ExtensionContext);
+
+    const registered = new Map<string, (...args: unknown[]) => unknown>();
+    sinon.stub(vscode.commands, "registerCommand").callsFake(((id: string, callback: (...args: unknown[]) => unknown) => {
+      registered.set(id, callback);
+      return { dispose: () => undefined };
+    }) as typeof vscode.commands.registerCommand);
+    const showErrorMessage = sinon.stub(vscode.window, "showErrorMessage").resolves(undefined);
+    const showInputBox = sinon.stub(vscode.window, "showInputBox");
+    showInputBox.onFirstCall().resolves("New Topic");
+    showInputBox.onSecondCall().resolves(undefined);
+
+    const busyError = Object.assign(new Error("busy"), {
+      name: "StorageBusyError",
+      holder: { pid: 123 },
+    });
+    const topicManager = { createTopic: sinon.stub().rejects(busyError) };
+    const context = { subscriptions: [] as unknown[] };
+
+    await CommandHandler.registerCommands(
+      context as unknown as vscode.ExtensionContext,
+      topicManager as unknown as import("@ragnarok/core").TopicManager,
+      {} as unknown as import("@ragnarok/core").EmbeddingService,
+      {} as unknown as import("@ragnarok/core").MemoryStore,
+      { refresh: sinon.spy() } as unknown as import("../src/topicTreeView").TopicTreeDataProvider,
+      {} as unknown as import("../src/topicTreeView").ConfigTreeDataProvider,
+    );
+
+    const createTopicHandler = registered.get(COMMANDS.CREATE_TOPIC);
+    expect(createTopicHandler, "CREATE_TOPIC should be registered").to.be.a("function");
+    await createTopicHandler!();
+
+    expect(showErrorMessage.calledOnce).to.equal(true);
+    const message = showErrorMessage.firstCall.args[0] as string;
+    expect(message).to.include("123");
+    expect(message).to.not.include("Failed to create topic");
+    expect(topicManager.createTopic.calledOnce).to.equal(true);
   });
 });

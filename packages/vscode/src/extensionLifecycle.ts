@@ -1,6 +1,3 @@
-import * as fs from "fs/promises";
-import * as path from "path";
-
 export class ExtensionStoppingError extends Error {
   constructor() {
     super("RAGnarōk is shutting down and is not accepting new operations");
@@ -156,25 +153,6 @@ export class ExtensionLifecycle {
     }
   }
 
-  private async waitForStorageLeaseRelease(timeoutMs = 5_000): Promise<void> {
-    const lockPath = path.join(this.storageDir, ".ragnarok.lock");
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() <= deadline) {
-      try {
-        const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as { releasedAt?: number };
-        if (typeof lock.releasedAt === "number") {
-          return;
-        }
-      } catch (error: any) {
-        if (error?.code === "ENOENT") {
-          return;
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    throw new Error(`Timed out waiting for the storage lease to release: ${lockPath}`);
-  }
-
   dispose(): Promise<void> {
     if (!this.shutdownPromise) {
       this.shutdownPromise = this.disposeOnce();
@@ -232,13 +210,6 @@ export class ExtensionLifecycle {
     }
     await close(this.resources.memoryStore);
     await close(this.resources.topicManager);
-    if (this.resources.topicManager) {
-      try {
-        await this.waitForStorageLeaseRelease();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
     if (this.resources.embeddingRegistry) {
       try {
         await this.resources.embeddingRegistry.disposeAll();
