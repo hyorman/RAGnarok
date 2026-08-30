@@ -2,6 +2,7 @@ import { expect } from "chai";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import type { VectorStore } from "@langchain/core/vectorstores";
 import {
   TopicManager,
   VectorStoreFactory,
@@ -468,5 +469,68 @@ describe("TopicManager operation-scoped write transactions", function () {
       caught = error;
     }
     expect(caught).to.be.instanceOf(VectorStoreLoadError);
+  });
+
+  it("getVectorStore never retries twice: a failing retry surfaces the failure instead of resolving null", async function () {
+    const created = await createManagerInTmpDir();
+    const topic = await created.createTopic({ name: "flaky" });
+
+    // Script three possible attempts. Correct behaviour only ever calls the
+    // first two: attempt 1 sees table-absent, the one authorized retry
+    // (attempt 2) hits a real load failure and must surface it. A bug that
+    // lets the retry's failure re-enter the outer catch would run a third,
+    // unauthorized attempt — scripted here to look like an empty topic, so a
+    // regression would silently resolve `null` instead of rejecting.
+    let attempts = 0;
+    const scripted: Array<() => Promise<VectorStore | null>> = [
+      async () => null,
+      async () => {
+        throw new VectorStoreLoadError(topic.id, new Error("still unreadable"));
+      },
+      async () => null,
+    ];
+    (created as any).loadVectorStoreOnce = async () => {
+      const step = scripted[attempts];
+      attempts += 1;
+      return step();
+    };
+    // Force the table-absent branch to take the retry path instead of
+    // fast-pathing on absent metadata, so the retry-failure behaviour under
+    // test actually runs.
+    (created as any).topicHasVectorStoreMetadata = async () => true;
+
+    let resolved: VectorStore | null | undefined;
+    let caught: unknown;
+    try {
+      resolved = await created.getVectorStore(topic.id);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(resolved).to.equal(undefined);
+    expect(caught).to.be.instanceOf(VectorStoreLoadError);
+    expect(attempts).to.equal(2);
+  });
+
+  it("getVectorStore skips the retry wait for a genuinely empty topic (no metadata, no table)", async function () {
+    const created = await createManagerInTmpDir();
+    const topic = await created.createTopic({ name: "empty" });
+
+    let retryInvoked = false;
+    const originalRetry = ((created as any).retryVectorStoreLoad as (id: string) => Promise<VectorStore | null>).bind(
+      created,
+    );
+    (created as any).retryVectorStoreLoad = async (id: string) => {
+      retryInvoked = true;
+      return originalRetry(id);
+    };
+
+    const started = Date.now();
+    const store = await created.getVectorStore(topic.id);
+    const elapsed = Date.now() - started;
+
+    expect(store).to.equal(null);
+    expect(retryInvoked).to.equal(false);
+    expect(elapsed).to.be.lessThan(100);
   });
 });

@@ -1366,18 +1366,19 @@ export class TopicManager {
    * (table-absent, or a load failure) is ambiguous between a genuinely empty
    * or corrupt topic and that brief window, so it gets exactly one retry
    * after a short wait before either outcome is committed to.
+   *
+   * Exactly one retry is authorized per call: the two branches below each
+   * call `retryVectorStoreLoad` at most once, and neither call sits inside a
+   * `catch` that the other could re-enter — a retry that itself throws
+   * `VectorStoreLoadError` propagates immediately rather than triggering a
+   * second, unauthorized retry that could resolve `null` over a real failure.
    */
   public async getVectorStore(topicId: string): Promise<VectorStore | null> {
     this.logger.debug("Getting vector store", { topicId });
 
+    let store: VectorStore | null;
     try {
-      const store = await this.loadVectorStoreOnce(topicId);
-      if (store) {
-        return store;
-      }
-      // table-absent on the first attempt: retry once before accepting
-      // empty-topic semantics.
-      return await this.retryVectorStoreLoad(topicId);
+      store = await this.loadVectorStoreOnce(topicId);
     } catch (error) {
       if (error instanceof VectorStoreLoadError) {
         return await this.retryVectorStoreLoad(topicId);
@@ -1388,9 +1389,22 @@ export class TopicManager {
       });
       throw error;
     }
+    if (store) {
+      return store;
+    }
+
+    // table-absent on the first attempt. A genuinely empty topic has no
+    // vector metadata file either — createStore always writes it at table
+    // creation, and a drop-and-recreate's table-absent window still leaves
+    // the pre-existing metadata on disk — so skip the retry's wait entirely
+    // when there is no metadata to be racing against.
+    if (!(await this.topicHasVectorStoreMetadata(topicId))) {
+      return null;
+    }
+    return await this.retryVectorStoreLoad(topicId);
   }
 
-  /** The retry point shared by both "table-absent" and "load failed". */
+  /** The retry point shared by both "table-absent" and "load failed". Called at most once per `getVectorStore` call. */
   private async retryVectorStoreLoad(topicId: string): Promise<VectorStore | null> {
     this.invalidateVectorStoreCache(topicId);
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1405,6 +1419,24 @@ export class TopicManager {
         topicId,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Whether a vector-store metadata file exists for this topic, tolerating
+   * corruption as "exists" rather than propagating it: a present-but-torn
+   * metadata file is itself evidence of an in-flight write, which the caller
+   * should retry rather than fast-path to empty-topic semantics for.
+   */
+  private async topicHasVectorStoreMetadata(topicId: string): Promise<boolean> {
+    if (!this.vectorStoreFactory) {
+      return false;
+    }
+    const customStorageDir = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? undefined) : undefined;
+    try {
+      return (await this.vectorStoreFactory.getStoreMetadata(topicId, customStorageDir)) !== null;
+    } catch {
+      return true;
     }
   }
 
@@ -1424,7 +1456,12 @@ export class TopicManager {
       await this.ensureEmbeddingModelCompatibility(topicId);
     } catch (error) {
       if (error instanceof VectorStoreMetadataCorruptionError) {
-        throw new VectorStoreLoadError(topicId, error);
+        // Distinguish this from a table-open failure: no table was touched,
+        // the topic's stored embedding metadata itself couldn't be read.
+        throw new VectorStoreLoadError(
+          topicId,
+          new Error(`embedding compatibility check failed before the vector table was opened: ${error.message}`),
+        );
       }
       throw error;
     }
