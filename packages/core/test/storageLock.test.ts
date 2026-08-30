@@ -637,7 +637,10 @@ describe("MemoryStore storage lock integration", function () {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("acquires the storage-dir lock on first data access and releases it on dispose", async function () {
+  // Retyped from the session-lease contract: memory no longer holds a lease
+  // for the life of the store. A mutation takes an operation lease and gives
+  // it straight back, and reads take nothing at all.
+  it("holds an operation lease only for the duration of a mutation", async function () {
     const store = new MemoryStore({
       storageDir: tempDir,
       embeddingService: createMockEmbeddingService(),
@@ -647,15 +650,31 @@ describe("MemoryStore storage lock integration", function () {
     const lockPath = path.join(tempDir, STORAGE_LOCK_FILENAME);
     expect(await exists(lockPath), "constructor must not touch the disk").to.equal(false);
 
+    // Observed from inside the mutation, at the moment it commits.
+    const vectorStore = (store as any).vectorStore;
+    const originalSaveScopeAtomic = vectorStore.saveScopeAtomic.bind(vectorStore);
+    let heldDuringMutation: boolean | null = null;
+    vectorStore.saveScopeAtomic = async (...args: unknown[]) => {
+      heldDuringMutation = await exists(lockPath);
+      return originalSaveScopeAtomic(...args);
+    };
+
     await store.store({ content: "a memory that forces a data access" });
-    expect(await exists(lockPath)).to.equal(true);
+    expect(heldDuringMutation, "a mutation must commit under an operation lease").to.equal(true);
+    // Released at the end of the mutation, not at dispose (unlink-at-zero).
+    expect(await exists(lockPath)).to.equal(false);
+
+    await store.list({ scope: "workspace" });
+    expect(await exists(lockPath), "reads must not take any lease").to.equal(false);
 
     await store.dispose();
-    // The last holder in the process unlinks the lock file (unlink-at-zero).
     expect(await exists(lockPath)).to.equal(false);
   });
 
-  it("fails fast when another live process holds the storage dir", async function () {
+  // Retyped: a foreign holder no longer fails a memory mutation fast with
+  // StorageLockHeldError. Mutations wait out the bounded window and then
+  // report the typed busy error.
+  it("reports a busy storage dir when another live process holds it", async function () {
     await fs.writeFile(
       path.join(tempDir, STORAGE_LOCK_FILENAME),
       JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }),
@@ -674,6 +693,7 @@ describe("MemoryStore storage lock integration", function () {
     } catch (error) {
       caught = error;
     }
-    expect(caught).to.be.instanceOf(StorageLockHeldError);
+    expect(caught).to.be.instanceOf(StorageBusyError);
+    expect(await store.list({ scope: "workspace" }), "reads stay available while a writer holds it").to.deep.equal([]);
   });
 });

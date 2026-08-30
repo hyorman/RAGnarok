@@ -1276,3 +1276,202 @@ describe("MemoryStore embedding model isolation", function () {
     );
   });
 });
+
+describe("MemoryStore lock-free reads and operation leases", function () {
+  this.timeout(30000);
+
+  let tempDir: string;
+  const stores: MemoryStore[] = [];
+
+  const makeStore = (markdownPath: string | null = null) => {
+    const result = new MemoryStore({
+      storageDir: tempDir,
+      embeddingService: createMockEmbeddingService(),
+      workingDir: tempDir,
+      markdownPath,
+    });
+    stores.push(result);
+    return result;
+  };
+
+  const forget = (target: MemoryStore) => {
+    const index = stores.indexOf(target);
+    if (index !== -1) {
+      stores.splice(index, 1);
+    }
+  };
+
+  const lockPath = () => path.join(tempDir, ".ragnarok.lock");
+  const manifestPath = () => path.join(tempDir, "memory-manifest.json");
+
+  /**
+   * A live lease held by another host: cross-host liveness cannot be probed,
+   * so a fresh heartbeat keeps it un-reclaimable for the whole test.
+   */
+  const writeForeignLease = async (): Promise<void> => {
+    await fs.writeFile(
+      lockPath(),
+      JSON.stringify({
+        version: 2,
+        ownerId: "foreign-owner",
+        pid: 99999,
+        hostname: "other-host",
+        acquiredAt: Date.now(),
+      }),
+      "utf8",
+    );
+  };
+
+  const exists = async (target: string): Promise<boolean> => {
+    try {
+      await fs.access(target);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const waitFor = async (predicate: () => boolean, timeoutMs = 5000): Promise<void> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect.fail(`Condition was not met within ${timeoutMs}ms`);
+  };
+
+  beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-lease-test-"));
+  });
+
+  afterEach(async function () {
+    for (const current of stores.splice(0)) {
+      await current.dispose().catch(() => undefined);
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  // "leaves behind" rather than "never creates": a read of a genuinely empty
+  // directory stamps the v2 marker under a try-lock, which transiently creates
+  // and unlinks the lock file. Here the seeded directory already carries the
+  // marker, so no read on this path takes a lease at all.
+  it("serves reads without leaving a storage lock file behind", async function () {
+    const writer = makeStore();
+    await writer.store({ content: "lock free read memory" });
+    await writer.dispose();
+    forget(writer);
+    expect(await exists(lockPath()), "a mutation must release and unlink its lease").to.equal(false);
+
+    const reader = makeStore();
+    expect((await reader.list({ scope: "workspace" })).map((entry) => entry.content)).to.include(
+      "lock free read memory",
+    );
+    await reader.recall({ query: "lock free read memory", scope: "workspace", reinforce: false });
+    await reader.stats();
+    await reader.getGraphSnapshot("workspace");
+    await reader.runDecay();
+
+    expect(await exists(lockPath()), "reads must not take any storage lease").to.equal(false);
+  });
+
+  it("serves reads while another process holds a live storage lease", async function () {
+    const writer = makeStore();
+    await writer.store({ content: "second window read memory" });
+    await writer.dispose();
+    forget(writer);
+
+    await writeForeignLease();
+
+    // This is the two-window bug: a second VS Code window used to die on its
+    // very first memory read because reads took the session lease.
+    const reader = makeStore();
+    expect((await reader.list({ scope: "workspace" })).map((entry) => entry.content)).to.include(
+      "second window read memory",
+    );
+    const recalled = await reader.recall({ query: "second window read memory", scope: "workspace", reinforce: false });
+    expect(recalled.memories.length).to.be.greaterThan(0);
+    await reader.stats();
+
+    const holder = JSON.parse(await fs.readFile(lockPath(), "utf8"));
+    expect(holder.ownerId, "reads must leave the foreign lease untouched").to.equal("foreign-owner");
+  });
+
+  it("releases the operation lease after a mutation and reports a busy foreign writer", async function () {
+    const writer = makeStore();
+    await writer.store({ content: "leased mutation memory" });
+    expect(await exists(lockPath()), "the operation lease must be released after the mutation").to.equal(false);
+
+    await writeForeignLease();
+    const error = await captureError(writer.store({ content: "blocked by the foreign writer" }));
+    expect((error as Error).name).to.equal("StorageBusyError");
+    expect((error as Error).message).to.include("Storage is busy");
+
+    // The foreign holder still owns the lease — a failed acquisition must
+    // never steal or unlink it.
+    const holder = JSON.parse(await fs.readFile(lockPath(), "utf8"));
+    expect(holder.ownerId).to.equal("foreign-owner");
+  });
+
+  it("recalls without stamping the embedding manifest while a foreign writer holds the lease", async function () {
+    const writer = makeStore();
+    await writer.store({ content: "manifest free recall memory" });
+    await writer.dispose();
+    forget(writer);
+
+    await fs.rm(manifestPath());
+    await writeForeignLease();
+
+    const reader = makeStore();
+    const recalled = await reader.recall({ query: "manifest free recall memory", scope: "workspace", reinforce: false });
+    expect(recalled.memories.length).to.be.greaterThan(0);
+    expect(await exists(manifestPath()), "a read must not stamp the manifest it could not lease").to.equal(false);
+  });
+
+  it("stamps the embedding manifest on the next mutation after a skipped read stamp", async function () {
+    const writer = makeStore();
+    await writer.store({ content: "manifest restamp memory" });
+    await writer.dispose();
+    forget(writer);
+
+    await fs.rm(manifestPath());
+    await writeForeignLease();
+
+    const reopened = makeStore();
+    await reopened.recall({ query: "manifest restamp memory", scope: "workspace", reinforce: false });
+    expect(await exists(manifestPath())).to.equal(false);
+
+    // The foreign writer goes away; the next mutation must still stamp the
+    // manifest the skipped read deliberately left alone.
+    await fs.rm(lockPath());
+    await reopened.store({ content: "memory written after the foreign writer left" });
+    expect(await exists(manifestPath()), "a mutation must stamp the manifest a read skipped").to.equal(true);
+  });
+
+  it("drops cached scopes when another process changes the memory storage directory", async function () {
+    const current = makeStore();
+    await current.store({ content: "watched memory" });
+    // Let this store's own write events drain before priming the caches, so
+    // the assertion below can only be satisfied by the foreign change.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await current.list({ scope: "workspace" });
+    expect((current as any).entryCache.size, "the read must have primed the cache").to.be.greaterThan(0);
+
+    const manifest = await fs.readFile(manifestPath(), "utf8");
+    await fs.writeFile(manifestPath(), manifest, "utf8");
+
+    await waitFor(() => (current as any).entryCache.size === 0 && (current as any).graphCache.size === 0);
+  });
+
+  it("closes the storage watcher on dispose", async function () {
+    const current = makeStore();
+    await current.store({ content: "watcher disposal memory" });
+    expect((current as any).storageWatcher, "a live store watches its storage directory").to.not.equal(null);
+
+    await current.dispose();
+    forget(current);
+    expect((current as any).storageWatcher).to.equal(null);
+    expect((current as any).watcherDebounceTimer).to.equal(null);
+  });
+});

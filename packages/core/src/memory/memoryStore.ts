@@ -10,6 +10,7 @@
  */
 
 import * as crypto from "crypto";
+import * as fsSync from "fs";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { Mutex } from "async-mutex";
@@ -39,15 +40,17 @@ import { GitBranchDetector } from "./gitBranchDetector";
 import { MemoryDecayEngine } from "./memoryDecayEngine";
 import { MemoryScopeLinker } from "./memoryScopeLinker";
 import { cosineSimilarity } from "../utils/vectorMath";
-import {
-  assertNoInterruptedStorageMigration,
-  atomicWriteFile,
-  atomicWriteJson,
-  ensureStorageFormatV2,
-} from "../utils/storageV2";
-import { acquireStorageLock } from "../utils/storageLock";
+import { atomicWriteFile, atomicWriteJson, ensureStorageFormatV2, inspectStorage } from "../utils/storageV2";
+import { acquireOperationLease, StorageBusyError } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
+
+/** The two storage-dir files whose replacement signals a foreign memory write. */
+const MEMORY_MANIFEST_FILENAME = "memory-manifest.json";
+const MEMORIES_MARKDOWN_FILENAME = "memories.md";
+const MEMORY_WATCH_DEBOUNCE_MS = 250;
+/** How long a mutation waits for a foreign writer before reporting StorageBusyError. */
+const MUTATION_LEASE_WAIT_MS = 5_000;
 
 export interface MemoryStoreOptions {
   /** LanceDB storage directory */
@@ -100,10 +103,27 @@ export class MemoryStore {
   private reinforcementDirty = new Set<string>();
   private reinforcementTimer: ReturnType<typeof setTimeout> | null = null;
   private memoryManifestPath: string;
+  // Both memoise CONFIRMED outcomes only. A read path that deliberately
+  // skipped a write (no marker/manifest, no lease) must leave them null so a
+  // later mutation still stamps.
   private fingerprintCheck: Promise<void> | null = null;
   private storageReady: Promise<void> | null = null;
   private storageDir: string;
-  private lockPromise: Promise<StorageLockHandle> | null = null;
+  // Bumped whenever caches are dropped. An in-flight single-flight load that
+  // started before the drop must not repopulate the cache with the state it
+  // read before: reads are lock-free, so such a load can easily be older than
+  // the mutation or foreign write that invalidated it.
+  private cacheGeneration = 0;
+  // Foreign-change watcher over the storage DIRECTORY (never a file).
+  private storageWatcher: fsSync.FSWatcher | null = null;
+  private watcherDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private watcherStopped = false;
+  private watcherFailureLogged = false;
+  // Depth of this store's own operation leases; a watch event that fires while
+  // one is open describes our own write, and dropping caches mid-mutation
+  // would discard the optimistic in-memory state the mutation is about to
+  // persist.
+  private activeMutationLeases = 0;
   private backgroundTasks = new Set<Promise<unknown>>();
   // Staged destructive writes must not race stores that captured an older
   // scope snapshot and could otherwise republish deleted entries.
@@ -115,7 +135,7 @@ export class MemoryStore {
     const lanceDbUri = path.join(options.storageDir, "memory-lancedb");
     this.storageDir = options.storageDir;
     this.vectorStore = new MemoryVectorStore(lanceDbUri);
-    this.memoryManifestPath = path.join(options.storageDir, "memory-manifest.json");
+    this.memoryManifestPath = path.join(options.storageDir, MEMORY_MANIFEST_FILENAME);
     this.embeddingService = options.embeddingService;
     this.extractor = options.llmProvider ? new MemoryEntityExtractor(options.llmProvider) : null;
     this.exporter = new MemoryMarkdownExporter();
@@ -135,12 +155,20 @@ export class MemoryStore {
   // ── Store ──────────────────────────────────────────────────────────
 
   async store(options: StoreOptions): Promise<MemoryEntry> {
-    return this.mutationMutex.runExclusive(() => this.storeUnlocked(options));
+    return this.mutationMutex.runExclusive(async () => {
+      // Resolved before the lease so the scope whose caches must be dropped is
+      // known when the lease opens (and so a branch-detection failure still
+      // surfaces without contending for the lease).
+      const resolved = await this.resolveBranch(options);
+      return this.withMutationLease([this.scopeKey(resolved.scope, resolved.branch)], () =>
+        this.storeUnlocked({ ...options, ...resolved }),
+      );
+    });
   }
 
   private async storeUnlocked(options: StoreOptions): Promise<MemoryEntry> {
     options.signal?.throwIfAborted();
-    await this.ensureEmbeddingFingerprint();
+    await this.ensureEmbeddingFingerprint(true);
     options.signal?.throwIfAborted();
     const { scope, branch } = await this.resolveBranch(options);
     const cacheKey = this.scopeKey(scope, branch);
@@ -238,7 +266,9 @@ export class MemoryStore {
 
   async recall(options: RecallOptions): Promise<RecallResult> {
     options.signal?.throwIfAborted();
-    await this.ensureEmbeddingFingerprint();
+    // Lock-free: recall never takes the write lease, so it can only stamp a
+    // missing manifest opportunistically (see ensureEmbeddingFingerprint).
+    await this.ensureEmbeddingFingerprint(false);
     const topK = options.topK ?? DEFAULT_TOP_K;
     const queryVector = await this.embeddingService.embed(options.query, options.signal);
     options.signal?.throwIfAborted();
@@ -332,7 +362,11 @@ export class MemoryStore {
   // ── Forget ─────────────────────────────────────────────────────────
 
   async forget(options: ForgetOptions, signal?: AbortSignal): Promise<number> {
-    return this.mutationMutex.runExclusive(() => this.forgetUnlocked(options, signal));
+    // Scope-wide: a forget by id, or by filter without a scope, walks every
+    // branch, so every cached scope has to be re-read under the lease.
+    return this.mutationMutex.runExclusive(() =>
+      this.withMutationLease(null, () => this.forgetUnlocked(options, signal)),
+    );
   }
 
   private async forgetUnlocked(options: ForgetOptions, signal?: AbortSignal): Promise<number> {
@@ -622,6 +656,7 @@ export class MemoryStore {
       return;
     }
     this.disposing = true;
+    this.stopStorageWatcher();
     if (this.autoDecayTimer) {
       clearInterval(this.autoDecayTimer);
       this.autoDecayTimer = null;
@@ -640,11 +675,6 @@ export class MemoryStore {
       await this.flushMarkdown();
       await this.drainBackgroundTasks();
       await this.vectorStore.dispose();
-      if (this.lockPromise) {
-        const lock = await this.lockPromise.catch(() => null);
-        this.lockPromise = null;
-        await lock?.release();
-      }
       this.disposed = true;
     } catch (error) {
       // Failed deferred persistence retains its dirty scope and the store/lease
@@ -660,15 +690,19 @@ export class MemoryStore {
       throw new Error("Memory reset requires confirm=true");
     }
     signal?.throwIfAborted();
-    await this.ensureStorageLock();
-    signal?.throwIfAborted();
 
+    // Deferred writers flush before the lease is taken: both take the mutation
+    // mutex themselves, and async-mutex is not reentrant.
     await this.flushReinforcement();
     await this.flushMarkdown();
     await this.drainBackgroundTasks();
     signal?.throwIfAborted();
 
-    return this.mutationMutex.runExclusive(() => this.resetUnlocked(signal));
+    // No scopes to re-read: reset derives nothing from canonical state, it
+    // deletes everything and drops the caches itself. Pre-invalidating would
+    // only force concurrent readers to queue behind the deletion for state
+    // that is about to vanish anyway.
+    return this.mutationMutex.runExclusive(() => this.withMutationLease([], () => this.resetUnlocked(signal)));
   }
 
   private async resetUnlocked(signal?: AbortSignal): Promise<void> {
@@ -676,8 +710,7 @@ export class MemoryStore {
     this.cancelMemoryWriteTimers();
     await this.vectorStore.deleteAll();
 
-    this.entryCache.clear();
-    this.graphCache.clear();
+    this.invalidateAllCaches();
     this.reinforcementDirty.clear();
     this.markdownDirty = false;
     await this.regenerateMarkdown();
@@ -688,15 +721,27 @@ export class MemoryStore {
   }
 
   async validateEmbeddingFingerprint(): Promise<void> {
-    await this.ensureEmbeddingFingerprint();
+    await this.ensureEmbeddingFingerprint(false);
   }
 
-  private async ensureEmbeddingFingerprint(): Promise<void> {
-    await this.ensureStorageReady();
+  /**
+   * Compare the embedding fingerprint against the stored manifest.
+   *
+   * `hasLease` says whether the caller holds this store's operation lease, and
+   * is passed explicitly rather than sniffed: it decides what the absent-
+   * manifest case is allowed to do. Under a lease the manifest is stamped as
+   * before. Without one (recall) the stamp is attempted with a try-lock and
+   * simply skipped when a foreign writer holds the lease — validation is
+   * impossible without a stored fingerprint anyway, and the next writer
+   * stamps it. A skipped stamp is deliberately NOT memoised.
+   */
+  private async ensureEmbeddingFingerprint(hasLease: boolean): Promise<void> {
+    await this.ensureStorageReady(hasLease);
     if (this.fingerprintCheck) {
       return this.fingerprintCheck;
     }
-    this.fingerprintCheck = (async () => {
+    let stamped = true;
+    const check = (async () => {
       const current =
         typeof (this.embeddingService as any).getFingerprint === "function"
           ? await this.embeddingService.getFingerprint()
@@ -718,11 +763,7 @@ export class MemoryStore {
         }
       }
       if (!stored) {
-        await atomicWriteJson(this.memoryManifestPath, {
-          schemaVersion: 2,
-          embeddingFingerprint: current,
-          updatedAt: Date.now(),
-        });
+        stamped = await this.stampEmbeddingFingerprint(current, hasLease);
         return;
       }
       if (JSON.stringify(stored) !== JSON.stringify(current)) {
@@ -732,24 +773,137 @@ export class MemoryStore {
         );
       }
     })();
+    this.fingerprintCheck = check;
     try {
-      await this.fingerprintCheck;
+      await check;
     } catch (error) {
       this.fingerprintCheck = null;
       throw error;
     }
+    if (!stamped && this.fingerprintCheck === check) {
+      // Nothing was validated and nothing was written: leave the guard
+      // unmemoised so the next mutation (which will hold the lease) stamps it.
+      this.fingerprintCheck = null;
+    }
   }
 
-  private async ensureStorageReady(): Promise<void> {
-    this.storageReady ??= (async () => {
-      await this.ensureStorageLock();
-      await ensureStorageFormatV2(this.storageDir);
-    })();
+  /**
+   * Write the absent manifest. Returns false when a foreign writer holds the
+   * lease and the stamp was skipped.
+   */
+  private async stampEmbeddingFingerprint(current: EmbeddingFingerprint, hasLease: boolean): Promise<boolean> {
+    if (hasLease) {
+      await atomicWriteJson(this.memoryManifestPath, {
+        schemaVersion: 2,
+        embeddingFingerprint: current,
+        updatedAt: Date.now(),
+      });
+      return true;
+    }
+
+    let lease: StorageLockHandle;
     try {
-      await this.storageReady;
+      lease = await acquireOperationLease(this.storageDir, { waitMs: 0 });
     } catch (error) {
-      this.storageReady = null;
+      if (error instanceof StorageBusyError) {
+        this.logger.debug("Skipping the memory manifest stamp: another process holds the storage lease");
+        return false;
+      }
       throw error;
+    }
+    try {
+      // Now that a lease is held, this is a write path: the format marker
+      // comes first, so the manifest can never be the thing that turns a
+      // fresh directory into "unversioned legacy storage".
+      await ensureStorageFormatV2(this.storageDir);
+      // Another process may have stamped it while this read was deciding to.
+      try {
+        const manifest = JSON.parse(await fs.readFile(this.memoryManifestPath, "utf8"));
+        if (manifest.embeddingFingerprint) {
+          return true;
+        }
+      } catch (error: any) {
+        if (error?.code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await atomicWriteJson(this.memoryManifestPath, {
+        schemaVersion: 2,
+        embeddingFingerprint: current,
+        updatedAt: Date.now(),
+      });
+      return true;
+    } finally {
+      await lease.release();
+    }
+  }
+
+  /**
+   * Validate the storage format marker, stamping it only for a genuinely
+   * empty directory.
+   *
+   * Classification is read-only, so two windows opening the same healthy store
+   * never contend — the overwhelmingly common case costs nothing. Any
+   * classification other than "current"/"empty" goes to `ensureStorageFormatV2`
+   * purely so it raises its own typed error: an interrupted migration, a legacy
+   * directory or a future format version must fail closed on reads too.
+   *
+   * The empty case is the only one that writes. A mutation stamps it under its
+   * own lease. A read stamps it opportunistically, with a TRY-lock — it never
+   * waits, never fails, and skips the stamp entirely when someone else holds
+   * the lease. The stamp cannot simply be skipped on reads: reads create the
+   * LanceDB directory as a side effect of loading, which would leave the store
+   * looking like unversioned 0.3 data and fail every subsequent open closed.
+   * Skipping it is safe only against a live foreign writer, because that writer
+   * stamps the marker under its own lease before it writes anything.
+   */
+  private async ensureStorageReady(hasLease: boolean): Promise<void> {
+    if (this.storageReady) {
+      await this.storageReady;
+      return;
+    }
+    const attempt = (async (): Promise<boolean> => {
+      const inspection = await inspectStorage(this.storageDir);
+      if (inspection.status === "current") {
+        return true;
+      }
+      if (inspection.status !== "empty") {
+        await ensureStorageFormatV2(this.storageDir);
+        return true;
+      }
+      if (hasLease) {
+        // Re-checked under the lease: another process may have stamped it
+        // while this one waited.
+        await ensureStorageFormatV2(this.storageDir);
+        return true;
+      }
+      return this.stampStorageFormatOpportunistically();
+    })();
+    // Memoised only once the outcome is confirmed, so a skipped read-path
+    // stamp never suppresses a later write-path stamp.
+    const confirmed = await attempt;
+    if (confirmed) {
+      this.storageReady = attempt.then(() => undefined);
+    }
+  }
+
+  /** Stamp the v2 marker if the lease is free right now. False when it is not. */
+  private async stampStorageFormatOpportunistically(): Promise<boolean> {
+    let lease: StorageLockHandle;
+    try {
+      lease = await acquireOperationLease(this.storageDir, { waitMs: 0 });
+    } catch (error) {
+      if (error instanceof StorageBusyError) {
+        this.logger.debug("Skipping the storage format stamp: another process holds the storage lease");
+        return false;
+      }
+      throw error;
+    }
+    try {
+      await ensureStorageFormatV2(this.storageDir);
+      return true;
+    } finally {
+      await lease.release();
     }
   }
 
@@ -775,12 +929,16 @@ export class MemoryStore {
    * @param entryIds — optional list of specific entry IDs to promote
    */
   async promoteToWorkspace(branch: string, entryIds?: string[], signal?: AbortSignal): Promise<number> {
-    return this.mutationMutex.runExclusive(() => this.promoteToWorkspaceUnlocked(branch, entryIds, signal));
+    return this.mutationMutex.runExclusive(() =>
+      this.withMutationLease(["workspace", `branch:${branch}`], () =>
+        this.promoteToWorkspaceUnlocked(branch, entryIds, signal),
+      ),
+    );
   }
 
   private async promoteToWorkspaceUnlocked(branch: string, entryIds?: string[], signal?: AbortSignal): Promise<number> {
     signal?.throwIfAborted();
-    await this.ensureStorageReady();
+    await this.ensureStorageReady(true);
     signal?.throwIfAborted();
     const count = await this.scopeLinker.promoteToWorkspace(`branch:${branch}`, "workspace", entryIds, signal);
     // Invalidate workspace caches so next access reloads from store
@@ -865,9 +1023,61 @@ export class MemoryStore {
     return scope === "branch" && branch ? `branch:${branch}` : "workspace";
   }
 
+  /**
+   * Drop one scope's cached state.
+   *
+   * The in-flight single-flight loads go too, and the generation counter is
+   * bumped: a load that started before this call read a state this caller has
+   * just declared stale, so it must neither be joined by the next reader nor
+   * allowed to repopulate the cache when it lands.
+   */
   private invalidateCache(scopeKey: string): void {
     this.entryCache.delete(scopeKey);
     this.graphCache.delete(scopeKey);
+    this.entryLoads.delete(scopeKey);
+    this.graphLoads.delete(scopeKey);
+    this.cacheGeneration += 1;
+  }
+
+  /** Drop every scope's cached state (a foreign write, or a scope-wide mutation). */
+  private invalidateAllCaches(): void {
+    this.entryCache.clear();
+    this.graphCache.clear();
+    this.entryLoads.clear();
+    this.graphLoads.clear();
+    this.cacheGeneration += 1;
+  }
+
+  /**
+   * Run a mutation under an exclusive, operation-scoped write lease.
+   *
+   * `scopes` names the scope keys the body will read-modify-write — null for
+   * "every scope", empty for a body that reads none. Their caches are dropped
+   * BEFORE the body runs, so the single-flight loaders re-read canonical state
+   * under the lease instead of deriving the next state from whatever another
+   * process left us holding.
+   *
+   * Reads never come through here — they are lock-free by design, which is
+   * what lets a second window read a store this one is writing. Deferred
+   * writers (`flushReinforcement`, `regenerateMarkdown`) still write outside
+   * any lease; converting them is the deferred-writer task's job.
+   */
+  private async withMutationLease<T>(scopes: string[] | null, body: () => Promise<T>): Promise<T> {
+    const lease = await acquireOperationLease(this.storageDir, { waitMs: MUTATION_LEASE_WAIT_MS });
+    this.activeMutationLeases += 1;
+    try {
+      if (scopes === null) {
+        this.invalidateAllCaches();
+      } else {
+        for (const scope of scopes) {
+          this.invalidateCache(scope);
+        }
+      }
+      return await body();
+    } finally {
+      this.activeMutationLeases -= 1;
+      await lease.release();
+    }
   }
 
   private async currentBranchScope(): Promise<string | null> {
@@ -876,28 +1086,30 @@ export class MemoryStore {
   }
 
   /**
-   * Cross-process single-writer guard, acquired lazily on first data access
-   * (the constructor is sync). Shares the process-wide refcounted lock with
-   * any TopicManager on the same storage dir.
+   * Whether THIS process currently holds the storage lease through one of
+   * this store's mutations.
+   *
+   * The loaders are shared by mutations and by lock-free reads, and threading
+   * a flag through every read call site would be noise. This is not a guess
+   * about someone else's lease: the count is incremented and decremented by
+   * `withMutationLease` alone. A concurrent read that observes it can still
+   * legitimately act as leased — the lease is process-wide and refcounted, so
+   * a write it makes while the count is positive is genuinely fenced against
+   * other processes.
    */
-  private async ensureStorageLock(): Promise<void> {
-    if (!this.lockPromise) {
-      const acquisition = assertNoInterruptedStorageMigration(this.storageDir).then(() =>
-        acquireStorageLock(this.storageDir),
-      );
-      this.lockPromise = acquisition;
-      acquisition.catch(() => {
-        // A failed acquisition must not poison later attempts.
-        if (this.lockPromise === acquisition) {
-          this.lockPromise = null;
-        }
-      });
-    }
-    await this.lockPromise;
+  private get holdsMutationLease(): boolean {
+    return this.activeMutationLeases > 0;
   }
 
+  /**
+   * Every read below is lock-free on purpose: taking the session lease here
+   * is exactly what used to kill a second VS Code window on its first memory
+   * read. Reads validate the storage format (never writing it) and then go
+   * straight to the vector store.
+   */
   private async getGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraph> {
-    await this.ensureStorageLock();
+    await this.ensureStorageReady(this.holdsMutationLease);
+    this.ensureStorageWatcher();
     const key = this.scopeKey(scope, branch);
     const cached = this.graphCache.get(key);
     if (cached) {
@@ -908,21 +1120,30 @@ export class MemoryStore {
     // caller gets its OWN graph object and mutations to the losers are lost.
     let loading = this.graphLoads.get(key);
     if (!loading) {
-      loading = this.vectorStore
+      const generation = this.cacheGeneration;
+      const load: Promise<MemoryGraph> = this.vectorStore
         .loadGraph(scope, branch)
         .then((data) => {
           const graph = data ? MemoryGraph.fromJSON(data) : new MemoryGraph();
-          this.graphCache.set(key, graph);
+          if (this.cacheGeneration === generation) {
+            this.graphCache.set(key, graph);
+          }
           return graph;
         })
-        .finally(() => this.graphLoads.delete(key));
-      this.graphLoads.set(key, loading);
+        .finally(() => {
+          if (this.graphLoads.get(key) === load) {
+            this.graphLoads.delete(key);
+          }
+        });
+      loading = load;
+      this.graphLoads.set(key, load);
     }
     return loading;
   }
 
   private async getEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
-    await this.ensureStorageLock();
+    await this.ensureStorageReady(this.holdsMutationLease);
+    this.ensureStorageWatcher();
     const key = this.scopeKey(scope, branch);
     const cached = this.entryCache.get(key);
     if (cached) {
@@ -934,16 +1155,123 @@ export class MemoryStore {
     // persist (lost update).
     let loading = this.entryLoads.get(key);
     if (!loading) {
-      loading = this.vectorStore
+      const generation = this.cacheGeneration;
+      const load: Promise<MemoryEntry[]> = this.vectorStore
         .loadEntries(scope, branch)
         .then((entries) => {
-          this.entryCache.set(key, entries);
+          if (this.cacheGeneration === generation) {
+            this.entryCache.set(key, entries);
+          }
           return entries;
         })
-        .finally(() => this.entryLoads.delete(key));
-      this.entryLoads.set(key, loading);
+        .finally(() => {
+          if (this.entryLoads.get(key) === load) {
+            this.entryLoads.delete(key);
+          }
+        });
+      loading = load;
+      this.entryLoads.set(key, load);
     }
     return loading;
+  }
+
+  // ── Foreign-change watcher ──────────────────────────────────────────
+  //
+  // Watches the storage DIRECTORY, never a file: memory-manifest.json and
+  // memories.md are both published by rename-over, and an inode-following
+  // file watch goes silent after the first replacement. Events are filtered
+  // to those two names, debounced 250ms, and skipped while this store holds
+  // its own operation lease (the debounce re-arms instead of dropping the
+  // event, so a foreign change that coincides with our write is still
+  // applied once the lease closes).
+  //
+  // Deliberately coarse: a foreign process's LanceDB writes do NOT reliably
+  // surface through these two files, so this signal alone cannot guarantee
+  // cross-process memory freshness. It complements — it does not replace —
+  // the cache invalidation every mutation performs when it takes its lease.
+  // Our own deferred markdown/manifest writes can also trip it (memories.md
+  // often lives inside the storage dir); the cost is a reload of state we
+  // just wrote, which is correctness-neutral.
+
+  /**
+   * Start the watch on first data access. The storage directory may not exist
+   * when the (synchronous) constructor runs, so construction is retried until
+   * it succeeds; the failure is logged once and never again.
+   */
+  private ensureStorageWatcher(): void {
+    if (this.watcherStopped || this.storageWatcher) {
+      return;
+    }
+    let watcher: fsSync.FSWatcher;
+    try {
+      watcher = fsSync.watch(this.storageDir, (_eventType, filename) => this.onRawWatchEvent(filename));
+    } catch (error) {
+      if (!this.watcherFailureLogged) {
+        this.watcherFailureLogged = true;
+        this.logger.debug("Unable to watch the memory storage directory for external changes", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+    watcher.on("error", (error) => {
+      this.logger.debug("Memory storage directory watch reported an error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.closeStorageWatcher();
+    });
+    this.storageWatcher = watcher;
+  }
+
+  private onRawWatchEvent(filename: string | Buffer | null): void {
+    if (this.watcherStopped) {
+      return;
+    }
+    const name = filename ? filename.toString() : null;
+    if (name !== null && name !== MEMORY_MANIFEST_FILENAME && name !== MEMORIES_MARKDOWN_FILENAME) {
+      return;
+    }
+    this.scheduleForeignChangeDrop();
+  }
+
+  private scheduleForeignChangeDrop(): void {
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+    }
+    this.watcherDebounceTimer = setTimeout(() => {
+      this.watcherDebounceTimer = null;
+      if (this.watcherStopped) {
+        return;
+      }
+      if (this.holdsMutationLease) {
+        // Our own mutation is mid-flight and holds optimistic in-memory state
+        // it has not persisted yet. Re-arm rather than drop the signal.
+        this.scheduleForeignChangeDrop();
+        return;
+      }
+      this.invalidateAllCaches();
+    }, MEMORY_WATCH_DEBOUNCE_MS);
+    this.watcherDebounceTimer.unref?.();
+  }
+
+  private closeStorageWatcher(): void {
+    if (this.storageWatcher) {
+      try {
+        this.storageWatcher.close();
+      } catch {
+        // Already closed, or the underlying handle is gone.
+      }
+      this.storageWatcher = null;
+    }
+  }
+
+  private stopStorageWatcher(): void {
+    this.watcherStopped = true;
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+      this.watcherDebounceTimer = null;
+    }
+    this.closeStorageWatcher();
   }
 
   private async findEntryById(id: string): Promise<(MemoryEntry & { scope: MemoryScope; branch?: string }) | null> {
