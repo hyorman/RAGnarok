@@ -8,6 +8,7 @@ import {
   ensureStorageFormatV2,
   inspectStorage,
   resetStorageToV2,
+  SHARED_TOPIC_CACHE_DIRNAME,
   STORAGE_FORMAT_FILENAME,
   STORAGE_FORMAT_VERSION,
   STORAGE_CONFIG_FILENAME,
@@ -377,5 +378,36 @@ describe("inspectStorage", () => {
       marker: null,
     });
     expect(await inspectStorage(storageDir)).to.deep.equal({ status: "reset-interrupted" });
+  });
+});
+
+describe("shared topic cache and storage v2", function () {
+  let storageDir: string;
+
+  beforeEach(async function () {
+    storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-sharedcache-"));
+  });
+
+  afterEach(async function () {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("does not classify a store holding only the shared cache as legacy", async function () {
+    await fs.mkdir(path.join(storageDir, SHARED_TOPIC_CACHE_DIRNAME), { recursive: true });
+
+    const inspection = await inspectStorage(storageDir);
+
+    expect(inspection.status).to.equal("empty");
+  });
+
+  it("leaves the shared cache in place across a reset", async function () {
+    await ensureStorageFormatV2(storageDir);
+    const cacheDir = path.join(storageDir, SHARED_TOPIC_CACHE_DIRNAME);
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(path.join(cacheDir, "entries.json"), "{}", "utf8");
+
+    await resetStorageToV2(storageDir);
+
+    expect(await fs.readFile(path.join(cacheDir, "entries.json"), "utf8")).to.equal("{}");
   });
 });

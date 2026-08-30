@@ -12,6 +12,12 @@ export const STORAGE_FORMAT_FILENAME = "storage-format.json";
 export const STORAGE_CONFIG_FILENAME = "config.json";
 /** Marks an in-flight `resetStorageToV2` so a crash mid-reset fails closed instead of reading as unversioned data. */
 export const STORAGE_RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
+/**
+ * Derived, content-addressed unpacks of shared `.rag` archives. Infrastructure,
+ * not corpus data: it must not make an otherwise-empty store read as an
+ * unversioned legacy layout, and a reset must not sweep it into a backup.
+ */
+export const SHARED_TOPIC_CACHE_DIRNAME = ".ragnarok-shared-cache";
 
 export class StorageMigrationInterruptedError extends Error {
   readonly name = "StorageMigrationInterruptedError";
@@ -84,6 +90,7 @@ function isInfrastructureEntry(entry: string): boolean {
     entry === STORAGE_LOCK_FILENAME ||
     entry === STORAGE_CONFIG_FILENAME ||
     entry === STORAGE_RESET_JOURNAL_FILENAME ||
+    entry === SHARED_TOPIC_CACHE_DIRNAME ||
     entry.startsWith("backup-v1-")
   );
 }
