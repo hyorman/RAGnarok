@@ -59,10 +59,12 @@ root concurrently. Coordination is on the write side:
   reports it as a retryable "storage is busy" condition rather than a failure
   of the operation itself. An ingestion holds one lease for the whole call,
   kept alive by the heartbeat.
-- **Full exclusion.** Migration, reset, and rollback take a session lease for
-  their entire duration. That acquisition fails fast with
-  `StorageLockHeldError`, which is what other processes report as "another
-  window is migrating or resetting".
+- **Full exclusion.** Migration and rollback take a session lease for their
+  entire duration. That acquisition fails fast with `StorageLockHeldError`,
+  which is what other processes report as "another window is migrating".
+  Reset holds exclusion for its whole operation too, but through an operation
+  lease: it waits the bounded time and reports `StorageBusyError` rather than
+  failing fast.
 - **Recovery is writer-only.** Journal and WAL rollback happen under a lease,
   so a reader serves the previous consistent snapshot instead of rolling back
   a foreign writer's in-flight transaction. Readers revalidate through a

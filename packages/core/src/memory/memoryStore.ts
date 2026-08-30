@@ -699,8 +699,11 @@ export class MemoryStore {
       await this.vectorStore.dispose();
       this.disposed = true;
     } catch (error) {
-      // Failed deferred persistence retains its dirty scope and the store/lease
-      // remain open, allowing an explicit retry instead of silently losing it.
+      // A genuine persistence failure retains its dirty scope and leaves the
+      // store open, allowing an explicit retry instead of silently losing it.
+      // A busy storage lease is not that case: the deferred writers try-lock,
+      // skip the flush, and `retryOrDrop*` declines to reschedule while
+      // disposing — so that pending write is quietly abandoned, not thrown.
       this.disposing = false;
       throw error;
     }
@@ -1091,8 +1094,10 @@ export class MemoryStore {
    *
    * Reads never come through here — they are lock-free by design, which is
    * what lets a second window read a store this one is writing. Deferred
-   * writers (`flushReinforcement`, `regenerateMarkdown`) still write outside
-   * any lease; converting them is the deferred-writer task's job.
+   * writers (`flushReinforcement`, `flushMarkdown`) are leased too, but with
+   * a single try-lock attempt (`waitMs: 0`) instead of this bounded wait:
+   * their writes are advisory, so a busy lease skips the flush and backs off
+   * (2s → 4s → 8s), dropping the pending write after three attempts.
    */
   private async withMutationLease<T>(scopes: string[] | null, body: () => Promise<T>): Promise<T> {
     const lease = await acquireOperationLease(this.storageDir, { waitMs: MUTATION_LEASE_WAIT_MS });

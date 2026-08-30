@@ -4,9 +4,17 @@
  * LanceDB tables are rewritten wholesale by this codebase's persistence
  * layer, and the in-process mutexes/write serializers cannot see a second
  * OS process (two VS Code windows on one global storage dir, or two stdio
- * MCP servers on ~/.ragnarok). This lock makes the single-writer constraint
- * explicit: the second process fails fast with a message naming the holder
- * instead of silently corrupting or losing writes.
+ * MCP servers on ~/.ragnarok). This lock coordinates the write side only:
+ * reads take no lease at all, so any number of processes may read one
+ * storage root concurrently. Writers exclude each other — a mutation takes
+ * an operation-scoped lease ({@link acquireOperationLease}) that waits a
+ * bounded time for a live foreign holder and then throws
+ * {@link StorageBusyError}, which callers surface as a retryable "storage is
+ * busy" rather than a failure of the operation; a full-exclusion operation
+ * (migration, rollback) takes a session lease ({@link acquireStorageLock})
+ * for its whole duration and fails fast with {@link StorageLockHeldError},
+ * naming the holder. Both lease kinds share one per-process refcount, and
+ * the lock file is unlinked when this process's last holder releases.
  *
  * Semantics:
  * - One lock file per storage directory: `<storageDir>/.ragnarok.lock`,
