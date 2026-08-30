@@ -368,11 +368,21 @@ export function registerTools(
     ...(isError ? { isError: true as const } : {}),
   });
   const graphResponseBytes = Math.min(config?.maxResponseBytes ?? MCP_LIMITS.responseBytes, MCP_LIMITS.responseBytes);
+  // StorageBusyError means a foreign writer still held the write lease when
+  // this mutation's bounded 5s wait expired — that reads as "try again
+  // shortly", not the generic per-operation failure text. Typed on
+  // error.name (never message matching) so unrelated errors are unaffected.
+  const toolErrorMessage = (error: unknown): string =>
+    error instanceof Error && error.name === "StorageBusyError"
+      ? "Storage is busy: another RAGnarōk process is writing. Retry shortly."
+      : error instanceof Error
+        ? error.message
+        : String(error);
   const toolError = (error: unknown) => ({
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+        text: JSON.stringify({ error: toolErrorMessage(error) }),
       },
     ],
     isError: true,
@@ -484,7 +494,7 @@ export function registerTools(
         files.push({
           path: filePath,
           status: "failed",
-          error: error instanceof Error ? error.message : String(error),
+          error: toolErrorMessage(error),
         });
       }
     }

@@ -13,7 +13,7 @@ import sinon from "sinon";
 import { McpServer } from "@modelcontextprotocol/server";
 import { measureToolResultForResponse, registerTools } from "../src/tools";
 import type { McpConfig } from "../src/config";
-import { TopicEmptyError } from "@ragnarok/core";
+import { TopicEmptyError, StorageBusyError } from "@ragnarok/core";
 import type {
   TopicManager,
   IConfigProvider,
@@ -530,6 +530,20 @@ describe("MCP Tools (registerTools)", () => {
       expect(parseResponse(result).error).to.equal("create failed");
     });
 
+    // StorageBusyError is typed (error.name), never message-matched: a foreign
+    // writer's bounded 5s wait expired, which reads as "try again shortly" —
+    // distinct from the generic per-operation failure text above.
+    it("create surfaces StorageBusyError with the busy-retry text", async () => {
+      topicManager.createTopic.rejects(new StorageBusyError("/tmp/x/.ragnarok.lock", null));
+
+      const result = await handlers.rag_topic({ action: "create", name: "x" });
+
+      expect(result.isError).to.equal(true);
+      expect(parseResponse(result).error).to.equal(
+        "Storage is busy: another RAGnarōk process is writing. Retry shortly.",
+      );
+    });
+
     it("rename delegates to updateTopic", async () => {
       topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
       (topicManager as any).updateTopic = sinon.stub().resolves(makeTopic({ id: "t1", name: "renamed" }));
@@ -770,6 +784,40 @@ describe("MCP Tools (registerTools)", () => {
 
       expect(result.isError).to.equal(true);
       expect(parseResponse(result).error).to.equal("add failed");
+    });
+
+    // Per-file errors go through the same typed StorageBusyError mapping as
+    // the top-level catch: this loop never rethrows, so a busy lease must be
+    // translated where it is actually caught.
+    it("reports a busy-retry error per file when a foreign writer holds the lease", async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tools-busy-"));
+      const fileA = path.join(tmpDir, "a.md");
+      await fs.writeFile(fileA, "# a");
+
+      try {
+        handlers = captureHandlers({
+          topicManager,
+          config,
+          ragQueryService,
+          mcpConfig: makeMcpConfig({ allowedPaths: [tmpDir] }),
+        });
+
+        topicManager.resolveTopicByName.resolves({ topic: makeTopic({ id: "t1", name: "docs" }), matchType: "exact" });
+        topicManager.addDocuments.rejects(new StorageBusyError("/tmp/x/.ragnarok.lock", null));
+
+        const result = await handlers.rag_ingest({
+          source: "files",
+          topic: "docs",
+          filePaths: [fileA],
+        });
+        const body = parseResponse(result);
+
+        expect(result.isError).to.equal(true);
+        expect(body.files[0].status).to.equal("failed");
+        expect(body.files[0].error).to.equal("Storage is busy: another RAGnarōk process is writing. Retry shortly.");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 
