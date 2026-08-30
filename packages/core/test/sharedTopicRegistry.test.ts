@@ -6,6 +6,7 @@ import { Logger } from "../src/logger";
 import { ArchiveFolderSource } from "../src/sharedTopics/archiveFolderSource";
 import { SharedTopicRegistry } from "../src/sharedTopics/registry";
 import type { ResolvedSharedTopic, SharedTopicSource } from "../src/sharedTopics/types";
+import type { Document as TopicDocument } from "../src/utils/types";
 import { writeTopicArchive } from "./helpers/sharedTopicFixtures";
 
 describe("archive folder source", function () {
@@ -64,7 +65,11 @@ describe("archive folder source", function () {
   });
 });
 
-function stubSource(id: string, label: string, topics: Array<{ nativeId: string; name: string }>): SharedTopicSource {
+function stubSource(
+  id: string,
+  label: string,
+  topics: Array<{ nativeId: string; name: string; documents?: TopicDocument[] }>,
+): SharedTopicSource {
   return {
     id,
     label,
@@ -79,7 +84,7 @@ function stubSource(id: string, label: string, topics: Array<{ nativeId: string;
           updatedAt: 1,
           documentCount: 0,
         },
-        documents: [],
+        documents: entry.documents ?? [],
         storeDir: `/cache/${id}/${entry.nativeId}`,
       }));
     },
@@ -133,7 +138,16 @@ describe("shared topic registry", function () {
 
   it("answers lookups and tags every topic as common", async function () {
     const registry = new SharedTopicRegistry(cacheRoot, logger);
-    registry.setSources([stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs" }])]);
+    const document: TopicDocument = {
+      id: "doc-1",
+      topicId: "shared-n1",
+      name: "readme.md",
+      filePath: "readme.md",
+      fileType: "markdown",
+      addedAt: 1,
+      chunkCount: 1,
+    };
+    registry.setSources([stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs", documents: [document] }])]);
     await registry.refresh([]);
 
     const [topic] = registry.listTopics();
@@ -143,6 +157,10 @@ describe("shared topic registry", function () {
     expect(topic.source).to.equal("common");
     expect(registry.getStoreDir(topic.id)).to.equal("/cache/src-a/n1");
     expect(registry.getStoreDir("topic-local")).to.equal(undefined);
+    expect(registry.getTopic(topic.id)?.name).to.equal("API Docs");
+    expect(registry.getTopic("topic-local")).to.equal(undefined);
+    expect(registry.getDocuments(topic.id)).to.deep.equal([document]);
+    expect(registry.getDocuments("topic-local")).to.deep.equal([]);
   });
 
   it("drops every topic when the sources are cleared", async function () {
@@ -173,5 +191,23 @@ describe("shared topic registry", function () {
     await registry.refresh([]);
 
     expect(registry.listTopics()).to.deep.equal([]);
+  });
+
+  it("isolates a failing source so the other source's topics still load", async function () {
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([
+      {
+        id: "src-a",
+        label: "share",
+        resolve: async () => {
+          throw new Error("network share vanished");
+        },
+      },
+      stubSource("src-b", "backup", [{ nativeId: "n1", name: "Runbook" }]),
+    ]);
+
+    await registry.refresh([]);
+
+    expect(registry.listTopics().map((topic) => topic.name)).to.deep.equal(["Runbook"]);
   });
 });
