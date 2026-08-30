@@ -2879,12 +2879,16 @@ export class TopicManager {
   /**
    * Run `operation` under an exclusive, operation-scoped write lease.
    *
-   * Every storage mutation goes through here. Reads take no lease at all, so
-   * the canonical files may have moved under our caches since they were
-   * loaded; the lease is therefore followed by a reload before any next-state
-   * is derived. The transaction coordinator is per operation on purpose: its
-   * `initialize()` is WAL recovery, which under this design must run while we
-   * hold the lease rather than once at startup.
+   * Every storage mutation goes through here. The transaction coordinator is
+   * per operation on purpose: its `initialize()` is WAL recovery, which under
+   * this design must run while we hold the lease rather than once at startup.
+   *
+   * Prologue order is load-bearing. WAL recovery *mutates the canonical
+   * files* — it rolls a prepared-but-uncommitted transaction back by restoring
+   * destinations from their backups. Reloading before that would fill the
+   * caches from the torn, pre-rollback generation, and the operation would
+   * then derive next-state from it and commit that durably, resurrecting a
+   * transaction the recovery had just aborted. So: recover first, then read.
    */
   private async runStorageWriteTransaction<T>(
     operation: (tx: { coordinator: StorageTransactionCoordinator; lease: StorageLockHandle }) => Promise<T>,
@@ -2892,20 +2896,26 @@ export class TopicManager {
   ): Promise<T> {
     return this.storageMutationMutex.runExclusive(async () => {
       const lease = await acquireOperationLease(this.storageDir, { waitMs: options?.waitMs ?? 5_000 });
+      const previousLease = this.activeLease;
+      const previousCoordinator = this.activeCoordinator;
       this.activeLease = lease;
       try {
-        // Write-side safety: another process may have written since our caches
-        // were loaded. Reload the canonical files before deriving next-state.
-        await this.reloadCanonicalState();
         const coordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), lease);
         await coordinator.initialize();
         this.activeCoordinator = coordinator;
+        // Write-side safety: another process may have written since our caches
+        // were loaded, and the recovery above may just have rolled a torn
+        // generation back. Reload the canonical files before deriving
+        // next-state from them.
+        await this.reloadCanonicalState();
         await this.recoverPostCommitCleanupJournal();
         await this.recoverIngestionJournal();
         return await operation({ coordinator, lease });
       } finally {
-        this.activeCoordinator = null;
-        this.activeLease = null;
+        // Restore rather than clear: a nested acquisition must never drop an
+        // outer transaction's fence on the way out.
+        this.activeCoordinator = previousCoordinator;
+        this.activeLease = previousLease;
         await lease.release();
       }
     });
@@ -2914,11 +2924,12 @@ export class TopicManager {
   /** Take an operation lease for a single startup write, then give it back. */
   private async withOperationLease<T>(operation: () => Promise<T>): Promise<T> {
     const lease = await acquireOperationLease(this.storageDir, { waitMs: 5_000 });
+    const previousLease = this.activeLease;
     this.activeLease = lease;
     try {
       return await operation();
     } finally {
-      this.activeLease = null;
+      this.activeLease = previousLease;
       await lease.release();
     }
   }

@@ -5,7 +5,10 @@ import * as path from "path";
 import { TopicManager, type IConfigProvider, type INotifier } from "../src/index";
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
 import type { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
-import { StorageTransactionCoordinator } from "../src/utils/storageTransactionCoordinator";
+import {
+  StorageTransactionCoordinator,
+  type StorageTransactionOperation,
+} from "../src/utils/storageTransactionCoordinator";
 
 const LOCK_FILENAME = ".ragnarok.lock";
 
@@ -33,6 +36,54 @@ function stubEmbeddingService(): EmbeddingService {
 
 function stubEmbeddingRegistry(): EmbeddingServiceRegistry {
   return {} as unknown as EmbeddingServiceRegistry;
+}
+
+/**
+ * Leave a real interrupted transaction on disk: `replacement` is published
+ * over `destination`, but the commit record is never written, so the WAL stays
+ * in the `prepared` state with the pre-image sitting in its backup directory.
+ *
+ * The prepared state is reached by driving the real coordinator rather than
+ * hand-writing a checksummed WAL. Losing the fence right after the publication
+ * is what stops the coordinator from rolling back on its own — a fenced owner
+ * must stop touching storage and leave recovery to the next lease holder.
+ */
+async function abandonPreparedIndexReplacement(
+  databaseDir: string,
+  destination: string,
+  replacement: unknown,
+): Promise<void> {
+  let fenced = false;
+  const coordinator = new StorageTransactionCoordinator(databaseDir, {
+    ownerId: "interrupted-writer",
+    assertOwned: async () => {
+      if (fenced) {
+        throw new Error("storage lease ownership was lost");
+      }
+    },
+  });
+  await coordinator.initialize();
+
+  const internals = coordinator as unknown as { applyPrepared: (record: unknown) => Promise<void> };
+  const realApplyPrepared = internals.applyPrepared.bind(coordinator);
+  internals.applyPrepared = async (record: unknown) => {
+    await realApplyPrepared(record);
+    fenced = true;
+  };
+
+  const source = path.join(databaseDir, ".prepared-index-fixture.json");
+  await fs.writeFile(source, JSON.stringify(replacement));
+  const operations: StorageTransactionOperation[] = [{ type: "replace", source, destination }];
+  try {
+    await coordinator.commit("fixture-interrupted-replace", operations);
+    throw new Error("the fixture transaction should not have committed");
+  } catch (error: any) {
+    if (!String(error?.message).includes("ownership was lost")) {
+      throw error;
+    }
+  } finally {
+    await fs.rm(source, { force: true });
+  }
 }
 
 async function lockFileGone(storageDir: string): Promise<boolean> {
@@ -188,6 +239,47 @@ describe("TopicManager operation-scoped write transactions", function () {
     }
     expect(recovered).to.equal(true);
     expect(await lockFileGone(storageDir)).to.equal(true);
+  });
+
+  it("rolls a prepared-but-uncommitted transaction back before reloading the caches", async function () {
+    // WAL recovery rewrites the canonical files. A transaction that read them
+    // first would cache the torn generation, then commit it back over the
+    // rollback and resurrect the aborted transaction.
+    const created = await createManagerInTmpDir();
+    const original = await created.createTopic({ name: "original" });
+
+    const databaseDir = path.join(storageDir, "database");
+    const indexPath = path.join(databaseDir, "topics.json");
+    await abandonPreparedIndexReplacement(databaseDir, indexPath, {
+      topics: {
+        "torn-topic": {
+          id: "torn-topic",
+          name: "torn",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          documentCount: 0,
+        },
+      },
+      modelName: "test-model",
+      lastUpdated: Date.now(),
+    });
+
+    // The tear is live on disk: the original topic is gone and a phantom is
+    // visible, exactly as an interrupted publication would leave it.
+    const torn = JSON.parse(await fs.readFile(indexPath, "utf8"));
+    expect(Object.keys(torn.topics)).to.deep.equal(["torn-topic"]);
+    const walFiles = (await fs.readdir(path.join(databaseDir, ".transactions"))).filter((entry) =>
+      entry.endsWith(".wal"),
+    );
+    expect(walFiles).to.have.length(1);
+
+    const second = await created.createTopic({ name: "second" });
+
+    const persisted = JSON.parse(await fs.readFile(indexPath, "utf8"));
+    expect(Object.keys(persisted.topics).sort()).to.deep.equal([original.id, second.id].sort());
+    expect(persisted.topics).to.not.have.property("torn-topic");
+    expect(created.getTopic("torn-topic")).to.equal(null);
+    expect(created.getTopic(original.id)).to.not.equal(null);
   });
 
   it("publishes a topic deletion to the cache only after the commit succeeds", async function () {
