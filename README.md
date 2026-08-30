@@ -536,11 +536,18 @@ contracts are in the [MCP server guide](packages/mcp-server/README.md).
 
 Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty 0.3/unversioned storage must be converted before it opens. VS Code converts a supported `v0.3-local` layout automatically on activation and reports where the immutable backup was kept; every other host and layout fails closed and must be converted with the supported offline migrator. Migration never resets or discards a store — a reset is a separate, explicitly consented action. See [MIGRATION.md](MIGRATION.md). Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
 
-**Single-writer constraint:** Only one process (VS Code window, MCP server
-instance, or CLI tool) may access a storage directory at a time. A second
-process fails fast instead of silently corrupting data. See
+**Concurrent access:** Reads are lock-free across processes. Any number of
+VS Code windows and MCP server instances may open and read the same storage
+directory at the same time; opening a second window never fails on the lock.
+Writes are what serialize: every mutation takes an exclusive per-operation
+lease on the storage directory, waits about five seconds for a foreign writer,
+and then fails with a typed busy error saying another RAGnarōk process is
+writing and to retry, instead of corrupting data. An ingestion holds its lease
+for the whole call. Migration, reset, and rollback still take the store
+exclusively for their entire duration, and other processes are told that
+another window is migrating or resetting. See
 [the architecture](ARCHITECTURE.md#storage) for the complete concurrency and
-locking model.
+lease model.
 
 ### Delivery and operations
 
