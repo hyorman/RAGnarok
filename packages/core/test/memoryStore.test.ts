@@ -1464,6 +1464,34 @@ describe("MemoryStore lock-free reads and operation leases", function () {
     await waitFor(() => (current as any).entryCache.size === 0 && (current as any).graphCache.size === 0);
   });
 
+  it("refuses to reset over an interrupted storage migration", async function () {
+    const current = makeStore();
+    await current.store({ content: "data an interrupted cutover must not destroy" });
+
+    // An interrupted migration's process is dead: it holds no live lease, so
+    // the operation lease alone would be granted and reset would delete over a
+    // half-renamed directory.
+    const statePath = path.join(
+      path.dirname(tempDir),
+      `.${path.basename(tempDir)}.migration-mig-x.json`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ sourcePath: tempDir, migrationId: "mig-x", stage: "cutoverPrepared" }),
+      "utf8",
+    );
+
+    try {
+      const error = await captureError(current.reset(true));
+      expect((error as Error).name).to.equal("StorageMigrationInterruptedError");
+      expect((await current.list({ scope: "workspace" })).map((entry) => entry.content)).to.deep.equal([
+        "data an interrupted cutover must not destroy",
+      ]);
+    } finally {
+      await fs.rm(statePath, { force: true });
+    }
+  });
+
   it("closes the storage watcher on dispose", async function () {
     const current = makeStore();
     await current.store({ content: "watcher disposal memory" });

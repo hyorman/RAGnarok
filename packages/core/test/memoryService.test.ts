@@ -8,6 +8,7 @@ import {
   type MemoryOperationInput,
   type MemoryOperationResult,
 } from "../src";
+import { StorageBusyError } from "../src/utils/storageLock";
 import type { MemoryEntry, MemoryEntity } from "../src/memory/types";
 import type { MemoryStore } from "../src/memory/memoryStore";
 
@@ -657,6 +658,30 @@ describe("MemoryService", function () {
     expect((error as Error).message).to.equal('Unable to execute memory action "list"');
     expect((error as Error).message).not.to.contain("/Users/private");
     expect((error as Error & { cause?: unknown }).cause).to.equal(internal);
+  });
+
+  it("passes a busy storage lease through both boundaries untouched", async function () {
+    // Hosts match this by name to offer a retry; wrapping it in a
+    // MemoryServiceError would bury that behind a cause chain.
+    const busy = new StorageBusyError("/storage/.ragnarok.lock", {
+      pid: 99999,
+      hostname: "other-host",
+      acquiredAt: Date.now(),
+    });
+    store.store.rejects(busy);
+    store.reset.rejects(busy);
+
+    const storeError = await captureError(
+      service.execute({ action: "store", content: "blocked by another writer" }, workspaceContext),
+    );
+    expect(storeError).to.equal(busy);
+    expect((storeError as Error).name).to.equal("StorageBusyError");
+    expect(storeError).to.not.be.instanceOf(MemoryServiceError);
+
+    const resetError = await captureError(service.reset());
+    expect(resetError).to.equal(busy);
+    expect((resetError as Error).name).to.equal("StorageBusyError");
+    expect(resetError).to.not.be.instanceOf(MemoryServiceError);
   });
 
   it("preserves cancellation reasons", async function () {

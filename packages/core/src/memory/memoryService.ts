@@ -17,6 +17,7 @@ import type {
   StoreMemoryResult,
 } from "./memoryServiceTypes";
 import { MemoryStore } from "./memoryStore";
+import { StorageBusyError } from "../utils/storageLock";
 import type { MemoryScope } from "./types";
 
 type StoreInput = Extract<MemoryOperationInput, { action: "store" }>;
@@ -73,7 +74,15 @@ export class MemoryService {
           return await this.executeCommunities(input, context, signal);
       }
     } catch (error) {
-      if (error instanceof MemoryServiceError || this.isCancellation(error, signal)) {
+      // StorageBusyError passes through untouched: it is a typed, retryable
+      // "another process is writing" signal that hosts match on by name to
+      // offer a retry. Wrapping it would make every caller unwrap a cause to
+      // find that out.
+      if (
+        error instanceof MemoryServiceError ||
+        error instanceof StorageBusyError ||
+        this.isCancellation(error, signal)
+      ) {
         throw error;
       }
       throw new MemoryServiceError("MEMORY_OPERATION_FAILED", `Unable to execute memory action "${input.action}"`, {
@@ -89,7 +98,7 @@ export class MemoryService {
         return { success: true } as const;
       }, signal);
     } catch (error) {
-      if (this.isCancellation(error, signal)) {
+      if (error instanceof StorageBusyError || this.isCancellation(error, signal)) {
         throw error;
       }
       throw new MemoryServiceError("MEMORY_RESET_FAILED", "Unable to reset memory", { cause: error });

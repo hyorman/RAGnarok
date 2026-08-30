@@ -40,7 +40,13 @@ import { GitBranchDetector } from "./gitBranchDetector";
 import { MemoryDecayEngine } from "./memoryDecayEngine";
 import { MemoryScopeLinker } from "./memoryScopeLinker";
 import { cosineSimilarity } from "../utils/vectorMath";
-import { atomicWriteFile, atomicWriteJson, ensureStorageFormatV2, inspectStorage } from "../utils/storageV2";
+import {
+  assertNoInterruptedStorageMigration,
+  atomicWriteFile,
+  atomicWriteJson,
+  ensureStorageFormatV2,
+  inspectStorage,
+} from "../utils/storageV2";
 import { acquireOperationLease, StorageBusyError } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
@@ -689,6 +695,14 @@ export class MemoryStore {
     if (!confirm) {
       throw new Error("Memory reset requires confirm=true");
     }
+    signal?.throwIfAborted();
+    // Fail closed over a half-finished namespace cutover. The operation lease
+    // cannot stand in for this: an INTERRUPTED migration's process is dead, so
+    // it holds no live lease and the lease would simply be granted — and a
+    // migration running inside THIS process is joined through the shared
+    // refcount rather than blocked. Either way `deleteAll` would then run
+    // destructively over a directory that is mid-rename.
+    await assertNoInterruptedStorageMigration(this.storageDir);
     signal?.throwIfAborted();
 
     // Deferred writers flush before the lease is taken: both take the mutation
