@@ -73,7 +73,7 @@ export interface StorageLockHandle {
   release(): Promise<void>;
 }
 
-interface LockFileInfo {
+export interface LockFileInfo {
   version?: number;
   ownerId?: string;
   pid: number;
@@ -613,26 +613,43 @@ async function acquireLease(
     return { ...NO_OP_HANDLE, lockPath };
   }
 
-  let entry = processLocks.get(key);
-  if (!entry) {
-    const acquisition = acquireFileLock(key, options, wait);
-    entry = { refs: 0, acquisition };
-    processLocks.set(key, entry);
-    // A failed acquisition must not poison later attempts.
-    acquisition.catch(() => {
-      if (processLocks.get(key) === entry) {
-        processLocks.delete(key);
-      }
-    });
-  }
-  entry.refs += 1;
+  // A caller that joins another caller's still-pending acquisition would
+  // otherwise inherit that first caller's wait policy AND error type on
+  // failure (e.g. a session acquire joining a pending operation-lease wait
+  // would surface StorageBusyError instead of StorageLockHeldError). The
+  // failed entry is already removed from processLocks by the rejection
+  // handler below before this awaits it, so a joiner retries exactly once,
+  // which re-attempts under ITS OWN policy instead of a foreign one.
+  let acquired: InternalLock | undefined;
+  let entry: ProcessLockEntry | undefined;
+  let retriedAfterForeignPolicyFailure = false;
+  for (;;) {
+    entry = processLocks.get(key);
+    const joinedPending = entry !== undefined;
+    if (!entry) {
+      const acquisition = acquireFileLock(key, options, wait);
+      entry = { refs: 0, acquisition };
+      processLocks.set(key, entry);
+      // A failed acquisition must not poison later attempts.
+      acquisition.catch(() => {
+        if (processLocks.get(key) === entry) {
+          processLocks.delete(key);
+        }
+      });
+    }
+    entry.refs += 1;
 
-  let acquired: InternalLock;
-  try {
-    acquired = await entry.acquisition;
-  } catch (error) {
-    entry.refs -= 1;
-    throw error;
+    try {
+      acquired = await entry.acquisition;
+      break;
+    } catch (error) {
+      entry.refs -= 1;
+      if (joinedPending && !retriedAfterForeignPolicyFailure) {
+        retriedAfterForeignPolicyFailure = true;
+        continue;
+      }
+      throw error;
+    }
   }
 
   let released = false;

@@ -202,7 +202,7 @@ export {
   StorageBusyError,
   STORAGE_LOCK_FILENAME,
 } from "./utils/storageLock";
-export type { StorageLockHandle, StorageLockOptions, OperationLeaseOptions } from "./utils/storageLock";
+export type { StorageLockHandle, StorageLockOptions, OperationLeaseOptions, LockFileInfo } from "./utils/storageLock";
 export { StorageTransactionCoordinator } from "./utils/storageTransactionCoordinator";
 export type { StorageTransactionFence, StorageTransactionOperation } from "./utils/storageTransactionCoordinator";
 export type {

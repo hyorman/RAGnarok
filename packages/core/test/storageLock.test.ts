@@ -173,7 +173,7 @@ describe("acquireStorageLock", function () {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("creates the lock file on acquire and owner-marks it on release", async function () {
+  it("creates the lock file on acquire and unlinks it when the last holder releases", async function () {
     const lock = await acquireStorageLock(tempDir);
     expect(await exists(lockPath)).to.equal(true);
 
@@ -541,6 +541,73 @@ describe("operation leases", function () {
       expect(error.holder?.hostname).to.equal("other-host");
       expect(Date.now() - started).to.be.greaterThanOrEqual(250);
     }
+  });
+
+  it("a session join of a pending operation-lease wait retries under its own (fail-fast) policy on failure", async () => {
+    await fs.writeFile(
+      path.join(dir, STORAGE_LOCK_FILENAME),
+      JSON.stringify({ version: 2, ownerId: "x", pid: 99999, hostname: "other-host", acquiredAt: Date.now() }),
+    );
+
+    // Synchronously start both: the op lease creates the pending entry, and
+    // the session call joins it before either has awaited anything.
+    const opPromise = acquireOperationLease(dir, { waitMs: 300, pollIntervalMs: 50 });
+    const sessionPromise = acquireStorageLock(dir);
+
+    let opError: any;
+    try {
+      await opPromise;
+      expect.fail("op lease should have thrown");
+    } catch (error) {
+      opError = error;
+    }
+    expect(opError.name).to.equal("StorageBusyError");
+
+    let sessionError: any;
+    try {
+      await sessionPromise;
+      expect.fail("session acquire should have thrown");
+    } catch (error) {
+      sessionError = error;
+    }
+    // The session joiner must retry under ITS OWN (fail-fast) policy, not
+    // inherit the operation lease's bounded-wait policy or error type.
+    expect(sessionError).to.be.instanceOf(StorageLockHeldError);
+  });
+
+  it("an operation-lease join of a pending session acquisition retries under its own wait policy on failure", async () => {
+    await fs.writeFile(
+      path.join(dir, STORAGE_LOCK_FILENAME),
+      JSON.stringify({ version: 2, ownerId: "x", pid: 99999, hostname: "other-host", acquiredAt: Date.now() }),
+    );
+
+    const started = Date.now();
+    // Synchronously start both: the session call creates the pending entry
+    // and fails fast, and the op lease joins it before either has awaited
+    // anything.
+    const sessionPromise = acquireStorageLock(dir);
+    const opPromise = acquireOperationLease(dir, { waitMs: 300, pollIntervalMs: 50 });
+
+    let sessionError: any;
+    try {
+      await sessionPromise;
+      expect.fail("session acquire should have thrown");
+    } catch (error) {
+      sessionError = error;
+    }
+    expect(sessionError).to.be.instanceOf(StorageLockHeldError);
+
+    let opError: any;
+    try {
+      await opPromise;
+      expect.fail("op lease should have thrown");
+    } catch (error) {
+      opError = error;
+    }
+    // The op-lease joiner must retry under ITS OWN bounded-wait policy, not
+    // inherit the session's fail-fast policy or error type.
+    expect(opError.name).to.equal("StorageBusyError");
+    expect(Date.now() - started).to.be.greaterThanOrEqual(250);
   });
 
   it("acquire/release stays cheap", async function () {
