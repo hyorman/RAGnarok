@@ -374,7 +374,7 @@ generated file's `$envOnly` block.
 | `RAGNAROK_EMBEDDING_API_KEY` | secret                                                                   |
 | `RAGNAROK_GITHUB_TOKEN`      | secret                                                                   |
 | `RAGNAROK_RESET_STORAGE`     | one-shot; persisting it would reset storage on every launch              |
-| `RAGNAROK_IGNORE_LOCK`       | one-shot; persisting it would disable the single-writer lock permanently |
+| `RAGNAROK_IGNORE_LOCK`       | one-shot; persisting it would disable the storage write lease permanently |
 
 The three secrets are the point of the split: `config.json` sits in the storage
 directory, gets copied with backups, and is readable by anything that can read
@@ -401,9 +401,21 @@ dangerous. The 24 imply a value, which simply moved into the file.
 
 ## Concurrent Access
 
-RAGnarōk enforces a single-writer constraint per storage directory via a cross-process storage lock (`<storageDir>/.ragnarok.lock`). Only one process may access a storage directory at a time. A second process fails fast with an error message naming the holder's PID instead of silently corrupting data. If a holder crashes, the lock self-heals automatically via heartbeat staleness detection (default 5 minutes) so a new process can acquire it.
+Several servers may point at one storage directory, and a server may share it with VS Code windows. Reads take no lock, so concurrent readers never contend and a second server starting against an already-open store is supported.
 
-For advanced setups that serialize access externally and need to bypass the lock, set `RAGNAROK_IGNORE_LOCK=1`. This is unsafe with concurrent writers and should only be used when you have your own synchronization mechanism.
+Writes serialize through a cross-process lease (`<storageDir>/.ragnarok.lock`, present only while a lease is held). Each mutation acquires the lease exclusively for the duration of that one operation — `rag_ingest` holds it for the whole call — recovers and reloads canonical state under it, applies its change, and releases. A mutation that finds a live foreign writer waits about five seconds and then returns a busy error rather than corrupting data:
+
+```json
+{
+  "error": { "code": "STORAGE_BUSY", "message": "Storage is busy: another RAGnarōk process is writing. Retry shortly." }
+}
+```
+
+`rag_memory` and `rag_reset_memory` report that code; the other mutating tools report the same message in their own error body. Nothing was written, so the call can simply be retried. If a holder crashes, the lease self-heals via heartbeat staleness detection (default 5 minutes) so a new process can acquire it.
+
+Migration, reset, and rollback are the exception: they hold the directory exclusively for their entire duration, and other processes are told a migration or reset is in progress until it completes.
+
+For advanced setups that serialize writes externally and need to bypass the lease, set `RAGNAROK_IGNORE_LOCK=1`. This bypasses both lease kinds, is unsafe with concurrent writers, and should only be used when you have your own synchronization mechanism.
 
 See [the architecture](../../ARCHITECTURE.md#storage) for the complete
 concurrency and storage model.

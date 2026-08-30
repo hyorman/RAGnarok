@@ -18,7 +18,7 @@ The configured `RAGNAROK_STORAGE_DIR` is one atomic administrative unit:
 <storage>/
   storage-format.json
   config.json
-  .ragnarok.lock
+  .ragnarok.lock          (present only while a write lease is held)
   database/
     topics.json
     topic-<id>-documents.json
@@ -36,22 +36,34 @@ the server read and write access to the storage root.
 unit: back it up with the store, and treat it as readable by anything that can
 read the store — which is why no credential is ever kept in it.
 
-## The single-writer lock
+## The write lease
 
-Do not share one MCP storage root between concurrent MCP servers or migration
-CLI processes. They take the same lease. VS Code uses a separate extension
-storage root and takes its own lease there. `.ragnarok.lock` records the holder's
-PID and host and is refreshed by heartbeat; a second process fails fast with a
-message naming the holder rather than corrupting the store. A crashed holder's
-lease goes stale after roughly five minutes and is then reclaimable, but a live
-same-host PID is never reclaimed merely for age.
+Several MCP servers may share one storage root, and several VS Code windows may
+share the extension's root. Reads take no lease, so concurrent readers never
+contend: starting a second server or opening a second window against a store
+that is already open is supported and does not fail.
 
-Do not set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested single-writer
-mechanism protects the entire root.
+Writes serialize through `<storage>/.ragnarok.lock`. Each mutation acquires an
+exclusive lease for the duration of that one operation — an ingestion holds it
+for the whole call — and then releases it; the file exists only while a lease is
+held. The lock records the holder's PID and host and is refreshed by heartbeat.
+A mutation that meets a live foreign holder waits about five seconds and then
+fails with `Storage is busy: a write is in progress by pid <n>`. Each host
+rewords that as a retryable busy message — the MCP tools report "Storage is
+busy: another RAGnarōk process is writing. Retry shortly.", the VS Code
+extension shows "Storage is busy — another window is writing (pid <n>). Retry
+in a moment." Nothing is written and the operation can simply be retried. A crashed holder's lease goes stale after roughly five minutes and is
+then reclaimable, but a live same-host PID is never reclaimed merely for age.
 
-The most common operational surprise is a second MCP client pointed at the same
-`RAGNAROK_STORAGE_DIR`. Give each client its own root, or accept that only one
-may run at a time.
+Migration, reset, and rollback are the exception: they hold the store
+exclusively for their entire duration, and any other process that tries to open
+or write it during that window is told a migration or reset is in progress.
+Never run two migration CLI processes, or a migration and a server, against the
+same root.
+
+Do not set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested mechanism
+serializes writes across the entire root: it bypasses both lease kinds, so
+concurrent writers can then corrupt the store.
 
 ## Backup and recovery
 
@@ -212,7 +224,9 @@ as evidence that the store is writable.
 
 ## Routine checks
 
-Monitor process restarts, storage free space, and stderr for lock contention
-and provider errors. Treat corruption, unsupported storage markers, fingerprint
+Monitor process restarts, storage free space, and stderr for busy-storage
+retries and provider errors. Occasional busy errors are normal when several
+processes share a root; a sustained stream of them means one writer is holding
+the lease far longer than a mutation should. Treat corruption, unsupported storage markers, fingerprint
 mismatches, and failed migration validation as hard operator incidents; do not
 reset storage until its backup and recovery path have been reviewed.

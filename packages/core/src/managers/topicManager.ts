@@ -28,6 +28,7 @@ import {
   EmbeddingFingerprintMismatchError,
   EmbeddingReindexRequiredError,
   VectorStoreFactory,
+  VectorStoreLoadError,
   VectorStoreMetadataCorruptionError,
 } from "../stores/vectorStoreFactory";
 import { EventEmitter } from "events";
@@ -39,9 +40,11 @@ import {
   assertNoInterruptedStorageMigration,
   atomicWriteJson,
   ensureStorageFormatV2,
+  inspectStorage,
   resetStorageToV2,
+  STORAGE_RESET_JOURNAL_FILENAME,
 } from "../utils/storageV2";
-import { acquireStorageLock } from "../utils/storageLock";
+import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import {
   StorageTransactionCoordinator,
@@ -55,6 +58,16 @@ import {
   type TopicArchiveManifestFile,
   validateAndStageTopicArchive,
 } from "../utils/topicArchive";
+
+/**
+ * Revision stand-in for a topics index file that does not exist yet.
+ *
+ * The index is published by the first storage write transaction, so a store
+ * that has never been mutated has no `topics.json` at all — reader paths no
+ * longer write one back on load. Not a valid sha256 digest, so it can never
+ * collide with a real hash.
+ */
+const ABSENT_TOPICS_INDEX_HASH = "absent";
 
 export interface TopicManagerOptions {
   storageDir: string;
@@ -94,6 +107,17 @@ export interface AddDocumentResult {
   document: TopicDocument;
   pipelineResult: PipelineResult;
 }
+
+/**
+ * Notifications about storage state changed by something other than this
+ * manager's own write transactions: a foreign process editing topics.json or
+ * a topic-documents file, or the whole storage tree becoming unreachable
+ * because a full-exclusion operation (migration/reset) elsewhere is holding
+ * it.
+ */
+export type StorageExternalChange =
+  | { kind: "topics-changed" }
+  | { kind: "storage-unavailable" };
 
 interface IngestionJournalEntry {
   id: string;
@@ -301,13 +325,29 @@ export class TopicManager {
   private archiveMutex = new Mutex();
   private storageMutationMutex = new Mutex();
   private topicMutationMutexes = new Map<string, Mutex>();
-  private storageLock: StorageLockHandle | null = null;
-  private transactionCoordinator: StorageTransactionCoordinator | null = null;
+  // Set only for the duration of a write transaction. Reads never take a
+  // lease, so a null value here means "not currently mutating storage".
+  private activeLease: StorageLockHandle | null = null;
+  private activeCoordinator: StorageTransactionCoordinator | null = null;
   private acceptingManagedOperations = true;
   private activeManagedOperations = 0;
   private operationDrainWaiters: Array<() => void> = [];
   private managedOperationContext = new AsyncLocalStorage<{ active: boolean }>();
   private disposePromise: Promise<void> | null = null;
+
+  // Cross-process freshness: a directory watch on the database dir (never a
+  // file watch -- atomicWriteJson's rename-over-destination orphans an
+  // inode-following handle after the first replacement). Instance-scoped,
+  // unlike the static onAgentCacheCleanup emitter above, because "another
+  // process touched storage" is only meaningful to the manager instance whose
+  // caches it might invalidate.
+  private readonly externalChangeEmitter = new EventEmitter();
+  private storageWatcher: fsSync.FSWatcher | null = null;
+  private watcherDebounceTimer: NodeJS.Timeout | null = null;
+  private watcherHealthTimer: NodeJS.Timeout | null = null;
+  private watcherRetryTimer: NodeJS.Timeout | null = null;
+  private watcherUnavailable = false;
+  private watcherStopped = false;
 
   /**
    * Create and initialize a TopicManager
@@ -348,23 +388,21 @@ export class TopicManager {
     this.logger.info("Initializing TopicManager");
 
     try {
-      // Cross-process single-writer guard: a second OS process on the same
-      // storage dir would race whole-table rewrites the in-process
-      // serializers cannot see. Fail fast naming the holder instead.
+      // Opening a store is a read. Cross-process exclusion is now per write
+      // operation (see runStorageWriteTransaction), so initialization takes a
+      // lease only for the two startup steps that genuinely write: stamping
+      // the format marker of an empty directory, and an explicit reset.
       await assertNoInterruptedStorageMigration(this.storageDir);
-      this.storageLock = await acquireStorageLock(this.storageDir);
 
       if (this.options.resetStorage) {
-        const backupPath = await resetStorageToV2(this.storageDir);
+        const backupPath = await this.withOperationLease(() => resetStorageToV2(this.storageDir));
         this.logger.warn("Storage reset completed", { backupPath: backupPath ?? "empty storage" });
       } else {
-        await ensureStorageFormatV2(this.storageDir);
+        await this.ensureStorageFormatMarker();
       }
 
       // Ensure storage directory exists
       await this.ensureStorageDirectory();
-      this.transactionCoordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), this.storageLock);
-      await this.transactionCoordinator.initialize();
 
       // Ensure embedding service is initialized so we know the active model
       await this.embeddingService.initialize();
@@ -382,13 +420,19 @@ export class TopicManager {
         this.embeddingService,
         this.embeddingRegistry,
       );
-      await this.recoverPostCommitCleanupJournal();
-      await this.recoverIngestionJournal();
+      // Recovery writes. Probe read-only first so the overwhelmingly common
+      // clean start never touches the lock file; only a store with something
+      // to repair pays for a transaction (whose prologue is the recovery
+      // itself, so the body has nothing left to do).
+      if (await this.hasPendingStorageRecovery()) {
+        await this.runStorageWriteTransaction(async () => undefined);
+      }
 
       // Load common database if configured
       await this.loadCommonDatabase();
 
       this.isInitialized = true;
+      this.startExternalChangeWatcher();
       this.logger.info("TopicManager initialized successfully", {
         topicCount: Object.keys(this.topicsIndex?.topics || {}).length,
         commonTopicCount: Object.keys(this.commonTopicsIndex?.topics || {}).length,
@@ -416,11 +460,6 @@ export class TopicManager {
         this.vectorStoreFactory = null;
         await close(() => factory.dispose());
       }
-      if (this.storageLock) {
-        const lock = this.storageLock;
-        this.storageLock = null;
-        await close(() => lock.release());
-      }
       if (cleanupFailures.length > 0) {
         this.logger.warn("TopicManager initialization cleanup encountered failures", {
           failures: cleanupFailures.map((cleanupError) =>
@@ -436,9 +475,7 @@ export class TopicManager {
    * Create a new topic
    */
   public async createTopic(options: CreateTopicOptions): Promise<Topic> {
-    return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() => this.createTopicUnlocked(options)),
-    );
+    return this.runManagedOperation(() => this.runStorageWriteTransaction(() => this.createTopicUnlocked(options)));
   }
 
   private async createTopicUnlocked(options: CreateTopicOptions): Promise<Topic> {
@@ -518,13 +555,13 @@ export class TopicManager {
    */
   public async deleteTopic(topicId: string): Promise<void> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
-        this.getTopicMutationMutex(topicId).runExclusive(() => this.deleteTopicUnlocked(topicId)),
+      this.runStorageWriteTransaction((tx) =>
+        this.getTopicMutationMutex(topicId).runExclusive(() => this.deleteTopicUnlocked(topicId, tx.coordinator)),
       ),
     );
   }
 
-  private async deleteTopicUnlocked(topicId: string): Promise<void> {
+  private async deleteTopicUnlocked(topicId: string, coordinator: StorageTransactionCoordinator): Promise<void> {
     this.logger.info("Deleting topic", { topicId });
 
     try {
@@ -539,7 +576,6 @@ export class TopicManager {
 
       const topicName = this.topicsIndex.topics[topicId].name;
       await this.assertStorageOwnership();
-      const coordinator = await this.ensureTransactionCoordinator();
 
       // The topics index is the visibility boundary and is published first.
       // Once it no longer advertises the topic, remaining table directories
@@ -564,16 +600,13 @@ export class TopicManager {
       // topic, so clear the complete cache before reopening it.
       this.invalidateVectorStoreCache();
       this.vectorStoreFactory.dispose();
-      const previousTopicsIndex = this.topicsIndex;
-      this.topicsIndex = nextTopicsIndex;
-      let committed = false;
       try {
         await coordinator.commit("delete-topic", operations, { topicId });
-        committed = true;
+        // Publish only what the commit made durable. Deriving next-state from
+        // the reloaded index and applying it after the commit removes the
+        // window in which the cache advertised a deletion that never landed.
+        this.topicsIndex = nextTopicsIndex;
       } finally {
-        if (!committed) {
-          this.topicsIndex = previousTopicsIndex;
-        }
         await fs.rm(preparedIndex, { force: true }).catch(() => undefined);
         this.vectorStoreFactory = new VectorStoreFactory(
           this.getDatabaseDir(),
@@ -641,7 +674,7 @@ export class TopicManager {
    */
   public async updateTopic(topicId: string, updates: Partial<Pick<Topic, "name" | "description">>): Promise<Topic> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() => this.updateTopicUnlocked(topicId, updates)),
+      this.runStorageWriteTransaction(() => this.updateTopicUnlocked(topicId, updates)),
     );
   }
 
@@ -852,8 +885,10 @@ export class TopicManager {
     documentId: string,
   ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
-        this.getTopicMutationMutex(topicId).runExclusive(() => this.removeDocumentUnlocked(topicId, documentId)),
+      this.runStorageWriteTransaction((tx) =>
+        this.getTopicMutationMutex(topicId).runExclusive(() =>
+          this.removeDocumentUnlocked(topicId, documentId, tx.coordinator),
+        ),
       ),
     );
   }
@@ -861,6 +896,7 @@ export class TopicManager {
   private async removeDocumentUnlocked(
     topicId: string,
     documentId: string,
+    coordinator: StorageTransactionCoordinator,
   ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
     if (this.isCommonTopic(topicId)) {
       throw new Error("Common database topics are read-only");
@@ -912,7 +948,6 @@ export class TopicManager {
     await atomicWriteJson(preparedDocuments, [...nextDocuments.values()]);
     await atomicWriteJson(preparedIndex, nextIndex);
     try {
-      const coordinator = await this.ensureTransactionCoordinator();
       await coordinator.commit(
         "remove-document-metadata",
         [
@@ -972,7 +1007,7 @@ export class TopicManager {
     options?: PipelineOptions,
   ): Promise<AddDocumentResult[]> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
+      this.runStorageWriteTransaction(() =>
         this.getTopicMutationMutex(topicId).runExclusive(() => this.addDocumentsUnlocked(topicId, filePaths, options)),
       ),
     );
@@ -993,6 +1028,10 @@ export class TopicManager {
         throw new Error("TopicManager not initialized");
       }
 
+      // The write transaction's prologue has already reloaded this.topicsIndex
+      // from disk before invoking this operation, so this lookup is live: a
+      // foreign process that deleted the topic since our caches were last
+      // populated is reflected here, not a stale in-memory reference.
       const topic = this.topicsIndex.topics[topicId];
       if (!topic) {
         throw new Error(`Topic not found: ${topicId}`);
@@ -1164,7 +1203,7 @@ export class TopicManager {
     options?: PipelineOptions,
   ): Promise<AddDocumentResult[]> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
+      this.runStorageWriteTransaction(() =>
         this.getTopicMutationMutex(topicId).runExclusive(() => this.addSourcesUnlocked(topicId, sources, options)),
       ),
     );
@@ -1338,7 +1377,9 @@ export class TopicManager {
    * The caller owns loading/chunking.
    */
   public async storeProcessedChunks(topicId: string, chunks: LangChainDocument[], signal?: AbortSignal): Promise<void> {
-    return this.runManagedOperation(() => this.storeProcessedChunksUnlocked(topicId, chunks, signal));
+    return this.runManagedOperation(() =>
+      this.runStorageWriteTransaction(() => this.storeProcessedChunksUnlocked(topicId, chunks, signal)),
+    );
   }
 
   private async storeProcessedChunksUnlocked(
@@ -1352,49 +1393,138 @@ export class TopicManager {
   }
 
   /**
-   * Get vector store for a topic
+   * Get vector store for a topic.
+   *
+   * Reads never take the storage lease, so a concurrent writer's
+   * drop-and-recreate (cross-process table swap) can make the table — or its
+   * metadata file — vanish mid-read. A first attempt landing on "absent"
+   * (table-absent, or a load failure) is ambiguous between a genuinely empty
+   * or corrupt topic and that brief window, so it gets exactly one retry
+   * after a short wait before either outcome is committed to.
+   *
+   * Exactly one retry is authorized per call: the two branches below each
+   * call `retryVectorStoreLoad` at most once, and neither call sits inside a
+   * `catch` that the other could re-enter — a retry that itself throws
+   * `VectorStoreLoadError` propagates immediately rather than triggering a
+   * second, unauthorized retry that could resolve `null` over a real failure.
    */
   public async getVectorStore(topicId: string): Promise<VectorStore | null> {
     this.logger.debug("Getting vector store", { topicId });
 
+    let store: VectorStore | null;
     try {
-      if (!this.vectorStoreFactory) {
-        throw new Error("TopicManager not initialized");
-      }
-
-      await this.ensureEmbeddingModelCompatibility(topicId);
-
-      const location = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? "common") : this.getDatabaseDir();
-      const cacheKey = `${location}::${topicId}`;
-      // Check cache first
-      const cachedStore = this.vectorStoreCache.get(cacheKey);
-      if (cachedStore) {
-        this.logger.debug("Returning cached vector store", { topicId });
-        return cachedStore;
-      }
-
-      // Load from disk
-      let store;
-      if (this.isCommonTopic(topicId) && this.commonDatabasePath) {
-        this.logger.debug("Loading vector store from common database", { topicId });
-        store = await this.vectorStoreFactory.loadStore(topicId, this.commonDatabasePath);
-      } else {
-        store = await this.vectorStoreFactory.loadStore(topicId);
-      }
-
-      if (store) {
-        this.vectorStoreCache.set(cacheKey, store);
-        this.logger.debug("Vector store loaded and cached", { topicId });
-      }
-
-      return store;
+      store = await this.loadVectorStoreOnce(topicId);
     } catch (error) {
+      if (error instanceof VectorStoreLoadError) {
+        return await this.retryVectorStoreLoad(topicId);
+      }
       this.logger.error("Failed to get vector store", {
         error: error instanceof Error ? error.message : String(error),
         topicId,
       });
       throw error;
     }
+    if (store) {
+      return store;
+    }
+
+    // table-absent on the first attempt. A genuinely empty topic has no
+    // vector metadata file either — createStore always writes it at table
+    // creation, and a drop-and-recreate's table-absent window still leaves
+    // the pre-existing metadata on disk — so skip the retry's wait entirely
+    // when there is no metadata to be racing against.
+    if (!(await this.topicHasVectorStoreMetadata(topicId))) {
+      return null;
+    }
+    return await this.retryVectorStoreLoad(topicId);
+  }
+
+  /** The retry point shared by both "table-absent" and "load failed". Called at most once per `getVectorStore` call. */
+  private async retryVectorStoreLoad(topicId: string): Promise<VectorStore | null> {
+    this.invalidateVectorStoreCache(topicId);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      // table-absent here is accepted as empty-topic semantics; a second
+      // VectorStoreLoadError is a real failure and must surface, never be
+      // swallowed into a fabricated "empty topic" result.
+      return await this.loadVectorStoreOnce(topicId);
+    } catch (error) {
+      this.logger.error("Failed to get vector store after retry", {
+        error: error instanceof Error ? error.message : String(error),
+        topicId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Whether a vector-store metadata file exists for this topic, tolerating
+   * corruption as "exists" rather than propagating it: a present-but-torn
+   * metadata file is itself evidence of an in-flight write, which the caller
+   * should retry rather than fast-path to empty-topic semantics for.
+   */
+  private async topicHasVectorStoreMetadata(topicId: string): Promise<boolean> {
+    if (!this.vectorStoreFactory) {
+      return false;
+    }
+    const customStorageDir = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? undefined) : undefined;
+    try {
+      return (await this.vectorStoreFactory.getStoreMetadata(topicId, customStorageDir)) !== null;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * One disk-touching attempt to resolve a topic's vector store: compat
+   * check, cache lookup, then load. A corrupt-metadata refusal from the
+   * compat check is classified the same way `loadStore` classifies its own
+   * metadata-read failure — as `VectorStoreLoadError` — so `getVectorStore`'s
+   * single retry point covers both read paths uniformly.
+   */
+  private async loadVectorStoreOnce(topicId: string): Promise<VectorStore | null> {
+    if (!this.vectorStoreFactory) {
+      throw new Error("TopicManager not initialized");
+    }
+
+    try {
+      await this.ensureEmbeddingModelCompatibility(topicId);
+    } catch (error) {
+      if (error instanceof VectorStoreMetadataCorruptionError) {
+        // Distinguish this from a table-open failure: no table was touched,
+        // the topic's stored embedding metadata itself couldn't be read.
+        throw new VectorStoreLoadError(
+          topicId,
+          new Error(`embedding compatibility check failed before the vector table was opened: ${error.message}`),
+        );
+      }
+      throw error;
+    }
+
+    const location = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? "common") : this.getDatabaseDir();
+    const cacheKey = `${location}::${topicId}`;
+    // Check cache first
+    const cachedStore = this.vectorStoreCache.get(cacheKey);
+    if (cachedStore) {
+      this.logger.debug("Returning cached vector store", { topicId });
+      return cachedStore;
+    }
+
+    // Load from disk
+    let store;
+    if (this.isCommonTopic(topicId) && this.commonDatabasePath) {
+      this.logger.debug("Loading vector store from common database", { topicId });
+      store = await this.vectorStoreFactory.loadStore(topicId, this.commonDatabasePath);
+    } else {
+      store = await this.vectorStoreFactory.loadStore(topicId);
+    }
+
+    if (store) {
+      this.vectorStoreCache.set(cacheKey, store);
+      this.logger.debug("Vector store loaded and cached", { topicId });
+    }
+
+    return store;
   }
 
   /**
@@ -1549,11 +1679,40 @@ export class TopicManager {
    */
   public async refresh(): Promise<void> {
     return this.runManagedOperation(() =>
+      // A refresh is a read: it republishes what is on disk and writes
+      // nothing, so it takes no lease. It still serializes against local
+      // mutations, because republishing the caches between a mutation's
+      // in-memory apply and its flush would silently drop that mutation.
       this.storageMutationMutex.runExclusive(async () => {
         this.logger.info("Refreshing topics");
-        await this.loadTopicsIndex();
+        await this.reloadCanonicalState();
       }),
     );
+  }
+
+  /**
+   * Subscribe to storage changes this manager did not itself make: a foreign
+   * process editing topics.json/a topic-documents file (`topics-changed`), or
+   * the storage tree going unreachable because a full-exclusion operation
+   * elsewhere is holding it (`storage-unavailable`).
+   */
+  public onExternalChange(listener: (change: StorageExternalChange) => void): { dispose(): void } {
+    this.externalChangeEmitter.on("change", listener);
+    return {
+      dispose: () => {
+        this.externalChangeEmitter.off("change", listener);
+      },
+    };
+  }
+
+  private emitExternalChange(change: StorageExternalChange): void {
+    try {
+      this.externalChangeEmitter.emit("change", change);
+    } catch (error) {
+      this.logger.warn("onExternalChange listener threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -1562,7 +1721,7 @@ export class TopicManager {
    */
   public async reinitializeWithNewModel(): Promise<void> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() => this.reinitializeWithNewModelUnlocked()),
+      this.runStorageWriteTransaction(() => this.reinitializeWithNewModelUnlocked()),
     );
   }
 
@@ -1636,6 +1795,7 @@ export class TopicManager {
   private async disposeOnce(): Promise<void> {
     this.logger.info("Disposing TopicManager");
     this.acceptingManagedOperations = false;
+    this.stopExternalChangeWatcher();
     await this.waitForManagedOperationsToDrain();
 
     const failures: unknown[] = [];
@@ -1662,12 +1822,10 @@ export class TopicManager {
     this.topicsIndex = null;
     this.isInitialized = false;
     TopicManager._onAgentCacheCleanup.removeAllListeners();
+    this.externalChangeEmitter.removeAllListeners();
 
-    if (this.storageLock) {
-      const lock = this.storageLock;
-      this.storageLock = null;
-      await close(() => lock.release());
-    }
+    // No session lease exists to release: every lease is released by the
+    // transaction that took it, and the drain above waited for those.
 
     this.logger.info("TopicManager disposed");
     if (failures.length > 0) {
@@ -1695,9 +1853,7 @@ export class TopicManager {
    */
   public async importTopic(archivePath: string): Promise<Topic> {
     return this.runManagedOperation(() =>
-      this.archiveMutex.runExclusive(() =>
-        this.storageMutationMutex.runExclusive(() => this.importTopicUnlocked(archivePath)),
-      ),
+      this.archiveMutex.runExclusive(() => this.importTopicUnlocked(archivePath)),
     );
   }
 
@@ -1717,6 +1873,12 @@ export class TopicManager {
       if (!this.topicsIndex.topics[topicId]) {
         throw new Error(`Topic not found: ${topicId}`);
       }
+
+      // Export takes no lease: it is a read. Capture the topics index
+      // revision now and re-check it once the archive is written, so a
+      // mutation that lands mid-export is caught instead of silently
+      // shipping a torn archive.
+      const indexHashBeforeExport = await this.hashFile(this.getTopicsIndexPath());
 
       await fs.mkdir(databaseDir, { recursive: true });
       stagingDir = await fs.mkdtemp(path.join(databaseDir, ".rag-export-"));
@@ -1763,6 +1925,11 @@ export class TopicManager {
       zip.end();
 
       await archivePromise;
+
+      if ((await this.hashFile(this.getTopicsIndexPath())) !== indexHashBeforeExport) {
+        throw new Error("Topic storage changed during export; retry the export");
+      }
+
       await fs.rename(temporaryArchivePath, exportPath);
       temporaryArchivePath = undefined;
 
@@ -1852,24 +2019,36 @@ export class TopicManager {
       };
       const preparedIndexPath = path.join(stagingDir, "prepared-topics.json");
       await atomicWriteJson(preparedIndexPath, nextTopicsIndex);
-      const expectedIndexSha256 = await this.hashFile(this.getTopicsIndexPath());
+      // Captured before the lease is taken: this guards the staging window
+      // above, not live cross-process races (the lease already excludes
+      // those once we hold it).
+      const expectedIndexSha256 = await this.hashTopicsIndexOrAbsent();
+      const preparedMetadataFinalPath = (await this.pathExists(preparedMetadataPath))
+        ? preparedMetadataPath
+        : undefined;
 
-      await this.commitStagedTopicImport({
-        contentDir: stagedArchive.contentDir,
-        originalTopicId: exportData.topic.id,
-        newTopicId,
-        preparedDocumentsPath,
-        preparedMetadataPath: (await this.pathExists(preparedMetadataPath)) ? preparedMetadataPath : undefined,
-        preparedIndexPath,
-        expectedIndexSha256,
+      // Only the commit is a storage mutation: staging above needed no lease.
+      await this.runStorageWriteTransaction(async (tx) => {
+        await this.commitStagedTopicImport(
+          {
+            contentDir: stagedArchive.contentDir,
+            originalTopicId: exportData.topic.id,
+            newTopicId,
+            preparedDocumentsPath,
+            preparedMetadataPath: preparedMetadataFinalPath,
+            preparedIndexPath,
+            expectedIndexSha256,
+          },
+          tx.coordinator,
+        );
+
+        const documentsMap = new Map<string, TopicDocument>();
+        for (const document of newDocuments) {
+          documentsMap.set(document.id, document);
+        }
+        this.topicsIndex = nextTopicsIndex;
+        this.topicDocuments.set(newTopicId, documentsMap);
       });
-
-      const documentsMap = new Map<string, TopicDocument>();
-      for (const document of newDocuments) {
-        documentsMap.set(document.id, document);
-      }
-      this.topicsIndex = nextTopicsIndex;
-      this.topicDocuments.set(newTopicId, documentsMap);
 
       this.logger.info("Topic imported successfully", {
         originalId: exportData.topic.id,
@@ -2093,6 +2272,27 @@ export class TopicManager {
     );
   }
 
+  /**
+   * Revision hash of the topics index, or {@link ABSENT_TOPICS_INDEX_HASH}
+   * when the file has not been written yet.
+   *
+   * Import captures this before staging and re-checks it under the write
+   * lease, so both sides must agree on how "no index yet" is spelled:
+   * absent-then-still-absent compares equal and the import proceeds, while
+   * absent-then-present compares unequal — a foreign writer published an
+   * index during the staging window, which is a genuine concurrent change.
+   */
+  private async hashTopicsIndexOrAbsent(): Promise<string> {
+    try {
+      return await this.hashFile(this.getTopicsIndexPath());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return ABSENT_TOPICS_INDEX_HASH;
+      }
+      throw error;
+    }
+  }
+
   private async hashFile(filePath: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const hash = createHash("sha256");
@@ -2108,7 +2308,10 @@ export class TopicManager {
    * before the topics index; the index rename is the visibility point. Runtime
    * failures before that point move all payloads back into staging.
    */
-  private async commitStagedTopicImport(commit: StagedTopicImportCommit): Promise<void> {
+  private async commitStagedTopicImport(
+    commit: StagedTopicImportCommit,
+    coordinator: StorageTransactionCoordinator,
+  ): Promise<void> {
     const databaseDir = this.getDatabaseDir();
     const operations: StorageTransactionOperation[] = [];
     const tableMappings = [{ oldName: commit.originalTopicId, newName: commit.newTopicId }];
@@ -2146,13 +2349,12 @@ export class TopicManager {
         throw new Error(`Import destination already exists: ${operation.destination}`);
       }
     }
-    if ((await this.hashFile(this.getTopicsIndexPath())) !== commit.expectedIndexSha256) {
+    if ((await this.hashTopicsIndexOrAbsent()) !== commit.expectedIndexSha256) {
       throw new Error("Topics index changed during import; retry after active writes finish");
     }
     // Retained as a deterministic failure-injection seam for archive tests.
     await this.publishPreparedTopicsIndex(commit.preparedIndexPath);
     await this.assertStorageOwnership();
-    const coordinator = await this.ensureTransactionCoordinator();
     await coordinator.commit("import-topic", operations, {
       originalTopicId: commit.originalTopicId,
       newTopicId: commit.newTopicId,
@@ -2363,15 +2565,20 @@ export class TopicManager {
       // Only a genuinely missing index may initialize empty storage. Parse,
       // schema, permission, and other I/O errors must leave the source intact
       // and abort initialization.
-      this.logger.info("Topics index not found, creating new one");
-      this.topicsIndex = {
-        topics: {},
-        modelName: this.embeddingService.getCurrentModel(),
-        lastUpdated: Date.now(),
-      };
-
-      await this.saveTopicsIndex();
-      this.topicDocuments = new Map();
+      //
+      // This is a reader path and must not write: persisting the empty index
+      // here would be an unleased mutation. The first real mutation's
+      // transaction saves it. An index already in memory is kept as-is — on
+      // reload it is the pending canonical state, not something to discard.
+      if (!this.topicsIndex) {
+        this.logger.info("Topics index not found, starting from an empty in-memory index");
+        this.topicsIndex = {
+          topics: {},
+          modelName: this.embeddingService.getCurrentModel(),
+          lastUpdated: Date.now(),
+        };
+        this.topicDocuments = new Map();
+      }
       return;
     }
 
@@ -2385,6 +2592,290 @@ export class TopicManager {
     this.logger.info("Topics index loaded", {
       topicCount: Object.keys(parsedIndex.topics).length,
     });
+  }
+
+  /**
+   * Read-only reload of topics.json and every topic-<id>-documents.json into
+   * the caches. Reads take no lease, so this is also what a write transaction
+   * runs before deriving next-state from cached values.
+   */
+  private async reloadCanonicalState(): Promise<void> {
+    await this.loadTopicsIndex();
+  }
+
+  // ==================== External-change watcher ====================
+  //
+  // Watches the database directory (never a specific file: atomicWriteJson
+  // publishes topics.json and each topic-documents file via rename-over, and
+  // an inode-following file watch goes silent after the first replacement).
+  // Events are filtered to topics.json / topic-<id>-documents.json, debounced
+  // 250ms, and skipped while this process's own write transaction is active
+  // -- the trailing debounce covers the release edge for any interleaved
+  // event that slips past that check. A watch failure, or the directory going
+  // missing, is reported as `storage-unavailable` and retried every 2s until
+  // storage returns, at which point the watch is re-established, the caches
+  // reloaded, and `topics-changed` emitted.
+
+  /** Start (or restart) the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
+  private startExternalChangeWatcher(): void {
+    if (this.watcherStopped) {
+      return;
+    }
+    // Idempotent re-entry: a caller re-establishing the watch (recovery,
+    // or any future accidental double-start) must never leak the previous
+    // handle/health-timer pair.
+    this.closeWatcher();
+    let watcher: fsSync.FSWatcher;
+    try {
+      watcher = fsSync.watch(this.getDatabaseDir(), (_eventType, filename) => {
+        this.onRawWatchEvent(filename);
+      });
+    } catch (error) {
+      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    watcher.on("error", (error) => {
+      this.logger.warn("Storage directory watch reported an error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.handleWatchOutage();
+    });
+    this.storageWatcher = watcher;
+    this.startWatcherHealthCheck();
+  }
+
+  private stopExternalChangeWatcher(): void {
+    this.watcherStopped = true;
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+      this.watcherDebounceTimer = null;
+    }
+    if (this.watcherRetryTimer) {
+      clearTimeout(this.watcherRetryTimer);
+      this.watcherRetryTimer = null;
+    }
+    this.closeWatcher();
+  }
+
+  private closeWatcher(): void {
+    if (this.storageWatcher) {
+      try {
+        this.storageWatcher.close();
+      } catch {
+        // Already closed or the underlying handle is gone; nothing to do.
+      }
+      this.storageWatcher = null;
+    }
+    if (this.watcherHealthTimer) {
+      clearInterval(this.watcherHealthTimer);
+      this.watcherHealthTimer = null;
+    }
+  }
+
+  /**
+   * Deliberate poll-augmentation, not an incidental helper: fs.watch alone
+   * cannot satisfy the unavailability contract on every platform. Linux's
+   * inotify backend emits an 'error' when the watched directory disappears,
+   * but macOS's FSEvents-backed watch does not -- it simply stops emitting
+   * events, with no signal that the directory is gone. A purely reactive
+   * design (relying only on `watcher.on("error", ...)`) would leave
+   * `storage-unavailable` undetectable on macOS until some unrelated
+   * qualifying file event happened to fire, which may never happen after a
+   * directory removal/rename -- exactly the scenario acceptance criterion 6
+   * exists to cover.
+   *
+   * The cost of closing that gap: one unref'd `fs.lstat` per manager every 2
+   * seconds while the watcher is otherwise healthy. Negligible, and it never
+   * keeps the process alive -- the timer is `unref()`'d here and explicitly
+   * cleared by `closeWatcher()` on outage or dispose.
+   */
+  private startWatcherHealthCheck(): void {
+    if (this.watcherHealthTimer) {
+      clearInterval(this.watcherHealthTimer);
+    }
+    this.watcherHealthTimer = setInterval(() => {
+      void this.checkStorageHealth();
+    }, 2_000);
+    this.watcherHealthTimer.unref?.();
+  }
+
+  private async checkStorageHealth(): Promise<void> {
+    if (this.watcherStopped || this.watcherUnavailable) {
+      return;
+    }
+    if (!(await this.databaseDirExists())) {
+      this.handleWatchOutage();
+    }
+  }
+
+  private async databaseDirExists(): Promise<boolean> {
+    try {
+      return await this.pathExists(this.getDatabaseDir());
+    } catch {
+      return false;
+    }
+  }
+
+  private onRawWatchEvent(filename: string | Buffer | null): void {
+    if (this.watcherStopped) {
+      return;
+    }
+    const name = filename ? filename.toString() : null;
+    if (name !== null && name !== EXTENSION.TOPICS_INDEX_FILENAME && !/^topic-.*-documents\.json$/.test(name)) {
+      return;
+    }
+    if (this.activeLease !== null) {
+      // Our own transaction is writing; its reload already applies the
+      // change and there is nothing external to report.
+      return;
+    }
+    this.scheduleDebouncedReload();
+  }
+
+  private scheduleDebouncedReload(): void {
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+    }
+    this.watcherDebounceTimer = setTimeout(() => {
+      this.watcherDebounceTimer = null;
+      void this.handleDebouncedChange();
+    }, 250);
+    this.watcherDebounceTimer.unref?.();
+  }
+
+  /**
+   * Every await below is a point where dispose() may have run to completion
+   * (cleared caches, removed listeners) while this call was suspended. Each
+   * one is followed by a fresh `watcherStopped` check that bails silently --
+   * a disposed manager must never have its caches repopulated by, or emit an
+   * event from, a reload that was already in flight when dispose() ran.
+   */
+  private async handleDebouncedChange(): Promise<void> {
+    if (this.watcherStopped || this.activeLease !== null) {
+      return;
+    }
+    const dirExists = await this.databaseDirExists();
+    if (this.watcherStopped) {
+      return;
+    }
+    if (!dirExists) {
+      this.handleWatchOutage();
+      return;
+    }
+    try {
+      await this.storageMutationMutex.runExclusive(async () => {
+        // Checked again inside the mutex: dispose() may have run while this
+        // call was queued waiting for a concurrent transaction/refresh.
+        if (this.watcherStopped) {
+          return;
+        }
+        await this.reloadCanonicalState();
+      });
+      if (this.watcherStopped) {
+        return;
+      }
+      this.emitExternalChange({ kind: "topics-changed" });
+    } catch (error: any) {
+      if (this.watcherStopped) {
+        return;
+      }
+      if (error?.code === "ENOENT") {
+        this.handleWatchOutage();
+        return;
+      }
+      this.logger.warn("Failed to reload storage state after an external change notification", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Enter (or stay in) the unavailable state: emit once, tear the watch down, and retry every 2s until storage returns. */
+  private handleWatchOutage(): void {
+    if (this.watcherStopped || this.watcherUnavailable) {
+      return;
+    }
+    this.watcherUnavailable = true;
+    // A pending debounced reload targets storage that is (or is about to be)
+    // gone; letting it fire later could race a duplicate topics-changed with
+    // the recovery path's own reload-and-emit.
+    if (this.watcherDebounceTimer) {
+      clearTimeout(this.watcherDebounceTimer);
+      this.watcherDebounceTimer = null;
+    }
+    this.closeWatcher();
+    void this.announceUnavailability();
+    this.scheduleOutageRetry();
+  }
+
+  /**
+   * Diagnostic only: whether a lock file or reset journal is present does not
+   * change the retry behaviour (either way storage is unavailable and gets
+   * retried), it only distinguishes "a full-exclusion operation elsewhere has
+   * the tree" from "storage is genuinely gone" for the log line.
+   */
+  private async announceUnavailability(): Promise<void> {
+    let reason = "the storage directory is unreachable";
+    try {
+      const lockPath = path.join(this.storageDir, STORAGE_LOCK_FILENAME);
+      const journalPath = path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME);
+      if ((await this.pathExists(lockPath)) || (await this.pathExists(journalPath))) {
+        reason = "a full-exclusion storage operation (migration/reset) appears to be in progress elsewhere";
+      }
+    } catch {
+      // Best-effort diagnostic only; never let this block the notification.
+    }
+    this.logger.warn("Storage became unavailable; external-change tracking will retry until it returns", { reason });
+    this.emitExternalChange({ kind: "storage-unavailable" });
+  }
+
+  private scheduleOutageRetry(): void {
+    if (this.watcherStopped) {
+      return;
+    }
+    this.watcherRetryTimer = setTimeout(() => {
+      this.watcherRetryTimer = null;
+      void this.attemptWatcherRecovery();
+    }, 2_000);
+    this.watcherRetryTimer.unref?.();
+  }
+
+  /** Same dispose-race discipline as handleDebouncedChange: re-check `watcherStopped` after every await and bail silently. */
+  private async attemptWatcherRecovery(): Promise<void> {
+    if (this.watcherStopped) {
+      return;
+    }
+    const dirExists = await this.databaseDirExists();
+    if (this.watcherStopped) {
+      return;
+    }
+    if (!dirExists) {
+      this.scheduleOutageRetry();
+      return;
+    }
+    this.watcherUnavailable = false;
+    this.startExternalChangeWatcher();
+    try {
+      await this.storageMutationMutex.runExclusive(async () => {
+        if (this.watcherStopped) {
+          return;
+        }
+        await this.reloadCanonicalState();
+      });
+      if (this.watcherStopped) {
+        return;
+      }
+      this.emitExternalChange({ kind: "topics-changed" });
+    } catch (error) {
+      if (this.watcherStopped) {
+        return;
+      }
+      this.logger.warn("Storage directory returned but reload failed; retrying", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.handleWatchOutage();
+    }
   }
 
   /**
@@ -2852,29 +3343,131 @@ export class TopicManager {
   }
 
   private async assertStorageOwnership(): Promise<void> {
-    if (this.storageLock) {
-      await this.storageLock.assertOwned();
+    if (this.activeLease) {
+      await this.activeLease.assertOwned();
       return;
     }
     // Direct unit fixtures construct the private manager without running
-    // initialization. A live initialized manager must never commit unlocked.
+    // initialization. A live initialized manager must never commit outside a
+    // write transaction: without a lease nothing excludes another process.
     if (this.isInitialized) {
       throw new Error("Storage lease is unavailable; refusing to commit");
     }
   }
 
-  private async ensureTransactionCoordinator(): Promise<StorageTransactionCoordinator> {
-    if (!this.transactionCoordinator) {
-      const fence = this.storageLock ?? {
-        ownerId: "unmanaged-test-fixture",
-        assertOwned: async () => {
-          await this.assertStorageOwnership();
-        },
-      };
-      this.transactionCoordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), fence);
-      await this.transactionCoordinator.initialize();
+  /**
+   * Run `operation` under an exclusive, operation-scoped write lease.
+   *
+   * Every storage mutation goes through here. The transaction coordinator is
+   * per operation on purpose: its `initialize()` is WAL recovery, which under
+   * this design must run while we hold the lease rather than once at startup.
+   *
+   * Prologue order is load-bearing. WAL recovery *mutates the canonical
+   * files* — it rolls a prepared-but-uncommitted transaction back by restoring
+   * destinations from their backups. Reloading before that would fill the
+   * caches from the torn, pre-rollback generation, and the operation would
+   * then derive next-state from it and commit that durably, resurrecting a
+   * transaction the recovery had just aborted. So: recover first, then read.
+   */
+  private async runStorageWriteTransaction<T>(
+    operation: (tx: { coordinator: StorageTransactionCoordinator; lease: StorageLockHandle }) => Promise<T>,
+    options?: { waitMs?: number },
+  ): Promise<T> {
+    return this.storageMutationMutex.runExclusive(async () => {
+      const lease = await acquireOperationLease(this.storageDir, { waitMs: options?.waitMs ?? 5_000 });
+      const previousLease = this.activeLease;
+      const previousCoordinator = this.activeCoordinator;
+      this.activeLease = lease;
+      try {
+        const coordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), lease);
+        await coordinator.initialize();
+        this.activeCoordinator = coordinator;
+        // Write-side safety: another process may have written since our caches
+        // were loaded, and the recovery above may just have rolled a torn
+        // generation back. Reload the canonical files before deriving
+        // next-state from them.
+        await this.reloadCanonicalState();
+        await this.recoverPostCommitCleanupJournal();
+        await this.recoverIngestionJournal();
+        return await operation({ coordinator, lease });
+      } finally {
+        // Restore rather than clear: a nested acquisition must never drop an
+        // outer transaction's fence on the way out.
+        this.activeCoordinator = previousCoordinator;
+        this.activeLease = previousLease;
+        await lease.release();
+      }
+    });
+  }
+
+  /** Take an operation lease for a single startup write, then give it back. */
+  private async withOperationLease<T>(operation: () => Promise<T>): Promise<T> {
+    const lease = await acquireOperationLease(this.storageDir, { waitMs: 5_000 });
+    const previousLease = this.activeLease;
+    this.activeLease = lease;
+    try {
+      return await operation();
+    } finally {
+      this.activeLease = previousLease;
+      await lease.release();
     }
-    return this.transactionCoordinator;
+  }
+
+  /**
+   * Validate the storage format marker, stamping it only for a genuinely
+   * empty directory.
+   *
+   * Classification is read-only, so two windows opening the same healthy store
+   * never contend. Only the fresh-install case writes, and it waits for the
+   * lease rather than try-locking: a first run that silently skipped the stamp
+   * would leave the store unversioned. Any other classification is handed to
+   * `ensureStorageFormatV2` unleased purely so it raises its own typed error —
+   * it cannot write on those paths, and taking a lease first would let a
+   * StorageBusyError mask the real diagnosis.
+   */
+  private async ensureStorageFormatMarker(): Promise<void> {
+    const inspection = await inspectStorage(this.storageDir);
+    if (inspection.status === "current") {
+      return;
+    }
+    if (inspection.status !== "empty") {
+      await ensureStorageFormatV2(this.storageDir);
+      return;
+    }
+    await this.withOperationLease(async () => {
+      // Re-check under the lease: another process may have stamped it while
+      // we waited.
+      await ensureStorageFormatV2(this.storageDir);
+    });
+  }
+
+  /**
+   * Read-only probe: has a previous run left anything to recover?
+   *
+   * Startup used to roll interrupted work back unconditionally, because it
+   * held a session lock and a session coordinator anyway. Recovery writes, so
+   * it now needs a lease — and a clean open must not take one. Probing keeps
+   * the old guarantee (an interrupted write is repaired when the store is
+   * opened, not deferred to whenever someone happens to write next) while a
+   * healthy store still opens without touching the lock file.
+   */
+  private async hasPendingStorageRecovery(): Promise<boolean> {
+    for (const journalPath of [this.getPostCommitCleanupJournalPath(), this.getIngestionJournalPath()]) {
+      if (await this.pathExists(journalPath)) {
+        return true;
+      }
+    }
+    // A crashed transaction leaves its WAL, or an orphaned staging directory,
+    // under the coordinator root.
+    try {
+      const staged = await fs.readdir(path.join(this.getDatabaseDir(), ".transactions"));
+      return staged.length > 0;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
   }
 
   private async runManagedOperation<T>(operation: () => Promise<T>): Promise<T> {

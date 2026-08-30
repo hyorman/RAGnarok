@@ -1,17 +1,23 @@
 /**
- * AA-1 release gate: two real server processes on one storage directory.
+ * Cross-process storage E2E: lock-free reads + operation-scoped write leases.
  *
- * The second process must fail fast at startup with a message naming the
- * holder (exit code 1), the first must stay fully functional, and after the
- * first exits cleanly a new process must acquire the directory again.
+ * TopicManager.create no longer takes a session lease, so two real server
+ * processes can share one storage directory from startup through reads.
+ * Only a MUTATION takes a bounded, operation-scoped lease: when a foreign
+ * process already holds a live one, the waiting mutation reports
+ * StorageBusyError as a tool error instead of failing the server or hanging
+ * forever. (StorageLockHeldError — a hard startup refusal — is reserved for
+ * a full-exclusion migration/reset/rollback in another process; that is not
+ * what this suite exercises.)
  */
 import { expect } from "chai";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { STORAGE_LOCK_FILENAME } from "@ragnarok/core";
 import { StdioHarness, SERVER_ENTRY } from "./helpers/stdioHarness";
 
-describe("cross-process storage lock E2E (AA-1 gate)", function () {
+describe("cross-process storage E2E (lock-free reads / busy-error mutations)", function () {
   this.timeout(120000);
 
   let storageDir: string;
@@ -20,7 +26,7 @@ describe("cross-process storage lock E2E (AA-1 gate)", function () {
 
   before(function () {
     if (!fs.existsSync(SERVER_ENTRY)) {
-      console.error(`Skipping lock E2E: ${SERVER_ENTRY} not built`);
+      console.error(`Skipping storage E2E: ${SERVER_ENTRY} not built`);
       this.skip();
     }
     storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-lock-e2e-"));
@@ -43,37 +49,61 @@ describe("cross-process storage lock E2E (AA-1 gate)", function () {
     }
   });
 
-  it("second process fails fast; lock releases on clean exit", async function () {
-    // First process: fully started (discover response ⇒ TopicManager
-    // created ⇒ lock held).
+  it("two server processes on one storage dir both start and answer a read tool", async function () {
     const first = new StdioHarness(storageDir, workDir);
     running.push(first);
-    expect((await first.discover()).error).to.equal(undefined);
-    expect(fs.existsSync(path.join(storageDir, ".ragnarok.lock")), "lock file missing").to.equal(true);
+    expect((await first.discover()).error, "first process failed to start").to.equal(undefined);
 
-    // Second process on the SAME storage dir: must exit 1, naming the holder.
+    // The second process on the SAME storage dir must ALSO start: reads are
+    // lock-free everywhere, and TopicManager.create takes no session lease.
     const second = new StdioHarness(storageDir, workDir);
     running.push(second);
-    const secondExit = await second.waitForExit(30000);
-    expect(secondExit, `expected startup failure; stderr: ${second.stderrText.slice(0, 500)}`).to.equal(1);
-    expect(second.stderrText).to.include("locked by another RAGnarōk process");
-    expect(second.stderrText).to.include(String(first.proc.pid));
+    expect((await second.discover()).error, "second process failed to start").to.equal(undefined);
 
-    // First process is unharmed by the rejected intruder.
-    const tools = await first.listTools(5);
+    const firstList = await first.callTool(2, "rag_topic", { action: "list" });
+    expect(firstList.error, `first read errored: ${JSON.stringify(firstList.error)}`).to.equal(undefined);
+    expect(firstList.result?.isError, `first read: ${JSON.stringify(firstList.result)}`).to.not.equal(true);
+
+    const secondList = await second.callTool(2, "rag_topic", { action: "list" });
+    expect(secondList.error, `second read errored: ${JSON.stringify(secondList.error)}`).to.equal(undefined);
+    expect(secondList.result?.isError, `second read: ${JSON.stringify(secondList.result)}`).to.not.equal(true);
+
+    expect(await first.close(), "first server did not exit cleanly").to.equal(0);
+    expect(await second.close(), "second server did not exit cleanly").to.equal(0);
+  });
+
+  it("a mutation returns the busy tool error while a foreign process holds a live lock", async function () {
+    const server = new StdioHarness(storageDir, workDir);
+    running.push(server);
+    expect((await server.discover()).error, "server failed to start").to.equal(undefined);
+
+    // Plant a live-looking foreign holder directly (no real second process):
+    // a different host and a fresh acquiredAt means the bounded wait in
+    // acquireOperationLease treats it as a live writer, never reclaims it as
+    // abandoned, and — after the wait expires — throws StorageBusyError.
+    const lockPath = path.join(storageDir, STORAGE_LOCK_FILENAME);
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({ version: 2, ownerId: "x", pid: 99999, hostname: "other-host", acquiredAt: Date.now() }),
+    );
+
+    try {
+      const created = await server.callTool(2, "rag_topic", { action: "create", name: "busy-topic" }, 15_000);
+      expect(created.error, `tool call transport error: ${JSON.stringify(created.error)}`).to.equal(undefined);
+      expect(created.result?.isError, `expected a busy tool error, got: ${JSON.stringify(created.result)}`).to.equal(
+        true,
+      );
+      const body = JSON.parse(created.result.content[0].text);
+      expect(body.error).to.equal("Storage is busy: another RAGnarōk process is writing. Retry shortly.");
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+    }
+
+    // The server itself never acquired the lease (it lost the race to the
+    // foreign holder), so it stays fully functional and exits cleanly.
+    const tools = await server.listTools(3);
     expect(tools.error).to.equal(undefined);
     expect(tools.result?.tools).to.be.an("array").with.length.greaterThan(0);
-
-    // Clean exit owner-marks the lease as released without unlinking a path
-    // that may have been replaced…
-    expect(await first.close(), "first server did not exit cleanly").to.equal(0);
-    const released = JSON.parse(fs.readFileSync(path.join(storageDir, ".ragnarok.lock"), "utf8"));
-    expect(released.releasedAt, "lock not owner-marked as released on exit").to.be.a("number");
-
-    // …so a third process reclaims it and acquires the directory normally.
-    const third = new StdioHarness(storageDir, workDir);
-    running.push(third);
-    expect((await third.discover()).error).to.equal(undefined);
-    expect(await third.close(), "third server did not exit cleanly").to.equal(0);
+    expect(await server.close(), "server did not exit cleanly").to.equal(0);
   });
 });

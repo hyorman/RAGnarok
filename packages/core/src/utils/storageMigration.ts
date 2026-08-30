@@ -7,10 +7,12 @@ import { EXTENSION } from "../constants";
 import type { Document, Topic, TopicsIndex } from "./types";
 import { acquireStorageLock, STORAGE_LOCK_FILENAME, type StorageLockHandle } from "./storageLock";
 import {
+  adoptLegacyVectorStoreMetadata,
   atomicWriteFile,
   atomicWriteJson,
   STORAGE_FORMAT_FILENAME,
   STORAGE_FORMAT_VERSION,
+  type AdoptedVectorStoreMetadata,
   type StorageFormatMarker,
 } from "./storageV2";
 
@@ -165,6 +167,13 @@ export interface MigrationRollbackOptions {
     | "rollbackLegacyPublished";
 }
 
+/** One prepared plan, reusable by apply without re-running conversion. */
+export interface PreparedStorageMigration {
+  plan: StorageMigrationPlan;
+  // parsed + converted stay internal; the handle is opaque outside this module
+  // (recovered via the module-level WeakMap keyed by `plan`).
+}
+
 interface ParsedLegacy {
   layout: "v0.3-local" | "v0.3-common";
   databaseDir: string;
@@ -180,7 +189,7 @@ interface ConvertedTopic {
   topic: Topic;
   documents: Document[];
   rows: Array<Record<string, unknown>>;
-  metadata: Record<string, unknown>;
+  metadata: AdoptedVectorStoreMetadata;
   sourceContentDigest: string;
   targetContentDigest: string;
   vectorDimension?: number;
@@ -208,6 +217,25 @@ function backupPathFor(sourcePath: string, inventory: MigrationInventory, migrat
     .toISOString()
     .replace(/[:.]/g, "-");
   return path.join(path.dirname(sourcePath), `backup-v0.3-${timestamp}-${migrationId}`);
+}
+
+/**
+ * Dedupe a computed backup path against a leftover backup from an earlier
+ * attempt on the same source (e.g. re-migrating after a rollback). The
+ * immutable prior backup is never touched; the new one just gets a fresh
+ * name (`-r2`, `-r3`, ...).
+ */
+async function uniqueBackupPath(candidate: string): Promise<string> {
+  if (!(await exists(candidate))) {
+    return candidate;
+  }
+  let suffix = 2;
+  let suffixed = `${candidate}-r${suffix}`;
+  while (await exists(suffixed)) {
+    suffix += 1;
+    suffixed = `${candidate}-r${suffix}`;
+  }
+  return suffixed;
 }
 
 async function writeChecksummedJson(filePath: string, value: unknown): Promise<void> {
@@ -726,23 +754,31 @@ async function convertTopic(
     topic,
     documents: converted.documents,
     rows: converted.rows,
-    metadata: {
-      schemaVersion: STORAGE_FORMAT_VERSION,
+    // Counts are recomputed from what conversion actually produced rather than
+    // trusted from the legacy file, then lifted by the shared adoption rule.
+    metadata: adoptLegacyVectorStoreMetadata({
       topicId: targetTopicId,
       documentCount: converted.documents.length,
       chunkCount: converted.rows.length,
       embeddingModel,
-      embeddingBackend: "",
       createdAt: Number(legacyMetadata.createdAt ?? sourceTopic.createdAt),
       updatedAt: Number(legacyMetadata.updatedAt ?? sourceTopic.updatedAt),
-      migrationRequiresFingerprintOnReindex: true,
-    },
+    }),
     sourceContentDigest: contentDigest(rows),
     targetContentDigest: contentDigest(converted.rows),
     vectorDimension: converted.vectorDimension,
     remaps: converted.remaps,
   };
 }
+
+/**
+ * Holds the parsed/converted conversion payload for a prepared plan, keyed by
+ * the plan object itself so the public handle stays opaque. A handle that
+ * crossed a serialization boundary (e.g. sent through IPC and rehydrated as a
+ * fresh object) has no entry here and must be rejected, never silently
+ * re-planned.
+ */
+const preparedConversions = new WeakMap<StorageMigrationPlan, { parsed?: ParsedLegacy; converted: ConvertedTopic[] }>();
 
 async function preparePlan(
   storageDir: string,
@@ -773,7 +809,7 @@ async function preparePlan(
         warnings: [],
         requiredBytes: inventory.totalBytes * 2 + 16 * 1024 * 1024,
         availableBytes: Number((await fs.statfs(parent)).bavail * (await fs.statfs(parent)).bsize),
-        backupPath: backupPathFor(sourcePath, inventory, migrationId),
+        backupPath: await uniqueBackupPath(backupPathFor(sourcePath, inventory, migrationId)),
         stagingPath: path.join(parent, `${base}.migrating-${migrationId}`),
         statePath: statePathFor(sourcePath, migrationId),
         dryRun: true,
@@ -813,7 +849,7 @@ async function preparePlan(
       "Legacy knowledge graphs are not copied because their embedding identity cannot be proven; rebuild is required.",
     );
   }
-  const backupPath = backupPathFor(sourcePath, inventory, migrationId);
+  const backupPath = await uniqueBackupPath(backupPathFor(sourcePath, inventory, migrationId));
   const stagingPath = path.join(parent, `${base}.migrating-${migrationId}`);
   const plan: StorageMigrationPlan = {
     migrationId,
@@ -851,6 +887,17 @@ export async function planStorageMigration(storageDir: string): Promise<StorageM
   return (await preparePlan(storageDir)).plan;
 }
 
+/**
+ * Runs the full conversion pass once and hands back an opaque handle that
+ * `applyStorageMigration` can reuse via `{ prepared }` without converting
+ * again, as long as the source has not changed since.
+ */
+export async function prepareStorageMigration(storageDir: string): Promise<PreparedStorageMigration> {
+  const { plan, parsed, converted } = await preparePlan(path.resolve(storageDir));
+  preparedConversions.set(plan, { parsed, converted });
+  return { plan };
+}
+
 export async function getStorageMigrationStatus(
   storageDir: string,
   migrationId?: string,
@@ -885,6 +932,39 @@ export async function getStorageMigrationStatus(
     }
   }
   return { plan, state };
+}
+
+/** Newest migration-state file for this storage dir, or null. Read-only, no planning. */
+export async function findLatestMigrationState(
+  storageDir: string,
+): Promise<{ state: MigrationState; statePath: string } | null> {
+  const sourcePath = path.resolve(storageDir);
+  const parent = path.dirname(sourcePath);
+  const prefix = `.${path.basename(sourcePath)}.migration-`;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(parent);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  let best: { state: MigrationState; statePath: string } | null = null;
+  for (const entry of entries
+    .filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(".json"))
+    .sort()) {
+    const statePath = path.join(parent, entry);
+    try {
+      const state = JSON.parse(await fs.readFile(statePath, "utf8")) as MigrationState;
+      if (state.sourcePath === sourcePath && (!best || state.updatedAt > best.state.updatedAt)) {
+        best = { state, statePath };
+      }
+    } catch {
+      // Read-only discovery is best-effort: ignore unparsable/corrupt state files.
+    }
+  }
+  return best;
 }
 
 async function writeState(state: MigrationState): Promise<void> {
@@ -1300,15 +1380,52 @@ async function applyPreparedCutover(
 /** Apply a planned migration. The source is never edited in place. */
 export async function applyStorageMigration(
   storageDir: string,
-  options: MigrationApplyOptions = {},
+  options: MigrationApplyOptions & { prepared?: PreparedStorageMigration } = {},
 ): Promise<MigrationReport> {
   const sourcePath = path.resolve(storageDir);
   const migrationLock = await acquireMigrationLock(sourcePath);
   let storageLock: StorageLockHandle | undefined;
+  let state: MigrationState | undefined;
   try {
     options.signal?.throwIfAborted();
-    const prepared = await preparePlan(sourcePath);
-    const { plan, parsed, converted } = prepared;
+    let plan: StorageMigrationPlan;
+    let parsed: ParsedLegacy | undefined;
+    let converted: ConvertedTopic[];
+    if (options.prepared) {
+      const cached = preparedConversions.get(options.prepared.plan);
+      if (!cached) {
+        throw new StorageMigrationError(
+          "MIG_CHANGED",
+          "Prepared migration handle is not recognized in this process; re-run prepareStorageMigration",
+        );
+      }
+      if (options.prepared.plan.sourcePath !== sourcePath) {
+        throw new StorageMigrationError(
+          "MIG_CHANGED",
+          "Prepared migration handle targets a different storage directory; re-run prepareStorageMigration",
+        );
+      }
+      // Cheap staleness check: recompute only the inventory digest (no legacy
+      // parse, no row conversion) and compare against the prepared plan's
+      // migrationId. A mismatch means the source moved under us -- fail
+      // closed rather than silently re-planning.
+      const freshInventory = await inventoryDirectory(sourcePath);
+      const freshMigrationId = `mig-${freshInventory.digest.slice(0, 20)}`;
+      if (freshMigrationId !== options.prepared.plan.migrationId) {
+        throw new StorageMigrationError(
+          "MIG_CHANGED",
+          "Legacy storage changed since the migration was prepared; re-run prepareStorageMigration",
+        );
+      }
+      plan = options.prepared.plan;
+      parsed = cached.parsed;
+      converted = cached.converted;
+    } else {
+      const freshlyPrepared = await preparePlan(sourcePath);
+      plan = freshlyPrepared.plan;
+      parsed = freshlyPrepared.parsed;
+      converted = freshlyPrepared.converted;
+    }
     if (plan.layout === "v2") {
       throw new StorageMigrationError("MIG_ALREADY_V2", "Storage already uses format v2");
     }
@@ -1343,7 +1460,7 @@ export async function applyStorageMigration(
       throw new StorageMigrationError("MIG_COLLISION", `Backup path already exists: ${plan.backupPath}`);
     }
     storageLock = await acquireStorageLock(sourcePath);
-    const state: MigrationState = {
+    state = {
       stateVersion: MIGRATION_STATE_VERSION,
       migrationId: plan.migrationId,
       sourcePath,
@@ -1382,6 +1499,13 @@ export async function applyStorageMigration(
     return JSON.parse(await fs.readFile(path.join(sourcePath, MIGRATION_REPORT_FILENAME), "utf8")) as MigrationReport;
   } catch (error) {
     await storageLock?.release().catch(() => undefined);
+    // Nothing has moved out of the source yet at these stages -- a bare retry
+    // must not trip over its own leftovers (MIG_COLLISION on stale staging).
+    // cutoverPrepared and later are left untouched; resume owns that recovery.
+    if (state && (state.stage === "planned" || state.stage === "staged" || state.stage === "validated")) {
+      await fs.rm(state.stagingPath, { recursive: true, force: true }).catch(() => undefined);
+      await fs.unlink(statePathFor(state.sourcePath, state.migrationId)).catch(() => undefined);
+    }
     throw error;
   } finally {
     await releaseMigrationLock(sourcePath, migrationLock);

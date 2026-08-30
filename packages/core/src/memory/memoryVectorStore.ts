@@ -24,6 +24,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { Logger } from "../logger";
 import { atomicWriteJson } from "../utils/storageV2";
+import { cosineSimilarity } from "../utils/vectorMath";
 import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "./types";
 
 export class MemoryVectorStore {
@@ -49,25 +50,73 @@ export class MemoryVectorStore {
     return this.dbPromise;
   }
 
-  /** Serialize a data operation against the drop-and-recreate persistence. */
-  private locked<T>(operation: () => Promise<T>): Promise<T> {
+  /**
+   * Serialize a MUTATION against the drop-and-recreate persistence.
+   *
+   * Runs journal recovery first: mutations now always run under the
+   * caller's cross-process operation lease (MemoryStore's
+   * `withMutationLease`), so restoring/rolling back a prepared journal here
+   * is safe — it can only ever be this process's own abandoned journal, or
+   * one belonging to a foreign writer that is provably dead (its lease was
+   * reclaimed before this process's lease was granted).
+   */
+  private lockedMutation<T>(operation: () => Promise<T>): Promise<T> {
     return this.opMutex.runExclusive(async () => {
       await this.recoverResetUnlocked();
       return operation();
     });
   }
 
+  /**
+   * Serialize a READ against the drop-and-recreate persistence.
+   *
+   * Deliberately runs NO journal recovery: a reader never holds the
+   * cross-process operation lease, so a `prepared` journal it finds may
+   * belong to a live foreign writer's in-flight transaction. Restoring (or
+   * unlinking) it here would roll back a write that has not failed —
+   * exactly the data-loss window this method exists to close. Journal-aware
+   * callers serve the journal's snapshot instead (see `readScopeState`);
+   * everyone else reads live tables unmodified.
+   */
+  private lockedRead<T>(operation: () => Promise<T>): Promise<T> {
+    return this.opMutex.runExclusive(operation);
+  }
+
+  /**
+   * True once `getDb()` has ever been called for this URI: LanceDB's
+   * `connect()` creates the directory as a side effect, so a missing
+   * directory means "never opened" and reads can answer from that without
+   * connecting (which would itself be a write on a read path).
+   */
+  private async dbDirExists(): Promise<boolean> {
+    try {
+      await fs.stat(this.lanceDbUri);
+      return true;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   // ── Public API (serialized) ────────────────────────────────────────
 
   async saveEntries(entries: MemoryEntry[], scope: MemoryScope, branch?: string): Promise<void> {
-    return this.locked(() =>
+    return this.lockedMutation(() =>
       this.withScopeJournal(scope, branch, () => this.saveEntriesUnlocked(entries, scope, branch)),
     );
   }
 
   async loadEntries(scope: MemoryScope, branch?: string): Promise<MemoryEntry[]> {
-    return this.locked(async () => {
-      await this.recoverScopeUnlocked(scope, branch);
+    if (!(await this.dbDirExists())) {
+      return [];
+    }
+    return this.lockedRead(async () => {
+      const snapshot = await this.readScopeState(scope, branch);
+      if (snapshot) {
+        return snapshot.entries;
+      }
       return this.loadEntriesUnlocked(scope, branch);
     });
   }
@@ -78,19 +127,40 @@ export class MemoryVectorStore {
     branch: string | undefined,
     topK: number,
   ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
-    return this.locked(async () => {
-      await this.recoverScopeUnlocked(scope, branch);
+    if (!(await this.dbDirExists())) {
+      return [];
+    }
+    return this.lockedRead(async () => {
+      const snapshot = await this.readScopeState(scope, branch);
+      if (snapshot) {
+        // A write is in flight (or died) for this scope: rank the previous
+        // consistent snapshot in JS instead of vector-searching a live table
+        // that may be mid-transaction.
+        return snapshot.entries
+          .filter((entry) => entry.isLatest !== false)
+          .map((entry) => ({ entry, score: cosineSimilarity(queryVector, entry.vector) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, topK);
+      }
       return this.searchEntriesUnlocked(queryVector, scope, branch, topK);
     });
   }
 
   async saveGraph(data: MemoryGraphData, scope: MemoryScope, branch?: string): Promise<void> {
-    return this.locked(() => this.withScopeJournal(scope, branch, () => this.saveGraphUnlocked(data, scope, branch)));
+    return this.lockedMutation(() =>
+      this.withScopeJournal(scope, branch, () => this.saveGraphUnlocked(data, scope, branch)),
+    );
   }
 
   async loadGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraphData | null> {
-    return this.locked(async () => {
-      await this.recoverScopeUnlocked(scope, branch);
+    if (!(await this.dbDirExists())) {
+      return null;
+    }
+    return this.lockedRead(async () => {
+      const snapshot = await this.readScopeState(scope, branch);
+      if (snapshot) {
+        return snapshot.graph;
+      }
       return this.loadGraphUnlocked(scope, branch);
     });
   }
@@ -102,7 +172,7 @@ export class MemoryVectorStore {
     scope: MemoryScope,
     branch?: string,
   ): Promise<void> {
-    return this.locked(() =>
+    return this.lockedMutation(() =>
       this.withScopeJournal(scope, branch, async () => {
         await this.saveEntriesUnlocked(entries, scope, branch);
         await this.saveGraphUnlocked(graph, scope, branch);
@@ -111,11 +181,13 @@ export class MemoryVectorStore {
   }
 
   async deleteBranchMemories(branch: string): Promise<void> {
-    return this.locked(() => this.withScopeJournal("branch", branch, () => this.deleteBranchMemoriesUnlocked(branch)));
+    return this.lockedMutation(() =>
+      this.withScopeJournal("branch", branch, () => this.deleteBranchMemoriesUnlocked(branch)),
+    );
   }
 
   async deleteAll(): Promise<void> {
-    return this.locked(() => this.deleteAllAtomicallyUnlocked());
+    return this.lockedMutation(() => this.deleteAllAtomicallyUnlocked());
   }
 
   // ── Table naming ───────────────────────────────────────────────────
@@ -232,7 +304,11 @@ export class MemoryVectorStore {
     }
   }
 
-  private async recoverResetUnlocked(): Promise<void> {
+  private async readResetJournalFile(): Promise<{
+    version: number;
+    state: "prepared" | "committed";
+    scopes: Array<{ scope: MemoryScope; branch?: string; entries: MemoryEntry[]; graph: MemoryGraphData | null }>;
+  } | null> {
     const journalPath = this.resetJournalPath();
     let journal: {
       version: number;
@@ -243,22 +319,50 @@ export class MemoryVectorStore {
       journal = JSON.parse(await fs.readFile(journalPath, "utf8"));
     } catch (error: any) {
       if (error?.code === "ENOENT") {
-        return;
+        return null;
       }
       throw new Error(`Memory reset journal is corrupt at ${journalPath}; refusing to expose partially reset storage`);
     }
     if (journal.version !== 1 || !Array.isArray(journal.scopes)) {
       throw new Error(`Memory reset journal is invalid at ${journalPath}`);
     }
+    if (journal.state !== "committed" && journal.state !== "prepared") {
+      throw new Error(`Memory reset journal has invalid state at ${journalPath}`);
+    }
+    return journal;
+  }
+
+  /** Writer-only: restores (or cleans up) a reset journal under the caller's operation lease. */
+  private async recoverResetUnlocked(): Promise<void> {
+    const journal = await this.readResetJournalFile();
+    if (!journal) {
+      return;
+    }
+    const journalPath = this.resetJournalPath();
     if (journal.state === "committed") {
       await fs.unlink(journalPath);
       return;
     }
-    if (journal.state !== "prepared") {
-      throw new Error(`Memory reset journal has invalid state at ${journalPath}`);
-    }
     await this.restoreResetSnapshotUnlocked(journal.scopes);
     await fs.unlink(journalPath);
+  }
+
+  /**
+   * Read-only: if a reset is prepared (in flight or died mid-write), every
+   * scope must be served from its captured snapshot rather than live tables,
+   * which may already be partially or fully dropped. Never restores or
+   * unlinks anything — that stays the writer's job.
+   */
+  private async readResetSnapshotForRead(
+    scope: MemoryScope,
+    branch?: string,
+  ): Promise<{ entries: MemoryEntry[]; graph: MemoryGraphData | null } | undefined> {
+    const journal = await this.readResetJournalFile();
+    if (!journal || journal.state !== "prepared") {
+      return undefined;
+    }
+    const match = journal.scopes.find((s) => s.scope === scope && s.branch === branch);
+    return match ? { entries: match.entries, graph: match.graph } : { entries: [], graph: null };
   }
 
   private trackTable(table: Table): void {
@@ -309,7 +413,17 @@ export class MemoryVectorStore {
     }
   }
 
-  private async recoverScopeUnlocked(scope: MemoryScope, branch?: string): Promise<void> {
+  private async readScopeJournalFile(
+    scope: MemoryScope,
+    branch?: string,
+  ): Promise<{
+    version: number;
+    state: "prepared" | "committed";
+    scope: MemoryScope;
+    branch?: string;
+    previousEntries: MemoryEntry[];
+    previousGraph: MemoryGraphData | null;
+  } | null> {
     const journalPath = this.scopeJournalPath(scope, branch);
     let journal: {
       version: number;
@@ -323,7 +437,7 @@ export class MemoryVectorStore {
       journal = JSON.parse(await fs.readFile(journalPath, "utf8"));
     } catch (error: any) {
       if (error?.code === "ENOENT") {
-        return;
+        return null;
       }
       throw new Error(
         `Memory transaction journal is corrupt at ${journalPath}; refusing to read a potentially torn scope`,
@@ -332,16 +446,60 @@ export class MemoryVectorStore {
     if (journal.version !== 1 || journal.scope !== scope || journal.branch !== branch) {
       throw new Error(`Memory transaction journal identity mismatch at ${journalPath}`);
     }
+    if (journal.state !== "committed" && journal.state !== "prepared") {
+      throw new Error(`Memory transaction journal has invalid state at ${journalPath}`);
+    }
+    return journal;
+  }
+
+  /** Writer-only: restores (or cleans up) a scope journal under the caller's operation lease. */
+  private async recoverScopeUnlocked(scope: MemoryScope, branch?: string): Promise<void> {
+    const journal = await this.readScopeJournalFile(scope, branch);
+    if (!journal) {
+      return;
+    }
+    const journalPath = this.scopeJournalPath(scope, branch);
     if (journal.state === "committed") {
       await fs.unlink(journalPath);
       return;
     }
-    if (journal.state !== "prepared") {
-      throw new Error(`Memory transaction journal has invalid state at ${journalPath}`);
-    }
     await this.saveEntriesUnlocked(journal.previousEntries, scope, branch);
     await this.saveGraphUnlocked(journal.previousGraph ?? { entities: [], relationships: [] }, scope, branch);
     await fs.unlink(journalPath);
+  }
+
+  /**
+   * Read-only: if a write is prepared (in flight or died) for this scope,
+   * serve the journal's previous-consistent snapshot instead of touching
+   * live tables. Never restores or unlinks — a reader must not roll back a
+   * foreign writer's in-flight transaction; only a mutation (which now
+   * always runs under the caller's operation lease) may do that.
+   */
+  private async readScopeSnapshotForRead(
+    scope: MemoryScope,
+    branch?: string,
+  ): Promise<{ entries: MemoryEntry[]; graph: MemoryGraphData | null } | undefined> {
+    const journal = await this.readScopeJournalFile(scope, branch);
+    if (!journal || journal.state !== "prepared") {
+      return undefined;
+    }
+    return { entries: journal.previousEntries, graph: journal.previousGraph ?? null };
+  }
+
+  /**
+   * Read-only: resolve the state a read should see for one scope, checking
+   * the reset journal (a wipe of everything) ahead of the narrower scope
+   * journal, then falling through to live tables when neither is prepared.
+   */
+  private async readScopeState(
+    scope: MemoryScope,
+    branch?: string,
+  ): Promise<{ entries: MemoryEntry[]; graph: MemoryGraphData | null } | undefined> {
+    const resetSnapshot = await this.readResetSnapshotForRead(scope, branch);
+    if (resetSnapshot !== undefined) {
+      return resetSnapshot;
+    }
+    return this.readScopeSnapshotForRead(scope, branch);
   }
 
   // ── Memory Entry CRUD ──────────────────────────────────────────────
@@ -673,7 +831,10 @@ export class MemoryVectorStore {
   // ── Scope Management ───────────────────────────────────────────────
 
   async listBranches(): Promise<string[]> {
-    return this.locked(async () => {
+    if (!(await this.dbDirExists())) {
+      return [];
+    }
+    return this.lockedRead(async () => {
       const db = await this.getDb();
       const tableNames = await db.tableNames();
 
@@ -692,7 +853,10 @@ export class MemoryVectorStore {
 
   /** List branches that have entity graph tables (may differ from entry branches). */
   async listEntityBranches(): Promise<string[]> {
-    return this.locked(async () => {
+    if (!(await this.dbDirExists())) {
+      return [];
+    }
+    return this.lockedRead(async () => {
       const db = await this.getDb();
       const tableNames = await db.tableNames();
 
@@ -740,7 +904,12 @@ export class MemoryVectorStore {
   }
 
   async dispose(): Promise<void> {
-    await this.locked(async () => {
+    // No recovery here: dispose never holds the cross-process operation
+    // lease, so it must never restore or unlink a journal it did not write —
+    // exactly like any other read. It touches no table data, only local
+    // handles, so bare mutex serialization (against this process's own
+    // concurrent operations) is all it needs.
+    await this.opMutex.runExclusive(async () => {
       for (const table of this.openTables) {
         table.close();
       }

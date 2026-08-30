@@ -11,6 +11,8 @@ import {
   type RagnarokExtensionApi,
 } from "../src/extension";
 import { COMMANDS, TOOLS, VIEWS } from "../src/constants";
+import { CommandHandler } from "../src/commands";
+import { GitHubTokenManager } from "../src/githubTokenManager";
 
 describe("real VS Code extension host activation", function () {
   this.timeout(120_000);
@@ -170,6 +172,53 @@ describe("real VS Code extension host activation", function () {
     ]);
   });
 
+  // Without this the views keep "RAGnarōk is starting up..." forever, so a
+  // storage failure is indistinguishable from a slow start.
+  it("publishes the activation-failed context key instead of leaving the views mid-start", async function () {
+    const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-activation-failed-"));
+    const contexts: Array<[string, unknown]> = [];
+    const executeCommand = sinon
+      .stub(vscode.commands, "executeCommand")
+      .callsFake(async (command: string, ...args: unknown[]) => {
+        if (command === COMMANDS.SET_CONTEXT) {
+          contexts.push([args[0] as string, args[1]]);
+        }
+        return undefined as never;
+      });
+    const serviceFactory = {
+      createEmbeddingService: () => ({ registerBackend: sinon.spy(), dispose: async () => undefined }),
+      createTopicManager: async () => {
+        throw new Error("storage could not be opened");
+      },
+      createMemoryStore: () => ({ dispose: async () => undefined }),
+      createMemoryCoordinator: () => ({ stopAdmission: () => undefined, drain: async () => undefined }),
+      createMemoryService: () => ({ execute: sinon.stub(), reset: sinon.stub() }),
+      createGraphVisualizationService: () => ({ generate: sinon.stub() }),
+    };
+    const context = {
+      globalStorageUri: vscode.Uri.file(storageDir),
+      extensionUri: vscode.Uri.file("/extension"),
+      subscriptions: [],
+    };
+
+    let caught: unknown;
+    try {
+      await activateWithServiceFactory(context as any, serviceFactory as any);
+    } catch (error) {
+      caught = error;
+    } finally {
+      executeCommand.restore();
+      await fs.rm(storageDir, { recursive: true, force: true });
+    }
+
+    // The failure still propagates: this reports the state, it does not swallow it.
+    expect(caught).to.be.instanceOf(Error);
+    const failedStates = contexts.filter(([key]) => key === "ragnarok.activationFailed").map(([, value]) => value);
+    // Cleared on entry so a retry does not inherit the previous panel, set on failure.
+    expect(failedStates).to.deep.equal([false, true]);
+    expect(contexts.some(([key, value]) => key === "ragnarok.loaded" && value === true)).to.equal(false);
+  });
+
   it("offers an opt-in native create/query/delete installed-artifact smoke", async function () {
     if (process.env.RAGNAROK_RUN_INSTALLED_SMOKE !== "1") {
       this.skip();
@@ -182,5 +231,63 @@ describe("real VS Code extension host activation", function () {
       queryExecuted: true,
       topicDeleted: true,
     });
+  });
+});
+
+// CommandHandler.registerCommands is exercised directly here (registerCommand
+// stubbed) rather than through a second activateWithServiceFactory: the
+// production activation in the describe block above already registered the
+// real "ragnarok.*" command ids on the live vscode.commands registry, and a
+// second real registration under the same ids throws.
+describe("command error mapping", function () {
+  afterEach(function () {
+    sinon.restore();
+  });
+
+  it("maps a StorageBusyError to the busy-writer notification instead of the generic failure message", async function () {
+    GitHubTokenManager.initialize({
+      secrets: {
+        get: async () => undefined,
+        store: async () => undefined,
+        delete: async () => undefined,
+        onDidChange: () => ({ dispose: () => undefined }),
+      },
+    } as unknown as vscode.ExtensionContext);
+
+    const registered = new Map<string, (...args: unknown[]) => unknown>();
+    sinon.stub(vscode.commands, "registerCommand").callsFake(((id: string, callback: (...args: unknown[]) => unknown) => {
+      registered.set(id, callback);
+      return { dispose: () => undefined };
+    }) as typeof vscode.commands.registerCommand);
+    const showErrorMessage = sinon.stub(vscode.window, "showErrorMessage").resolves(undefined);
+    const showInputBox = sinon.stub(vscode.window, "showInputBox");
+    showInputBox.onFirstCall().resolves("New Topic");
+    showInputBox.onSecondCall().resolves(undefined);
+
+    const busyError = Object.assign(new Error("busy"), {
+      name: "StorageBusyError",
+      holder: { pid: 123 },
+    });
+    const topicManager = { createTopic: sinon.stub().rejects(busyError) };
+    const context = { subscriptions: [] as unknown[] };
+
+    await CommandHandler.registerCommands(
+      context as unknown as vscode.ExtensionContext,
+      topicManager as unknown as import("@ragnarok/core").TopicManager,
+      {} as unknown as import("@ragnarok/core").EmbeddingService,
+      {} as unknown as import("@ragnarok/core").MemoryStore,
+      { refresh: sinon.spy() } as unknown as import("../src/topicTreeView").TopicTreeDataProvider,
+      {} as unknown as import("../src/topicTreeView").ConfigTreeDataProvider,
+    );
+
+    const createTopicHandler = registered.get(COMMANDS.CREATE_TOPIC);
+    expect(createTopicHandler, "CREATE_TOPIC should be registered").to.be.a("function");
+    await createTopicHandler!();
+
+    expect(showErrorMessage.calledOnce).to.equal(true);
+    const message = showErrorMessage.firstCall.args[0] as string;
+    expect(message).to.include("123");
+    expect(message).to.not.include("Failed to create topic");
+    expect(topicManager.createTopic.calledOnce).to.equal(true);
   });
 });

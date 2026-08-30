@@ -515,9 +515,20 @@ describe("MemoryVectorStore", function () {
 describe("MemoryVectorStore atomic scope recovery", function () {
   this.timeout(30000);
 
-  it("restores the previous coherent entry+graph snapshot after an interrupted rollback", async function () {
+  const exists = async (target: string): Promise<boolean> => {
+    try {
+      await fs.access(target);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("a read after an interrupted rollback serves the journal's snapshot but leaves recovery to the next mutation", async function () {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-atomic-recovery-"));
     const uri = path.join(directory, "memory-lancedb");
+    const digest = crypto.createHash("sha256").update("workspace").digest("hex").slice(0, 24);
+    const journalPath = path.join(directory, `.memory-scope-${digest}.journal.json`);
     const first = new MemoryVectorStore(uri);
     const oldEntry = createTestEntry({ id: "old-entry", content: "old coherent memory", entityIds: ["old-entity"] });
     const oldEntity = createTestEntity({ id: "old-entity", sourceMemoryIds: [oldEntry.id] });
@@ -543,9 +554,21 @@ describe("MemoryVectorStore atomic scope recovery", function () {
     expect(caught).to.be.instanceOf(Error);
     await first.dispose();
 
+    // A fresh store's FIRST operations here are reads. Under the writer-only
+    // recovery contract they must serve the prepared journal's previous
+    // snapshot (not the live table, which was left holding the interrupted
+    // write) without restoring or unlinking anything.
     const restarted = new MemoryVectorStore(uri);
     expect((await restarted.loadEntries("workspace")).map((entry) => entry.id)).to.deep.equal([oldEntry.id]);
     expect((await restarted.loadGraph("workspace"))?.entities.map((entity) => entity.id)).to.deep.equal([oldEntity.id]);
+    expect(await exists(journalPath), "reads must never recover (or remove) a prepared journal").to.equal(true);
+
+    // Only a mutation — which now always runs under an operation lease —
+    // recovers the journal, restoring the true previous state and removing
+    // the journal file.
+    await restarted.saveEntries([oldEntry], "workspace");
+    expect(await exists(journalPath), "the next mutation must recover and remove the journal").to.equal(false);
+
     await restarted.dispose();
     await fs.rm(directory, { recursive: true, force: true });
   });
@@ -564,5 +587,113 @@ describe("MemoryVectorStore atomic scope recovery", function () {
     expect((bounded as any).openTables.size).to.be.at.most(32);
     await bounded.dispose();
     await fs.rm(directory, { recursive: true, force: true });
+  });
+});
+
+describe("MemoryVectorStore writer-only journal recovery", function () {
+  this.timeout(30000);
+
+  let directory: string;
+  let storageDir: string;
+  let uri: string;
+
+  const scopeJournalPath = (scope: string): string => {
+    const digest = crypto.createHash("sha256").update(scope).digest("hex").slice(0, 24);
+    return path.join(storageDir, `.memory-scope-${digest}.journal.json`);
+  };
+
+  const exists = async (target: string): Promise<boolean> => {
+    try {
+      await fs.access(target);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  beforeEach(async function () {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-journal-read-"));
+    storageDir = directory;
+    uri = path.join(storageDir, "memory-lancedb");
+  });
+
+  afterEach(async function () {
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it("a read serves a prepared scope journal's snapshot and leaves the journal in place", async function () {
+    const store = new MemoryVectorStore(uri);
+
+    // Seed the live table with an entry that is NOT what the journal claims
+    // was the previous state — the point of the test is that a read must
+    // report the journal's snapshot, not whatever the live table currently
+    // holds.
+    const liveEntry = createTestEntry({ id: "live-entry", content: "live table entry (in-flight write)" });
+    await store.saveEntries([liveEntry], "workspace");
+
+    const knownEntry = createTestEntry({ id: "known-entry", content: "previous consistent snapshot" });
+    const journalPath = scopeJournalPath("workspace");
+    await fs.writeFile(
+      journalPath,
+      JSON.stringify({
+        version: 1,
+        state: "prepared",
+        scope: "workspace",
+        previousEntries: [knownEntry],
+        previousGraph: null,
+        createdAt: Date.now(),
+      }),
+      "utf8",
+    );
+
+    const listed = await store.loadEntries("workspace");
+    expect(listed.map((e) => e.id)).to.deep.equal([knownEntry.id]);
+    expect(await exists(journalPath), "a read must never recover (or remove) a prepared journal").to.equal(true);
+
+    // A subsequent mutation, with no foreign lock in play, recovers the
+    // journal (restoring the previous consistent state — [knownEntry], not
+    // the live table's [liveEntry]) before applying its own full write.
+    const newEntry = createTestEntry({ content: "new entry after recovery" });
+    await store.saveEntries([knownEntry, newEntry], "workspace");
+    expect(await exists(journalPath), "the next mutation must recover and remove the journal").to.equal(false);
+
+    const afterRecovery = await store.loadEntries("workspace");
+    expect(afterRecovery.map((e) => e.id).sort()).to.deep.equal([knownEntry.id, newEntry.id].sort());
+
+    await store.dispose();
+  });
+
+  it("throws the typed corrupt-journal error on a read instead of guessing", async function () {
+    const store = new MemoryVectorStore(uri);
+    await store.saveEntries([createTestEntry()], "workspace");
+
+    const journalPath = scopeJournalPath("workspace");
+    await fs.writeFile(journalPath, "{{{ not json", "utf8");
+
+    let thrown: Error | null = null;
+    try {
+      await store.loadEntries("workspace");
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown, "a corrupt journal on the read path must fail closed").to.not.be.null;
+    expect(thrown!.message).to.include("corrupt");
+
+    await fs.rm(journalPath);
+    await store.dispose();
+  });
+
+  it("a read of a fresh store never creates the memory-lancedb directory", async function () {
+    const store = new MemoryVectorStore(uri);
+
+    expect(await store.loadEntries("workspace")).to.deep.equal([]);
+    expect(await store.loadGraph("workspace")).to.equal(null);
+    expect(await store.searchEntries(randomVector(), "workspace", undefined, 5)).to.deep.equal([]);
+    expect(await store.listBranches()).to.deep.equal([]);
+    expect(await store.listEntityBranches()).to.deep.equal([]);
+
+    expect(await exists(uri), "a pure read must never create the LanceDB directory").to.equal(false);
+
+    await store.dispose();
   });
 });

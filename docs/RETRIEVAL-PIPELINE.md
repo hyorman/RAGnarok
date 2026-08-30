@@ -158,7 +158,7 @@ Measured quality for these strategies across SciFact, NFCorpus, FiQA, and FRAMES
 ```
 <storage>/
   storage-format.json        v2 marker
-  .ragnarok.lock             fenced single-writer lease
+  .ragnarok.lock             fenced write lease (present only while held)
   database/
     topics.json
     topic-<id>-documents.json

@@ -196,6 +196,192 @@ describe("VectorStoreFactory metadata persistence", function () {
     expect(error).to.be.instanceOf(VectorStoreMetadataCorruptionError);
     expect(await fs.readFile(metadataPath, "utf8")).to.equal(corruptBytes);
   });
+
+  /**
+   * Byte-for-byte what the 0.3 release wrote. A store already marked v2 still
+   * acquires these files — an older build writing into it, or a 0.3-era `.rag`
+   * archive imported by topicManager, which rewrites only `topicId`. The
+   * whole-storage migrator normalizes this shape but never sees those, so the
+   * read boundary has to.
+   */
+  const legacyMetadata = (topicId: string) => ({
+    topicId,
+    documentCount: 1,
+    chunkCount: 1386,
+    embeddingModel: "vscodeLM:copilot.text-embedding-3-small",
+    createdAt: 1787169289626,
+    updatedAt: 1787169289626,
+  });
+
+  it("adopts pre-v2 metadata instead of rejecting it, without inventing a fingerprint", async function () {
+    const legacyTopic = "metadata-pre-v2";
+    await factory.createStore({ topicId: legacyTopic, storageDir });
+    const metadataPath = path.join(storageDir, `vector-${legacyTopic}-metadata.json`);
+    await fs.writeFile(metadataPath, JSON.stringify(legacyMetadata(legacyTopic), null, 2));
+
+    const metadata = await factory.getStoreMetadata(legacyTopic);
+
+    expect(metadata).to.deep.equal({
+      schemaVersion: STORAGE_FORMAT_VERSION,
+      topicId: legacyTopic,
+      documentCount: 1,
+      chunkCount: 1386,
+      embeddingModel: "vscodeLM:copilot.text-embedding-3-small",
+      embeddingBackend: "",
+      createdAt: 1787169289626,
+      updatedAt: 1787169289626,
+      migrationRequiresFingerprintOnReindex: true,
+    });
+    // Adoption is a read-path concern; it must not write.
+    expect(JSON.parse(await fs.readFile(metadataPath, "utf8"))).to.deep.equal(legacyMetadata(legacyTopic));
+  });
+
+  it("still refuses to extend adopted vectors whose embedding space is unverifiable", async function () {
+    const legacyTopic = "metadata-pre-v2-mutation";
+    await factory.createStore({ topicId: legacyTopic, storageDir });
+    const metadataPath = path.join(storageDir, `vector-${legacyTopic}-metadata.json`);
+    await fs.writeFile(metadataPath, JSON.stringify(legacyMetadata(legacyTopic), null, 2));
+
+    // Both guarded entry points, because adoption must not open either one.
+    for (const mutate of [
+      () => factory.validateEmbeddingModel(legacyTopic),
+      () =>
+        factory.reconcileDocuments(legacyTopic, [
+          new LangChainDocument({ pageContent: "new chunk", metadata: { source: "new.md" } }),
+        ]),
+    ]) {
+      let error: unknown;
+      try {
+        await mutate();
+      } catch (caught) {
+        error = caught;
+      }
+      // Reads recover the topic; only extension waits for an explicit reindex.
+      expect(error).to.be.instanceOf(EmbeddingReindexRequiredError);
+    }
+  });
+
+  it("persists the adopted shape on the next legitimate metadata write", async function () {
+    const legacyTopic = "metadata-pre-v2-persist";
+    await factory.createStore({ topicId: legacyTopic, storageDir });
+    const metadataPath = path.join(storageDir, `vector-${legacyTopic}-metadata.json`);
+    await fs.writeFile(metadataPath, JSON.stringify(legacyMetadata(legacyTopic), null, 2));
+
+    await factory.saveStore(legacyTopic, { documentCount: 1, chunkCount: 1386 });
+
+    const persisted = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(persisted.schemaVersion).to.equal(STORAGE_FORMAT_VERSION);
+    // The flag survives the write, so the topic does not silently become mutable.
+    expect(persisted.migrationRequiresFingerprintOnReindex).to.equal(true);
+    expect(persisted.embeddingFingerprint).to.equal(undefined);
+    expect(persisted.embeddingModel).to.equal("vscodeLM:copilot.text-embedding-3-small");
+  });
+
+  it("rejects damage that only resembles pre-v2 metadata", async function () {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["a future schema version", { ...legacyMetadata("x"), schemaVersion: 99 }],
+      ["a mismatched topic id", { ...legacyMetadata("someone-else") }],
+      ["a non-finite chunk count", { ...legacyMetadata("x"), chunkCount: "1386" }],
+      ["a missing embedding model", { ...legacyMetadata("x"), embeddingModel: undefined }],
+      ["a missing timestamp", { ...legacyMetadata("x"), updatedAt: undefined }],
+    ];
+
+    for (const [name, payload] of cases) {
+      const topicId = "x";
+      const metadataPath = path.join(storageDir, `vector-${topicId}-metadata.json`);
+      await fs.writeFile(metadataPath, JSON.stringify({ ...payload, topicId: payload.topicId ?? topicId }));
+
+      let error: unknown;
+      try {
+        await factory.getStoreMetadata(topicId);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error, `${name} must stay a corruption refusal`).to.be.instanceOf(VectorStoreMetadataCorruptionError);
+    }
+  });
+});
+
+/**
+ * A table that exists but fails to load must abort whatever called loadStore,
+ * not hand back null. Returning null here is exactly what used to let
+ * documentPipeline treat "exists but broken" as "does not exist yet" and call
+ * createStore, which drops the table. createStore itself gets the same
+ * guarantee directly: it must refuse to touch an existing table unless the
+ * caller explicitly opts into recreation.
+ */
+describe("non-destructive load and create", function () {
+  this.timeout(120000);
+
+  let factory: VectorStoreFactory;
+  let storageDir: string;
+  let metadataPath: string;
+  const topicId = "non-destructive";
+
+  before(async function () {
+    const embeddingService = new EmbeddingService({ config: mockConfig, notifier: mockNotifier });
+    const modelRegistry = ModelRegistry.getInstance();
+    embeddingService.registerBackend(new HuggingFaceBackend(modelRegistry, mockNotifier));
+
+    storageDir = path.join(os.tmpdir(), `vsf-non-destructive-${crypto.randomUUID()}`);
+    await fs.mkdir(storageDir, { recursive: true });
+
+    const embeddingRegistry = new EmbeddingServiceRegistry({
+      createService: () => embeddingService,
+      maxResidentLocal: 2,
+    });
+    factory = new VectorStoreFactory(storageDir, modelRegistry.getDefaultModel(), embeddingService, embeddingRegistry);
+    await factory.initialize();
+
+    metadataPath = path.join(storageDir, `vector-${topicId}-metadata.json`);
+    await factory.createStore({ topicId, storageDir }, [
+      new LangChainDocument({
+        pageContent: "the original semantic space, never to be dropped silently",
+        metadata: { documentId: "original", chunkId: "original-0" },
+      }),
+    ]);
+  });
+
+  after(async function () {
+    factory?.dispose();
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("loadStore rethrows load failures as VectorStoreLoadError instead of null", async function () {
+    // The store created in before() is still cache-resident; a cache hit
+    // would never touch the (about to be corrupted) metadata file.
+    (factory as any).storeCache.clear();
+    await fs.writeFile(metadataPath, "not json{{");
+    try {
+      await factory.loadStore(topicId);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.name).to.equal("VectorStoreLoadError");
+      expect(error.topicId).to.equal(topicId);
+    }
+  });
+
+  it("loadStore still returns null when the table genuinely does not exist", async function () {
+    expect(await factory.loadStore("no-such-topic")).to.equal(null);
+  });
+
+  it("createStore refuses to drop an existing table without recreate: true", async function () {
+    try {
+      await factory.createStore({ topicId, storageDir: "" }, []);
+      expect.fail("should have thrown");
+    } catch (error: any) {
+      expect(error.message).to.include("already exists");
+    }
+    // and the original rows are still there
+    const stats = await factory.getStoredStats(topicId);
+    expect(stats.chunkCount).to.be.greaterThan(0);
+  });
+
+  it("createStore with recreate: true still rebuilds", async function () {
+    await factory.createStore({ topicId, storageDir: "" }, [], undefined, { recreate: true });
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(metadata.documentCount).to.equal(0);
+  });
 });
 
 /**
@@ -867,42 +1053,62 @@ describe("VectorStoreFactory embedding-model guard", function () {
     return makeFactory();
   }
 
+  /**
+   * A migrated topic backed by a REAL table, so adoption's dimension check has
+   * something genuine to fail against: the table is built at CONFIGURED_MODEL's
+   * dimension (4), but "model-x" -- the topic's own recorded model -- now
+   * yields 8. Adoption must resolve model-x, discover the mismatch, and refuse;
+   * it must never fall back to trusting the flag alone.
+   */
   async function makeFactoryWithUnfingerprintedVectors(topicId: string): Promise<VectorStoreFactory> {
+    const factory = await makeFactory({ [CONFIGURED_MODEL]: 4, "model-x": 8 });
+    await factory.createStore({ topicId, storageDir });
     await writeMetadata(topicId, {
       embeddingModel: "model-x",
       migrationRequiresFingerprintOnReindex: true,
     });
-    return makeFactory();
+    return factory;
   }
 
   /**
-   * The reindex FLAG alone, with a perfectly valid fingerprint present.
+   * The reindex FLAG alone, with a stale-but-present fingerprint that *claims*
+   * to match the real table -- proving the flag forces re-verification through
+   * adoption rather than letting a recorded-but-untrustworthy fingerprint wave
+   * the write through.
    *
    * Pins the first disjunct of the write-path guard on its own: with a
    * fingerprint recorded, the missing-fingerprint disjunct cannot carry the
-   * refusal, so only the flag can.
+   * refusal, so only the flag can route the mutation through adoption, which
+   * then genuinely refuses because model-x now yields 8, not the table's 4.
    */
   async function makeFactoryWithReindexFlagOnly(topicId: string): Promise<VectorStoreFactory> {
+    const factory = await makeFactory({ [CONFIGURED_MODEL]: 4, "model-x": 8 });
+    await factory.createStore({ topicId, storageDir });
     await writeMetadata(topicId, {
       embeddingModel: "model-x",
+      // Stale: claims to match the table (4), but model-x now yields 8.
       embeddingFingerprint: fingerprintOf("model-x", 4),
       migrationRequiresFingerprintOnReindex: true,
     });
-    return makeFactory();
+    return factory;
   }
 
   /**
-   * A MISSING fingerprint alone, with the reindex flag clear.
+   * A MISSING fingerprint alone, with the reindex flag clear, against a REAL
+   * table whose dimension model-x no longer matches.
    *
    * Pins the second disjunct on its own: with the flag down, only the absent
-   * fingerprint can carry the refusal.
+   * fingerprint can route the mutation through adoption, which then genuinely
+   * refuses on the real dimension mismatch.
    */
   async function makeFactoryWithMissingFingerprintOnly(topicId: string): Promise<VectorStoreFactory> {
+    const factory = await makeFactory({ [CONFIGURED_MODEL]: 4, "model-x": 8 });
+    await factory.createStore({ topicId, storageDir });
     await writeMetadata(topicId, {
       embeddingModel: "model-x",
       migrationRequiresFingerprintOnReindex: false,
     });
-    return makeFactory();
+    return factory;
   }
 
   /** A single document, enough to get past reconcileDocuments' empty-input early return. */
@@ -995,6 +1201,119 @@ describe("VectorStoreFactory embedding-model guard", function () {
     const error = await rejectionOf(() => factory.reconcileDocuments("t", oneDocument()));
     expect(error, "an absent fingerprint alone must refuse the write").to.be.instanceOf(EmbeddingReindexRequiredError);
     expect(error?.message).to.match(/reindex/i);
+  });
+});
+
+/**
+ * The migrator (and the read-path legacy adopter) never invent a fingerprint —
+ * they stamp `migrationRequiresFingerprintOnReindex: true` and leave the topic
+ * permanently unwritable. This is where that dead end turns into self-healing:
+ * a migrated topic's first write resolves its OWN recorded model, verifies its
+ * dimension against the REAL live table, and only then stamps the fingerprint
+ * the migrator refused to invent. A genuine mismatch still refuses.
+ */
+describe("fingerprint adoption on first write", function () {
+  this.timeout(60000);
+
+  const CONFIGURED_MODEL = "model-x";
+  const TEST_DIMENSION = 4;
+  let storageDir: string;
+  let factory: VectorStoreFactory;
+  let topicId: string;
+  let metadataPath: string;
+  let dimensions: Record<string, number>;
+
+  beforeEach(async function () {
+    storageDir = path.join(os.tmpdir(), `vsf-adopt-${crypto.randomUUID()}`);
+    await fs.mkdir(storageDir, { recursive: true });
+
+    // Mutable and shared by reference with every service the registry hands
+    // out, so a test can change what CONFIGURED_MODEL yields AFTER the real
+    // table has already been built at the original dimension.
+    dimensions = { [CONFIGURED_MODEL]: TEST_DIMENSION };
+    const configured = new DimensionRecordingService(dimensions);
+    await configured.initialize(CONFIGURED_MODEL);
+    factory = new VectorStoreFactory(
+      storageDir,
+      CONFIGURED_MODEL,
+      configured as unknown as EmbeddingService,
+      new EmbeddingServiceRegistry({
+        createService: () => new DimensionRecordingService(dimensions) as unknown as EmbeddingService,
+        maxResidentLocal: 4,
+      }),
+    );
+    await factory.initialize();
+
+    // A REAL LanceDB table, built normally at TEST_DIMENSION.
+    topicId = "migrated-topic";
+    await factory.createStore({ topicId, storageDir });
+    metadataPath = path.join(storageDir, `vector-${topicId}-metadata.json`);
+    // Drop the cached store so every call below re-reads metadata from disk.
+    (factory as any).storeCache.clear();
+  });
+
+  afterEach(async function () {
+    factory?.dispose();
+    await fs.rm(storageDir, { recursive: true, force: true });
+  });
+
+  it("stamps the fingerprint and clears the migration flag when dimensions match", async function () {
+    // Arrange: rewrite the normally-created metadata into the migrated shape:
+    // fingerprint removed, flag set. (getStoreMetadata reads the JSON from
+    // disk on every call, so no cache invalidation is needed beyond the clear
+    // in beforeEach.)
+    const raw = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    delete raw.embeddingFingerprint;
+    raw.migrationRequiresFingerprintOnReindex = true;
+    await fs.writeFile(metadataPath, JSON.stringify(raw));
+
+    await factory.validateEmbeddingModel(topicId); // must NOT throw
+
+    const healed = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(healed.migrationRequiresFingerprintOnReindex).to.equal(false);
+    expect(healed.embeddingFingerprint).to.be.an("object");
+    expect(healed.embeddingFingerprint.dimension).to.equal(TEST_DIMENSION);
+  });
+
+  it("still refuses when the topic's model produces a different dimension", async function () {
+    const raw = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    delete raw.embeddingFingerprint;
+    raw.migrationRequiresFingerprintOnReindex = true;
+    await fs.writeFile(metadataPath, JSON.stringify(raw));
+
+    // The real table stays at TEST_DIMENSION; the topic's own model now
+    // yields something else. A genuine, verified mismatch.
+    dimensions[CONFIGURED_MODEL] = TEST_DIMENSION + 8;
+
+    let error: unknown;
+    try {
+      await factory.validateEmbeddingModel(topicId);
+      expect.fail("should have thrown");
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as Error).name).to.equal("EmbeddingReindexRequiredError");
+    const untouched = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(untouched.migrationRequiresFingerprintOnReindex).to.equal(true);
+  });
+
+  it("adopted pre-v2 metadata heals the same way (schemaVersion absent on disk)", async function () {
+    const raw = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    const legacy = {
+      topicId: raw.topicId,
+      documentCount: raw.documentCount,
+      chunkCount: raw.chunkCount,
+      embeddingModel: raw.embeddingModel,
+      createdAt: raw.createdAt,
+      updatedAt: raw.updatedAt,
+    };
+    await fs.writeFile(metadataPath, JSON.stringify(legacy));
+
+    await factory.validateEmbeddingModel(topicId);
+
+    const healed = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    expect(healed.schemaVersion).to.equal(STORAGE_FORMAT_VERSION);
+    expect(healed.migrationRequiresFingerprintOnReindex).to.equal(false);
   });
 });
 

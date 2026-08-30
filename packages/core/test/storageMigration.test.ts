@@ -5,23 +5,27 @@ import * as path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { connect } from "@lancedb/lancedb";
+import * as lancedbModule from "@lancedb/lancedb";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
-  EmbeddingReindexRequiredError,
   EmbeddingServiceRegistry,
   MIGRATION_REPORT_FILENAME,
+  MIGRATION_STATE_VERSION,
   STORAGE_FORMAT_FILENAME,
   StorageMigrationError,
   applyStorageMigration,
   ensureStorageFormatV2,
+  findLatestMigrationState,
   getStorageMigrationStatus,
   planStorageMigration,
+  prepareStorageMigration,
   resumeStorageMigration,
   rollbackStorageMigration,
   TopicManager,
   VectorStoreFactory,
   type IConfigProvider,
   type INotifier,
+  type MigrationState,
 } from "../src/index";
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
 
@@ -245,8 +249,11 @@ describe("offline v0.3 storage migration", function () {
       getCurrentModel: () => "Xenova/all-MiniLM-L6-v2",
       getFingerprint: async () => ({
         backendKind: "huggingface",
+        providerFormat: "huggingface",
         model: "Xenova/all-MiniLM-L6-v2",
+        revision: "test",
         dimension: 3,
+        endpointHash: "local",
         normalized: true,
       }),
       // The registry initializes and may dispose the services it hands out, so
@@ -254,6 +261,11 @@ describe("offline v0.3 storage migration", function () {
       // concrete backend initializes through that backend.
       initialize: async () => undefined,
       initializeForBackend: async () => undefined,
+      // The migrated topic's own model resolves here, and adoption writes
+      // through it on the very next line: the stub has to answer both the
+      // fingerprint probe and the real embed the healed write performs.
+      embedBatch: async (texts: string[]) => texts.map(() => [0, 0, 1]),
+      embedBatchWithBackend: async (_backendType: string, texts: string[]) => texts.map(() => [0, 0, 1]),
       dispose: async () => undefined,
     } as unknown as EmbeddingService;
     const config: IConfigProvider = { get: <T>(_key: string, fallback: T) => fallback };
@@ -295,17 +307,23 @@ describe("offline v0.3 storage migration", function () {
       embeddingRegistry,
     );
     (manager as any).vectorStoreFactory = vectorStoreFactory;
-    try {
-      await vectorStoreFactory.reconcileDocuments(fixture.topicId, [
-        new LangChainDocument({
-          pageContent: "must not be mixed into unverifiable vectors",
-          metadata: { documentId: "new-document", chunkId: "new-chunk" },
-        }),
-      ]);
-      expect.fail("expected migrated-vector quarantine");
-    } catch (error) {
-      expect(error).to.be.instanceOf(EmbeddingReindexRequiredError);
-    }
+    // The migrated topic's own recorded model ("Xenova/all-MiniLM-L6-v2")
+    // resolves, and it yields dimension 3 -- exactly what the live table
+    // holds. First write must self-heal rather than quarantine forever.
+    await vectorStoreFactory.reconcileDocuments(fixture.topicId, [
+      new LangChainDocument({
+        pageContent: "adopted into the healed embedding space",
+        metadata: { documentId: "new-document", chunkId: "new-chunk", source: "new-document.md" },
+      }),
+    ]);
+    const healedMetadata = JSON.parse(
+      await fs.readFile(path.join(fixture.storageDir, "database", `vector-${fixture.topicId}-metadata.json`), "utf8"),
+    );
+    expect(healedMetadata.migrationRequiresFingerprintOnReindex, "first write must clear the migration flag").to.equal(
+      false,
+    );
+    expect(healedMetadata.embeddingFingerprint, "first write must stamp a verified fingerprint").to.be.an("object");
+    expect(healedMetadata.embeddingFingerprint.dimension).to.equal(3);
     const removed = await manager.removeDocument(fixture.topicId, documents[0].id);
     expect(removed.chunksRemoved).to.be.greaterThan(0);
     const archivePath = path.join(parent, "migrated-topic.rag");
@@ -379,7 +397,7 @@ describe("offline v0.3 storage migration", function () {
     expect(await fs.readFile(path.join(storageDir, "unknown.bin"), "utf8")).to.equal("do not overwrite");
   });
 
-  it("resumes idempotently after failures at planned and staged boundaries", async function () {
+  it("cleans up its own leftovers after failures at planned, staged, and validated boundaries so a bare retry succeeds", async function () {
     for (const failAfterStage of ["planned", "staged", "validated"] as const) {
       const fixtureParent = path.join(parent, failAfterStage);
       await fs.mkdir(fixtureParent);
@@ -392,17 +410,50 @@ describe("offline v0.3 storage migration", function () {
           failAfterStage,
         }),
       );
-      const status = await getStorageMigrationStatus(fixture.storageDir, plan.migrationId);
-      expect(status.state?.stage).to.equal(failAfterStage);
-      const report = await resumeStorageMigration(fixture.storageDir, plan.migrationId);
+      // Nothing moved out of the source at these stages, so the failure must
+      // not leave the staging dir or state file behind to block a retry.
+      expect(
+        (await getStorageMigrationStatus(fixture.storageDir, plan.migrationId)).state,
+        `${failAfterStage}: state file must be removed`,
+      ).to.equal(undefined);
+      let stagingExists = true;
+      try {
+        await fs.access(plan.stagingPath);
+      } catch {
+        stagingExists = false;
+      }
+      expect(stagingExists, `${failAfterStage}: staging dir must be removed`).to.equal(false);
+
+      const report = await applyStorageMigration(fixture.storageDir, {
+        nonInteractive: true,
+        acceptedBackupPath: plan.backupPath,
+      });
       expect(report.migrationId).to.equal(plan.migrationId);
       expect((await getStorageMigrationStatus(fixture.storageDir, plan.migrationId)).state?.stage).to.equal(
         "committed",
       );
-      expect((await resumeStorageMigration(fixture.storageDir, plan.migrationId)).migrationId).to.equal(
-        plan.migrationId,
-      );
     }
+  });
+
+  it("dedupes a colliding backup path with -r2 while leaving the earlier backup untouched", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    const basePlan = await planStorageMigration(fixture.storageDir);
+    // Simulate a leftover backup from an earlier attempt on this same source
+    // (e.g. after a rollback re-migrates it) occupying the deterministic path.
+    await fs.mkdir(basePlan.backupPath);
+
+    const plan = await planStorageMigration(fixture.storageDir);
+    expect(plan.migrationId).to.equal(basePlan.migrationId);
+    expect(plan.backupPath).to.equal(`${basePlan.backupPath}-r2`);
+
+    const report = await applyStorageMigration(fixture.storageDir, {
+      nonInteractive: true,
+      acceptedBackupPath: plan.backupPath,
+    });
+    expect(report.migrationId).to.equal(plan.migrationId);
+    await fs.access(plan.backupPath);
+    // The pre-existing backup at the base (unsuffixed) path is left alone.
+    expect(await fs.readdir(basePlan.backupPath)).to.deep.equal([]);
   });
 
   it("persists cutover intent, blocks normal initialization, and resumes every rename boundary", async function () {
@@ -537,5 +588,98 @@ describe("offline v0.3 storage migration", function () {
     }
     expect(rejected?.code).to.equal(33);
     expect(JSON.parse(rejected.stdout).error.code).to.equal("MIG_CONFIRMATION");
+  });
+
+  it("apply with a prepared plan performs conversion exactly once", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    const prepared = await prepareStorageMigration(fixture.storageDir);
+    const sourceLanceDir = path.resolve(fixture.databaseDir, "lancedb");
+
+    // Instrument the shared lancedb module (same cached instance the
+    // implementation requires) to prove apply never re-opens the *source*
+    // table -- i.e. it never re-runs preparePlan/legacyRows -- once a
+    // prepared handle is reused. Installed after prepare so only apply's
+    // behavior is measured.
+    const lancedbAny = lancedbModule as any;
+    const originalConnect = lancedbAny.connect;
+    let sourceConnectCalls = 0;
+    lancedbAny.connect = async (uri: string, ...rest: unknown[]) => {
+      if (path.resolve(String(uri)) === sourceLanceDir) {
+        sourceConnectCalls += 1;
+      }
+      return originalConnect(uri, ...rest);
+    };
+    try {
+      const report = await applyStorageMigration(fixture.storageDir, {
+        prepared,
+        nonInteractive: true,
+        acceptedBackupPath: prepared.plan.backupPath,
+      });
+      expect(
+        sourceConnectCalls,
+        "apply must not re-open the source lancedb table when reusing a prepared plan",
+      ).to.equal(0);
+      expect(report.migrationId).to.equal(prepared.plan.migrationId);
+      expect(
+        JSON.parse(await fs.readFile(path.join(fixture.storageDir, STORAGE_FORMAT_FILENAME), "utf8")).formatVersion,
+      ).to.equal(2);
+      await fs.access(prepared.plan.backupPath);
+    } finally {
+      lancedbAny.connect = originalConnect;
+    }
+  });
+
+  it("apply with a stale prepared plan throws MIG_CHANGED", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    const prepared = await prepareStorageMigration(fixture.storageDir);
+    await fs.writeFile(path.join(fixture.databaseDir, "extra.json"), "{}");
+
+    const error = await captureError(() =>
+      applyStorageMigration(fixture.storageDir, {
+        prepared,
+        nonInteractive: true,
+        acceptedBackupPath: prepared.plan.backupPath,
+      }),
+    );
+    expect((error as StorageMigrationError).code).to.equal("MIG_CHANGED");
+  });
+
+  it("findLatestMigrationState returns null with no state and the newest with two", async function () {
+    const fixture = await writeLegacyFixture(parent);
+    expect(await findLatestMigrationState(fixture.storageDir)).to.equal(null);
+
+    const plan = await planStorageMigration(fixture.storageDir);
+    const sourcePath = path.resolve(fixture.storageDir);
+    const baseState: MigrationState = {
+      stateVersion: MIGRATION_STATE_VERSION,
+      migrationId: plan.migrationId,
+      sourcePath,
+      layout: plan.layout,
+      stage: "planned",
+      sourceInventoryDigest: plan.inventory.digest,
+      backupPath: plan.backupPath,
+      stagingPath: plan.stagingPath,
+      updatedAt: 1000,
+    };
+    const olderPath = path.join(parent, `.${path.basename(fixture.storageDir)}.migration-${plan.migrationId}.json`);
+    await fs.writeFile(olderPath, JSON.stringify(baseState));
+
+    const newerState: MigrationState = { ...baseState, migrationId: `${plan.migrationId}-2`, updatedAt: 2000 };
+    const newerPath = path.join(
+      parent,
+      `.${path.basename(fixture.storageDir)}.migration-${newerState.migrationId}.json`,
+    );
+    await fs.writeFile(newerPath, JSON.stringify(newerState));
+
+    const corruptPath = path.join(
+      parent,
+      `.${path.basename(fixture.storageDir)}.migration-${plan.migrationId}-corrupt.json`,
+    );
+    await fs.writeFile(corruptPath, "not json");
+
+    const found = await findLatestMigrationState(fixture.storageDir);
+    expect(found).to.not.equal(null);
+    expect(found!.state.updatedAt).to.equal(2000);
+    expect(found!.statePath).to.equal(newerPath);
   });
 });

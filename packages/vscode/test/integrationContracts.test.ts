@@ -13,6 +13,7 @@ import {
   COMMANDS,
   VIEWS,
   openTopicManagerWithMigration,
+  wireExternalStorageChangeRefresh,
   TOOLS,
   TopicTreeItem,
   type MigrationUxDependencies,
@@ -34,28 +35,23 @@ function legacyPlan(): any {
     availableBytes: 100,
     backupPath: "/backup",
     stagingPath: "/stage",
+    statePath: "/legacy-state.json",
   };
 }
 
 function migrationDependencies(overrides: Partial<MigrationUxDependencies> = {}): MigrationUxDependencies {
   const manager = {} as any;
-  let creates = 0;
   return {
-    createTopicManager: async () => {
-      creates++;
-      if (creates === 1) {
-        throw new Error("non-empty unversioned RAGnarōk storage");
-      }
-      return manager;
-    },
-    plan: async () => legacyPlan(),
-    status: async () => ({ plan: legacyPlan() }),
+    createTopicManager: async () => manager,
+    inspect: async () => ({ status: "legacy" }) as any,
+    prepare: async () => ({ plan: legacyPlan() }) as any,
+    findState: async () => null,
     apply: async () => ({}) as any,
     resume: async () => ({}) as any,
-    choose: async () => "migrate",
+    rollback: async () => ({}) as any,
     progress: async (_resuming, task) => task(new AbortController().signal),
     showStorageFailure: async () => undefined,
-    showCancellation: async () => undefined,
+    showInformation: async () => undefined,
     ...overrides,
   };
 }
@@ -202,7 +198,31 @@ describe("VS Code contribution and tree contracts", function () {
   });
 });
 
-describe("guided VS Code storage migration UX", function () {
+describe("activation failure surface", function () {
+  // A welcome entry with no `when`, or a stale one that still matches, renders
+  // alongside the failure panel and contradicts it. The compiler sees none of
+  // this, so the mutual exclusivity is asserted here.
+  it("gives every view a failure panel and gates the optimistic entries behind it", async function () {
+    const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+    const welcome = manifest.contributes.viewsWelcome;
+
+    for (const view of [VIEWS.RAG_TOPICS, VIEWS.RAG_MEMORY]) {
+      const entries = welcome.filter((entry: any) => entry.view === view);
+      const failure = entries.filter((entry: any) => entry.when === "ragnarok.activationFailed");
+      expect(failure, `${view} needs exactly one activation-failure panel`).to.have.lengthOf(1);
+      expect(failure[0].contents).to.include("command:workbench.action.reloadWindow");
+      expect(failure[0].contents).to.include("was not changed");
+
+      for (const entry of entries.filter((candidate: any) => candidate !== failure[0])) {
+        expect(entry.when, `${view} entry "${entry.contents.slice(0, 24)}" must yield to the failure panel`).to.include(
+          "!ragnarok.activationFailed",
+        );
+      }
+    }
+  });
+});
+
+describe("automatic VS Code storage migration", function () {
   it("applies a previewed migration and opens the converted manager", async function () {
     let appliedSignal: AbortSignal | undefined;
     const dependencies = migrationDependencies({
@@ -216,77 +236,124 @@ describe("guided VS Code storage migration UX", function () {
     expect(appliedSignal?.aborted).to.equal(false);
   });
 
-  it("resumes durable state instead of applying again", async function () {
-    let resumed = 0;
+  // "resumes durable state instead of applying again" moved to the proactive
+  // recovery suite below, where the pre-cutover state now arrives via
+  // findState rather than being rediscovered after a failed open.
+
+  it("converts a legacy store without asking and reports where the backup went", async function () {
     let applied = 0;
+    const messages: string[] = [];
     const dependencies = migrationDependencies({
-      status: async () => ({ plan: legacyPlan(), state: { stage: "staged" } as any }),
-      resume: async () => {
-        resumed++;
-        return {} as any;
-      },
       apply: async () => {
         applied++;
         return {} as any;
+      },
+      showInformation: async (message) => {
+        messages.push(message);
       },
     });
+
     await openTopicManagerWithMigration("/legacy", dependencies);
-    expect(resumed).to.equal(1);
-    expect(applied).to.equal(0);
+
+    expect(applied).to.equal(1);
+    // The backup path is the only route back from an unattended migration.
+    expect(messages).to.have.lengthOf(1);
+    expect(messages[0]).to.include("/backup");
   });
 
-  it("leaves storage untouched when the user cancels", async function () {
-    let applied = 0;
-    let cancellationMessage = "";
+  it("surfaces plan warnings and remap counts in the reported summary", async function () {
+    const plan = {
+      ...legacyPlan(),
+      warnings: ["Legacy knowledge graphs are not copied because their embedding identity cannot be proven."],
+      remaps: [{ kind: "topic", from: "old", to: "new", reason: "namespace" }],
+    };
+    const messages: string[] = [];
     const dependencies = migrationDependencies({
-      choose: async () => "cancel",
-      apply: async () => {
-        applied++;
-        return {} as any;
+      prepare: async () => ({ plan }) as any,
+      showInformation: async (message) => {
+        messages.push(message);
       },
-      showCancellation: async (message) => {
-        cancellationMessage = message;
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(messages).to.have.lengthOf(1);
+    expect(messages[0]).to.include("Warnings: Legacy knowledge graphs are not copied");
+    expect(messages[0]).to.include("1 ID(s) were remapped");
+  });
+
+  it("reports corrupt storage without planning", async function () {
+    let planned = 0;
+    let failure = "";
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "current" }) as any,
+      createTopicManager: async () => {
+        throw new Error("corrupt topics index");
+      },
+      prepare: async () => {
+        planned++;
+        return { plan: legacyPlan() } as any;
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
       },
     });
     try {
       await openTopicManagerWithMigration("/legacy", dependencies);
-      expect.fail("expected cancellation");
-    } catch (error) {
-      expect((error as Error).message).to.include("unversioned");
+      expect.fail("expected storage failure");
+    } catch {
+      // expected
     }
-    expect(applied).to.equal(0);
-    expect(cancellationMessage).to.include("No data was changed");
+    expect(planned).to.equal(0);
+    expect(failure).to.include("could not be opened safely");
+    expect(failure).to.include("No data was changed");
   });
 
-  it("reports corrupt storage and two-window lease failures without planning", async function () {
-    for (const [error, expected] of [
-      [new Error("corrupt topics index"), "could not be opened safely"],
-      [Object.assign(new Error("locked by another RAGnarōk process"), { name: "StorageLockHeldError" }), "another"],
-    ] as const) {
-      let planned = 0;
-      let failure = "";
-      const dependencies = migrationDependencies({
-        createTopicManager: async () => {
-          throw error;
-        },
-        plan: async () => {
-          planned++;
-          return legacyPlan();
-        },
-        showStorageFailure: async (message) => {
-          failure = message;
-        },
-      });
-      try {
-        await openTopicManagerWithMigration("/legacy", dependencies);
-        expect.fail("expected storage failure");
-      } catch {
-        // expected
-      }
-      expect(planned).to.equal(0);
-      expect(failure).to.include(expected);
-      expect(failure).to.include("No data was changed");
+  // TopicManager.create no longer takes a session lease, so StorageLockHeldError
+  // on open means only a full-exclusion migration/reset running elsewhere —
+  // never a second window merely having the storage open for reads/writes.
+  it("tells the loser of a two-window full-exclusion race to wait, without planning", async function () {
+    let planned = 0;
+    let failure = "";
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "current" }) as any,
+      createTopicManager: async () => {
+        throw Object.assign(new Error("locked"), { name: "StorageLockHeldError" });
+      },
+      prepare: async () => {
+        planned++;
+        return { plan: legacyPlan() } as any;
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
+      },
+    });
+    try {
+      await openTopicManagerWithMigration("/legacy", dependencies);
+      expect.fail("expected storage failure");
+    } catch {
+      // expected
     }
+    expect(planned).to.equal(0);
+    expect(failure).to.equal(
+      "A RAGnarōk storage migration or reset is running in another window. Wait for it to finish, then reload this window.",
+    );
+  });
+
+  it("never surfaces a storage failure when createTopicManager resolves normally", async function () {
+    let failureShown = false;
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "current" }) as any,
+      createTopicManager: async () => ({}) as any,
+      showStorageFailure: async () => {
+        failureShown = true;
+      },
+    });
+
+    const result = await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(result).to.be.an("object");
+    expect(failureShown).to.equal(false);
   });
 
   it("surfaces apply failure and cancellation before cutover", async function () {
@@ -300,7 +367,7 @@ describe("guided VS Code storage migration UX", function () {
         showStorageFailure: async (message) => {
           errorMessage = message;
         },
-        showCancellation: async (message) => {
+        showInformation: async (message) => {
           cancellationMessage = message;
         },
       });
@@ -314,9 +381,249 @@ describe("guided VS Code storage migration UX", function () {
         expect(cancellationMessage).to.include("before cutover");
         expect(errorMessage).to.equal("");
       } else {
-        expect(errorMessage).to.include("Inspect migration status");
+        expect(errorMessage).to.include("resume or retry automatically");
       }
     }
+  });
+});
+
+// Activation inspects before it opens, so an interrupted migration is finished
+// on the next window open instead of waiting for a hand-run CLI. Which recovery
+// entry point a stage routes to is the whole safety property here: a rollback
+// stage sent through resume() would re-run the forward migration over a
+// half-restored tree.
+describe("proactive activation recovery", function () {
+  it("auto-resumes an interrupted forward migration without re-planning", async function () {
+    const calls: string[] = [];
+    let resumedId = "";
+    const dependencies = migrationDependencies({
+      inspect: async () =>
+        ({
+          status: "interrupted",
+          migrationId: "mig-forward",
+          stage: "cutoverPrepared",
+          statePath: "/parent/.storage.migration-mig-forward.json",
+        }) as any,
+      resume: async (_dir, migrationId) => {
+        calls.push("resume");
+        resumedId = migrationId;
+        return {} as any;
+      },
+      rollback: async () => {
+        calls.push("rollback");
+        return {} as any;
+      },
+      prepare: async () => {
+        calls.push("prepare");
+        return { plan: legacyPlan() } as any;
+      },
+      apply: async () => {
+        calls.push("apply");
+        return {} as any;
+      },
+    });
+
+    const manager = await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(calls).to.deep.equal(["resume"]);
+    expect(resumedId).to.equal("mig-forward");
+    expect(manager).to.be.an("object");
+  });
+
+  it("completes an interrupted rollback with rollback(), then re-enters and migrates the restored legacy tree", async function () {
+    const calls: string[] = [];
+    let inspections = 0;
+    const dependencies = migrationDependencies({
+      inspect: async () => {
+        inspections++;
+        return inspections === 1
+          ? ({
+              status: "interrupted",
+              migrationId: "mig-rollback",
+              stage: "rollbackV2BackedUp",
+              statePath: "/parent/.storage.migration-mig-rollback.json",
+            } as any)
+          : ({ status: "legacy" } as any);
+      },
+      resume: async () => {
+        calls.push("resume");
+        return {} as any;
+      },
+      rollback: async () => {
+        calls.push("rollback");
+        return {} as any;
+      },
+      prepare: async () => {
+        calls.push("prepare");
+        return { plan: legacyPlan() } as any;
+      },
+      apply: async () => {
+        calls.push("apply");
+        return {} as any;
+      },
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    // Never resume(): it knows nothing about rollback stages.
+    expect(calls).to.deep.equal(["rollback", "prepare", "apply"]);
+    expect(inspections).to.equal(2);
+  });
+
+  it("resumes a pre-cutover state instead of starting a second migration", async function () {
+    const calls: string[] = [];
+    let resumedId = "";
+    const dependencies = migrationDependencies({
+      inspect: async () => ({ status: "legacy" }) as any,
+      findState: async () =>
+        ({
+          state: { migrationId: "mig-staged", stage: "staged" },
+          statePath: "/parent/.storage.migration-mig-staged.json",
+        }) as any,
+      resume: async (_dir, migrationId) => {
+        calls.push("resume");
+        resumedId = migrationId;
+        return {} as any;
+      },
+      prepare: async () => {
+        calls.push("prepare");
+        return { plan: legacyPlan() } as any;
+      },
+      apply: async () => {
+        calls.push("apply");
+        return {} as any;
+      },
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(calls).to.deep.equal(["resume"]);
+    expect(resumedId).to.equal("mig-staged");
+  });
+
+  it("prepares once and applies that same handle, never converting twice", async function () {
+    let prepared = 0;
+    const handle = { plan: legacyPlan() } as any;
+    let appliedPrepared: unknown;
+    const dependencies = migrationDependencies({
+      findState: async () => null,
+      prepare: async () => {
+        prepared++;
+        return handle;
+      },
+      apply: async (_dir, options) => {
+        appliedPrepared = (options as any).prepared;
+        return {} as any;
+      },
+    });
+
+    await openTopicManagerWithMigration("/legacy", dependencies);
+
+    expect(prepared).to.equal(1);
+    expect(appliedPrepared).to.equal(handle);
+  });
+
+  it("names the state file when recovery fails, and lets activation fail", async function () {
+    let failure = "";
+    const dependencies = migrationDependencies({
+      inspect: async () =>
+        ({
+          status: "interrupted",
+          migrationId: "mig-forward",
+          stage: "legacyBackedUp",
+          statePath: "/parent/.storage.migration-mig-forward.json",
+        }) as any,
+      resume: async () => {
+        throw new Error("resume exploded");
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
+      },
+    });
+
+    let thrown: any;
+    try {
+      await openTopicManagerWithMigration("/legacy", dependencies);
+      expect.fail("expected recovery failure to propagate");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown?.message).to.equal("resume exploded");
+    expect(failure).to.include("/parent/.storage.migration-mig-forward.json");
+    expect(failure).to.include("mig-forward");
+    expect(failure).to.include("Your data is intact");
+  });
+
+  it("tells the loser of a two-window migration race to wait rather than reporting a failure", async function () {
+    let failure = "";
+    const dependencies = migrationDependencies({
+      apply: async () => {
+        throw Object.assign(new Error("migration lock held"), {
+          name: "StorageMigrationError",
+          code: "MIG_BUSY",
+        });
+      },
+      showStorageFailure: async (message) => {
+        failure = message;
+      },
+    });
+
+    try {
+      await openTopicManagerWithMigration("/legacy", dependencies);
+      expect.fail("expected the busy migration to propagate");
+    } catch {
+      // expected
+    }
+
+    expect(failure).to.include("Another VS Code window is migrating");
+    expect(failure).to.not.include("storage migration failed");
+  });
+});
+
+describe("external storage change wiring", function () {
+  function fakeTopicManager() {
+    let listener: ((change: { kind: "topics-changed" | "storage-unavailable" }) => void) | undefined;
+    let disposed = 0;
+    return {
+      onExternalChange: (l: (change: { kind: "topics-changed" | "storage-unavailable" }) => void) => {
+        listener = l;
+        return { dispose: () => (disposed += 1) };
+      },
+      emit: (change: { kind: "topics-changed" | "storage-unavailable" }) => listener?.(change),
+      get disposeCount() {
+        return disposed;
+      },
+    };
+  }
+
+  it("refreshes both tree providers on topics-changed and warns only on storage-unavailable", function () {
+    const manager = fakeTopicManager();
+    let topicRefreshes = 0;
+    let configRefreshes = 0;
+    const warnings: string[] = [];
+
+    const subscription = wireExternalStorageChangeRefresh(
+      manager as any,
+      { refresh: () => (topicRefreshes += 1) } as any,
+      { refresh: () => (configRefreshes += 1) } as any,
+      (message) => warnings.push(message),
+    );
+
+    manager.emit({ kind: "topics-changed" });
+    expect(topicRefreshes).to.equal(1);
+    expect(configRefreshes).to.equal(1);
+    expect(warnings).to.deep.equal([]);
+
+    manager.emit({ kind: "storage-unavailable" });
+    expect(topicRefreshes).to.equal(2);
+    expect(configRefreshes).to.equal(2);
+    expect(warnings).to.deep.equal([
+      "RAGnarōk storage is temporarily unavailable (another window is migrating or resetting it)",
+    ]);
+
+    subscription.dispose();
+    expect(manager.disposeCount).to.equal(1);
   });
 });
 

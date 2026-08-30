@@ -25,7 +25,12 @@ import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { hasRemoteEndpoint, type EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { Logger } from "../logger";
-import { atomicWriteJson, STORAGE_FORMAT_VERSION } from "../utils/storageV2";
+import {
+  adoptLegacyVectorStoreMetadata,
+  atomicWriteJson,
+  STORAGE_FORMAT_VERSION,
+  type LegacyVectorStoreMetadata,
+} from "../utils/storageV2";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 export interface VectorStoreConfig {
@@ -73,6 +78,27 @@ export class VectorStoreMetadataCorruptionError extends Error {
         "Refusing to mutate the existing table because its embedding space cannot be verified.",
     );
     this.name = "VectorStoreMetadataCorruptionError";
+  }
+}
+
+/**
+ * A table exists but could not be loaded (corrupt/unreadable metadata, an
+ * unopenable LanceDB table, or any other failure short of a genuine
+ * endpoint refusal). This must never be swallowed into a `null` return:
+ * documentPipeline treats `null` from loadStore as "no store yet" and calls
+ * createStore, which would drop the very table that failed to load.
+ */
+export class VectorStoreLoadError extends Error {
+  readonly name = "VectorStoreLoadError";
+  constructor(
+    public readonly topicId: string,
+    public readonly cause: unknown,
+  ) {
+    super(
+      `Vector store for topic ${topicId} exists but failed to load: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}. ` +
+        `The table was left untouched.`,
+    );
   }
 }
 
@@ -178,6 +204,7 @@ export class VectorStoreFactory {
     config: VectorStoreConfig,
     initialDocuments?: LangChainDocument[],
     signal?: AbortSignal,
+    options?: { recreate?: boolean },
   ): Promise<void> {
     signal?.throwIfAborted();
     this.logger.info("Creating vector store", {
@@ -190,13 +217,18 @@ export class VectorStoreFactory {
       const db = await this.getConnection(this.lanceDbUri);
       signal?.throwIfAborted();
 
-      // Check if table exists and drop it to start fresh
       const tableNames = await db.tableNames();
       signal?.throwIfAborted();
       if (tableNames.includes(config.topicId)) {
+        if (!options?.recreate) {
+          throw new Error(
+            `Vector store table for topic ${config.topicId} already exists; ` +
+              `refusing to drop it outside an explicit recreate path.`,
+          );
+        }
         await db.dropTable(config.topicId);
         signal?.throwIfAborted();
-        this.logger.debug("Dropped existing table", { topicId: config.topicId });
+        this.logger.debug("Dropped existing table for recreate", { topicId: config.topicId });
       }
 
       const docs = initialDocuments && initialDocuments.length > 0 ? initialDocuments : [];
@@ -348,7 +380,7 @@ export class VectorStoreFactory {
       // createStore, which DROPS the existing table and re-embeds it against
       // this deployment's endpoint. The silent loss this check exists to
       // prevent would then be caused by the check itself.
-      if (error instanceof EmbeddingEndpointMismatchError) {
+      if (error instanceof EmbeddingEndpointMismatchError || error instanceof VectorStoreLoadError) {
         throw error;
       }
       this.logger.error("Failed to load vector store", {
@@ -356,7 +388,9 @@ export class VectorStoreFactory {
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
-      return null;
+      // A table that exists but cannot be loaded must surface as a failure:
+      // returning null here is what used to let ingestion drop the table.
+      throw new VectorStoreLoadError(topicId, error);
     }
   }
 
@@ -365,10 +399,18 @@ export class VectorStoreFactory {
     try {
       const metadataJson = await fs.readFile(metadataPath, "utf-8");
       const metadata = JSON.parse(metadataJson) as unknown;
-      if (!this.isVectorStoreMetadata(metadata, topicId)) {
-        throw new VectorStoreMetadataCorruptionError(topicId, "malformed or incomplete");
+      if (this.isVectorStoreMetadata(metadata, topicId)) {
+        return metadata;
       }
-      return metadata;
+      // A pre-v2 file is old, not damaged. Adopting it in memory recovers the
+      // topic for reading without re-embedding anything; the adoption marks the
+      // embedding space unverifiable, so extension still fails closed below.
+      const adopted = this.adoptIfLegacyMetadata(metadata, topicId);
+      if (adopted) {
+        this.logger.info("Adopted pre-v2 vector store metadata", { topicId, embeddingModel: adopted.embeddingModel });
+        return adopted;
+      }
+      throw new VectorStoreMetadataCorruptionError(topicId, "malformed or incomplete");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return null;
@@ -404,17 +446,26 @@ export class VectorStoreFactory {
     if (!metadata) {
       return;
     }
-    // Checked first, and before anything is resolved: a topic whose space
-    // cannot be verified must not cause a model to be loaded on its behalf.
-    this.assertMetadataAllowsMutation(topicId, metadata);
-    const recorded = metadata.embeddingFingerprint;
+    let verified = metadata;
+    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
+      const migrationBackend = metadata.embeddingBackend ?? "";
+      if (hasRemoteEndpoint(migrationBackend)) {
+        const recordedHash = metadata.embeddingFingerprint?.endpointHash;
+        if (recordedHash && recordedHash !== (await this.configuredEndpointHash())) {
+          return; // foreign endpoint: loadStore's refusal handles it; never resolve here
+        }
+      }
+      verified = await this.adoptFingerprintForMigratedTopic(topicId, metadata);
+    }
+    const recorded = verified.embeddingFingerprint;
     if (!recorded) {
-      // Unreachable — assertMetadataAllowsMutation refuses a missing
-      // fingerprint — but the space stays unverifiable either way.
+      // Unreachable — adoptFingerprintForMigratedTopic always returns
+      // metadata carrying a fingerprint, or throws — but the space stays
+      // unverifiable either way.
       throw new EmbeddingReindexRequiredError(topicId);
     }
 
-    const backend = metadata.embeddingBackend ?? "";
+    const backend = verified.embeddingBackend ?? "";
     if (hasRemoteEndpoint(backend) && recorded.endpointHash !== (await this.configuredEndpointHash())) {
       // A foreign endpoint is loadStore's refusal to raise, one step later.
       // Resolving the topic's service here would first register it — and open a
@@ -422,7 +473,7 @@ export class VectorStoreFactory {
       return;
     }
 
-    const model = metadata.embeddingModel || this.embeddingModel;
+    const model = verified.embeddingModel || this.embeddingModel;
     const current = await (await this.resolveEmbeddingService(model, backend)).getFingerprint();
     if (recorded.dimension !== current.dimension) {
       this.logger.error("Embedding dimension mismatch detected", {
@@ -464,7 +515,11 @@ export class VectorStoreFactory {
         topicId,
         documentCount: metadata.documentCount || 0,
         chunkCount: metadata.chunkCount || 0,
-        embeddingModel: metadata.embeddingModel || this.embeddingModel,
+        // The topic's own recorded model outranks this factory's default: a
+        // caller that omits the field is refreshing counts, not re-labelling
+        // the embedding space. Falling straight through to the default would
+        // silently re-attribute adopted and migrated vectors.
+        embeddingModel: metadata.embeddingModel || previousMetadata?.embeddingModel || this.embeddingModel,
         embeddingBackend: metadata.embeddingBackend || "",
         embeddingFingerprint,
         migrationRequiresFingerprintOnReindex,
@@ -656,14 +711,70 @@ export class VectorStoreFactory {
       }
       throw new Error(`Vector store table not found for topic ${topicId}`);
     }
-    this.assertMetadataAllowsMutation(topicId, metadata);
+    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
+      return this.adoptFingerprintForMigratedTopic(topicId, metadata);
+    }
     return metadata;
   }
 
-  private assertMetadataAllowsMutation(topicId: string, metadata: VectorStoreMetadata): void {
-    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
+  /**
+   * A migrated or adopted topic reaches its first write here. The topic's own
+   * recorded model is resolved and its produced dimension checked against the
+   * live table; only a verified match may stamp the fingerprint the migrator
+   * refused to invent. A mismatch is the genuine reindex case.
+   */
+  private async adoptFingerprintForMigratedTopic(
+    topicId: string,
+    metadata: VectorStoreMetadata,
+  ): Promise<VectorStoreMetadata> {
+    let fingerprint: EmbeddingFingerprint;
+    try {
+      const service = await this.resolveEmbeddingService(
+        metadata.embeddingModel || this.embeddingModel,
+        metadata.embeddingBackend ?? "",
+      );
+      fingerprint = await service.getFingerprint();
+    } catch (error) {
+      this.logger.error("Cannot resolve recorded model for migrated topic", {
+        topicId,
+        model: metadata.embeddingModel,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw new EmbeddingReindexRequiredError(topicId);
     }
+    const tableDimension = await this.getTableDimension(topicId);
+    if (tableDimension !== null && tableDimension !== fingerprint.dimension) {
+      throw new EmbeddingReindexRequiredError(topicId);
+    }
+    await this.saveStore(topicId, {
+      ...metadata,
+      embeddingFingerprint: fingerprint,
+      embeddingBackend: fingerprint.backendKind,
+      migrationRequiresFingerprintOnReindex: false,
+    });
+    const healed = await this.getStoreMetadata(topicId);
+    if (!healed || healed.migrationRequiresFingerprintOnReindex || !healed.embeddingFingerprint) {
+      throw new EmbeddingReindexRequiredError(topicId);
+    }
+    return healed;
+  }
+
+  /** Vector dimension of the live table, or null when the table is empty/absent. */
+  private async getTableDimension(topicId: string): Promise<number | null> {
+    const db = await this.getConnection(this.lanceDbUri);
+    if (!(await db.tableNames()).includes(topicId)) {
+      return null;
+    }
+    const table = await db.openTable(topicId);
+    const schema = await table.schema();
+    const vectorField = schema.fields.find((field: { name: string }) => field.name === "vector");
+    const listSize = (vectorField?.type as { listSize?: number } | undefined)?.listSize;
+    if (typeof listSize === "number" && listSize > 0) {
+      return listSize;
+    }
+    const rows = await table.query().limit(1).toArray();
+    const vector = rows[0]?.vector;
+    return vector ? Array.from(vector as ArrayLike<number>).length : null;
   }
 
   private async hasTable(topicId: string): Promise<boolean> {
@@ -675,6 +786,39 @@ export class VectorStoreFactory {
     const metadataPath = this.getMetadataPath(topicId);
     await fs.mkdir(path.dirname(metadataPath), { recursive: true });
     await atomicWriteJson(metadataPath, metadata);
+  }
+
+  /**
+   * Recognizes metadata written before the schema was versioned, and only that.
+   *
+   * `schemaVersion` must be absent rather than merely unequal: a file claiming a
+   * version this build does not know is a forward-compatibility problem, not a
+   * legacy one, and guessing at it would be exactly the silent reinterpretation
+   * the corruption refusal exists to prevent.
+   */
+  private adoptIfLegacyMetadata(value: unknown, topicId: string): VectorStoreMetadata | null {
+    if (!value || typeof value !== "object" || "schemaVersion" in value) {
+      return null;
+    }
+    const legacy = value as Partial<LegacyVectorStoreMetadata>;
+    if (
+      legacy.topicId !== topicId ||
+      !Number.isFinite(legacy.documentCount) ||
+      !Number.isFinite(legacy.chunkCount) ||
+      typeof legacy.embeddingModel !== "string" ||
+      !Number.isFinite(legacy.createdAt) ||
+      !Number.isFinite(legacy.updatedAt)
+    ) {
+      return null;
+    }
+    return adoptLegacyVectorStoreMetadata({
+      topicId,
+      documentCount: legacy.documentCount as number,
+      chunkCount: legacy.chunkCount as number,
+      embeddingModel: legacy.embeddingModel,
+      createdAt: legacy.createdAt as number,
+      updatedAt: legacy.updatedAt as number,
+    });
   }
 
   private isVectorStoreMetadata(value: unknown, topicId: string): value is VectorStoreMetadata {

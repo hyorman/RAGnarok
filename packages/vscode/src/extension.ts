@@ -102,6 +102,28 @@ const defaultRuntimeFactory: ActivationRuntimeFactory = {
   registerMemorySidebar: (memoryService, operationRunner) => registerMemorySidebar(memoryService, operationRunner),
 };
 
+/**
+ * Keeps the tree views live when another process writes topics.json/a
+ * topic-documents file, or when a full-exclusion migration/reset elsewhere
+ * takes the storage tree away and later gives it back. Both kinds refresh
+ * both views; `storage-unavailable` additionally warns, since a read racing
+ * that window can surface stale or momentarily-missing data.
+ */
+export function wireExternalStorageChangeRefresh(
+  topicManager: Pick<TopicManager, "onExternalChange">,
+  treeDataProvider: Pick<TopicTreeDataProvider, "refresh">,
+  configDataProvider: Pick<ConfigTreeDataProvider, "refresh">,
+  showWarning: (message: string) => void,
+): { dispose(): void } {
+  return topicManager.onExternalChange((change) => {
+    treeDataProvider.refresh();
+    configDataProvider.refresh();
+    if (change.kind === "storage-unavailable") {
+      showWarning("RAGnarōk storage is temporarily unavailable (another window is migrating or resetting it)");
+    }
+  });
+}
+
 export function createMemoryServices(
   store: MemoryStore,
   factory: Pick<
@@ -123,6 +145,20 @@ export function createMemoryServices(
 
 let activeLifecycle: ExtensionLifecycle | undefined;
 
+/**
+ * Never allowed to throw: it runs on the activation failure path, where a
+ * second error would replace the original cause with a setContext failure.
+ */
+async function setActivationFailed(failed: boolean): Promise<void> {
+  try {
+    await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.ACTIVATION_FAILED, failed);
+  } catch (error) {
+    logger.error("Failed to publish the activation state context key", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<RagnarokExtensionApi> {
   return activateWithServiceFactory(context, defaultServiceFactory);
 }
@@ -142,6 +178,10 @@ export async function activateWithServiceFactory(
   activeLifecycle = lifecycle;
 
   try {
+    // Cleared first: a retry after a failed activation must not inherit the
+    // previous attempt's failure panel.
+    await setActivationFailed(false);
+
     // Create adapter instances
     const configProvider = new VsCodeConfigProvider();
     const notifier = new VsCodeNotifier();
@@ -270,6 +310,20 @@ export async function activateWithServiceFactory(
     context.subscriptions.push(configDataProvider);
     lifecycle.addDisposable(configView);
     lifecycle.addDisposable(configDataProvider);
+
+    // Keep both tree views live across external storage changes (another
+    // window writing topics.json/a documents file, or a full-exclusion
+    // migration/reset elsewhere taking the storage tree away and back).
+    const externalChangeSubscription = wireExternalStorageChangeRefresh(
+      topicManager,
+      treeDataProvider,
+      configDataProvider,
+      (message) => {
+        void vscode.window.showWarningMessage(message);
+      },
+    );
+    context.subscriptions.push(externalChangeSubscription);
+    lifecycle.addDisposable(externalChangeSubscription);
 
     // Register commands
     const commandRegistrations = await CommandHandler.registerCommands(
@@ -631,6 +685,10 @@ export async function activateWithServiceFactory(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error("Failed to activate extension", { error: errorMessage });
+    // Before cleanup: the views are already visible, and leaving them on the
+    // "starting up" text is the difference between a reported failure and a
+    // hang the user cannot diagnose.
+    await setActivationFailed(true);
     try {
       await lifecycle.dispose();
     } catch (cleanupError) {

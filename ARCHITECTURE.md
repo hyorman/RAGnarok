@@ -26,7 +26,7 @@ user who spawned it, exactly like the VS Code extension's.
 
 ## Storage
 
-The configured storage root has one v2 marker and one lease:
+The configured storage root has one v2 marker and one lease file:
 
 ```text
 <storage>/
@@ -45,10 +45,36 @@ Some directories are created only when their feature is used. Shared/common
 legacy stores may instead begin with a flat `topics.json`/`lancedb` layout;
 the offline migrator converts that layout. See [MIGRATION.md](MIGRATION.md).
 
-The storage lease uses an owner token, PID/host identity, heartbeat, and
+`.ragnarok.lock` is present only while a lease is held; a graceful release
+marks it released and unlinks it.
+
+Reads take no lease at all, so any number of processes — VS Code windows, MCP
+servers, the migration CLI's read-only paths — may open and read one storage
+root concurrently. Coordination is on the write side:
+
+- **Operation leases.** Each mutation acquires the lease, runs WAL recovery,
+  reloads canonical state from disk, applies its change, and releases. The
+  acquisition waits (about five seconds by default, polling) for a live
+  foreign holder and then throws a typed `StorageBusyError`; the caller
+  reports it as a retryable "storage is busy" condition rather than a failure
+  of the operation itself. An ingestion holds one lease for the whole call,
+  kept alive by the heartbeat.
+- **Full exclusion.** Migration and rollback take a session lease for their
+  entire duration. That acquisition fails fast with `StorageLockHeldError`,
+  which is what other processes report as "another window is migrating".
+  Reset holds exclusion for its whole operation too, but through an operation
+  lease: it waits the bounded time and reports `StorageBusyError` rather than
+  failing fast.
+- **Recovery is writer-only.** Journal and WAL rollback happen under a lease,
+  so a reader serves the previous consistent snapshot instead of rolling back
+  a foreign writer's in-flight transaction. Readers revalidate through a
+  storage-directory watcher that emits external-change events.
+
+The lease itself uses an owner token, PID/host identity, heartbeat, and
 generation-scoped stale reclamation. Same-host live PIDs are never reclaimed
 merely for age. Storage v2 readers fail closed on corrupt or unsupported
-metadata.
+metadata. `RAGNAROK_IGNORE_LOCK=1` bypasses both lease kinds entirely and is
+unsafe with concurrent writers.
 
 Topic ingestion stages data and metadata under a durable journal. Archive
 import validates the central directory, normalized paths, duplicates,

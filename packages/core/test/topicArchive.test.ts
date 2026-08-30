@@ -7,8 +7,9 @@ import { createHash } from "crypto";
 import AdmZip from "adm-zip";
 import sinon from "sinon";
 import { ZipFile } from "yazl";
-import { TopicManager, type IConfigProvider, type INotifier } from "../src/index";
+import { STORAGE_LOCK_FILENAME, TopicManager, type IConfigProvider, type INotifier } from "../src/index";
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
+import type { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
 import type { ExportedTopicData, TopicsIndex } from "../src/utils/types";
 import {
   TOPIC_ARCHIVE_FORMAT_VERSION,
@@ -109,6 +110,38 @@ async function captureError(action: () => Promise<unknown>): Promise<Error> {
     return error as Error;
   }
   throw new Error("Expected action to reject");
+}
+
+function stubEmbeddingServiceForInit(): EmbeddingService {
+  return {
+    initialize: async () => undefined,
+    getCurrentModel: () => "test-model",
+    dispose: () => undefined,
+    getFingerprint: async () => ({
+      backendKind: "huggingface",
+      providerFormat: "huggingface",
+      model: "test-model",
+      revision: "unknown",
+      dimension: 4,
+      endpointHash: "local",
+    }),
+    isBackendAvailable: async () => true,
+  } as unknown as EmbeddingService;
+}
+
+function stubEmbeddingRegistryForInit(): EmbeddingServiceRegistry {
+  return {
+    get: async () => stubEmbeddingServiceForInit(),
+  } as unknown as EmbeddingServiceRegistry;
+}
+
+async function lockFileGone(storageDir: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(storageDir, STORAGE_LOCK_FILENAME));
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 function createManager(storageDir: string): TopicManager {
@@ -344,7 +377,11 @@ describe("topic archive safety", function () {
 
     const error = await captureError(() => manager.importTopic(archivePath));
     expect(error.message).to.equal("injected publication failure");
-    expect(await listTree(databaseDir)).to.deep.equal(treeBefore);
+    // The commit now runs under an operation-scoped write transaction, whose
+    // coordinator stamps an empty `.transactions` root as part of taking the
+    // lease — before the injected failure ever fires. No staged live path is
+    // touched, so that is the only addition to the tree.
+    expect(await listTree(databaseDir)).to.deep.equal([...treeBefore, "d:.transactions"].sort());
     expect(await fs.readFile(path.join(databaseDir, "topics.json"), "utf8")).to.equal(originalIndexBytes);
     expect(manager.getTopic("topic-imported")).to.equal(null);
   });
@@ -441,5 +478,132 @@ describe("topic archive safety", function () {
       expect(validated.exportData.topic.id).to.equal("topic-local");
     }
     expect((await fs.readdir(databaseDir)).some((entry) => entry.startsWith(".rag-"))).to.equal(false);
+  });
+
+  it("commits an import's publication under the storage write lease and releases it once import resolves", async function () {
+    const storageDir = path.join(temporaryDir, "storage-import-lease");
+    const manager = await TopicManager.create({
+      storageDir,
+      config,
+      notifier,
+      embeddingService: stubEmbeddingServiceForInit(),
+      embeddingRegistry: stubEmbeddingRegistryForInit(),
+    });
+
+    try {
+      // Seed a topic so the import runs against a store whose topics index
+      // has already been published; the fresh-store case (no topics.json at
+      // all) is covered by the test below.
+      await manager.createTopic({ name: "seed" });
+
+      const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
+      await writeArchive(archivePath, new Map([["topic.json", topicBytes]]));
+
+      const lockPath = path.join(storageDir, STORAGE_LOCK_FILENAME);
+      let lockHeldDuringCommit = false;
+      const originalPublish = (manager as any).publishPreparedTopicsIndex.bind(manager);
+      (manager as any).publishPreparedTopicsIndex = async (preparedIndexPath: string) => {
+        lockHeldDuringCommit = await fs
+          .access(lockPath)
+          .then(() => true)
+          .catch(() => false);
+        return originalPublish(preparedIndexPath);
+      };
+
+      const imported = await manager.importTopic(archivePath);
+
+      expect(lockHeldDuringCommit, "commit must run while the storage lease is held").to.equal(true);
+      expect(imported.name).to.include("Archive topic");
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(storageDir, "database", "topics.json"), "utf8"),
+      ) as TopicsIndex;
+      expect(persisted.topics).to.have.property(imported.id);
+      expect(manager.getTopic(imported.id)).to.not.equal(null);
+      expect(await lockFileGone(storageDir)).to.equal(true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("imports into a store whose topics index has never been written", async function () {
+    const storageDir = path.join(temporaryDir, "storage-import-fresh");
+    const manager = await TopicManager.create({
+      storageDir,
+      config,
+      notifier,
+      embeddingService: stubEmbeddingServiceForInit(),
+      embeddingRegistry: stubEmbeddingRegistryForInit(),
+    });
+
+    try {
+      // Nothing has mutated this store, so `topics.json` does not exist yet:
+      // the reader path that loads the index no longer writes one back.
+      const topicsIndexPath = path.join(storageDir, "database", "topics.json");
+      expect(
+        await fs
+          .access(topicsIndexPath)
+          .then(() => true)
+          .catch(() => false),
+        "a freshly created store must not have a topics index yet",
+      ).to.equal(false);
+
+      const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
+      await writeArchive(archivePath, new Map([["topic.json", topicBytes]]));
+
+      const imported = await manager.importTopic(archivePath);
+
+      expect(imported.name).to.include("Archive topic");
+      expect(manager.getTopic(imported.id)).to.not.equal(null);
+      const persisted = JSON.parse(await fs.readFile(topicsIndexPath, "utf8")) as TopicsIndex;
+      expect(persisted.topics).to.have.property(imported.id);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("rejects export when the topics index changes during the archive write, and leaves no archive behind", async function () {
+    const storageDir = path.join(temporaryDir, "storage-export-race");
+    const databaseDir = path.join(storageDir, "database");
+    await fs.mkdir(databaseDir, { recursive: true });
+    const index: TopicsIndex = {
+      topics: {
+        "topic-local": {
+          id: "topic-local",
+          name: "Local",
+          createdAt: 1,
+          updatedAt: 1,
+          documentCount: 0,
+        },
+      },
+      modelName: "test-model",
+      lastUpdated: 1,
+    };
+    await fs.writeFile(path.join(databaseDir, "topics.json"), `${JSON.stringify(index, null, 2)}\n`);
+    const manager = createManager(storageDir);
+    (manager as any).topicsIndex = index;
+    (manager as any).topicDocuments = new Map([["topic-local", new Map()]]);
+
+    const topicsIndexPath = (manager as any).getTopicsIndexPath() as string;
+    const realHashFile = ((manager as any).hashFile as (filePath: string) => Promise<string>).bind(manager);
+    let topicsIndexHashCalls = 0;
+    (manager as any).hashFile = async (filePath: string): Promise<string> => {
+      if (filePath === topicsIndexPath) {
+        topicsIndexHashCalls += 1;
+        if (topicsIndexHashCalls === 2) {
+          // Simulate a mutation landing between the pre-export snapshot and
+          // the archive write completing, without disturbing the manifest
+          // content hashing that createStableExportSnapshot also relies on.
+          return "mutated-during-export";
+        }
+      }
+      return realHashFile(filePath);
+    };
+
+    const exportPath = path.join(temporaryDir, "raced.rag");
+    const error = await captureError(() => manager.exportTopic("topic-local", exportPath));
+    expect(error.message).to.match(/changed during export/);
+    expect(topicsIndexHashCalls).to.be.at.least(2);
+    expect((await captureError(() => fs.stat(exportPath))).message).to.include("ENOENT");
+    expect((await fs.readdir(temporaryDir)).some((entry) => entry.includes("raced.rag"))).to.equal(false);
   });
 });

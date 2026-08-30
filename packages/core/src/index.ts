@@ -82,6 +82,7 @@ export {
   VectorStoreMetadataCorruptionError,
   EmbeddingFingerprintMismatchError,
   EmbeddingEndpointMismatchError,
+  VectorStoreLoadError,
 } from "./stores/vectorStoreFactory";
 export type { VectorStoreConfig, VectorStoreMetadata } from "./stores/vectorStoreFactory";
 
@@ -123,7 +124,13 @@ export type { QueryPlannerOptions, QueryPlan, SubQuery } from "./agents/queryPla
 
 // Managers
 export { TopicManager } from "./managers/topicManager";
-export type { TopicManagerOptions, CreateTopicOptions, TopicStats, AddDocumentResult } from "./managers/topicManager";
+export type {
+  TopicManagerOptions,
+  CreateTopicOptions,
+  TopicStats,
+  AddDocumentResult,
+  StorageExternalChange,
+} from "./managers/topicManager";
 export { DocumentPipeline } from "./managers/documentPipeline";
 export type { PipelineOptions, PipelineProgress, PipelineResult } from "./managers/documentPipeline";
 
@@ -157,19 +164,26 @@ export {
   STORAGE_FORMAT_VERSION,
   STORAGE_FORMAT_FILENAME,
   STORAGE_CONFIG_FILENAME,
+  StorageMigrationInterruptedError,
+  UnversionedStorageError,
+  StorageFormatVersionError,
+  StorageResetInterruptedError,
   atomicWriteFile,
   atomicWriteJson,
   ensureStorageFormatV2,
+  inspectStorage,
   resetStorageToV2,
 } from "./utils/storageV2";
-export type { StorageFormatMarker } from "./utils/storageV2";
+export type { StorageFormatMarker, StorageInspection } from "./utils/storageV2";
 export {
   MIGRATION_REPORT_FILENAME,
   MIGRATION_STATE_VERSION,
   StorageMigrationError,
   applyStorageMigration,
+  findLatestMigrationState,
   getStorageMigrationStatus,
   planStorageMigration,
+  prepareStorageMigration,
   resumeStorageMigration,
   rollbackStorageMigration,
 } from "./utils/storageMigration";
@@ -184,10 +198,17 @@ export type {
   MigrationStage,
   MigrationState,
   MigrationTopicPlan,
+  PreparedStorageMigration,
   StorageMigrationPlan,
 } from "./utils/storageMigration";
-export { acquireStorageLock, StorageLockHeldError, STORAGE_LOCK_FILENAME } from "./utils/storageLock";
-export type { StorageLockHandle, StorageLockOptions } from "./utils/storageLock";
+export {
+  acquireStorageLock,
+  acquireOperationLease,
+  StorageLockHeldError,
+  StorageBusyError,
+  STORAGE_LOCK_FILENAME,
+} from "./utils/storageLock";
+export type { StorageLockHandle, StorageLockOptions, OperationLeaseOptions, LockFileInfo } from "./utils/storageLock";
 export { StorageTransactionCoordinator } from "./utils/storageTransactionCoordinator";
 export type { StorageTransactionFence, StorageTransactionOperation } from "./utils/storageTransactionCoordinator";
 export type {
