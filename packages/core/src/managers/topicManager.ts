@@ -28,6 +28,7 @@ import {
   EmbeddingFingerprintMismatchError,
   EmbeddingReindexRequiredError,
   VectorStoreFactory,
+  VectorStoreLoadError,
   VectorStoreMetadataCorruptionError,
 } from "../stores/vectorStoreFactory";
 import { EventEmitter } from "events";
@@ -849,8 +850,10 @@ export class TopicManager {
     documentId: string,
   ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
-        this.getTopicMutationMutex(topicId).runExclusive(() => this.removeDocumentUnlocked(topicId, documentId)),
+      this.runStorageWriteTransaction((tx) =>
+        this.getTopicMutationMutex(topicId).runExclusive(() =>
+          this.removeDocumentUnlocked(topicId, documentId, tx.coordinator),
+        ),
       ),
     );
   }
@@ -858,6 +861,7 @@ export class TopicManager {
   private async removeDocumentUnlocked(
     topicId: string,
     documentId: string,
+    coordinator: StorageTransactionCoordinator,
   ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
     if (this.isCommonTopic(topicId)) {
       throw new Error("Common database topics are read-only");
@@ -909,7 +913,6 @@ export class TopicManager {
     await atomicWriteJson(preparedDocuments, [...nextDocuments.values()]);
     await atomicWriteJson(preparedIndex, nextIndex);
     try {
-      const coordinator = await this.ensureTransactionCoordinator();
       await coordinator.commit(
         "remove-document-metadata",
         [
@@ -969,7 +972,7 @@ export class TopicManager {
     options?: PipelineOptions,
   ): Promise<AddDocumentResult[]> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
+      this.runStorageWriteTransaction(() =>
         this.getTopicMutationMutex(topicId).runExclusive(() => this.addDocumentsUnlocked(topicId, filePaths, options)),
       ),
     );
@@ -990,6 +993,10 @@ export class TopicManager {
         throw new Error("TopicManager not initialized");
       }
 
+      // The write transaction's prologue has already reloaded this.topicsIndex
+      // from disk before invoking this operation, so this lookup is live: a
+      // foreign process that deleted the topic since our caches were last
+      // populated is reflected here, not a stale in-memory reference.
       const topic = this.topicsIndex.topics[topicId];
       if (!topic) {
         throw new Error(`Topic not found: ${topicId}`);
@@ -1161,7 +1168,7 @@ export class TopicManager {
     options?: PipelineOptions,
   ): Promise<AddDocumentResult[]> {
     return this.runManagedOperation(() =>
-      this.storageMutationMutex.runExclusive(() =>
+      this.runStorageWriteTransaction(() =>
         this.getTopicMutationMutex(topicId).runExclusive(() => this.addSourcesUnlocked(topicId, sources, options)),
       ),
     );
@@ -1335,7 +1342,9 @@ export class TopicManager {
    * The caller owns loading/chunking.
    */
   public async storeProcessedChunks(topicId: string, chunks: LangChainDocument[], signal?: AbortSignal): Promise<void> {
-    return this.runManagedOperation(() => this.storeProcessedChunksUnlocked(topicId, chunks, signal));
+    return this.runManagedOperation(() =>
+      this.runStorageWriteTransaction(() => this.storeProcessedChunksUnlocked(topicId, chunks, signal)),
+    );
   }
 
   private async storeProcessedChunksUnlocked(
@@ -1349,49 +1358,101 @@ export class TopicManager {
   }
 
   /**
-   * Get vector store for a topic
+   * Get vector store for a topic.
+   *
+   * Reads never take the storage lease, so a concurrent writer's
+   * drop-and-recreate (cross-process table swap) can make the table — or its
+   * metadata file — vanish mid-read. A first attempt landing on "absent"
+   * (table-absent, or a load failure) is ambiguous between a genuinely empty
+   * or corrupt topic and that brief window, so it gets exactly one retry
+   * after a short wait before either outcome is committed to.
    */
   public async getVectorStore(topicId: string): Promise<VectorStore | null> {
     this.logger.debug("Getting vector store", { topicId });
 
     try {
-      if (!this.vectorStoreFactory) {
-        throw new Error("TopicManager not initialized");
-      }
-
-      await this.ensureEmbeddingModelCompatibility(topicId);
-
-      const location = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? "common") : this.getDatabaseDir();
-      const cacheKey = `${location}::${topicId}`;
-      // Check cache first
-      const cachedStore = this.vectorStoreCache.get(cacheKey);
-      if (cachedStore) {
-        this.logger.debug("Returning cached vector store", { topicId });
-        return cachedStore;
-      }
-
-      // Load from disk
-      let store;
-      if (this.isCommonTopic(topicId) && this.commonDatabasePath) {
-        this.logger.debug("Loading vector store from common database", { topicId });
-        store = await this.vectorStoreFactory.loadStore(topicId, this.commonDatabasePath);
-      } else {
-        store = await this.vectorStoreFactory.loadStore(topicId);
-      }
-
+      const store = await this.loadVectorStoreOnce(topicId);
       if (store) {
-        this.vectorStoreCache.set(cacheKey, store);
-        this.logger.debug("Vector store loaded and cached", { topicId });
+        return store;
       }
-
-      return store;
+      // table-absent on the first attempt: retry once before accepting
+      // empty-topic semantics.
+      return await this.retryVectorStoreLoad(topicId);
     } catch (error) {
+      if (error instanceof VectorStoreLoadError) {
+        return await this.retryVectorStoreLoad(topicId);
+      }
       this.logger.error("Failed to get vector store", {
         error: error instanceof Error ? error.message : String(error),
         topicId,
       });
       throw error;
     }
+  }
+
+  /** The retry point shared by both "table-absent" and "load failed". */
+  private async retryVectorStoreLoad(topicId: string): Promise<VectorStore | null> {
+    this.invalidateVectorStoreCache(topicId);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      // table-absent here is accepted as empty-topic semantics; a second
+      // VectorStoreLoadError is a real failure and must surface, never be
+      // swallowed into a fabricated "empty topic" result.
+      return await this.loadVectorStoreOnce(topicId);
+    } catch (error) {
+      this.logger.error("Failed to get vector store after retry", {
+        error: error instanceof Error ? error.message : String(error),
+        topicId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * One disk-touching attempt to resolve a topic's vector store: compat
+   * check, cache lookup, then load. A corrupt-metadata refusal from the
+   * compat check is classified the same way `loadStore` classifies its own
+   * metadata-read failure — as `VectorStoreLoadError` — so `getVectorStore`'s
+   * single retry point covers both read paths uniformly.
+   */
+  private async loadVectorStoreOnce(topicId: string): Promise<VectorStore | null> {
+    if (!this.vectorStoreFactory) {
+      throw new Error("TopicManager not initialized");
+    }
+
+    try {
+      await this.ensureEmbeddingModelCompatibility(topicId);
+    } catch (error) {
+      if (error instanceof VectorStoreMetadataCorruptionError) {
+        throw new VectorStoreLoadError(topicId, error);
+      }
+      throw error;
+    }
+
+    const location = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? "common") : this.getDatabaseDir();
+    const cacheKey = `${location}::${topicId}`;
+    // Check cache first
+    const cachedStore = this.vectorStoreCache.get(cacheKey);
+    if (cachedStore) {
+      this.logger.debug("Returning cached vector store", { topicId });
+      return cachedStore;
+    }
+
+    // Load from disk
+    let store;
+    if (this.isCommonTopic(topicId) && this.commonDatabasePath) {
+      this.logger.debug("Loading vector store from common database", { topicId });
+      store = await this.vectorStoreFactory.loadStore(topicId, this.commonDatabasePath);
+    } else {
+      store = await this.vectorStoreFactory.loadStore(topicId);
+    }
+
+    if (store) {
+      this.vectorStoreCache.set(cacheKey, store);
+      this.logger.debug("Vector store loaded and cached", { topicId });
+    }
+
+    return store;
   }
 
   /**
