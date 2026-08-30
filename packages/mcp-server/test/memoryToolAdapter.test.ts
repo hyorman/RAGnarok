@@ -3,7 +3,18 @@ import sinon from "sinon";
 import { MemoryServiceError, TOOL_LIMITS } from "@ragnarok/core";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { buildMemoryInputSchema, registerTools } from "../src/tools";
-import { invokeMemoryTool } from "../src/memoryToolAdapter";
+import { invokeMemoryResetTool, invokeMemoryTool } from "../src/memoryToolAdapter";
+
+/**
+ * A stand-in for core's StorageBusyError: only `name` is set, so a test that
+ * passes proves the adapter routes on the type tag rather than on `instanceof`
+ * or on the message text.
+ */
+function storageBusyError(): Error {
+  const error = new Error("Storage is busy: a write is in progress by pid 4242.");
+  error.name = "StorageBusyError";
+  return error;
+}
 
 function makeServerContext(signal = new AbortController().signal): any {
   return { mcpReq: { signal } };
@@ -174,6 +185,34 @@ describe("rag_memory error payload", () => {
     expect(result.isError).to.equal(true);
     expect(parseResponse(result)).to.deep.equal({
       error: { code: "MEMORY_OPERATION_FAILED", message: "memory failed" },
+    });
+  });
+
+  it("reports a busy storage lease as STORAGE_BUSY, not MEMORY_OPERATION_FAILED", async () => {
+    const execute = sinon.stub().rejects(storageBusyError());
+
+    const result = await callMemoryTool({ action: "store", content: "c" }, execute);
+
+    expect(result.isError).to.equal(true);
+    expect(parseResponse(result)).to.deep.equal({
+      error: {
+        code: "STORAGE_BUSY",
+        message: "Storage is busy: another RAGnarōk process is writing. Retry shortly.",
+      },
+    });
+  });
+
+  it("reports a busy storage lease from rag_reset_memory with the same code", async () => {
+    const reset = sinon.stub().rejects(storageBusyError());
+
+    const result = await invokeMemoryResetTool(makeServerContext(), { reset } as any);
+
+    expect(result.isError).to.equal(true);
+    expect(parseResponse(result)).to.deep.equal({
+      error: {
+        code: "STORAGE_BUSY",
+        message: "Storage is busy: another RAGnarōk process is writing. Retry shortly.",
+      },
     });
   });
 
