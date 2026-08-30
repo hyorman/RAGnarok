@@ -175,6 +175,12 @@ export {
   resetStorageToV2,
 } from "./utils/storageV2";
 export type { StorageFormatMarker, StorageInspection } from "./utils/storageV2";
+export { SharedTopicRegistry } from "./sharedTopics/registry";
+export { ArchiveFolderSource } from "./sharedTopics/archiveFolderSource";
+export { SharedArchiveCache, deriveSharedTopicId } from "./sharedTopics/archiveCache";
+export { SharedTopicReadOnlyError } from "./sharedTopics/types";
+export type { SharedTopicSource, SharedTopicSourceContext, ResolvedSharedTopic } from "./sharedTopics/types";
+export { SHARED_TOPIC_CACHE_DIRNAME } from "./utils/storageV2";
 export {
   MIGRATION_REPORT_FILENAME,
   MIGRATION_STATE_VERSION,

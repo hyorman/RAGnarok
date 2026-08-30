@@ -13,6 +13,7 @@ import {
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
 import type { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
 import type { PipelineOptions, PipelineResult } from "../src/managers/documentPipeline";
+import type { Topic, TopicsIndex } from "../src/utils/types";
 import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
@@ -134,11 +135,7 @@ async function lockFileGone(storageDir: string): Promise<boolean> {
  */
 function installFakeDocumentPipeline(manager: TopicManager, onProcessing?: () => Promise<void>): void {
   (manager as any).documentPipeline = {
-    processDocument: async (
-      filePath: string,
-      _topicId: string,
-      _options: PipelineOptions,
-    ): Promise<PipelineResult> => {
+    processDocument: async (filePath: string, _topicId: string, _options: PipelineOptions): Promise<PipelineResult> => {
       await onProcessing?.();
       const documentId = `doc-${path.basename(filePath)}`;
       return {
@@ -532,5 +529,76 @@ describe("TopicManager operation-scoped write transactions", function () {
     expect(store).to.equal(null);
     expect(retryInvoked).to.equal(false);
     expect(elapsed).to.be.lessThan(100);
+  });
+});
+
+/**
+ * Moved from topicManagerCommonDatabase.test.ts, which was deleted with the
+ * common-database code. This case never had anything to do with that feature:
+ * it pins the ordering of a local delete — the topics index must be published
+ * before the storage generation it names is removed.
+ */
+describe("TopicManager delete ordering", function () {
+  let temporaryDir: string;
+
+  beforeEach(async function () {
+    temporaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "topic-delete-ordering-"));
+  });
+
+  afterEach(async function () {
+    await fs.rm(temporaryDir, { recursive: true, force: true });
+  });
+
+  it("publishes topic deletion before removing its storage generation", async function () {
+    const storageRoot = path.join(temporaryDir, "delete-local");
+    const database = path.join(storageRoot, "database");
+    const lancedb = path.join(database, "lancedb");
+    await fs.mkdir(lancedb, { recursive: true });
+    const local: Topic = { id: "delete-me", name: "Delete me", createdAt: 1, updatedAt: 1, documentCount: 0 };
+    const index: TopicsIndex = {
+      topics: { [local.id]: local },
+      modelName: "test-model",
+      lastUpdated: 1,
+    };
+    await fs.writeFile(path.join(database, "topics.json"), JSON.stringify(index));
+    await fs.writeFile(path.join(database, `topic-${local.id}-documents.json`), "[]");
+    await fs.writeFile(path.join(database, `vector-${local.id}-metadata.json`), "{}");
+    for (const table of [`${local.id}.lance`]) {
+      await fs.mkdir(path.join(lancedb, table));
+      await fs.writeFile(path.join(lancedb, table, "data"), "fixture");
+    }
+
+    const Manager = TopicManager as unknown as new (options: {
+      storageDir: string;
+      config: IConfigProvider;
+      notifier: INotifier;
+      embeddingService: EmbeddingService;
+    }) => TopicManager;
+    const manager = new Manager({
+      storageDir: storageRoot,
+      config,
+      notifier,
+      embeddingService: { getCurrentModel: () => "test-model" } as unknown as EmbeddingService,
+    });
+    (manager as any).topicsIndex = index;
+    (manager as any).topicDocuments = new Map([[local.id, new Map()]]);
+    (manager as any).vectorStoreFactory = { dispose: () => undefined };
+
+    await manager.deleteTopic(local.id);
+    expect(manager.getTopic(local.id)).to.equal(null);
+    expect(JSON.parse(await fs.readFile(path.join(database, "topics.json"), "utf8")).topics).to.deep.equal({});
+    for (const candidate of [
+      path.join(database, `topic-${local.id}-documents.json`),
+      path.join(database, `vector-${local.id}-metadata.json`),
+      path.join(lancedb, `${local.id}.lance`),
+    ]) {
+      let exists = true;
+      try {
+        await fs.access(candidate);
+      } catch {
+        exists = false;
+      }
+      expect(exists, candidate).to.equal(false);
+    }
   });
 });

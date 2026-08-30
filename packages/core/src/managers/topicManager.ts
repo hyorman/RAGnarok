@@ -35,15 +35,18 @@ import { EventEmitter } from "events";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import type { EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { Logger } from "../logger";
-import { EXTENSION, CONFIG } from "../constants";
+import { EXTENSION } from "../constants";
 import {
   assertNoInterruptedStorageMigration,
   atomicWriteJson,
   ensureStorageFormatV2,
   inspectStorage,
   resetStorageToV2,
+  SHARED_TOPIC_CACHE_DIRNAME,
   STORAGE_RESET_JOURNAL_FILENAME,
 } from "../utils/storageV2";
+import { SharedTopicRegistry } from "../sharedTopics/registry";
+import type { SharedTopicSource } from "../sharedTopics/types";
 import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import {
@@ -87,6 +90,11 @@ export interface TopicManagerOptions {
   llmProvider?: ILLMProvider;
   /** Explicitly back up existing managed data and initialize storage format v2. */
   resetStorage?: boolean;
+  /**
+   * Sources contributing read-only shared topics. Hosts construct these; core
+   * owns everything downstream of resolve().
+   */
+  sharedTopicSources?: SharedTopicSource[];
 }
 
 export interface CreateTopicOptions {
@@ -115,9 +123,7 @@ export interface AddDocumentResult {
  * because a full-exclusion operation (migration/reset) elsewhere is holding
  * it.
  */
-export type StorageExternalChange =
-  | { kind: "topics-changed" }
-  | { kind: "storage-unavailable" };
+export type StorageExternalChange = { kind: "topics-changed" } | { kind: "storage-unavailable" };
 
 interface IngestionJournalEntry {
   id: string;
@@ -317,10 +323,9 @@ export class TopicManager {
   private topicNameVectorCache: Map<string, number[]> = new Map();
   private topicNameVectorModel: string | null = null;
 
-  // Common database support
-  private commonTopicsIndex: TopicsIndex | null = null;
-  private commonTopicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
-  private commonDatabasePath: string | null = null;
+  /** Read-only topics contributed by configured sources. Replaces the common database. */
+  private readonly sharedTopics: SharedTopicRegistry;
+  private readonly sharedTopicsMutex = new Mutex();
   private journalMutex = new Mutex();
   private archiveMutex = new Mutex();
   private storageMutationMutex = new Mutex();
@@ -361,6 +366,8 @@ export class TopicManager {
   private constructor(private options: TopicManagerOptions) {
     this.logger = new Logger("TopicManager");
     this.storageDir = options.storageDir;
+    this.sharedTopics = new SharedTopicRegistry(path.join(this.storageDir, SHARED_TOPIC_CACHE_DIRNAME), this.logger);
+    this.sharedTopics.setSources(options.sharedTopicSources ?? []);
     this.config = options.config;
     this.notifier = options.notifier;
     this.embeddingService = options.embeddingService;
@@ -428,14 +435,13 @@ export class TopicManager {
         await this.runStorageWriteTransaction(async () => undefined);
       }
 
-      // Load common database if configured
-      await this.loadCommonDatabase();
+      await this.refreshSharedTopics();
 
       this.isInitialized = true;
       this.startExternalChangeWatcher();
       this.logger.info("TopicManager initialized successfully", {
         topicCount: Object.keys(this.topicsIndex?.topics || {}).length,
-        commonTopicCount: Object.keys(this.commonTopicsIndex?.topics || {}).length,
+        sharedTopicCount: this.sharedTopics.listTopics().length,
         embeddingModel: this.topicsIndex?.modelName,
       });
     } catch (error) {
@@ -491,17 +497,14 @@ export class TopicManager {
       const existingTopic = Object.values(this.topicsIndex.topics).find(
         (t) => t.name.toLowerCase() === options.name.toLowerCase(),
       );
-      const commonNameConflict = Object.values(this.commonTopicsIndex?.topics ?? {}).find(
-        (topic) => topic.name.toLowerCase() === options.name.toLowerCase(),
-      );
 
-      if (existingTopic || commonNameConflict) {
+      if (existingTopic) {
         throw new Error(`Topic with name "${options.name}" already exists`);
       }
 
       // Create topic object
       let topicId = this.generateTopicId();
-      while (this.topicsIndex.topics[topicId] || this.commonTopicsIndex?.topics[topicId]) {
+      while (this.topicsIndex.topics[topicId]) {
         topicId = this.generateTopicId();
       }
       const topic: Topic = {
@@ -699,11 +702,8 @@ export class TopicManager {
         const existingTopic = Object.values(this.topicsIndex.topics).find(
           (t) => t.id !== topicId && t.name.toLowerCase() === updates.name!.toLowerCase(),
         );
-        const commonTopic = Object.values(this.commonTopicsIndex?.topics ?? {}).find(
-          (candidate) => candidate.name.toLowerCase() === updates.name!.toLowerCase(),
-        );
 
-        if (existingTopic || commonTopic) {
+        if (existingTopic) {
           throw new Error(`Topic with name "${updates.name}" already exists`);
         }
       }
@@ -734,33 +734,27 @@ export class TopicManager {
   }
 
   /**
-   * Get a topic by ID (from local or common database)
+   * Get a topic by ID (local, or contributed by a shared source)
    */
   public getTopic(topicId: string): Topic | null {
-    // Check local topics first
-    if (this.topicsIndex?.topics[topicId]) {
-      return { ...this.topicsIndex.topics[topicId], source: "local" as TopicSource };
+    const local = this.topicsIndex?.topics[topicId];
+    if (local) {
+      return { ...local, source: "local" as TopicSource };
     }
-    // Check common topics
-    if (this.commonTopicsIndex?.topics[topicId]) {
-      return { ...this.commonTopicsIndex.topics[topicId], source: "common" as TopicSource };
-    }
-    return null;
+    return this.sharedTopics.getTopic(topicId) ?? null;
   }
 
   /**
-   * Get all topics (local + common merged)
+   * Get all topics (local + shared merged)
    */
   public getAllTopics(): Topic[] {
     const localTopics = this.topicsIndex
-      ? Object.values(this.topicsIndex.topics).map((t) => ({ ...t, source: "local" as TopicSource }))
+      ? Object.values(this.topicsIndex.topics).map((topic) => ({ ...topic, source: "local" as TopicSource }))
       : [];
 
-    const commonTopics = this.commonTopicsIndex
-      ? Object.values(this.commonTopicsIndex.topics).map((t) => ({ ...t, source: "common" as TopicSource }))
-      : [];
-
-    return [...localTopics, ...commonTopics].filter((t) => !TopicManager.isSystemTopic(t.name));
+    return [...localTopics, ...this.sharedTopics.listTopics()].filter(
+      (topic) => !TopicManager.isSystemTopic(topic.name),
+    );
   }
 
   /**
@@ -849,28 +843,20 @@ export class TopicManager {
     );
   }
 
-  /**
-   * Check if a topic is from the common database (read-only)
-   */
+  /** True when this topic comes from a shared source and is therefore read-only. */
   public isCommonTopic(topicId: string): boolean {
-    return this.topicsIndex?.topics[topicId] === undefined && this.commonTopicsIndex?.topics[topicId] !== undefined;
+    return this.sharedTopics.has(topicId);
   }
 
   /**
-   * Get documents for a specific topic (local or common)
+   * Get documents for a specific topic (local or shared)
    */
   public getTopicDocuments(topicId: string): TopicDocument[] {
-    // Check local documents first
-    const localDocs = this.topicDocuments.get(topicId);
-    if (localDocs) {
-      return Array.from(localDocs.values());
+    const localDocuments = this.topicDocuments.get(topicId);
+    if (localDocuments) {
+      return Array.from(localDocuments.values());
     }
-    // Check common documents
-    const commonDocs = this.commonTopicDocuments.get(topicId);
-    if (commonDocs) {
-      return Array.from(commonDocs.values());
-    }
-    return [];
+    return this.sharedTopics.getDocuments(topicId);
   }
 
   public listDocuments(topicId: string): TopicDocument[] {
@@ -994,7 +980,7 @@ export class TopicManager {
       storageDir: this.storageDir,
       databaseDir: this.getDatabaseDir(),
       topicCount: Object.keys(this.topicsIndex?.topics ?? {}).length,
-      commonTopicCount: Object.keys(this.commonTopicsIndex?.topics ?? {}).length,
+      commonTopicCount: this.sharedTopics.listTopics().length,
     };
   }
 
@@ -1467,7 +1453,7 @@ export class TopicManager {
     if (!this.vectorStoreFactory) {
       return false;
     }
-    const customStorageDir = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? undefined) : undefined;
+    const customStorageDir = this.getTopicStoreDir(topicId);
     try {
       return (await this.vectorStoreFactory.getStoreMetadata(topicId, customStorageDir)) !== null;
     } catch {
@@ -1501,7 +1487,7 @@ export class TopicManager {
       throw error;
     }
 
-    const location = this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? "common") : this.getDatabaseDir();
+    const location = this.getTopicStoreDir(topicId) ?? this.getDatabaseDir();
     const cacheKey = `${location}::${topicId}`;
     // Check cache first
     const cachedStore = this.vectorStoreCache.get(cacheKey);
@@ -1510,14 +1496,8 @@ export class TopicManager {
       return cachedStore;
     }
 
-    // Load from disk
-    let store;
-    if (this.isCommonTopic(topicId) && this.commonDatabasePath) {
-      this.logger.debug("Loading vector store from common database", { topicId });
-      store = await this.vectorStoreFactory.loadStore(topicId, this.commonDatabasePath);
-    } else {
-      store = await this.vectorStoreFactory.loadStore(topicId);
-    }
+    // Load from disk. `undefined` already means "the managed database directory".
+    const store = await this.vectorStoreFactory.loadStore(topicId, this.getTopicStoreDir(topicId));
 
     if (store) {
       this.vectorStoreCache.set(cacheKey, store);
@@ -1535,8 +1515,7 @@ export class TopicManager {
       throw new Error("TopicManager not initialized");
     }
 
-    const customDir = this.isCommonTopic(topicId) ? this.commonDatabasePath : undefined;
-    return this.vectorStoreFactory.getAllDocuments(topicId, limit, customDir ?? undefined);
+    return this.vectorStoreFactory.getAllDocuments(topicId, limit, this.getTopicStoreDir(topicId));
   }
 
   /**
@@ -1550,10 +1529,7 @@ export class TopicManager {
       return;
     }
 
-    const metadata = await this.vectorStoreFactory.getStoreMetadata(
-      topicId,
-      this.isCommonTopic(topicId) ? (this.commonDatabasePath ?? undefined) : undefined,
-    );
+    const metadata = await this.vectorStoreFactory.getStoreMetadata(topicId, this.getTopicStoreDir(topicId));
     if (!metadata?.embeddingModel) {
       return;
     }
@@ -1620,17 +1596,16 @@ export class TopicManager {
         return null;
       }
 
-      let topic = this.topicsIndex.topics[topicId];
+      let topic: Topic | undefined = this.topicsIndex.topics[topicId];
       let databaseDir = this.getDatabaseDir();
       let isCommon = false;
 
-      // If not in local, check common
-      if (!topic && this.commonTopicsIndex && this.commonTopicsIndex.topics[topicId]) {
-        topic = this.commonTopicsIndex.topics[topicId];
-        if (this.commonDatabasePath) {
-          databaseDir = this.commonDatabasePath;
-          isCommon = true;
-        }
+      // If not in local, check the shared sources
+      const sharedStoreDir = this.getTopicStoreDir(topicId);
+      if (!topic && sharedStoreDir) {
+        topic = this.sharedTopics.getTopic(topicId);
+        databaseDir = sharedStoreDir;
+        isCommon = true;
       }
 
       if (!topic) {
@@ -1638,9 +1613,9 @@ export class TopicManager {
       }
 
       // Get document count
-      const documents = isCommon ? this.commonTopicDocuments.get(topicId) : this.topicDocuments.get(topicId);
-
-      const documentCount = documents?.size || 0;
+      const documentCount = isCommon
+        ? this.sharedTopics.getDocuments(topicId).length
+        : (this.topicDocuments.get(topicId)?.size ?? 0);
 
       // Load vector store metadata
       const metadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
@@ -1852,9 +1827,7 @@ export class TopicManager {
    * Import a topic from a .rag archive file
    */
   public async importTopic(archivePath: string): Promise<Topic> {
-    return this.runManagedOperation(() =>
-      this.archiveMutex.runExclusive(() => this.importTopicUnlocked(archivePath)),
-    );
+    return this.runManagedOperation(() => this.archiveMutex.runExclusive(() => this.importTopicUnlocked(archivePath)));
   }
 
   private async exportTopicUnlocked(topicId: string, exportPath: string): Promise<void> {
@@ -1974,7 +1947,7 @@ export class TopicManager {
       }
 
       let newTopicId = this.generateTopicId();
-      while (this.topicsIndex.topics[newTopicId] || this.commonTopicsIndex?.topics[newTopicId]) {
+      while (this.topicsIndex.topics[newTopicId]) {
         newTopicId = this.generateTopicId();
       }
       const now = Date.now();
@@ -1985,11 +1958,7 @@ export class TopicManager {
         updatedAt: now,
         source: "local",
       };
-      const occupiedNames = new Set(
-        [...Object.values(this.topicsIndex.topics), ...Object.values(this.commonTopicsIndex?.topics ?? {})].map(
-          (topic) => topic.name.toLowerCase(),
-        ),
-      );
+      const occupiedNames = new Set(Object.values(this.topicsIndex.topics).map((topic) => topic.name.toLowerCase()));
       const baseName = newTopic.name;
       let suffix = 0;
       while (occupiedNames.has(newTopic.name.toLowerCase())) {
@@ -2049,6 +2018,10 @@ export class TopicManager {
         this.topicsIndex = nextTopicsIndex;
         this.topicDocuments.set(newTopicId, documentsMap);
       });
+
+      // A shared topic whose name the newly imported one now occupies must be
+      // renamed, or it becomes unreachable by name.
+      await this.refreshSharedTopics();
 
       this.logger.info("Topic imported successfully", {
         originalId: exportData.topic.id,
@@ -2387,141 +2360,6 @@ export class TopicManager {
     return normalizedCandidate === normalizedParent || normalizedCandidate.startsWith(`${normalizedParent}${path.sep}`);
   }
 
-  /**
-   * Load topics from common database path (read-only)
-   */
-  public async loadCommonDatabase(): Promise<void> {
-    return this.runManagedOperation(() => this.loadCommonDatabaseUnlocked());
-  }
-
-  private async loadCommonDatabaseUnlocked(): Promise<void> {
-    const commonPath = this.config.get<string>(CONFIG.COMMON_DATABASE_PATH, "");
-
-    if (!commonPath) {
-      this.logger.debug("No common database path configured");
-      this.commonTopicsIndex = null;
-      this.commonTopicDocuments.clear();
-      this.commonDatabasePath = null;
-      return;
-    }
-
-    try {
-      // Verify path exists
-      await fs.access(commonPath);
-      const commonFormat = JSON.parse(await fs.readFile(path.join(commonPath, "storage-format.json"), "utf8"));
-      if (commonFormat.formatVersion !== 2) {
-        throw new Error("Common database must use storage format v2");
-      }
-      const commonDatabaseDir = path.join(commonPath, EXTENSION.DATABASE_DIR);
-      this.commonDatabasePath = commonDatabaseDir;
-
-      // Check for topics.json
-      const indexPath = path.join(commonDatabaseDir, EXTENSION.TOPICS_INDEX_FILENAME);
-      try {
-        await fs.access(indexPath);
-      } catch {
-        this.logger.warn("Common database path exists but missing topics.json", { path: commonPath });
-        this.notifier.showWarning(
-          `Common database path found, but missing "${EXTENSION.TOPICS_INDEX_FILENAME}". Is the path correct?`,
-        );
-        this.commonTopicsIndex = null;
-        this.commonTopicDocuments.clear();
-        return;
-      }
-
-      // Load topics index from common path
-      const data = await fs.readFile(indexPath, "utf-8");
-      this.commonTopicsIndex = parseTopicsIndex(data);
-      this.commonTopicDocuments.clear();
-
-      this.logger.info("Common database loaded", {
-        path: commonPath,
-        topicCount: Object.keys(this.commonTopicsIndex?.topics || {}).length,
-      });
-
-      // Load document metadata for each common topic
-      if (this.commonTopicsIndex) {
-        // Check for name conflicts with local topics BEFORE fully loading
-        const localTopicNames = new Set(Object.values(this.topicsIndex?.topics || {}).map((t) => t.name.toLowerCase()));
-        const localTopicIds = new Set(Object.keys(this.topicsIndex?.topics || {}));
-
-        const conflicts: string[] = [];
-
-        for (const topic of Object.values(this.commonTopicsIndex.topics)) {
-          if (localTopicNames.has(topic.name.toLowerCase()) || localTopicIds.has(topic.id)) {
-            conflicts.push(`${topic.name} (${topic.id})`);
-          }
-        }
-
-        if (conflicts.length > 0) {
-          const conflictList = conflicts.slice(0, 3).join(", ") + (conflicts.length > 3 ? "..." : "");
-          const message = `Cannot load common database due to topic ID/name conflicts. Local topics [${conflictList}] already exist. Please rename or re-ID the conflicting topics first.`;
-
-          this.logger.warn("Common database load aborted due to name conflicts", { conflicts });
-          this.notifier.showError(message);
-
-          // Abort loading
-          this.commonTopicsIndex = null;
-          this.commonTopicDocuments.clear();
-          this.commonDatabasePath = null;
-          return;
-        }
-
-        // No conflicts, proceed to load documents
-        for (const topicId of Object.keys(this.commonTopicsIndex.topics)) {
-          await this.loadCommonTopicDocuments(topicId);
-        }
-      }
-    } catch (error) {
-      this.logger.warn("Failed to load common database", {
-        path: commonPath,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.notifier.showError(
-        `Failed to load common database: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      this.commonTopicsIndex = null;
-      this.commonTopicDocuments.clear();
-      this.commonDatabasePath = null;
-    }
-  }
-
-  /**
-   * Load document metadata for a common topic
-   */
-  private async loadCommonTopicDocuments(topicId: string): Promise<void> {
-    if (!this.commonDatabasePath) {
-      return;
-    }
-
-    try {
-      const documentsPath = path.join(this.commonDatabasePath, `topic-${topicId}-documents.json`);
-      const data = await fs.readFile(documentsPath, "utf-8");
-      const documentsArray: TopicDocument[] = JSON.parse(data);
-
-      const documentsMap = new Map<string, TopicDocument>();
-      for (const doc of documentsArray) {
-        documentsMap.set(doc.id, doc);
-      }
-
-      this.commonTopicDocuments.set(topicId, documentsMap);
-    } catch (error) {
-      if ((error as any).code === "ENOENT") {
-        this.logger.warn("Document file missing for common topic", { topicId, error: "File not found" });
-      } else {
-        this.logger.error("Failed to load documents for common topic", { topicId, error });
-      }
-      this.commonTopicDocuments.set(topicId, new Map());
-    }
-  }
-
-  /**
-   * Get common database path if configured
-   */
-  public getCommonDatabasePath(): string | null {
-    return this.commonDatabasePath;
-  }
-
   // ==================== Private Methods ====================
 
   /**
@@ -2529,6 +2367,42 @@ export class TopicManager {
    */
   private getDatabaseDir(): string {
     return path.join(this.storageDir, EXTENSION.DATABASE_DIR);
+  }
+
+  /**
+   * Where this topic's vector data lives, or undefined for the managed database
+   * directory. One accessor for the five call sites that used to spell out
+   * `isCommonTopic(id) ? commonDatabasePath : <site-specific fallback>`.
+   */
+  private getTopicStoreDir(topicId: string): string | undefined {
+    return this.sharedTopics.getStoreDir(topicId);
+  }
+
+  /**
+   * Re-resolve shared topic sources. Passing `sources` replaces the configured
+   * set — hosts do this when their configuration changes.
+   *
+   * Never throws: an unreadable share must not stop a store from opening.
+   */
+  public async refreshSharedTopics(sources?: SharedTopicSource[]): Promise<void> {
+    await this.sharedTopicsMutex.runExclusive(async () => {
+      if (sources) {
+        this.sharedTopics.setSources(sources);
+      }
+      const previousIds = this.sharedTopics.listTopics().map((topic) => topic.id);
+      const localNames = Object.values(this.topicsIndex?.topics ?? {}).map((topic) => topic.name);
+      try {
+        await this.sharedTopics.refresh(localNames);
+      } catch (error) {
+        this.logger.debug("Shared topic refresh failed", { error });
+        return;
+      }
+      // A topic that is gone, or whose unpack moved, must not keep being served
+      // from a directory that has been pruned.
+      for (const topicId of previousIds) {
+        this.invalidateVectorStoreCache(topicId);
+      }
+    });
   }
 
   /**
