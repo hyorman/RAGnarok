@@ -168,6 +168,91 @@ describe("shared topic registry", function () {
     expect(registry.getDocuments("topic-local")).to.deep.equal([]);
   });
 
+  it("keeps the first of two archives that derive the same shared id", async function () {
+    // api-docs.rag and api-docs-v2.rag exported from one source topic derive
+    // one sharedId. Only one can be served; the survivor must be stable, and
+    // it must not display as "API Docs (share)" with no "API Docs" anywhere
+    // because the loser reserved the plain name on its way past.
+    const duplicating: SharedTopicSource = {
+      id: "src-a",
+      label: "share",
+      async resolve(): Promise<ResolvedSharedTopic[]> {
+        return ["v1", "v2"].map((native) => ({
+          nativeId: native,
+          sharedId: "shared-same",
+          topic: { id: "shared-same", name: "API Docs", createdAt: 1, updatedAt: 1, documentCount: 0 },
+          documents: [],
+          storeDir: `/cache/src-a/${native}`,
+        }));
+      },
+    };
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([duplicating]);
+
+    await registry.refresh([]);
+
+    const topics = registry.listTopics();
+    expect(topics.map((topic) => topic.name)).to.deep.equal(["API Docs"]);
+    expect(registry.getStoreDir(topics[0].id)).to.equal("/cache/src-a/v1");
+  });
+
+  it("reassigns names with no source I/O, idempotently and reversibly", async function () {
+    let scans = 0;
+    const counting: SharedTopicSource = {
+      id: "src-a",
+      label: "share",
+      async resolve(): Promise<ResolvedSharedTopic[]> {
+        scans += 1;
+        return [
+          {
+            nativeId: "n1",
+            sharedId: "shared-n1",
+            topic: { id: "shared-n1", name: "API Docs", createdAt: 1, updatedAt: 1, documentCount: 0 },
+            documents: [],
+            storeDir: "/cache/src-a/n1",
+          },
+        ];
+      },
+    };
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([counting]);
+    await registry.refresh([]);
+    expect(scans).to.equal(1);
+
+    registry.reassignNames(["API Docs"]);
+    expect(registry.listTopics()[0].name).to.equal("API Docs (share)");
+
+    // Idempotent: a second pass must not suffix the suffix.
+    registry.reassignNames(["API Docs"]);
+    expect(registry.listTopics()[0].name).to.equal("API Docs (share)");
+
+    // Reversible: the local topic went away, so the plain name is free again.
+    registry.reassignNames([]);
+    expect(registry.listTopics()[0].name).to.equal("API Docs");
+
+    expect(scans, "reassignNames must never touch a source").to.equal(1);
+  });
+
+  it("hands out a copy of a topic's documents, not the stored array", async function () {
+    const document: TopicDocument = {
+      id: "doc-1",
+      topicId: "shared-n1",
+      name: "readme.md",
+      filePath: "readme.md",
+      fileType: "markdown",
+      addedAt: 1,
+      chunkCount: 1,
+    };
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs", documents: [document] }])]);
+    await registry.refresh([]);
+    const topicId = registry.listTopics()[0].id;
+
+    registry.getDocuments(topicId).length = 0;
+
+    expect(registry.getDocuments(topicId)).to.deep.equal([document]);
+  });
+
   it("drops every topic when the sources are cleared", async function () {
     const registry = new SharedTopicRegistry(cacheRoot, logger);
     registry.setSources([stubSource("src-a", "share", [{ nativeId: "n1", name: "API Docs" }])]);

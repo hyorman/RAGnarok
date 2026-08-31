@@ -69,6 +69,20 @@ export class SharedTopicRegistry {
 
       // Deterministic order so name assignment is reproducible run to run.
       for (const entry of [...resolved].sort((left, right) => left.nativeId.localeCompare(right.nativeId))) {
+        if (rebuilt.has(entry.sharedId)) {
+          // Two archives exported from one source topic derive one sharedId,
+          // so only one of them can be served. Skipping the later one makes
+          // the winner deterministic (the sort above is over an equal key
+          // otherwise) and, more visibly, stops assignName running twice: the
+          // first pass would reserve the plain name and the survivor would
+          // display as "<name> (share)" with no "<name>" anywhere.
+          this.logger.debug("Shared topic id already contributed; keeping the first", {
+            source: source.id,
+            sharedId: entry.sharedId,
+            nativeId: entry.nativeId,
+          });
+          continue;
+        }
         const name = this.assignName(entry.topic.name, source.label, taken);
         taken.add(name.toLowerCase());
         rebuilt.set(entry.sharedId, {
@@ -123,8 +137,11 @@ export class SharedTopicRegistry {
     return this.entries.get(topicId)?.storeDir;
   }
 
+  /** A copy: getTopic and listTopics clone too, and a caller that mutates what
+   * it gets back would otherwise corrupt the registry until the next refresh. */
   public getDocuments(topicId: string): TopicDocument[] {
-    return this.entries.get(topicId)?.documents ?? [];
+    const entry = this.entries.get(topicId);
+    return entry ? [...entry.documents] : [];
   }
 
   public listTopics(): Topic[] {
