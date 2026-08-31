@@ -126,7 +126,7 @@ describe("storage format v2", () => {
     // (TypeScript's __importStar), so it cannot be assigned to directly; the
     // underlying CommonJS module object -- the one storageV2.ts's own
     // namespace view reads through -- is mutable and shared process-wide.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fsModule: typeof fs = require("fs/promises");
     const originalRename = fsModule.rename;
     let forwardMoveCalls = 0;
@@ -181,7 +181,7 @@ describe("storage format v2", () => {
 
     // Force fs.mkdir to fail. We only want to intercept the backup-dir mkdir,
     // not any other mkdir calls (e.g., mkdtemp in beforeEach).
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fsModule: typeof fs = require("fs/promises");
     const originalMkdir = fsModule.mkdir;
     let mkdirCalls = 0;
