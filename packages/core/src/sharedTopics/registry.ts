@@ -19,6 +19,14 @@ interface RegistryEntry {
   topic: Topic;
   documents: TopicDocument[];
   storeDir: string;
+  /**
+   * The source's own name for this topic, kept apart from `topic.name` so
+   * reassignName() is idempotent: reassigning over an already-suffixed name
+   * would otherwise suffix the suffix.
+   */
+  preferredName: string;
+  /** The contributing source's label, which is what a suffix is built from. */
+  sourceLabel: string;
 }
 
 export class SharedTopicRegistry {
@@ -67,12 +75,39 @@ export class SharedTopicRegistry {
           topic: { ...entry.topic, id: entry.sharedId, name, source: "common" },
           documents: entry.documents,
           storeDir: entry.storeDir,
+          preferredName: entry.topic.name,
+          sourceLabel: source.label,
         });
       }
     }
 
     this.entries = rebuilt;
     await this.pruneUnconfiguredSourceCaches();
+  }
+
+  /**
+   * Re-run name assignment over the entries already resolved, with no source
+   * I/O whatsoever.
+   *
+   * This is what a local create/rename/delete needs: the reserved names moved,
+   * so a shared topic may have to step aside or may be free to step back. What
+   * such a mutation must NOT do is re-scan the share -- D5 keeps folder scans
+   * out of every hot path, and on the network mount this feature targets a
+   * readdir can stall for the OS timeout or fail transiently.
+   *
+   * Map iteration is insertion order, which is exactly the order refresh()
+   * assigned in, so this reproduces what a refresh would have produced.
+   */
+  public reassignNames(reservedNames: Iterable<string>): void {
+    const taken = new Set<string>();
+    for (const name of reservedNames) {
+      taken.add(name.toLowerCase());
+    }
+    for (const entry of this.entries.values()) {
+      const name = this.assignName(entry.preferredName, entry.sourceLabel, taken);
+      taken.add(name.toLowerCase());
+      entry.topic = { ...entry.topic, name };
+    }
   }
 
   public has(topicId: string): boolean {

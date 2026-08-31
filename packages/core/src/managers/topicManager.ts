@@ -484,12 +484,12 @@ export class TopicManager {
   public async createTopic(options: CreateTopicOptions): Promise<Topic> {
     return this.runManagedOperation(async () => {
       const topic = await this.runStorageWriteTransaction(() => this.createTopicUnlocked(options));
-      // Inside runManagedOperation so dispose() cannot drain past it, but
-      // after the transaction resolves -- runStorageWriteTransaction releases
-      // both storageMutationMutex and the exclusive lease in its own finally,
-      // so a share scan never widens another writer's StorageBusyError window.
+      // After the transaction resolves -- runStorageWriteTransaction releases
+      // both storageMutationMutex and the exclusive lease in its own finally.
+      // Names only: reconciling them is pure in-memory work, where a full
+      // re-resolve would readdir the share on a path D5 keeps scan-free.
       // Success path only: a throw above propagates before this runs.
-      await this.refreshSharedTopics();
+      this.reassignSharedTopicNames();
       return topic;
     });
   }
@@ -573,7 +573,7 @@ export class TopicManager {
       );
       // The deleted name is free again, so a shared topic that was suffixed out
       // of its way can take it back. Placement: see createTopic.
-      await this.refreshSharedTopics();
+      this.reassignSharedTopicNames();
     });
   }
 
@@ -694,7 +694,7 @@ export class TopicManager {
       const topic = await this.runStorageWriteTransaction(() => this.updateTopicUnlocked(topicId, updates));
       // A shared topic whose name this rename now occupies must be renamed, or
       // it becomes unreachable by name. Placement: see createTopic.
-      await this.refreshSharedTopics();
+      this.reassignSharedTopicNames();
       return topic;
     });
   }
@@ -1678,8 +1678,9 @@ export class TopicManager {
       });
       // The local names just changed, so a shared topic may now collide with
       // one. Outside the mutex, for the same reason the mutation wrappers put
-      // it outside their transaction.
-      await this.refreshSharedTopics();
+      // it outside their transaction. This command reloads local state; the
+      // share is re-scanned only by RAG: Refresh Shared Topics.
+      this.reassignSharedTopicNames();
     });
   }
 
@@ -2037,7 +2038,7 @@ export class TopicManager {
 
       // A shared topic whose name the newly imported one now occupies must be
       // renamed, or it becomes unreachable by name.
-      await this.refreshSharedTopics();
+      this.reassignSharedTopicNames();
 
       this.logger.info("Topic imported successfully", {
         originalId: exportData.topic.id,
@@ -2376,31 +2377,27 @@ export class TopicManager {
     return normalizedCandidate === normalizedParent || normalizedCandidate.startsWith(`${normalizedParent}${path.sep}`);
   }
 
-  // ==================== Private Methods ====================
-
   /**
-   * Get the database directory path
-   */
-  private getDatabaseDir(): string {
-    return path.join(this.storageDir, EXTENSION.DATABASE_DIR);
-  }
-
-  /**
-   * Where this topic's vector data lives, or undefined for the managed database
-   * directory. One accessor for the five call sites that used to spell out
-   * `isCommonTopic(id) ? commonDatabasePath : <site-specific fallback>`.
-   */
-  private getTopicStoreDir(topicId: string): string | undefined {
-    return this.sharedTopics.getStoreDir(topicId);
-  }
-
-  /**
-   * Re-resolve shared topic sources. Passing `sources` replaces the configured
-   * set — hosts do this when their configuration changes.
+   * Re-resolve shared topic sources: the only path that reads a share.
    *
-   * Never throws: an unreadable share must not stop a store from opening.
+   * Per D5 this runs at initialize, on configuration change, and from the
+   * RAG: Refresh Shared Topics command -- nowhere else. Local topic changes
+   * reconcile names through reassignSharedTopicNames() instead, so no
+   * mutation ever waits on a folder scan.
+   *
+   * Inside runManagedOperation so dispose() cannot drain past an in-flight
+   * scan. Never throws: neither an unreadable share nor a shutdown that
+   * refuses the operation may stop a store from opening or fail a caller.
    */
   public async refreshSharedTopics(sources?: SharedTopicSource[]): Promise<void> {
+    try {
+      await this.runManagedOperation(() => this.refreshSharedTopicsUnlocked(sources));
+    } catch (error) {
+      this.logger.debug("Shared topic refresh skipped", { error });
+    }
+  }
+
+  private async refreshSharedTopicsUnlocked(sources?: SharedTopicSource[]): Promise<void> {
     await this.sharedTopicsMutex.runExclusive(async () => {
       if (sources) {
         this.sharedTopics.setSources(sources);
@@ -2415,6 +2412,10 @@ export class TopicManager {
         this.logger.debug("Shared topic refresh failed", { error });
         return;
       }
+      // The scan above is real I/O and takes no lease, so a local mutation may
+      // have landed while it ran and the names it just assigned would be built
+      // from a stale reserved set. Reconciling again is pure in-memory work.
+      this.reassignSharedTopicNames();
       // A topic that is gone, or whose unpack moved, must not keep being served
       // from a directory that has been pruned.
       for (const entry of previous) {
@@ -2455,6 +2456,40 @@ export class TopicManager {
         this.logger.debug("Shared topic connection retirement failed", { error });
       }
     });
+  }
+
+  // ==================== Private Methods ====================
+
+  /**
+   * Reconcile shared topic names against the local names, touching no share.
+   *
+   * Synchronous and lock-free on purpose. A shared topic whose name a local
+   * topic takes becomes unreachable -- resolveTopicByName returns the first
+   * case-insensitive match and local topics are listed first -- so every local
+   * create/rename/delete has to push it aside, and every delete has to let it
+   * step back. What none of them may do is wait on the share: awaiting the
+   * shared-topics mutex here would queue a committed mutation behind a stalled
+   * network readdir, which is the hazard D5 exists to prevent.
+   */
+  private reassignSharedTopicNames(): void {
+    const localNames = Object.values(this.topicsIndex?.topics ?? {}).map((topic) => topic.name);
+    this.sharedTopics.reassignNames(localNames);
+  }
+
+  /**
+   * Get the database directory path
+   */
+  private getDatabaseDir(): string {
+    return path.join(this.storageDir, EXTENSION.DATABASE_DIR);
+  }
+
+  /**
+   * Where this topic's vector data lives, or undefined for the managed database
+   * directory. One accessor for the five call sites that used to spell out
+   * `isCommonTopic(id) ? commonDatabasePath : <site-specific fallback>`.
+   */
+  private getTopicStoreDir(topicId: string): string | undefined {
+    return this.sharedTopics.getStoreDir(topicId);
   }
 
   /**
@@ -2704,10 +2739,9 @@ export class TopicManager {
       }
       // The local names just changed underneath us, so a shared topic may now
       // collide with one -- the very hole this feature closes for local
-      // mutations, reopened from outside. Safe here: the watch is on
-      // getDatabaseDir(), and the shared cache lives outside it, so a refresh
-      // cannot retrigger the watcher.
-      await this.refreshSharedTopics();
+      // mutations, reopened from outside. Names only: a watcher callback is a
+      // hot path, and D5 keeps folder scans out of those.
+      this.reassignSharedTopicNames();
       this.emitExternalChange({ kind: "topics-changed" });
     } catch (error: any) {
       if (this.watcherStopped) {
@@ -2800,10 +2834,9 @@ export class TopicManager {
       }
       // The local names just changed underneath us, so a shared topic may now
       // collide with one -- the very hole this feature closes for local
-      // mutations, reopened from outside. Safe here: the watch is on
-      // getDatabaseDir(), and the shared cache lives outside it, so a refresh
-      // cannot retrigger the watcher.
-      await this.refreshSharedTopics();
+      // mutations, reopened from outside. Names only: a watcher callback is a
+      // hot path, and D5 keeps folder scans out of those.
+      this.reassignSharedTopicNames();
       this.emitExternalChange({ kind: "topics-changed" });
     } catch (error) {
       if (this.watcherStopped) {

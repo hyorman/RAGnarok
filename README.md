@@ -333,9 +333,10 @@ renamed, deleted, exported, or ingested into. A shared topic whose name matches
 one of your own is shown as `<name> (<folder name>)` so both stay addressable.
 
 **Refreshing:** archives are picked up when the setting changes, when the window
-opens, and when you run **RAG: Refresh Shared Topics**. Shared topics are also
-re-synced automatically whenever your own local topics change. There is no
-background watcher on the shared folder.
+opens, and when you run **RAG: Refresh Shared Topics** — those three moments,
+and nothing else. Creating, renaming or deleting one of your own topics
+reconciles shared topic names immediately, but does not re-read the folder.
+There is no background watcher on the shared folder.
 
 **MCP server:** set the same key in `config.json`:
 

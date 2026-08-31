@@ -176,6 +176,81 @@ describe("shared topics end to end", function () {
     await consumer.dispose();
   });
 
+  it("gives a shared topic its unsuffixed name back when the local topic is deleted", async function () {
+    const publisher = await createTestTopicManager(publisherDir);
+    const published = await publisher.createTopic({ name: "API Docs" });
+    await publisher.exportTopic(published.id, path.join(shareDir, "api-docs.rag"));
+    await publisher.dispose();
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    const local = await consumer.createTopic({ name: "API Docs" });
+    expect(consumer.getAllTopics().find((entry) => entry.source === "common")?.name).to.equal("API Docs (share)");
+
+    await consumer.deleteTopic(local.id);
+
+    // The name is free again, so the suffix that only existed to dodge the
+    // local topic has to come off -- which only works if the entry kept the
+    // source's preferred name rather than overwriting it with the suffixed one.
+    const topics = consumer.getAllTopics();
+    expect(topics).to.have.lengthOf(1);
+    expect(topics[0].name).to.equal("API Docs");
+
+    await consumer.dispose();
+  });
+
+  it("reconciles shared names on a local mutation without scanning the share", async function () {
+    // D5: no folder scan in any hot path. A stalled network mount must not be
+    // able to block a create that has already committed, and a transient
+    // readdir failure must not empty every shared topic as a side effect of an
+    // unrelated local mutation.
+    let scans = 0;
+    const countingSource: SharedTopicSource = {
+      id: "test:counting",
+      label: "share",
+      resolve: async () => {
+        scans += 1;
+        return [
+          {
+            nativeId: "topic-1750000000000-abc1234",
+            sharedId: "shared-0123456789abcdef",
+            topic: {
+              id: "shared-0123456789abcdef",
+              name: "API Docs",
+              createdAt: 1,
+              updatedAt: 1,
+              documentCount: 0,
+            },
+            documents: [],
+            storeDir: path.join(consumerDir, "unused-store"),
+          },
+        ];
+      },
+    };
+
+    const consumer = await createTestTopicManager(consumerDir, [countingSource]);
+    // Initialize resolves once, which D5 allows. Baseline from there.
+    const afterInit = scans;
+    expect(afterInit).to.be.greaterThan(0);
+
+    const local = await consumer.createTopic({ name: "API Docs" });
+
+    expect(scans, "createTopic must not scan the share").to.equal(afterInit);
+    expect(consumer.getAllTopics().find((entry) => entry.source === "common")?.name).to.equal("API Docs (share)");
+
+    await consumer.updateTopic(local.id, { name: "Internal Notes" });
+    expect(scans, "updateTopic must not scan the share").to.equal(afterInit);
+    expect(consumer.getAllTopics().find((entry) => entry.source === "common")?.name).to.equal("API Docs");
+
+    await consumer.deleteTopic(local.id);
+    expect(scans, "deleteTopic must not scan the share").to.equal(afterInit);
+
+    // The explicit refresh is the one path that is still allowed to scan.
+    await consumer.refreshSharedTopics();
+    expect(scans, "an explicit refresh must scan the share").to.equal(afterInit + 1);
+
+    await consumer.dispose();
+  });
+
   it("closes the LanceDB connection to a shared unpack that a republish retired", async function () {
     const publisher = await createTestTopicManager(publisherDir);
     const topic = await publisher.createTopic({ name: "API Docs" });
@@ -308,8 +383,8 @@ describe("shared topics end to end", function () {
       openGate = resolve;
     });
 
-    // Runs the write transaction, then blocks in refreshSharedTopics.
-    const creating = consumer.createTopic({ name: "API Docs" });
+    // The explicit refresh is the only path that still scans the share.
+    const refreshing = consumer.refreshSharedTopics();
     await scanRunning;
 
     const disposing = consumer.dispose();
@@ -323,7 +398,7 @@ describe("shared topics end to end", function () {
     expect(scanCompleted).to.equal(false);
 
     openGate!();
-    await creating;
+    await refreshing;
     await disposing;
     expect(scanCompleted).to.equal(true);
   });
@@ -470,8 +545,10 @@ describe("shared topics are read-only", function () {
       throw new Error("boom: connection refused to close");
     };
 
-    // createTopic awaits refreshSharedTopics() on its success path, which is
-    // where the republish above is noticed and the stale directory retired.
+    // The explicit refresh is where the republish above is noticed and the
+    // stale directory retired. A rejecting close must not surface there, nor
+    // leave the manager unable to take the next mutation.
+    await consumer.refreshSharedTopics();
     const created = await consumer.createTopic({ name: "Local Only" });
 
     expect(consumer.getTopic(created.id)).to.not.equal(null);
