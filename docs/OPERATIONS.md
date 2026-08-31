@@ -72,7 +72,8 @@ concurrent writers can then corrupt the store.
 validated and unpacked into `<storage>/.ragnarok-shared-cache/`, which is derived
 data: deleting it costs only the next refresh. Unpacking takes no write lease, so
 several processes sharing a storage root can materialize it concurrently. The
-shared folder itself is only read, and only during a refresh.
+shared folder itself is only read, and only during a refresh. Shared topics are
+also re-synced automatically whenever your own local topics change.
 
 ## Backup and recovery
 

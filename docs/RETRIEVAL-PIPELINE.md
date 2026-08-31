@@ -224,5 +224,3 @@ most 10,000 edges, and oversized records return `GRAPH_VISUALIZATION_RECORD_TOO_
 - The offline migrator still emits a `graphRebuildRequired` flag and a "rebuild is required" warning
   for legacy `kg-*` tables. Both are vestigial: there is nothing to rebuild and no strategy that
   would consume the result.
-- `ragnarok.commonDatabasePath` is contributed as a VS Code setting but `adapters.ts` hard-codes it
-  to `""` for the MCP server, so shared/common read-only topics are a VS Code-only capability.
