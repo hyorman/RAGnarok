@@ -481,14 +481,16 @@ export class TopicManager {
    * Create a new topic
    */
   public async createTopic(options: CreateTopicOptions): Promise<Topic> {
-    const topic = await this.runManagedOperation(() =>
-      this.runStorageWriteTransaction(() => this.createTopicUnlocked(options)),
-    );
-    // Outside the transaction, so a share scan never widens the window in which
-    // a concurrent writer sees StorageBusyError. On the success path only: a
-    // throw above propagates before this runs.
-    await this.refreshSharedTopics();
-    return topic;
+    return this.runManagedOperation(async () => {
+      const topic = await this.runStorageWriteTransaction(() => this.createTopicUnlocked(options));
+      // Inside runManagedOperation so dispose() cannot drain past it, but
+      // after the transaction resolves -- runStorageWriteTransaction releases
+      // both storageMutationMutex and the exclusive lease in its own finally,
+      // so a share scan never widens another writer's StorageBusyError window.
+      // Success path only: a throw above propagates before this runs.
+      await this.refreshSharedTopics();
+      return topic;
+    });
   }
 
   private async createTopicUnlocked(options: CreateTopicOptions): Promise<Topic> {
@@ -564,14 +566,14 @@ export class TopicManager {
    * Delete a topic and its vector store
    */
   public async deleteTopic(topicId: string): Promise<void> {
-    await this.runManagedOperation(() =>
-      this.runStorageWriteTransaction((tx) =>
+    return this.runManagedOperation(async () => {
+      await this.runStorageWriteTransaction((tx) =>
         this.getTopicMutationMutex(topicId).runExclusive(() => this.deleteTopicUnlocked(topicId, tx.coordinator)),
-      ),
-    );
-    // The deleted name is free again, so a shared topic that was suffixed out
-    // of its way can take it back. Outside the transaction: see createTopic.
-    await this.refreshSharedTopics();
+      );
+      // The deleted name is free again, so a shared topic that was suffixed out
+      // of its way can take it back. Placement: see createTopic.
+      await this.refreshSharedTopics();
+    });
   }
 
   private async deleteTopicUnlocked(topicId: string, coordinator: StorageTransactionCoordinator): Promise<void> {
@@ -686,13 +688,13 @@ export class TopicManager {
    * Update topic metadata
    */
   public async updateTopic(topicId: string, updates: Partial<Pick<Topic, "name" | "description">>): Promise<Topic> {
-    const topic = await this.runManagedOperation(() =>
-      this.runStorageWriteTransaction(() => this.updateTopicUnlocked(topicId, updates)),
-    );
-    // A shared topic whose name this rename now occupies must be renamed, or it
-    // becomes unreachable by name. Outside the transaction: see createTopic.
-    await this.refreshSharedTopics();
-    return topic;
+    return this.runManagedOperation(async () => {
+      const topic = await this.runStorageWriteTransaction(() => this.updateTopicUnlocked(topicId, updates));
+      // A shared topic whose name this rename now occupies must be renamed, or
+      // it becomes unreachable by name. Placement: see createTopic.
+      await this.refreshSharedTopics();
+      return topic;
+    });
   }
 
   private async updateTopicUnlocked(
@@ -1667,16 +1669,20 @@ export class TopicManager {
    * Refresh topics from disk
    */
   public async refresh(): Promise<void> {
-    return this.runManagedOperation(() =>
+    return this.runManagedOperation(async () => {
       // A refresh is a read: it republishes what is on disk and writes
       // nothing, so it takes no lease. It still serializes against local
       // mutations, because republishing the caches between a mutation's
       // in-memory apply and its flush would silently drop that mutation.
-      this.storageMutationMutex.runExclusive(async () => {
+      await this.storageMutationMutex.runExclusive(async () => {
         this.logger.info("Refreshing topics");
         await this.reloadCanonicalState();
-      }),
-    );
+      });
+      // The local names just changed, so a shared topic may now collide with
+      // one. Outside the mutex, for the same reason the mutation wrappers put
+      // it outside their transaction.
+      await this.refreshSharedTopics();
+    });
   }
 
   /**

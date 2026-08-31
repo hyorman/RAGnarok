@@ -278,6 +278,56 @@ describe("shared topics end to end", function () {
     await consumer.dispose();
   });
 
+  it("does not let dispose() drain past an in-flight share refresh", async function () {
+    // A source whose scan can be held open on demand. It starts ungated so the
+    // manager's own startup refresh completes normally.
+    let gate: Promise<void> | null = null;
+    let openGate: (() => void) | null = null;
+    let scanStarted: (() => void) | null = null;
+    const scanRunning = new Promise<void>((resolve) => {
+      scanStarted = resolve;
+    });
+    let scanCompleted = false;
+
+    const gatedSource: SharedTopicSource = {
+      id: "test:gated",
+      label: "gated",
+      resolve: async () => {
+        if (gate) {
+          scanStarted?.();
+          await gate;
+          scanCompleted = true;
+        }
+        return [];
+      },
+    };
+
+    const consumer = await createTestTopicManager(consumerDir, [gatedSource]);
+
+    gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+
+    // Runs the write transaction, then blocks in refreshSharedTopics.
+    const creating = consumer.createTopic({ name: "API Docs" });
+    await scanRunning;
+
+    const disposing = consumer.dispose();
+    const pending = await Promise.race([
+      disposing.then(() => "disposed" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 250)),
+    ]);
+    // With the refresh outside runManagedOperation, the drain counter is
+    // already zero here and dispose() returns while the scan is still running.
+    expect(pending, "dispose() returned while a share refresh was still running").to.equal("pending");
+    expect(scanCompleted).to.equal(false);
+
+    openGate!();
+    await creating;
+    await disposing;
+    expect(scanCompleted).to.equal(true);
+  });
+
   it("stops serving a topic whose archive was removed", async function () {
     const publisher = await createTestTopicManager(publisherDir);
     const topic = await publisher.createTopic({ name: "API Docs" });
