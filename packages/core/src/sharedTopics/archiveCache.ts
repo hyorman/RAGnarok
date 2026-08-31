@@ -271,6 +271,10 @@ export class SharedArchiveCache {
         // EEXIST/ENOTEMPTY for a rename onto a non-empty directory, but
         // Windows raises EPERM for a rename onto ANY existing directory
         // regardless of emptiness. Probe for the destination directly.
+        this.logger.debug("Shared unpack could not be renamed into place; probing the destination", {
+          destination,
+          error,
+        });
         if (!(await this.unpackExists(published))) {
           // Either the destination is not there at all (a real failure —
           // the retry below rethrows), or it is there but incomplete: a
