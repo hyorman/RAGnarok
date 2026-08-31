@@ -26,6 +26,7 @@ The configured `RAGNAROK_STORAGE_DIR` is one atomic administrative unit:
   memory-lancedb/
   memory-manifest.json
   exports/
+  .ragnarok-shared-cache/   derived unpacks of shared .rag archives; safe to delete
 ```
 
 Feature-specific directories are created lazily. Give the account that spawns
@@ -64,6 +65,14 @@ same root.
 Do not set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested mechanism
 serializes writes across the entire root: it bypasses both lease kinds, so
 concurrent writers can then corrupt the store.
+
+## Shared topic archives
+
+`commonDatabasePath` names a folder of exported `.rag` archives. Each archive is
+validated and unpacked into `<storage>/.ragnarok-shared-cache/`, which is derived
+data: deleting it costs only the next refresh. Unpacking takes no write lease, so
+several processes sharing a storage root can materialize it concurrently. The
+shared folder itself is only read, and only during a refresh.
 
 ## Backup and recovery
 

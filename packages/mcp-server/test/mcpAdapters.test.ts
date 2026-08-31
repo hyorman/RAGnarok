@@ -428,7 +428,13 @@ describe("MCP Server", () => {
       expect(provider.get(CONFIG.EMBEDDING_BACKEND, "")).to.equal("huggingface");
     });
 
-    it('should return "" for CONFIG.COMMON_DATABASE_PATH', () => {
+    it("should surface a configured commonDatabasePath verbatim, not the caller's fallback", () => {
+      const configured = new EnvConfigProvider({ ...mcpConfig, commonDatabasePath: "/shared/rag-archives" });
+      expect(configured.get(CONFIG.COMMON_DATABASE_PATH, "/fallback")).to.equal("/shared/rag-archives");
+    });
+
+    it("should return the empty default for CONFIG.COMMON_DATABASE_PATH when unset", () => {
+      expect(mcpConfig.commonDatabasePath).to.equal("");
       expect(provider.get(CONFIG.COMMON_DATABASE_PATH, "/fallback")).to.equal("");
     });
 

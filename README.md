@@ -311,30 +311,41 @@ Or select a topic in the tree view and click the edit icon.
 - ✅ Automatic token selection based on repository URL
 - ✅ No need to enter token every time you add a repository
 
-#### 2e. Using Common/Shared Databases
+#### 2e. Using Shared Topic Folders
 
-RAGnarōk supports read-only access to shared team knowledge bases via the `ragnarok.commonDatabasePath` setting.
+RAGnarōk reads read-only topics from a folder of exported `.rag` archives via the
+`ragnarok.commonDatabasePath` setting.
 
 **Setup:**
 
-1. Export topics from a source workspace
-2. Place exported topic archives in a shared location (network drive, shared folder)
-3. Configure `ragnarok.commonDatabasePath` to point to this folder:
+1. Export a topic with **RAG: Export Topic** (or `rag_topic` `export` in MCP)
+2. Put the resulting `.rag` file in a shared location (network drive, shared folder, synced directory)
+3. Point `ragnarok.commonDatabasePath` at that folder:
 
 ```json
 {
-  "ragnarok.commonDatabasePath": "/path/to/shared/rag-databases"
+  "ragnarok.commonDatabasePath": "/path/to/shared/rag-archives"
 }
 ```
 
-**Benefits:**
+Shared topics appear alongside your own and are queryable by name. They cannot be
+renamed, deleted, exported, or ingested into. A shared topic whose name matches
+one of your own is shown as `<name> (<folder name>)` so both stay addressable.
 
-- ✅ Share curated knowledge bases across teams
-- ✅ Read-only topics prevent accidental modification
-- ✅ Centralized documentation and policy storage
-- ✅ Works with any file-sharing system
+**Refreshing:** archives are picked up when the setting changes, when the window
+opens, and when you run **RAG: Refresh Shared Topics**. There is no background
+watcher.
 
-**Note**: Topics from common database path appear in the tree view but cannot be deleted or modified.
+**MCP server:** set the same key in `config.json`:
+
+```json
+{ "storage": { "commonDatabasePath": "/path/to/shared/rag-archives" } }
+```
+
+**Notes:** archives are unpacked into a cache inside your own storage directory,
+so the shared folder is only ever read and may be read-only. An archive that is
+corrupt or written by an incompatible version is skipped without affecting the
+others.
 
 #### 3. Query with Copilot
 
@@ -399,7 +410,7 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   // Retrieval strategy: vector, hybrid, bm25
   "ragnarok.retrievalStrategy": "hybrid",
 
-  // Path to shared/common RAG database (read-only topics)
+  // Folder of exported .rag archives providing read-only topics
   "ragnarok.commonDatabasePath": ""
 }
 ```

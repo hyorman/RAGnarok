@@ -291,6 +291,7 @@ environment variable for any of them.
 | `limits.shutdownDrainMs`        | `10000`                         | Budget for draining in-flight tool calls on SIGINT/SIGTERM                                                                        |
 | `limits.maxResponseBytes`       | `1048576`                       | Maximum serialized tool response size                                                                                             |
 | `storage.exportDir`             | `<storage>/exports`             | Only directory used for exported archives                                                                                         |
+| `storage.commonDatabasePath`    | _(empty)_                       | Folder of exported `.rag` archives contributing read-only topics. Empty disables it                                               |
 | `security.githubHosts`          | `github.com`                    | GitHub/GHES host allowlist, as a JSON array of strings. Lower-cased, and must not be empty                                        |
 
 Three of those rows deserve a paragraph each.
