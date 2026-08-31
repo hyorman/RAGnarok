@@ -345,3 +345,107 @@ describe("shared topics end to end", function () {
     await consumer.dispose();
   });
 });
+
+describe("shared topics are read-only", function () {
+  this.timeout(300_000);
+
+  it("refuses every mutation with a typed error naming the topic", async function () {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-sharedro-"));
+    const publisherDir = path.join(root, "publisher");
+    const consumerDir = path.join(root, "consumer");
+    const shareDir = path.join(root, "share");
+    await fs.mkdir(shareDir, { recursive: true });
+
+    const publisher = await createTestTopicManager(publisherDir);
+    const topic = await publisher.createTopic({ name: "API Docs" });
+    await publisher.exportTopic(topic.id, path.join(shareDir, "api-docs.rag"));
+    await publisher.dispose();
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    const sharedId = consumer.getAllTopics()[0].id;
+
+    const attempts: Array<[string, () => Promise<unknown>]> = [
+      ["deleteTopic", () => consumer.deleteTopic(sharedId)],
+      ["addDocuments", () => consumer.addDocuments(sharedId, ["/tmp/whatever.md"])],
+      ["removeDocument", () => consumer.removeDocument(sharedId, "doc-1")],
+      ["updateTopic", () => consumer.updateTopic(sharedId, { name: "Renamed" })],
+    ];
+
+    for (const [label, attempt] of attempts) {
+      let caught: unknown;
+      try {
+        await attempt();
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error | undefined)?.name, label).to.equal("SharedTopicReadOnlyError");
+      expect((caught as Error).message, label).to.contain("API Docs");
+    }
+
+    await consumer.dispose();
+  });
+
+  it("reports stats for a shared topic", async function () {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-sharedstats-"));
+    const publisherDir = path.join(root, "publisher");
+    const consumerDir = path.join(root, "consumer");
+    const shareDir = path.join(root, "share");
+    await fs.mkdir(shareDir, { recursive: true });
+
+    const publisher = await createTestTopicManager(publisherDir);
+    const topic = await publisher.createTopic({ name: "API Docs" });
+    const sourceFile = path.join(publisherDir, "guide.md");
+    await fs.writeFile(sourceFile, "# Rate limits\n\n100 requests per minute.\n", "utf8");
+    await publisher.addDocuments(topic.id, [sourceFile]);
+    await publisher.exportTopic(topic.id, path.join(shareDir, "api-docs.rag"));
+    await publisher.dispose();
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    const sharedId = consumer.getAllTopics()[0].id;
+
+    const stats = await consumer.getTopicStats(sharedId);
+
+    expect(stats).to.not.equal(null);
+    expect(stats!.documentCount).to.equal(1);
+    expect(stats!.chunkCount).to.be.greaterThan(0);
+    await consumer.dispose();
+  });
+
+  it("still succeeds a mutation when closing a retired shared connection rejects", async function () {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-sharedretire-"));
+    const publisherDir = path.join(root, "publisher");
+    const consumerDir = path.join(root, "consumer");
+    const shareDir = path.join(root, "share");
+    await fs.mkdir(shareDir, { recursive: true });
+
+    const publisher = await createTestTopicManager(publisherDir);
+    const topic = await publisher.createTopic({ name: "API Docs" });
+    const archivePath = path.join(shareDir, "api-docs.rag");
+    await publisher.exportTopic(topic.id, archivePath);
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    expect(consumer.getAllTopics()).to.have.lengthOf(1);
+
+    // Republish with different content: content-addressing gives the unpack a
+    // new directory, so the next refresh must retire the old one.
+    const sourceFile = path.join(publisherDir, "guide.md");
+    await fs.writeFile(sourceFile, "# Rate limits\n\n100 requests per minute.\n", "utf8");
+    await publisher.addDocuments(topic.id, [sourceFile]);
+    await fs.rm(archivePath);
+    await publisher.exportTopic(topic.id, archivePath);
+    await publisher.dispose();
+
+    // A factory whose closeConnection always rejects: retirement can never
+    // succeed, so this exercises the forgiving handling around it.
+    (consumer as any).vectorStoreFactory.closeConnection = async () => {
+      throw new Error("boom: connection refused to close");
+    };
+
+    // createTopic awaits refreshSharedTopics() on its success path, which is
+    // where the republish above is noticed and the stale directory retired.
+    const created = await consumer.createTopic({ name: "Local Only" });
+
+    expect(consumer.getTopic(created.id)).to.not.equal(null);
+    await consumer.dispose();
+  });
+});

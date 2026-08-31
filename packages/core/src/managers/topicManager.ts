@@ -46,6 +46,7 @@ import {
   STORAGE_RESET_JOURNAL_FILENAME,
 } from "../utils/storageV2";
 import { SharedTopicRegistry } from "../sharedTopics/registry";
+import { SharedTopicReadOnlyError } from "../sharedTopics/types";
 import type { SharedTopicSource } from "../sharedTopics/types";
 import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
@@ -577,6 +578,7 @@ export class TopicManager {
   }
 
   private async deleteTopicUnlocked(topicId: string, coordinator: StorageTransactionCoordinator): Promise<void> {
+    this.assertNotSharedTopic(topicId, "delete");
     this.logger.info("Deleting topic", { topicId });
 
     try {
@@ -701,6 +703,7 @@ export class TopicManager {
     topicId: string,
     updates: Partial<Pick<Topic, "name" | "description">>,
   ): Promise<Topic> {
+    this.assertNotSharedTopic(topicId, "rename");
     this.logger.info("Updating topic", { topicId, updates });
 
     try {
@@ -865,6 +868,18 @@ export class TopicManager {
   }
 
   /**
+   * Refuse a mutation aimed at a shared topic. Without this, deleteTopic and
+   * addDocuments fail with "Topic not found" — technically true (a shared topic
+   * is not in the local index) and actively misleading.
+   */
+  private assertNotSharedTopic(topicId: string, operation: string): void {
+    if (!this.sharedTopics.has(topicId)) {
+      return;
+    }
+    throw new SharedTopicReadOnlyError(topicId, this.sharedTopics.getTopic(topicId)?.name ?? topicId, operation);
+  }
+
+  /**
    * Get documents for a specific topic (local or shared)
    */
   public getTopicDocuments(topicId: string): TopicDocument[] {
@@ -900,9 +915,7 @@ export class TopicManager {
     documentId: string,
     coordinator: StorageTransactionCoordinator,
   ): Promise<{ document: TopicDocument; chunksRemoved: number }> {
-    if (this.isCommonTopic(topicId)) {
-      throw new Error("Common database topics are read-only");
-    }
+    this.assertNotSharedTopic(topicId, "remove document");
     if (!this.topicsIndex || !this.vectorStoreFactory) {
       throw new Error("TopicManager not initialized");
     }
@@ -1020,6 +1033,7 @@ export class TopicManager {
     filePaths: string[],
     options?: PipelineOptions,
   ): Promise<AddDocumentResult[]> {
+    this.assertNotSharedTopic(topicId, "ingest");
     this.logger.info("Adding documents to topic", {
       topicId,
       documentCount: filePaths.length,
@@ -1612,42 +1626,26 @@ export class TopicManager {
         return null;
       }
 
-      let topic: Topic | undefined = this.topicsIndex.topics[topicId];
-      let databaseDir = this.getDatabaseDir();
-      let isCommon = false;
-
-      // If not in local, check the shared sources
-      const sharedStoreDir = this.getTopicStoreDir(topicId);
-      if (!topic && sharedStoreDir) {
-        topic = this.sharedTopics.getTopic(topicId);
-        databaseDir = sharedStoreDir;
-        isCommon = true;
-      }
-
+      const topic = this.getTopic(topicId);
       if (!topic) {
         return null;
       }
 
-      // Get document count
-      const documentCount = isCommon
-        ? this.sharedTopics.getDocuments(topicId).length
-        : (this.topicDocuments.get(topicId)?.size ?? 0);
-
-      // Load vector store metadata
+      const documentCount = this.getTopicDocuments(topicId).length;
+      const databaseDir = this.getTopicStoreDir(topicId) ?? this.getDatabaseDir();
       const metadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
 
       let chunkCount = 0;
-      let embeddingModel = this.embeddingService.getCurrentModel() || this.topicsIndex?.modelName || "unknown";
+      let embeddingModel = this.embeddingService.getCurrentModel() || this.topicsIndex.modelName || "unknown";
 
       try {
-        const metadataJson = await fs.readFile(metadataPath, "utf-8");
-        const metadata = JSON.parse(metadataJson);
+        const metadata = JSON.parse(await fs.readFile(metadataPath, "utf-8"));
         chunkCount = metadata.chunkCount || 0;
         if (metadata.embeddingModel) {
           embeddingModel = metadata.embeddingModel;
         }
       } catch {
-        // Metadata not available
+        // Metadata not available: an empty topic reports zero chunks.
       }
 
       return {
@@ -1860,9 +1858,7 @@ export class TopicManager {
       if (!this.topicsIndex) {
         throw new Error("TopicManager not initialized");
       }
-      if (this.isCommonTopic(topicId)) {
-        throw new Error("Cannot export topics from common database");
-      }
+      this.assertNotSharedTopic(topicId, "export");
       if (!this.topicsIndex.topics[topicId]) {
         throw new Error(`Topic not found: ${topicId}`);
       }
@@ -2424,31 +2420,39 @@ export class TopicManager {
       for (const entry of previous) {
         this.invalidateVectorStoreCache(entry.id);
       }
-      // The manager's cache is not the only thing holding the old directory:
-      // VectorStoreFactory keeps a LanceDB connection per lancedb URI and the
-      // tables opened through it, neither of which the per-topic invalidation
-      // above can reach. A shared unpack is content-addressed, so a republished
-      // archive retires its predecessor's directory -- which the cache then
-      // prunes from disk, out from under those handles.
-      const liveStoreDirs = new Set(
-        this.sharedTopics
-          .listTopics()
-          .map((topic) => this.sharedTopics.getStoreDir(topic.id))
-          .filter((storeDir): storeDir is string => storeDir !== undefined),
-      );
-      const retiredStoreDirs = new Set<string>();
-      for (const entry of previous) {
-        if (entry.storeDir === undefined || entry.storeDir === this.sharedTopics.getStoreDir(entry.id)) {
-          continue;
+      // Retirement is best-effort: it is real I/O against handles the resolve
+      // step above does not own, and this method is awaited on the success
+      // path of createTopic/updateTopic/deleteTopic/refresh(). A rejection
+      // here must never surface a successful mutation as a failure.
+      try {
+        // The manager's cache is not the only thing holding the old directory:
+        // VectorStoreFactory keeps a LanceDB connection per lancedb URI and the
+        // tables opened through it, neither of which the per-topic invalidation
+        // above can reach. A shared unpack is content-addressed, so a republished
+        // archive retires its predecessor's directory -- which the cache then
+        // prunes from disk, out from under those handles.
+        const liveStoreDirs = new Set(
+          this.sharedTopics
+            .listTopics()
+            .map((topic) => this.sharedTopics.getStoreDir(topic.id))
+            .filter((storeDir): storeDir is string => storeDir !== undefined),
+        );
+        const retiredStoreDirs = new Set<string>();
+        for (const entry of previous) {
+          if (entry.storeDir === undefined || entry.storeDir === this.sharedTopics.getStoreDir(entry.id)) {
+            continue;
+          }
+          // Two topics from one archive share a directory; only retire one no
+          // surviving topic is still served from.
+          if (!liveStoreDirs.has(entry.storeDir)) {
+            retiredStoreDirs.add(entry.storeDir);
+          }
         }
-        // Two topics from one archive share a directory; only retire one no
-        // surviving topic is still served from.
-        if (!liveStoreDirs.has(entry.storeDir)) {
-          retiredStoreDirs.add(entry.storeDir);
+        for (const storeDir of retiredStoreDirs) {
+          await this.vectorStoreFactory?.closeConnection(storeDir);
         }
-      }
-      for (const storeDir of retiredStoreDirs) {
-        await this.vectorStoreFactory?.closeConnection(storeDir);
+      } catch (error) {
+        this.logger.debug("Shared topic connection retirement failed", { error });
       }
     });
   }
