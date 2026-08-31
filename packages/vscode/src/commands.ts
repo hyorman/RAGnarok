@@ -5,9 +5,17 @@
 
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
-import { TopicManager, EmbeddingService, Logger, sanitizeErrorMessage, Topic, MemoryStore } from "@ragnarok/core";
+import {
+  TopicManager,
+  EmbeddingService,
+  Logger,
+  sanitizeErrorMessage,
+  Topic,
+  MemoryStore,
+  ArchiveFolderSource,
+} from "@ragnarok/core";
 import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
-import { COMMANDS } from "./constants";
+import { COMMANDS, CONFIG, VSCODE_CONFIG } from "./constants";
 import { GitHubTokenManager } from "./githubTokenManager";
 import { waitForAbortableUi, type ExtensionOperationRunner } from "./extensionLifecycle";
 
@@ -166,6 +174,9 @@ export class CommandHandler {
       ),
       vscode.commands.registerCommand(COMMANDS.IMPORT_TOPIC, () =>
         run(COMMANDS.IMPORT_TOPIC, () => handler.importTopic()),
+      ),
+      vscode.commands.registerCommand(COMMANDS.REFRESH_SHARED_TOPICS, () =>
+        run(COMMANDS.REFRESH_SHARED_TOPICS, () => handler.refreshSharedTopics()),
       ),
       vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: any) =>
         run(COMMANDS.RENAME_TOPIC, () => handler.renameTopic(item)),
@@ -1380,6 +1391,25 @@ export class CommandHandler {
     } catch (error) {
       logger.error(`Failed to import topic: ${error}`);
       reportOperationFailure("Failed to import topic", error);
+    }
+  }
+
+  /**
+   * Re-resolve the configured shared topic sources
+   */
+  private async refreshSharedTopics(): Promise<void> {
+    try {
+      const configuredPath = vscode.workspace
+        .getConfiguration(VSCODE_CONFIG.ROOT)
+        .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
+      await this.topicManager.refreshSharedTopics(
+        configuredPath ? [new ArchiveFolderSource(configuredPath)] : [],
+      );
+      this.treeDataProvider.refresh();
+      vscode.window.showInformationMessage("RAGnarōk: Shared topics refreshed");
+    } catch (error) {
+      logger.error(`Failed to refresh shared topics: ${error}`);
+      reportOperationFailure("Failed to refresh shared topics", error);
     }
   }
 }

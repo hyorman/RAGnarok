@@ -19,6 +19,7 @@ import {
   MemoryService,
   GraphVisualizationService,
   RetrievalStrategy,
+  ArchiveFolderSource,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
 import { VsCodeConfigProvider } from "./adapters/vsCodeConfigProvider";
@@ -231,6 +232,12 @@ export async function activateWithServiceFactory(
         embeddingService,
         embeddingRegistry,
         llmProvider,
+        sharedTopicSources: (() => {
+          const configuredPath = vscode.workspace
+            .getConfiguration(VSCODE_CONFIG.ROOT)
+            .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
+          return configuredPath ? [new ArchiveFolderSource(configuredPath)] : [];
+        })(),
       });
     const topicManager = await openTopicManagerWithMigration(storageDir, createDefaultMigrationUx(createTopicManager));
     lifecycle.setResources({ topicManager });
@@ -547,13 +554,18 @@ export async function activateWithServiceFactory(
             }
           }
 
-          // Handle Common Database Path change
+          // Handle shared topics folder change
           if (event.affectsConfiguration(`${VSCODE_CONFIG.ROOT}.${CONFIG.COMMON_DATABASE_PATH}`)) {
-            logger.info("Common database path configuration changed");
-            await topicManager.loadCommonDatabase();
+            logger.info("Shared topics folder configuration changed");
+            const configuredPath = vscode.workspace
+              .getConfiguration(VSCODE_CONFIG.ROOT)
+              .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
+            await topicManager.refreshSharedTopics(
+              configuredPath ? [new ArchiveFolderSource(configuredPath)] : [],
+            );
             treeDataProvider.refresh();
             configDataProvider.refresh();
-            vscode.window.showInformationMessage("Common database reloaded");
+            vscode.window.showInformationMessage("Shared topics reloaded");
           }
 
           const affectsTreeViewConfig = treeViewConfigPaths.some((configPath) =>

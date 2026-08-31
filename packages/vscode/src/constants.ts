@@ -56,6 +56,7 @@ export const COMMANDS = {
   REMOVE_GITHUB_TOKEN: "ragnarok.removeGithubToken",
   EXPORT_TOPIC: "ragnarok.exportTopic",
   IMPORT_TOPIC: "ragnarok.importTopic",
+  REFRESH_SHARED_TOPICS: "ragnarok.refreshSharedTopics",
   RENAME_TOPIC: "ragnarok.renameTopic",
   SHOW_MEMORY_GRAPH: "ragnarok.showMemoryGraph",
   /** Destructive: the sidebar replacement for the removed ragResetMemory tool. */

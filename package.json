@@ -155,7 +155,7 @@
         "ragnarok.commonDatabasePath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "**Path to a shared/common RAG database folder.** Topics from this path are read-only and cannot be deleted or modified. Useful for team-shared knowledge bases.\n\n**Format:** Absolute path to a folder containing exported RAG database files.",
+          "markdownDescription": "**Folder of shared topic archives.** Point this at a folder containing `.rag` files exported with **RAG: Export Topic**. Those topics appear alongside your own as read-only and cannot be modified.\n\n**Refreshing:** run **RAG: Refresh Shared Topics** after adding or replacing an archive.\n\n**Format:** absolute path to a folder of `.rag` archives.",
           "order": 12
         },
         "ragnarok.rerankerModel": {
@@ -265,6 +265,12 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "ragnarok.refreshSharedTopics",
+        "title": "Refresh Shared Topics",
+        "category": "RAG",
+        "icon": "$(sync)"
+      },
+      {
         "command": "ragnarok.renameTopic",
         "title": "Rename Topic",
         "category": "RAG",
@@ -364,6 +370,11 @@
           "command": "ragnarok.refreshTopics",
           "when": "view == ragTopics",
           "group": "navigation@3"
+        },
+        {
+          "command": "ragnarok.refreshSharedTopics",
+          "when": "view == ragTopics",
+          "group": "navigation@4"
         },
         {
           "command": "ragnarok.showMemoryGraph",

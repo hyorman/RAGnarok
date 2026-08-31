@@ -40,6 +40,11 @@ describe("real VS Code extension host activation", function () {
     await vscode.commands.executeCommand(COMMANDS.REFRESH_TOPICS);
   });
 
+  it("contributes the shared topics refresh command", async function () {
+    const commands = await vscode.commands.getCommands(true);
+    expect(commands).to.include("ragnarok.refreshSharedTopics");
+  });
+
   // Runs against the live activation, before the rollback test tears it down.
   // The reset command is deliberately not executed here: its modal has no user.
   it("registers the memory sidebar commands and refreshes the memory tree", async function () {
