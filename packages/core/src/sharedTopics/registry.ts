@@ -11,6 +11,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { ILogger } from "../interfaces";
+import { ENTRIES_FILENAME, STALE_TRANSIENT_MS } from "./archiveCache";
 import type { Document as TopicDocument, Topic } from "../utils/types";
 import type { ResolvedSharedTopic, SharedTopicSource } from "./types";
 
@@ -116,6 +117,21 @@ export class SharedTopicRegistry {
     return source.id.replace(/[^a-zA-Z0-9._-]+/g, "-");
   }
 
+  /**
+   * Reclaim the cache of a source nobody configures any more.
+   *
+   * Age-gated, exactly as SharedArchiveCache.prune is for its transients, and
+   * for the same reason one level up: the cache root lives under the storage
+   * directory, which every process sharing that directory also shares, while
+   * the configured source set is per-process (in VS Code, per window — the
+   * setting is window-scoped). "Not configured here" therefore does not mean
+   * "not in use anywhere", and an unconditional removal would delete another
+   * window's live unpacks out from under its open LanceDB handles.
+   *
+   * A live process rewrites entries.json on every refresh, so a recent mtime
+   * is the signal that someone is still using this cache. A genuinely
+   * abandoned one is still reclaimed, just a refresh cycle later.
+   */
   private async pruneUnconfiguredSourceCaches(): Promise<void> {
     const keep = new Set(this.sources.map((source) => this.cacheDirName(source)));
     let names: string[];
@@ -128,7 +144,25 @@ export class SharedTopicRegistry {
       if (keep.has(name)) {
         continue;
       }
-      await fs.rm(path.join(this.cacheRoot, name), { recursive: true, force: true }).catch(() => undefined);
+      const sourceDir = path.join(this.cacheRoot, name);
+      let mtimeMs: number;
+      try {
+        mtimeMs = (await fs.stat(path.join(sourceDir, ENTRIES_FILENAME))).mtimeMs;
+      } catch {
+        // No entries.json: a source directory another process created but
+        // whose first sync has not finished yet — on a big share that is
+        // minutes of unpacking. Fall back to the directory's own mtime rather
+        // than deleting on a failed probe.
+        try {
+          mtimeMs = (await fs.stat(sourceDir)).mtimeMs;
+        } catch {
+          continue;
+        }
+      }
+      if (Date.now() - mtimeMs < STALE_TRANSIENT_MS) {
+        continue;
+      }
+      await fs.rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 }

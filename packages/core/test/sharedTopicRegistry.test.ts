@@ -92,15 +92,20 @@ function stubSource(
 }
 
 describe("shared topic registry", function () {
+  this.timeout(30_000);
+
   let cacheRoot: string;
+  let shareFolder: string;
   const logger = new Logger("test");
 
   beforeEach(async function () {
     cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-registry-"));
+    shareFolder = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-registry-share-"));
   });
 
   afterEach(async function () {
     await fs.rm(cacheRoot, { recursive: true, force: true });
+    await fs.rm(shareFolder, { recursive: true, force: true });
   });
 
   it("keeps a name that collides with nothing", async function () {
@@ -191,6 +196,51 @@ describe("shared topic registry", function () {
     await registry.refresh([]);
 
     expect(registry.listTopics()).to.deep.equal([]);
+  });
+
+  it("leaves a concurrent process's cache alone when this process has no sources", async function () {
+    // One storage directory, two windows. globalStorageUri is shared by every
+    // VS Code window while ragnarok.commonDatabasePath is window-scoped, so a
+    // window with no share configured routinely refreshes over a cache root
+    // another window is actively serving from. Deleting it there pulls the
+    // LanceDB directories out from under that window's open handles.
+    await writeTopicArchive(path.join(shareFolder, "api.rag"), { name: "API Docs" });
+    const configured = new SharedTopicRegistry(cacheRoot, logger);
+    configured.setSources([new ArchiveFolderSource(shareFolder)]);
+    await configured.refresh([]);
+    const storeDir = configured.getStoreDir(configured.listTopics()[0].id)!;
+    await fs.access(path.join(storeDir, "topic.json"));
+
+    const unconfigured = new SharedTopicRegistry(cacheRoot, logger);
+    await unconfigured.refresh([]);
+
+    await fs.access(path.join(storeDir, "topic.json"));
+  });
+
+  it("prunes an unconfigured source's cache once it is old enough to be abandoned", async function () {
+    await writeTopicArchive(path.join(shareFolder, "api.rag"), { name: "API Docs" });
+    const registry = new SharedTopicRegistry(cacheRoot, logger);
+    registry.setSources([new ArchiveFolderSource(shareFolder)]);
+    await registry.refresh([]);
+    const storeDir = registry.getStoreDir(registry.listTopics()[0].id)!;
+    const sourceDir = path.dirname(storeDir);
+
+    // Age the cache past the point where any live process could still be
+    // refreshing it, which is the only signal that says "genuinely abandoned".
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fs.utimes(path.join(sourceDir, "entries.json"), old, old);
+    await fs.utimes(sourceDir, old, old);
+
+    registry.setSources([]);
+    await registry.refresh([]);
+
+    let present = true;
+    try {
+      await fs.access(sourceDir);
+    } catch {
+      present = false;
+    }
+    expect(present).to.equal(false);
   });
 
   it("isolates a failing source so the other source's topics still load", async function () {

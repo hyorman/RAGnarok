@@ -159,6 +159,44 @@ describe("shared archive cache", function () {
     await fs.access(path.join(second.storeDir, "topic.json"));
   });
 
+  it("re-unpacks a published unpack that lost its table directory", async function () {
+    // A concurrent rm -rf removes children in an uncontrollable order and an
+    // open .lance file can refuse deletion, so a half-deleted unpack is a real
+    // on-disk state. The archive is untouched, so its fingerprint -- the warm
+    // path's cache key -- never changes: without a probe that covers what the
+    // unpack should contain, the broken directory is served forever.
+    const archive = path.join(folder, "api.rag");
+    await writeTopicArchive(archive);
+    const cache = new SharedArchiveCache(cacheDir, "archiveFolder:test", logger);
+    const [first] = await cache.sync([archive]);
+    const table = path.join(first.storeDir, "lancedb", `${first.sharedId}.lance`);
+    await fs.access(table);
+
+    await fs.rm(path.join(first.storeDir, "lancedb"), { recursive: true, force: true });
+
+    const [second] = await cache.sync([archive]);
+
+    expect(second).to.not.equal(undefined);
+    expect(second.storeDir).to.equal(first.storeDir);
+    await fs.access(table);
+  });
+
+  it("re-unpacks a published unpack that lost its vector metadata", async function () {
+    const archive = path.join(folder, "api.rag");
+    await writeTopicArchive(archive);
+    const cache = new SharedArchiveCache(cacheDir, "archiveFolder:test", logger);
+    const [first] = await cache.sync([archive]);
+    const metadata = path.join(first.storeDir, `vector-${first.sharedId}-metadata.json`);
+    await fs.access(metadata);
+
+    await fs.rm(metadata, { force: true });
+
+    const [second] = await cache.sync([archive]);
+
+    expect(second.storeDir).to.equal(first.storeDir);
+    await fs.access(metadata);
+  });
+
   it("sweeps a staging directory orphaned by a crash, but leaves a recent one alone", async function () {
     const archive = path.join(folder, "api.rag");
     await writeTopicArchive(archive);

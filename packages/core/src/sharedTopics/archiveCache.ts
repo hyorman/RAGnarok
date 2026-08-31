@@ -21,7 +21,7 @@ import { atomicWriteJson } from "../utils/storageV2";
 import { validateAndStageTopicArchive } from "../utils/topicArchive";
 import type { ResolvedSharedTopic } from "./types";
 
-const ENTRIES_FILENAME = "entries.json";
+export const ENTRIES_FILENAME = "entries.json";
 const ENTRIES_VERSION = 1;
 /**
  * How long a dot-prefixed transient (our own ".staging-<uuid>" unpack
@@ -29,8 +29,12 @@ const ENTRIES_VERSION = 1;
  * `prune()` treats it as orphaned by a crash rather than in-flight from a
  * live concurrent process. Far beyond any real unpack duration, so it cannot
  * race a genuinely live writer.
+ *
+ * SharedTopicRegistry reuses this threshold for the same reason one level up:
+ * a cache root is shared by every process using one storage directory, so an
+ * unconfigured source here may be a live source there.
  */
-const STALE_TRANSIENT_MS = 60 * 60 * 1000;
+export const STALE_TRANSIENT_MS = 60 * 60 * 1000;
 
 interface CacheEntry {
   /** Basename of the archive inside its folder. */
@@ -43,6 +47,16 @@ interface CacheEntry {
   /** Cached topic metadata, so a warm sync never reopens the archive. */
   topic: ExportedTopicData["topic"];
   documents: TopicDocument[];
+  /**
+   * What the unpack actually contains, recorded at publish time. An empty
+   * topic legitimately ships without a table and the vector metadata is
+   * conditional too, so an unconditional probe would reject a valid unpack --
+   * but without a probe at all a half-deleted one is served forever, because
+   * the archive's fingerprint never changes. Optional: an entries.json
+   * written before this field existed re-unpacks once, then converges.
+   */
+  hasTable?: boolean;
+  hasVectorMetadata?: boolean;
 }
 
 interface EntriesFile {
@@ -138,9 +152,35 @@ export class SharedArchiveCache {
     };
   }
 
-  private async unpackExists(entry: Pick<CacheEntry, "sharedId" | "fingerprint">): Promise<boolean> {
+  /**
+   * Does the unpack still hold everything it was published with?
+   *
+   * Probing only topic.json is not enough: `fs.rm({recursive:true})` removes
+   * children concurrently and an open .lance file can refuse deletion, so a
+   * partially deleted unpack whose topic.json survived would pass and then be
+   * served -- forever, since the fingerprint that keys the warm path is the
+   * archive's, not the unpack's.
+   */
+  private async unpackExists(
+    entry: Pick<CacheEntry, "sharedId" | "fingerprint" | "hasTable" | "hasVectorMetadata">,
+  ): Promise<boolean> {
+    if (entry.hasTable === undefined || entry.hasVectorMetadata === undefined) {
+      // Recorded by a version that did not track contents. Treat as a failed
+      // probe: one forced re-unpack is cheaper than guessing.
+      return false;
+    }
+    const dir = this.unpackDir(entry);
+    const required = [path.join(dir, "topic.json")];
+    if (entry.hasTable) {
+      required.push(path.join(dir, "lancedb", `${entry.sharedId}.lance`));
+    }
+    if (entry.hasVectorMetadata) {
+      required.push(path.join(dir, `vector-${entry.sharedId}-metadata.json`));
+    }
     try {
-      await fs.access(path.join(this.unpackDir(entry), "topic.json"));
+      for (const target of required) {
+        await fs.access(target);
+      }
       return true;
     } catch {
       return false;
@@ -192,6 +232,7 @@ export class SharedArchiveCache {
 
       const nativeMetadata = path.join(content, `vector-${nativeId}-metadata.json`);
       const sharedMetadata = path.join(content, `vector-${sharedId}-metadata.json`);
+      let hasVectorMetadata = true;
       try {
         const metadata = JSON.parse(await fs.readFile(nativeMetadata, "utf8"));
         metadata.topicId = sharedId;
@@ -201,19 +242,25 @@ export class SharedArchiveCache {
         if (error?.code !== "ENOENT") {
           throw error;
         }
+        // The vector metadata file is conditional in a valid archive.
+        hasVectorMetadata = false;
       }
 
       const nativeTable = path.join(content, "lancedb", `${nativeId}.lance`);
       const sharedTable = path.join(content, "lancedb", `${sharedId}.lance`);
+      let hasTable = true;
       try {
         await fs.rename(nativeTable, sharedTable);
       } catch (error: any) {
         if (error?.code !== "ENOENT") {
           throw error;
         }
+        // An empty topic legitimately ships without a table.
+        hasTable = false;
       }
 
-      const destination = this.unpackDir({ sharedId, fingerprint });
+      const published = { sharedId, fingerprint, hasTable, hasVectorMetadata };
+      const destination = this.unpackDir(published);
       try {
         await fs.rename(content, destination);
       } catch (error) {
@@ -223,14 +270,30 @@ export class SharedArchiveCache {
         // adopt them. Don't dispatch on the error code: POSIX raises
         // EEXIST/ENOTEMPTY for a rename onto a non-empty directory, but
         // Windows raises EPERM for a rename onto ANY existing directory
-        // regardless of emptiness. Probe for the destination directly and
-        // rethrow only when it turns out not to be there.
-        if (!(await this.unpackExists({ sharedId, fingerprint }))) {
-          throw error;
+        // regardless of emptiness. Probe for the destination directly.
+        if (!(await this.unpackExists(published))) {
+          // Either the destination is not there at all (a real failure —
+          // the retry below rethrows), or it is there but incomplete: a
+          // half-deleted unpack from an interrupted prune. Replacing it is
+          // the only repair, because the archive's fingerprint — and so this
+          // destination name — never changes.
+          await fs.rm(destination, { recursive: true, force: true });
+          await fs.rename(content, destination);
         }
       }
 
-      return { archive: archiveName, size, mtimeMs, fingerprint, nativeId, sharedId, topic, documents };
+      return {
+        archive: archiveName,
+        size,
+        mtimeMs,
+        fingerprint,
+        nativeId,
+        sharedId,
+        topic,
+        documents,
+        hasTable,
+        hasVectorMetadata,
+      };
     } catch (error) {
       this.logger.debug("Shared archive skipped", { archivePath, error });
       return null;

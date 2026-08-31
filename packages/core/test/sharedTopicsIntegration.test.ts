@@ -328,6 +328,35 @@ describe("shared topics end to end", function () {
     expect(scanCompleted).to.equal(true);
   });
 
+  it("re-unpacks a half-deleted cache entry instead of serving it empty", async function () {
+    const publisher = await createTestTopicManager(publisherDir);
+    const topic = await publisher.createTopic({ name: "API Docs" });
+    const sourceFile = path.join(publisherDir, "guide.md");
+    await fs.writeFile(sourceFile, "# Rate limits\n\nThe API allows 100 requests per minute.\n", "utf8");
+    await publisher.addDocuments(topic.id, [sourceFile]);
+    await publisher.exportTopic(topic.id, path.join(shareDir, "api-docs.rag"));
+    await publisher.dispose();
+
+    const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
+    const sharedId = consumer.getAllTopics()[0].id;
+    const storeDir: string = (consumer as any).sharedTopics.getStoreDir(sharedId);
+
+    // Half of an interrupted rm -rf: topic.json survives, the table does not.
+    // The archive is untouched, so the warm path would happily serve this.
+    await fs.rm(path.join(storeDir, "lancedb"), { recursive: true, force: true });
+    await fs.access(path.join(storeDir, "topic.json"));
+
+    await consumer.refreshSharedTopics();
+
+    const store = await consumer.getVectorStore(consumer.getAllTopics()[0].id);
+    expect(store, "a half-deleted unpack must be rebuilt, not served empty").to.not.equal(null);
+    const hits = await store!.similaritySearch("how many requests per minute", 3);
+    expect(hits.length).to.be.greaterThan(0);
+    expect(hits.map((hit) => hit.pageContent).join(" ")).to.contain("100 requests");
+
+    await consumer.dispose();
+  });
+
   it("stops serving a topic whose archive was removed", async function () {
     const publisher = await createTestTopicManager(publisherDir);
     const topic = await publisher.createTopic({ name: "API Docs" });
