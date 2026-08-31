@@ -100,6 +100,8 @@ export interface McpConfig {
   rerankerMaxCandidates: number;
   rerankerCandidateMultiplier: number;
   exportDir: string;
+  /** Folder of exported .rag archives contributing read-only shared topics. Empty disables it. */
+  commonDatabasePath: string;
   githubHosts: string[];
   githubToken: string;
   resetStorage: boolean;
@@ -136,6 +138,7 @@ const configSchema = z
     rerankerMaxCandidates: z.number().int().min(1).max(200),
     rerankerCandidateMultiplier: z.number().int().min(1).max(20),
     exportDir: z.string().min(1),
+    commonDatabasePath: z.string(),
     githubHosts: z.array(z.string().min(1)).min(1),
     githubToken: z.string(),
     resetStorage: z.boolean(),
@@ -228,6 +231,7 @@ export function loadConfig(): McpConfig {
     rerankerMaxCandidates: file.rerankerMaxCandidates ?? 20,
     rerankerCandidateMultiplier: file.rerankerCandidateMultiplier ?? 4,
     exportDir: file.exportDir || path.join(storageDir, "exports"),
+    commonDatabasePath: file.commonDatabasePath || "",
     // An empty security.githubHosts is a deliberate "no hosts" rather than an
     // absent setting, and configSchema's .min(1) rejects it loudly. Lower-case
     // every entry: tools.ts matches against parsed.hostname.toLowerCase(), so a

@@ -7,11 +7,12 @@ import { loadConfig } from "../src/config";
 import { STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
 
 describe("config file key table", () => {
-  it("declares exactly the 23 file-settable keys", () => {
-    // 23, not 24: reranker.enabled was removed when reranking became
+  it("declares exactly the 24 file-settable keys", () => {
+    // 24, not 23: storage.commonDatabasePath was added for shared topic folders.
+    // Still not 25: reranker.enabled was removed when reranking became
     // unconditional. The bundled ONNX model means there is no download to opt
     // out of, so the switch only ever produced a worse search.
-    assert.equal(FILE_KEYS.length, 23);
+    assert.equal(FILE_KEYS.length, 24);
   });
 
   it("names the same file core exempts from storage-format gating and reset backups", () => {
@@ -106,6 +107,18 @@ describe("reading the config file", () => {
       () => readConfigFile(dir),
       (e: unknown) => e instanceof Error && e.message.includes(CONFIG_FILE_NAME),
     );
+  });
+
+  it("flattens the shared topics folder onto commonDatabasePath", () => {
+    write({ storage: { commonDatabasePath: "/srv/rag-share" } });
+
+    assert.equal(readConfigFile(dir).commonDatabasePath, "/srv/rag-share");
+  });
+
+  it("leaves the shared topics folder unset when config.json omits it", () => {
+    write({ retrieval: { topK: 7 } });
+
+    assert.equal(readConfigFile(dir).commonDatabasePath, undefined);
   });
 
   it("throws naming an unknown key", () => {

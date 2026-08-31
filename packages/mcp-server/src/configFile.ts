@@ -27,6 +27,7 @@ export type FileField =
   | "allowedPaths"
   | "githubHosts"
   | "exportDir"
+  | "commonDatabasePath"
   | "maxResponseBytes"
   | "shutdownDrainMs"
   | "logLevel";
@@ -93,6 +94,7 @@ export const FILE_KEYS: readonly FileKey[] = [
   { path: ["security", "githubHosts"], field: "githubHosts", schema: z.array(z.string()), shown: ["github.com"] },
 
   { path: ["storage", "exportDir"], field: "exportDir", schema: z.string(), shown: "<storageDir>/exports" },
+  { path: ["storage", "commonDatabasePath"], field: "commonDatabasePath", schema: z.string(), shown: "" },
 
   { path: ["limits", "maxResponseBytes"], field: "maxResponseBytes", schema: positiveInt, shown: 1048576 },
   { path: ["limits", "shutdownDrainMs"], field: "shutdownDrainMs", schema: positiveInt, shown: 10000 },

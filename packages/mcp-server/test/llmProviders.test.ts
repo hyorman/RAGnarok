@@ -43,6 +43,7 @@ function makeConfig(overrides: Partial<McpConfig> = {}): McpConfig {
     rerankerMaxCandidates: 20,
     rerankerCandidateMultiplier: 4,
     exportDir: "/tmp/ragnarok-exports",
+    commonDatabasePath: "",
     githubHosts: ["github.com"],
     githubToken: "",
     resetStorage: false,

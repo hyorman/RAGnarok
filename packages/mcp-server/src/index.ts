@@ -10,7 +10,9 @@
  *
  * Environment variables — secrets, bootstrap paths and one-shot switches only.
  * Everything else lives in <storageDir>/config.json, which the server generates
- * on first run with a $defaults block documenting every setting:
+ * on first run with a $defaults block documenting every setting — including
+ * storage.commonDatabasePath, a folder of exported .rag archives contributing
+ * read-only shared topics (unset by default, config.json only, no env var):
  *   RAGNAROK_STORAGE_DIR       — Database storage directory (default: ~/.ragnarok)
  *   RAGNAROK_WORKING_DIR       — Project root for git-branch-scoped memory (default: process.cwd())
  *   RAGNAROK_LLM_API_KEY       — API key for OpenAI or Anthropic
@@ -38,6 +40,7 @@ import {
   MemoryService,
   GraphVisualizationService,
   CrossEncoderReranker,
+  ArchiveFolderSource,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion, assertNoRemovedEnvVars } from "./config";
@@ -137,6 +140,7 @@ async function main(): Promise<void> {
     embeddingRegistry,
     llmProvider,
     resetStorage: config.resetStorage,
+    sharedTopicSources: config.commonDatabasePath ? [new ArchiveFolderSource(config.commonDatabasePath)] : [],
   });
 
   logger.info(`Loaded ${topicManager.getAllTopics().length} topic(s) from ${config.storageDir}`);
