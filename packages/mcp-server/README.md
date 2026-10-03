@@ -134,7 +134,7 @@ src/
 ├── llmProviders.ts               # OpenAI, Anthropic, Ollama LLM providers
 ├── memoryToolAdapter.ts          # rag_memory / rag_reset_memory input and result shaping
 ├── graphVisualizationAdapter.ts  # rag_memory_visualize projection and limits
-├── toolRuntime.ts                # Shared tool runtime (abort, drain, response limits)
+├── toolRuntime.ts                # Tool admission and drain runtime
 ├── tools.ts                      # Tool definitions & handlers (registerTools)
 ├── uiResource.ts                 # ui://ragnarok/graph MCP App resource
 └── ui/                           # Generated MCP App HTML bundle
