@@ -10,8 +10,7 @@ rejected and there is no compatibility mode.
 **Stdio is the only transport.** There is no HTTP mode, no listener, no
 endpoint, and no bearer token. The server is a child process of one MCP client
 on one machine, running as the user who spawned it. Environment variables that
-configured the removed HTTP transport are rejected at startup, with an error
-naming every one that was set.
+configured the removed HTTP transport are not read.
 
 MCP and VS Code share core memory behavior, not storage. This process constructs
 the core service over `RAGNAROK_STORAGE_DIR`; VS Code constructs it over extension
@@ -355,7 +354,7 @@ with the load cost paid on each query.
 #### The GitHub host allowlist
 
 `security.githubHosts` must resolve to at least one
-host. An explicitly empty array is rejected at startup rather than quietly
+host. An explicitly empty array is rejected when the configuration loads rather than quietly
 falling back to `github.com`: emptying a security allowlist is a deliberate
 instruction, and silently restoring the default would grant back access that had
 just been revoked.
@@ -386,12 +385,7 @@ Between them the two tables are the complete surface: 23 keys in the file, 7
 variables in the environment, nothing else. A variable named after one of the 23
 is simply not read.
 
-Variables belonging to the **removed HTTP transport** are the one exception, and
-they are not merely ignored: `assertNoRemovedEnvVars()` aborts startup and names
-every offender it finds, so a stale shared-service configuration fails loudly
-instead of quietly becoming a local pipe. They are deliberately not listed here —
-naming them in a configuration guide would read as documentation of a supported
-setting, and the startup error already tells you which one you set.
+Variables that belonged to the **removed HTTP transport** are not read. They are deliberately not listed here, so this guide is never mistaken for documentation of a supported setting.
 
 The difference in treatment is deliberate: those variables implied a capability
 the server no longer has — a listening port, TLS termination, bearer auth — and

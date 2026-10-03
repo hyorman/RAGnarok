@@ -65,9 +65,8 @@ for (const variable of ["RAGNAROK_STORAGE_DIR"]) {
 for (const key of ["security.allowedPaths", "embedding.model", "llm.provider", "limits.maxResponseBytes"]) {
   assert.match(mcp, new RegExp(key.replace(".", "\\.")), `MCP guide must document ${key}`);
 }
-// Variables removed with the HTTP transport are rejected at startup by
-// assertNoRemovedEnvVars, whose REMOVED_ENV_VARS array is the list. Naming
-// them here would read as documentation of a supported setting.
+// Variables that belonged to the removed HTTP transport are no longer read.
+// Naming them here would read as documentation of a supported setting.
 for (const removed of [
   "RAGNAROK_DEPLOYMENT_MODE",
   "RAGNAROK_ADMIN_API_KEY",
@@ -76,6 +75,16 @@ for (const removed of [
   "RAGNAROK_TRANSFER_MAX_FILE_BYTES",
 ]) {
   assert.doesNotMatch(mcp, new RegExp(removed), `MCP guide must not document removed variable ${removed}`);
+}
+for (const [name, contents] of [
+  ["README.md", await readFile(path.join(root, "README.md"), "utf8")],
+  ["packages/mcp-server/README.md", mcp],
+]) {
+  assert.doesNotMatch(
+    contents,
+    /assertNoRemovedEnvVars|rejected at startup/,
+    `${name} describes a startup guard that does not exist`,
+  );
 }
 
 const core = await readFile(path.join(root, "packages/core/README.md"), "utf8");
