@@ -286,8 +286,8 @@ environment variable for any of them.
 | `llm.baseUrl`                   | _(per-provider)_                | LLM API base URL override (Ollama defaults to `http://localhost:11434`; OpenAI/Anthropic use their official endpoints unless set) |
 | `llm.requestTimeoutMs`          | `30000`                         | Timeout for one configured LLM request                                                                                            |
 | `reranker.model`                | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model. Reranking itself is unconditional — there is no key to disable it                                   |
-| `reranker.maxCandidates`        | `20`                            | Maximum candidates scored by the reranker                                                                                         |
-| `reranker.candidateMultiplier`  | `4`                             | First-stage over-fetch multiplier                                                                                                 |
+| `reranker.maxCandidates`        | `40`                            | Ceiling on candidates scored by the reranker; caps `candidateMultiplier`                                                          |
+| `reranker.candidateMultiplier`  | `4`                             | First-stage over-fetch multiplier, capped by `maxCandidates`                                                                      |
 | `limits.shutdownDrainMs`        | `10000`                         | Budget for draining in-flight tool calls on SIGINT/SIGTERM                                                                        |
 | `limits.maxResponseBytes`       | `1048576`                       | Maximum serialized tool response size                                                                                             |
 | `storage.exportDir`             | `<storage>/exports`             | Only directory used for exported archives                                                                                         |

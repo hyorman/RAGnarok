@@ -41,7 +41,12 @@ export const DEFAULTS = {
   LOCAL_MODEL_PATH: "",
   EMBEDDING_MODEL: "Xenova/all-MiniLM-L6-v2",
   RERANKER_MODEL: "Xenova/ms-marco-MiniLM-L-6-v2",
-  RERANKER_MAX_CANDIDATES: 20,
+  // 40, not 20: this is the ceiling on candidates handed to the cross-encoder,
+  // and it must not bind before RERANKER_CANDIDATE_MULTIPLIER does. At the
+  // default topK of 10, a ceiling of 20 silently reduced the documented 4x
+  // over-fetch to 2x, and at the maximum topK of 20 it removed it entirely —
+  // leaving the reranker able only to reorder results it could not improve.
+  RERANKER_MAX_CANDIDATES: 40,
   RERANKER_CANDIDATE_MULTIPLIER: 4,
 } as const;
 

@@ -1152,4 +1152,25 @@ describe("RAGAgent", function () {
       expect(uniqueIds.size).to.equal(chunkIds.length);
     });
   });
+
+  describe("Candidate ceiling", function () {
+    it("returns results when fewer candidates exist than the candidate ceiling", async function () {
+      // The candidate ceiling is now 40, so most small topics return far fewer
+      // candidates than the cap. A short list must score and return normally
+      // rather than being padded, mis-sliced, or erroring.
+      const smallStore = new MockVectorStore();
+      await smallStore.addDocuments([
+        new LangChainDocument({ pageContent: "Python is a programming language", metadata: { chunkId: "c1" } }),
+        new LangChainDocument({ pageContent: "JavaScript runs in browsers", metadata: { chunkId: "c2" } }),
+        new LangChainDocument({ pageContent: "TypeScript adds static types", metadata: { chunkId: "c3" } }),
+      ]);
+      const smallAgent = new RAGAgent(mockConfig, mockLLMProvider);
+      await smallAgent.initialize(smallStore);
+
+      const result = await smallAgent.query("what language has types?", defaultQueryOptions({ topK: 10 }));
+
+      expect(result.results.length).to.be.greaterThan(0);
+      expect(result.results.length).to.be.at.most(3);
+    });
+  });
 });

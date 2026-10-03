@@ -79,7 +79,7 @@ export const FILE_KEYS: readonly FileKey[] = [
     schema: z.string(),
     shown: "Xenova/ms-marco-MiniLM-L-6-v2",
   },
-  { path: ["reranker", "maxCandidates"], field: "rerankerMaxCandidates", schema: positiveInt, shown: 20 },
+  { path: ["reranker", "maxCandidates"], field: "rerankerMaxCandidates", schema: positiveInt, shown: 40 },
   {
     path: ["reranker", "candidateMultiplier"],
     field: "rerankerCandidateMultiplier",

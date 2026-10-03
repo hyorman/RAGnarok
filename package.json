@@ -172,7 +172,7 @@
         },
         "ragnarok.rerankerMaxCandidates": {
           "type": "number",
-          "default": 20,
+          "default": 40,
           "minimum": 5,
           "maximum": 100,
           "markdownDescription": "**Reranker Max Candidates** — Maximum number of candidates to pass through the cross-encoder. Higher values improve recall but increase latency.",

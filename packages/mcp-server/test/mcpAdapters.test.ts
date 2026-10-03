@@ -108,7 +108,7 @@ describe("MCP Server", () => {
     it("defaults the reranker to its bundled model", () => {
       const config = loadConfig();
       expect(config.rerankerModel).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
-      expect(config.rerankerMaxCandidates).to.equal(20);
+      expect(config.rerankerMaxCandidates).to.equal(40);
       expect(config.rerankerCandidateMultiplier).to.equal(4);
     });
 
