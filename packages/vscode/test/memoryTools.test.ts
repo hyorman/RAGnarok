@@ -268,6 +268,24 @@ describe("VS Code native memory tools", function () {
     expect(harness.memoryService.execute.called).to.equal(false);
   });
 
+  it("tells the model to retry when storage is busy", async function () {
+    // Core rethrows StorageBusyError untouched precisely so a host can match
+    // it by name and offer a retry — it is deliberately not a
+    // MemoryServiceError. The MCP host has always mapped it; before this
+    // change the language-model tools let it reach the model as an opaque
+    // failure, which is the one caller that could act on a retry hint.
+    const harness = registrationHarness();
+    const busy = new Error("another process holds the write lease");
+    busy.name = "StorageBusyError";
+    harness.memoryService.execute.rejects(busy);
+
+    const output = await harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input: { action: "stats" } }, token());
+
+    const text = JSON.stringify(output).toLowerCase();
+    expect(text).to.include("busy");
+    expect(text).to.include("retry");
+  });
+
   it("still rejects unexpected non-service errors", async function () {
     const harness = registrationHarness();
     harness.memoryService.execute.rejects(new Error("disk gone"));

@@ -5,6 +5,7 @@
 
 import * as vscode from "vscode";
 import {
+  classifyToolError,
   TopicManager,
   EmbeddingService,
   Logger,
@@ -171,6 +172,13 @@ export class RAGTool {
       // payload, and the result shape that MCP also returns.
       return await executeQueryTool(params, { ragQueryService: this.ragQueryService, workspaceContext }, signal);
     } catch (error) {
+      const classified = classifyToolError(error);
+      if (classified.kind !== "generic") {
+        // A recognised kind is already a message meant for a caller — and
+        // sanitising it would strip the retry hint. Surface it as-is.
+        logger.error(`RAG Query Failed: ${classified.message}`);
+        throw new Error(classified.message);
+      }
       const rawMessage = error instanceof Error ? error.message : String(error);
       logger.error(`RAG Query Failed: ${rawMessage}`);
       const sanitizedMessage = rawMessage

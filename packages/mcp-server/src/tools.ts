@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { McpServer, type ServerContext, type ToolAnnotations } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
+  classifyToolError,
   TopicManager,
   RAGQueryService,
   executeQueryTool,
@@ -373,12 +374,7 @@ export function registerTools(
   // this mutation's bounded 5s wait expired — that reads as "try again
   // shortly", not the generic per-operation failure text. Typed on
   // error.name (never message matching) so unrelated errors are unaffected.
-  const toolErrorMessage = (error: unknown): string =>
-    error instanceof Error && error.name === "StorageBusyError"
-      ? "Storage is busy: another RAGnarōk process is writing. Retry shortly."
-      : error instanceof Error
-        ? error.message
-        : String(error);
+  const toolErrorMessage = (error: unknown): string => classifyToolError(error).message;
   const toolError = (error: unknown) => ({
     content: [
       {

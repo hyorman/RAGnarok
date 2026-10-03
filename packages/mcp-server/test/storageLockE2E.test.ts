@@ -94,7 +94,10 @@ describe("cross-process storage E2E (lock-free reads / busy-error mutations)", f
         true,
       );
       const body = JSON.parse(created.result.content[0].text);
-      expect(body.error).to.equal("Storage is busy: another RAGnarōk process is writing. Retry shortly.");
+      // The pid comes from the lock file the fixture plants. Both hosts now
+      // share one classifier in @ragnarok/core, so this host inherited the
+      // holder pid the VS Code notification always carried.
+      expect(body.error).to.equal("Storage is busy: another RAGnarōk process is writing (pid 99999). Retry shortly.");
     } finally {
       fs.rmSync(lockPath, { force: true });
     }
