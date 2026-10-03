@@ -1,7 +1,13 @@
 name: Release gates
 
 on:
+  # Pushes gate main and release tags only. A topic branch is covered by its
+  # pull_request run, and listening to both ran every check twice: the
+  # concurrency group is keyed on github.ref, and refs/heads/x never collides
+  # with refs/pull/N/merge, so neither run cancelled the other.
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -17,11 +23,38 @@ env:
   NODE_OPTIONS: --enable-source-maps
 
 jobs:
+  # Static checks over source text: identical on every Node version, so they
+  # run once instead of once per matrix leg. Keeping them in the matrix also
+  # made a plain formatting failure read as Node-version-specific, because
+  # fail-fast cancelled the other leg before it could report the same thing.
+  static-checks:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run test:release-static
+
+  # Both ends of the supported engines range (>=22 <25). 22 is the floor
+  # because the VS Code extension host runs it -- VS Code 1.105 bundles Node
+  # 22.19.0 (Electron 37.6.0) -- and @ragnarok/core loads inside that host.
+  # fail-fast is off so a failure on one leg still reports the other.
   quality:
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
-        node: [20, 22]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -32,21 +65,26 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run compile
-      - run: npm run lint
-      - run: npm run format:check
-      - run: npm run test:release-static
       - run: npm run test:fast
 
   native:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
             gate: linux
-          - os: macos-13
+          # macos-13 is retired and never gets a runner -- it sat at the 24h
+          # workflow ceiling while the linux and windows legs ran. This gate
+          # only needs some macOS, and macos-14 is already proven by the
+          # vsix-installed matrix below.
+          - os: macos-14
             gate: macos
-          - os: windows-2022
+          # windows-2025 is the current image. windows-2022 is the previous
+          # one, and a retired label does not fail -- it queues, which is
+          # exactly what macos-13 did above.
+          - os: windows-2025
             gate: windows
     runs-on: ${{ matrix.os }}
     steps:
@@ -65,6 +103,7 @@ jobs:
       - run: npm run test:shutdown-soak
 
   vscode-tests:
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -78,6 +117,7 @@ jobs:
       - run: xvfb-run -a npm test
 
   supply-chain:
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -96,6 +136,7 @@ jobs:
       - run: git diff --exit-code -- bom.cdx.json bom.spdx.json
 
   benchmarks:
+    timeout-minutes: 60
     needs: artifact-build
     runs-on: ubuntu-24.04
     steps:
@@ -125,7 +166,8 @@ jobs:
           if-no-files-found: error
 
   artifact-build:
-    needs: [quality, native, vscode-tests, supply-chain]
+    timeout-minutes: 45
+    needs: [static-checks, quality, native, vscode-tests, supply-chain]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -156,6 +198,7 @@ jobs:
           retention-days: 7
 
   vsix-installed:
+    timeout-minutes: 30
     needs: artifact-build
     strategy:
       fail-fast: false
@@ -167,14 +210,18 @@ jobs:
           - target: linux-arm64
             os: ubuntu-24.04-arm
             cli: code
+          # macos-13 was the last Intel runner and is retired. Running the
+          # x64 VSIX here means an arm64 VS Code process, and Rosetta cannot
+          # mix architectures inside one process -- so a failure on this leg
+          # is an architecture mismatch, not a RAGnarok regression.
           - target: darwin-x64
-            os: macos-13
+            os: macos-14
             cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
           - target: darwin-arm64
             os: macos-14
             cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
           - target: win32-x64
-            os: windows-2022
+            os: windows-2025
             cli: code.cmd
           - target: win32-arm64
             os: windows-11-arm
@@ -199,6 +246,7 @@ jobs:
           VSCODE_CLI: ${{ matrix.cli }}
 
   vscode-minimum:
+    timeout-minutes: 20
     needs: artifact-build
     runs-on: ubuntu-24.04
     steps:
@@ -219,6 +267,7 @@ jobs:
           VSCODE_VERSION: 1.105.0
 
   docker-smoke:
+    timeout-minutes: 30
     needs: artifact-build
     runs-on: ubuntu-24.04
     steps:
@@ -239,9 +288,11 @@ jobs:
       - run: node scripts/docker-gate.mjs
 
   release-gate:
+    timeout-minutes: 10
     if: always()
     needs:
       [
+        static-checks,
         quality,
         native,
         vscode-tests,
@@ -255,6 +306,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - run: |
+          test '${{ needs.static-checks.result }}' = success
           test '${{ needs.quality.result }}' = success
           test '${{ needs.native.result }}' = success
           test '${{ needs.vscode-tests.result }}' = success
@@ -267,6 +319,7 @@ jobs:
 
   manifest:
     if: github.ref_type == 'tag' && github.ref_protected == true && github.event_name != 'pull_request'
+    timeout-minutes: 20
     needs: [release-gate, artifact-build]
     runs-on: ubuntu-24.04
     permissions:
@@ -318,6 +371,7 @@ jobs:
 
   publish:
     if: github.ref_type == 'tag' && github.ref_protected == true && github.event_name != 'pull_request'
+    timeout-minutes: 30
     needs: manifest
     runs-on: ubuntu-24.04
     environment: release

@@ -9,6 +9,7 @@ import { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegi
 import { VectorStoreFactory } from "../src/stores/vectorStoreFactory";
 import type { EmbeddingFingerprint } from "../src/embeddings/embeddingBackend";
 import type { ILLMProvider } from "../src/interfaces";
+import { STORAGE_FORMAT_FILENAME } from "../src/utils/storage";
 
 // ── Mock Embedding Service ───────────────────────────────────────────
 // Returns a deterministic 32-dim vector derived from a simple text hash.
@@ -881,7 +882,10 @@ describe("MemoryStore reset and cancellation safety", function () {
 describe("MemoryStore standalone format and markdown privacy", function () {
   this.timeout(30000);
 
-  it("fails closed before writing into non-empty unversioned standalone storage", async function () {
+  it("writes into a directory holding pre-v2 content without touching it", async function () {
+    // v2 is the baseline, so unversioned content is not adopted and not an
+    // obstacle: the store stamps its marker beside it and proceeds. The old
+    // file stays exactly where the operator left it.
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-format-gate-"));
     await fs.writeFile(path.join(directory, "legacy-memory.json"), "{}", "utf8");
     const standalone = new MemoryStore({
@@ -891,9 +895,10 @@ describe("MemoryStore standalone format and markdown privacy", function () {
       markdownPath: null,
     });
 
-    const error = await captureError(standalone.store({ content: "must not enter unversioned storage" }));
-    expect((error as Error).message).to.include("Existing unversioned RAGnarōk storage");
-    expect(await fs.readdir(directory)).to.include("legacy-memory.json");
+    const stored = await standalone.store({ content: "enters the new v2 store" });
+    expect(stored.content).to.equal("enters the new v2 store");
+    expect(await fs.readdir(directory)).to.include.members(["legacy-memory.json", STORAGE_FORMAT_FILENAME]);
+    expect(await fs.readFile(path.join(directory, "legacy-memory.json"), "utf8")).to.equal("{}");
     await standalone.dispose();
     await fs.rm(directory, { recursive: true, force: true });
   });
@@ -1424,7 +1429,11 @@ describe("MemoryStore lock-free reads and operation leases", function () {
     await writeForeignLease();
 
     const reader = makeStore();
-    const recalled = await reader.recall({ query: "manifest free recall memory", scope: "workspace", reinforce: false });
+    const recalled = await reader.recall({
+      query: "manifest free recall memory",
+      scope: "workspace",
+      reinforce: false,
+    });
     expect(recalled.memories.length).to.be.greaterThan(0);
     expect(await exists(manifestPath()), "a read must not stamp the manifest it could not lease").to.equal(false);
   });
@@ -1490,34 +1499,6 @@ describe("MemoryStore lock-free reads and operation leases", function () {
     await fs.writeFile(manifestPath(), manifest, "utf8");
 
     await waitFor(() => (current as any).entryCache.size === 0 && (current as any).graphCache.size === 0);
-  });
-
-  it("refuses to reset over an interrupted storage migration", async function () {
-    const current = makeStore();
-    await current.store({ content: "data an interrupted cutover must not destroy" });
-
-    // An interrupted migration's process is dead: it holds no live lease, so
-    // the operation lease alone would be granted and reset would delete over a
-    // half-renamed directory.
-    const statePath = path.join(
-      path.dirname(tempDir),
-      `.${path.basename(tempDir)}.migration-mig-x.json`,
-    );
-    await fs.writeFile(
-      statePath,
-      JSON.stringify({ sourcePath: tempDir, migrationId: "mig-x", stage: "cutoverPrepared" }),
-      "utf8",
-    );
-
-    try {
-      const error = await captureError(current.reset(true));
-      expect((error as Error).name).to.equal("StorageMigrationInterruptedError");
-      expect((await current.list({ scope: "workspace" })).map((entry) => entry.content)).to.deep.equal([
-        "data an interrupted cutover must not destroy",
-      ]);
-    } finally {
-      await fs.rm(statePath, { force: true });
-    }
   });
 
   it("closes the storage watcher on dispose", async function () {

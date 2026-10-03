@@ -17,7 +17,7 @@ import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import type { ILogger } from "../interfaces";
 import type { Document as TopicDocument, ExportedTopicData } from "../utils/types";
-import { atomicWriteJson } from "../utils/storageV2";
+import { atomicWriteJson } from "../utils/storage";
 import { validateAndStageTopicArchive } from "../utils/topicArchive";
 import type { ResolvedSharedTopic } from "./types";
 

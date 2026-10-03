@@ -1,6 +1,6 @@
 # How RAGnarōk works: ingestion to retrieval
 
-Traced from source at commit `87d1985`. File and line references are load-bearing — this describes
+Traced from source at commit `14dd4f4`. File and line references are load-bearing — this describes
 what the code does, not what it intends to do.
 
 There is no document knowledge graph. Entity extraction over ingested documents, the `graph` and
@@ -21,10 +21,10 @@ flowchart TB
     url["rag_ingest source=url · source=github"]
   end
 
-  entry --> TM["TopicManager.addDocuments()<br/>topicManager.ts:907"]
+  entry --> TM["TopicManager.addDocuments()<br/>topicManager.ts:1019"]
 
   TM --> J1["write ingestion journal<br/>stage: started"]
-  J1 --> PROC["DocumentPipeline.processDocument()<br/>topicManager.ts:985<br/>load → chunk → embed → store"]
+  J1 --> PROC["DocumentPipeline.processDocument()<br/>topicManager.ts:1102<br/>load → chunk → embed → store"]
   PROC --> J2["journal: metadataCommitted → vectorCommitted<br/>+ document index update"]
 ```
 
@@ -41,7 +41,7 @@ flowchart LR
   F["file · URL · git repo"] --> L["DocumentLoaderFactory<br/>text · markdown · pdf · html · github · web"]
   L --> C["SemanticChunker<br/>Markdown- · Code- or Recursive-CharacterTextSplitter"]
   C --> M["chunk metadata<br/>chunkIndex · headingPath · sectionTitle · loc"]
-  M --> ID["chunkId = hashId('chunk', docId + index + text)<br/>documentPipeline.ts:289"]
+  M --> ID["chunkId = hashId('chunk', docId + index + text)<br/>documentPipeline.ts:294"]
   ID --> E["embed with the TOPIC'S recorded model<br/>new topic → configured embedding.model<br/>existing topic → its metadata.embeddingModel"]
   E --> V[("LanceDB table &lt;topicId&gt;<br/>vector + text + metadata")]
 ```
@@ -111,7 +111,7 @@ flowchart TB
   LLMREF -->|"?? heuristicPlan (line 378)"| USE["QueryPlan { complexity, subQueries[] }"]
 
   USE --> LOOP["for each sub-query"]
-  LOOP --> OF["over-fetch when a reranker exists<br/>topK × 4, capped at 20<br/>ragAgent.ts:459-465"]
+  LOOP --> OF["over-fetch when a reranker exists<br/>topK × 4, capped at 40<br/>ragAgent.ts:459-465"]
   OF --> STRAT{"retrievalStrategy"}
   STRAT --> R1["vector"] & R2["bm25"] & R3["hybrid"]
 
@@ -159,6 +159,7 @@ Measured quality for these strategies across SciFact, NFCorpus, FiQA, and FRAMES
 <storage>/
   storage-format.json        v2 marker
   .ragnarok.lock             fenced write lease (present only while held)
+  .ragnarok-shared-cache/    unpacked shared .rag archives; derived, safe to delete
   database/
     topics.json
     topic-<id>-documents.json
@@ -221,6 +222,3 @@ most 10,000 edges, and oversized records return `GRAPH_VISUALIZATION_RECORD_TOO_
 - `hybrid`'s lexical half is TF-only despite the BM25-adjacent naming around it: `scoreDocument`
   (`keywordRetriever.ts:119-150`) has no IDF and no document-frequency term, so the keyword component
   of the blend is not Okapi BM25 — even though the standalone `bm25` strategy is.
-- The offline migrator still emits a `graphRebuildRequired` flag and a "rebuild is required" warning
-  for legacy `kg-*` tables. Both are vestigial: there is nothing to rebuild and no strategy that
-  would consume the result.

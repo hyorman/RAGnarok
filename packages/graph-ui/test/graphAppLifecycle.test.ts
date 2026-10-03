@@ -4,6 +4,17 @@ import { createMcpGraphAppBridge } from "../src/bridges/mcpBridge";
 import { startGraphApp, type GraphAppBridge } from "../src/app";
 import { parseGraphVisualizationResult } from "../src/schema";
 import type { GraphVisualizationDocument, GraphVisualizationGroup, GraphVisualizationNode } from "../src/documentTypes";
+import * as fs from "fs";
+import * as path from "path";
+
+// Derived, never written out a second time. The bridge's version is a TS
+// literal because version-sync.js only rewrites JSON and cannot reach it, so
+// test-release-static.mjs pins the source. A hardcoded copy here was a third
+// unguarded one, and the 0.4.1 bump moved the source and left it behind:
+// actual 0.4.1 vs expected 0.4.0. Reading the manifest tracks every bump.
+const PACKAGE_VERSION = (
+  JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "package.json"), "utf8")) as { version: string }
+).version;
 
 function graphDocument(): GraphVisualizationDocument {
   return {
@@ -265,7 +276,7 @@ describe("graph app lifecycle", function () {
       expect(initialize, "the installed Apps SDK must emit ui/initialize").not.to.equal(undefined);
       expect((initialize!.params as { appInfo: unknown }).appInfo).to.deep.equal({
         name: "RAGnarok Graph",
-        version: "0.4.0",
+        version: PACKAGE_VERSION,
       });
     } finally {
       console.debug = originalDebug;

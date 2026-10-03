@@ -4,16 +4,15 @@ import * as os from "os";
 import * as path from "path";
 import {
   atomicWriteJson,
-  assertNoInterruptedStorageMigration,
-  ensureStorageFormatV2,
+  ensureStorageFormat,
   inspectStorage,
-  resetStorageToV2,
+  resetStorage,
   SHARED_TOPIC_CACHE_DIRNAME,
   STORAGE_FORMAT_FILENAME,
   STORAGE_FORMAT_VERSION,
   STORAGE_CONFIG_FILENAME,
   STORAGE_RESET_JOURNAL_FILENAME,
-} from "../src/utils/storageV2";
+} from "../src/utils/storage";
 import { STORAGE_LOCK_FILENAME } from "../src/utils/storageLock";
 
 describe("storage format v2", () => {
@@ -28,32 +27,33 @@ describe("storage format v2", () => {
   });
 
   it("initializes an empty installation", async () => {
-    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
     const marker = JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"));
     expect(marker.formatVersion).to.equal(2);
   });
 
-  it("fails closed for non-empty unversioned storage", async () => {
-    await fs.mkdir(path.join(directory, "database"));
-    try {
-      await ensureStorageFormatV2(directory);
-      expect.fail("expected format validation to fail");
-    } catch (error) {
-      expect((error as Error).name).to.equal("UnversionedStorageError");
-    }
+  it("initializes beside non-empty unversioned content instead of refusing it", async () => {
+    // v2 is the baseline format and the unversioned 0.3 layout was never
+    // released, so pre-v2 content is not evidence of anything to adopt. It is
+    // left untouched on disk and the marker is stamped beside it.
+    const legacy = path.join(directory, "database");
+    await fs.mkdir(legacy);
+
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
+    expect(await fs.readdir(legacy), "pre-v2 content must not be moved or deleted").to.deep.equal([]);
   });
 
   it("ignores the storage lock file when judging whether a directory holds data", async () => {
     // The cross-process lock is acquired BEFORE format validation, so a
     // fresh directory containing only .ragnarok.lock must initialize cleanly.
     await fs.writeFile(path.join(directory, STORAGE_LOCK_FILENAME), JSON.stringify({ pid: process.pid }));
-    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
   });
 
   it("does not move the active lock file into the reset backup", async () => {
     await fs.mkdir(path.join(directory, "database"));
     await fs.writeFile(path.join(directory, STORAGE_LOCK_FILENAME), JSON.stringify({ pid: process.pid }));
-    const backup = await resetStorageToV2(directory);
+    const backup = await resetStorage(directory);
     expect(backup).to.be.a("string");
     const backedUp = await fs.readdir(backup!);
     expect(backedUp).to.deep.equal(["database"]);
@@ -66,27 +66,24 @@ describe("storage format v2", () => {
     // validation runs. Treating it as data would make every fresh install look
     // like unversioned v0.3 storage and refuse to start.
     await fs.writeFile(path.join(directory, STORAGE_CONFIG_FILENAME), "{}");
-    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
   });
 
-  it("still fails closed when the config file sits alongside real unversioned data", async () => {
-    // The exemption above is narrow: config.json stops being *evidence* of a
-    // legacy install, it does not stop one being detected.
+  it("initializes with the config file sitting alongside unversioned data", async () => {
+    // Settings survive because nothing is moved at all now -- neither the
+    // operator's config nor the pre-v2 corpus beside it.
     await fs.writeFile(path.join(directory, STORAGE_CONFIG_FILENAME), "{}");
     await fs.mkdir(path.join(directory, "database"));
-    try {
-      await ensureStorageFormatV2(directory);
-      expect.fail("expected format validation to fail");
-    } catch (error) {
-      expect((error as Error).name).to.equal("UnversionedStorageError");
-    }
+
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
+    expect(await fs.readdir(directory)).to.include.members([STORAGE_CONFIG_FILENAME, "database"]);
   });
 
   it("does not move the config file into the reset backup", async () => {
     // Resetting the corpus must not silently discard the operator's settings.
     await fs.mkdir(path.join(directory, "database"));
     await fs.writeFile(path.join(directory, STORAGE_CONFIG_FILENAME), '{"retrieval":{"topK":5}}');
-    const backup = await resetStorageToV2(directory);
+    const backup = await resetStorage(directory);
     expect(backup).to.be.a("string");
     expect(await fs.readdir(backup!)).to.deep.equal(["database"]);
     expect(await fs.readFile(path.join(directory, STORAGE_CONFIG_FILENAME), "utf8")).to.equal(
@@ -99,10 +96,10 @@ describe("storage format v2", () => {
   it("moves legacy data to a timestamped backup before reset", async () => {
     await fs.mkdir(path.join(directory, "database"));
     await fs.writeFile(path.join(directory, "database", "topics.json"), "legacy");
-    const backup = await resetStorageToV2(directory);
+    const backup = await resetStorage(directory);
     expect(backup).to.be.a("string");
     expect(await fs.readFile(path.join(backup!, "database", "topics.json"), "utf8")).to.equal("legacy");
-    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
   });
 
   it("restores the format marker and clears the journal when a reset failure fully rolls back", async () => {
@@ -124,7 +121,7 @@ describe("storage format v2", () => {
     //
     // The `import * as fs` binding above is a getter-only ES namespace view
     // (TypeScript's __importStar), so it cannot be assigned to directly; the
-    // underlying CommonJS module object -- the one storageV2.ts's own
+    // underlying CommonJS module object -- the one storage.ts's own
     // namespace view reads through -- is mutable and shared process-wide.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fsModule: typeof fs = require("fs/promises");
@@ -146,8 +143,8 @@ describe("storage format v2", () => {
     let caught: any;
     try {
       try {
-        await resetStorageToV2(directory);
-        expect.fail("expected resetStorageToV2 to throw");
+        await resetStorage(directory);
+        expect.fail("expected resetStorage to throw");
       } catch (error) {
         caught = error;
       }
@@ -160,15 +157,13 @@ describe("storage format v2", () => {
     // The rollback was provably complete, so the store must be genuinely
     // healthy again: marker restored verbatim, journal gone, data untouched.
     expect(await fs.readdir(directory)).to.not.include(STORAGE_RESET_JOURNAL_FILENAME);
-    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(
-      marker,
-    );
+    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(marker);
     expect(await fs.readFile(path.join(directory, "database", "topics.json"), "utf8")).to.equal("v2 data");
     expect(await fs.readFile(path.join(directory, "extra.txt"), "utf8")).to.equal("more v2 data");
 
     // And the store opens normally afterward instead of throwing
     // StorageResetInterruptedError -- no lingering fail-closed state.
-    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
   });
 
   it("restores the format marker and clears the journal when backup-dir mkdir fails", async () => {
@@ -198,8 +193,8 @@ describe("storage format v2", () => {
     let caught: any;
     try {
       try {
-        await resetStorageToV2(directory);
-        expect.fail("expected resetStorageToV2 to throw");
+        await resetStorage(directory);
+        expect.fail("expected resetStorage to throw");
       } catch (error) {
         caught = error;
       }
@@ -212,14 +207,12 @@ describe("storage format v2", () => {
     // The rollback was provably complete (moved was empty), so the store must
     // be healthy again: marker restored verbatim, journal gone, data untouched.
     expect(await fs.readdir(directory)).to.not.include(STORAGE_RESET_JOURNAL_FILENAME);
-    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(
-      marker,
-    );
+    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(marker);
     expect(await fs.readFile(path.join(directory, "database", "topics.json"), "utf8")).to.equal("v2 data");
 
     // And the store opens normally afterward instead of throwing
     // StorageResetInterruptedError -- no lingering fail-closed state.
-    expect((await ensureStorageFormatV2(directory)).formatVersion).to.equal(2);
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(2);
   });
 
   it("atomically replaces JSON without leaving temporary files", async () => {
@@ -240,36 +233,15 @@ describe("typed storage errors", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("throws StorageMigrationInterruptedError with id, stage, and statePath", async () => {
+  it("initializes a marker-less dir holding managed data, leaving that data in place", async () => {
     const storageDir = path.join(dir, "storage");
-    await fs.mkdir(storageDir, { recursive: true });
-    const statePath = path.join(dir, ".storage.migration-mig-abc.json");
-    await fs.writeFile(
-      statePath,
-      JSON.stringify({ sourcePath: storageDir, migrationId: "mig-abc", stage: "cutoverPrepared" }),
-    );
-    try {
-      await assertNoInterruptedStorageMigration(storageDir);
-      expect.fail("should have thrown");
-    } catch (error: any) {
-      expect(error.name).to.equal("StorageMigrationInterruptedError");
-      expect(error.migrationId).to.equal("mig-abc");
-      expect(error.stage).to.equal("cutoverPrepared");
-      expect(error.statePath).to.equal(statePath);
-    }
-  });
-
-  it("throws UnversionedStorageError for a marker-less dir with managed data", async () => {
-    const storageDir = path.join(dir, "storage");
+    const topics = path.join(storageDir, "database", "topics.json");
     await fs.mkdir(path.join(storageDir, "database"), { recursive: true });
-    await fs.writeFile(path.join(storageDir, "database", "topics.json"), "{}");
-    try {
-      await ensureStorageFormatV2(storageDir);
-      expect.fail("should have thrown");
-    } catch (error: any) {
-      expect(error.name).to.equal("UnversionedStorageError");
-      expect(error.storageDir).to.equal(storageDir);
-    }
+    await fs.writeFile(topics, '{"topics":{}}');
+
+    expect((await ensureStorageFormat(storageDir)).formatVersion).to.equal(2);
+    // Not adopted, not deleted: still byte-for-byte where the operator left it.
+    expect(await fs.readFile(topics, "utf8")).to.equal('{"topics":{}}');
   });
 
   it("throws StorageFormatVersionError for a future formatVersion", async () => {
@@ -277,7 +249,7 @@ describe("typed storage errors", () => {
     await fs.mkdir(storageDir, { recursive: true });
     await fs.writeFile(path.join(storageDir, "storage-format.json"), JSON.stringify({ formatVersion: 3 }));
     try {
-      await ensureStorageFormatV2(storageDir);
+      await ensureStorageFormat(storageDir);
       expect.fail("should have thrown");
     } catch (error: any) {
       expect(error.name).to.equal("StorageFormatVersionError");
@@ -294,7 +266,7 @@ describe("typed storage errors", () => {
       backupDir,
     });
     try {
-      await ensureStorageFormatV2(storageDir);
+      await ensureStorageFormat(storageDir);
       expect.fail("should have thrown");
     } catch (error: any) {
       expect(error.name).to.equal("StorageResetInterruptedError");
@@ -323,7 +295,7 @@ describe("inspectStorage", () => {
 
   it("reports an empty directory as empty", async () => {
     await fs.mkdir(storageDir, { recursive: true });
-    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "empty" });
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "empty", unmanagedEntriesPresent: false });
   });
 
   it("reports a v2 marker as current", async () => {
@@ -341,29 +313,17 @@ describe("inspectStorage", () => {
     expect(await inspectStorage(storageDir)).to.deep.equal({ status: "future-version", foundVersion: 3 });
   });
 
-  it("reports marker-less managed data as legacy", async () => {
+  it("reports marker-less managed data as empty, flagging that entries are present", async () => {
+    // "empty" is the status a caller acts on -- there is no v2 store here to
+    // adopt. unmanagedEntriesPresent is informational only, so a host can log
+    // why a visibly non-empty directory is being initialized as a new store.
     await fs.mkdir(path.join(storageDir, "database"), { recursive: true });
     await fs.writeFile(path.join(storageDir, "database", "topics.json"), "{}");
-    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "legacy" });
-  });
-
-  it("reports an interrupted migration with its id, stage, and state path", async () => {
-    await fs.mkdir(storageDir, { recursive: true });
-    const statePath = path.join(dir, ".storage.migration-mig-xyz.json");
-    await fs.writeFile(
-      statePath,
-      JSON.stringify({ sourcePath: storageDir, migrationId: "mig-xyz", stage: "cutoverPrepared" }),
-    );
-    expect(await inspectStorage(storageDir)).to.deep.equal({
-      status: "interrupted",
-      migrationId: "mig-xyz",
-      stage: "cutoverPrepared",
-      statePath,
-    });
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "empty", unmanagedEntriesPresent: true });
   });
 
   it("never writes: inspecting an absent directory neither creates it nor marks it", async () => {
-    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "empty" });
+    expect(await inspectStorage(storageDir)).to.deep.equal({ status: "empty", unmanagedEntriesPresent: false });
     await fs.access(storageDir).then(
       () => expect.fail("inspectStorage must not create the storage directory"),
       () => undefined,
@@ -401,12 +361,12 @@ describe("shared topic cache and storage v2", function () {
   });
 
   it("leaves the shared cache in place across a reset", async function () {
-    await ensureStorageFormatV2(storageDir);
+    await ensureStorageFormat(storageDir);
     const cacheDir = path.join(storageDir, SHARED_TOPIC_CACHE_DIRNAME);
     await fs.mkdir(cacheDir, { recursive: true });
     await fs.writeFile(path.join(cacheDir, "entries.json"), "{}", "utf8");
 
-    await resetStorageToV2(storageDir);
+    await resetStorage(storageDir);
 
     expect(await fs.readFile(path.join(cacheDir, "entries.json"), "utf8")).to.equal("{}");
   });

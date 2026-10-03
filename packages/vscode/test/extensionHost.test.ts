@@ -260,7 +260,10 @@ describe("command error mapping", function () {
     } as unknown as vscode.ExtensionContext);
 
     const registered = new Map<string, (...args: unknown[]) => unknown>();
-    sinon.stub(vscode.commands, "registerCommand").callsFake(((id: string, callback: (...args: unknown[]) => unknown) => {
+    sinon.stub(vscode.commands, "registerCommand").callsFake(((
+      id: string,
+      callback: (...args: unknown[]) => unknown,
+    ) => {
       registered.set(id, callback);
       return { dispose: () => undefined };
     }) as typeof vscode.commands.registerCommand);

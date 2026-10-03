@@ -6,13 +6,14 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import {
+  classifyToolError,
   TopicManager,
   EmbeddingService,
   Logger,
   sanitizeErrorMessage,
   Topic,
   MemoryStore,
-  ArchiveFolderSource,
+  createSharedTopicSources,
 } from "@ragnarok/core";
 import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
 import { COMMANDS, CONFIG, VSCODE_CONFIG } from "./constants";
@@ -49,30 +50,20 @@ export async function addDocumentsWithLifecycleSignal(
   return results;
 }
 
-interface StorageBusyErrorLike extends Error {
-  holder?: { pid?: number } | null;
-}
-
-function isStorageBusyError(error: unknown): error is StorageBusyErrorLike {
-  return error instanceof Error && error.name === "StorageBusyError";
-}
-
 /**
- * Shared failure reporting for every command handler's catch block. A
- * StorageBusyError means a foreign writer still held the write lease when
- * this mutation's bounded 5s wait expired — that reads as "try again
- * shortly", not the generic per-operation failure message a corrupted
- * operation would produce. Everything else keeps the existing
- * `${operationLabel}: ${sanitizeErrorMessage(error)}` shape.
+ * Shared failure reporting for every command handler's catch block. The
+ * classification lives in @ragnarok/core so this host and the MCP host cannot
+ * disagree about what a failure means; only the rendering is local. A
+ * recognised kind shows core's wording, and anything generic keeps the
+ * existing `${operationLabel}: ${sanitizeErrorMessage(error)}` shape.
  */
 function reportOperationFailure(operationLabel: string, error: unknown): void {
-  if (isStorageBusyError(error)) {
-    const pid = error.holder?.pid;
-    const holderSuffix = typeof pid === "number" ? ` (pid ${pid})` : "";
-    vscode.window.showErrorMessage(`Storage is busy — another window is writing${holderSuffix}. Retry in a moment.`);
+  const classified = classifyToolError(error);
+  if (classified.kind === "generic") {
+    vscode.window.showErrorMessage(`${operationLabel}: ${sanitizeErrorMessage(error)}`);
     return;
   }
-  vscode.window.showErrorMessage(`${operationLabel}: ${sanitizeErrorMessage(error)}`);
+  vscode.window.showErrorMessage(classified.message);
 }
 
 export class CommandHandler {
@@ -1402,9 +1393,7 @@ export class CommandHandler {
       const configuredPath = vscode.workspace
         .getConfiguration(VSCODE_CONFIG.ROOT)
         .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
-      await this.topicManager.refreshSharedTopics(
-        configuredPath ? [new ArchiveFolderSource(configuredPath)] : [],
-      );
+      await this.topicManager.refreshSharedTopics(createSharedTopicSources(configuredPath));
       this.treeDataProvider.refresh();
       vscode.window.showInformationMessage("RAGnarōk: Shared topics refreshed");
     } catch (error) {

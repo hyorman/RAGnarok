@@ -3,7 +3,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { Logger } from "../src/logger";
-import { ArchiveFolderSource } from "../src/sharedTopics/archiveFolderSource";
+import { ArchiveFolderSource, createSharedTopicSources } from "../src/sharedTopics/archiveFolderSource";
 import { SharedTopicRegistry } from "../src/sharedTopics/registry";
 import type { ResolvedSharedTopic, SharedTopicSource } from "../src/sharedTopics/types";
 import type { Document as TopicDocument } from "../src/utils/types";
@@ -62,6 +62,24 @@ describe("archive folder source", function () {
     const source = new ArchiveFolderSource(path.join(root, "absent"));
 
     expect(await source.resolve({ cacheDir, logger })).to.deep.equal([]);
+  });
+
+  it("builds no source at all for an unconfigured path", function () {
+    // The empty case must be zero sources, never a source pointing at "" —
+    // which would resolve to the process working directory. The whitespace
+    // case is stricter than the four call sites this replaces: a path of
+    // spaces was truthy and would have built a source on nonsense.
+    expect(createSharedTopicSources("")).to.deep.equal([]);
+    expect(createSharedTopicSources(undefined)).to.deep.equal([]);
+    expect(createSharedTopicSources(null)).to.deep.equal([]);
+    expect(createSharedTopicSources("   ")).to.deep.equal([]);
+  });
+
+  it("builds one archive folder source for a configured path", function () {
+    const sources = createSharedTopicSources(folder);
+
+    expect(sources).to.have.lengthOf(1);
+    expect(sources[0].id).to.equal(new ArchiveFolderSource(folder).id);
   });
 });
 
@@ -135,10 +153,7 @@ describe("shared topic registry", function () {
 
     await registry.refresh(["API Docs"]);
 
-    expect(registry.listTopics().map((topic) => topic.name)).to.deep.equal([
-      "API Docs (share)",
-      "API Docs (share 2)",
-    ]);
+    expect(registry.listTopics().map((topic) => topic.name)).to.deep.equal(["API Docs (share)", "API Docs (share 2)"]);
   });
 
   it("answers lookups and tags every topic as common", async function () {

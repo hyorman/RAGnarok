@@ -34,7 +34,6 @@ export {
   ExtensionStoppingError,
   type ExtensionOperationRunner,
 } from "./extensionLifecycle";
-export { createDefaultMigrationUx, openTopicManagerWithMigration, type MigrationUxDependencies } from "./migrationUx";
 export { TopicTreeDataProvider, TopicTreeItem, ConfigTreeDataProvider } from "./topicTreeView";
 export {
   activateWithServiceFactory,

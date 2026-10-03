@@ -29,10 +29,8 @@ Version 0.3 did not persist memory stores. An unversioned store containing unkno
 therefore rejected instead of guessed at. Some 0.3-era stores contain `kg-*` tables from the document
 knowledge graph, a subsystem that no longer exists. Those tables are recognized so that they do not
 count as unknown structure, but they are never copied: vectors and documents are migrated and the
-`kg-*` tables are dropped. The report still marks such topics `graphRebuildRequired` and warns that
-the legacy graph was not copied; that flag is vestigial, because document knowledge graphs no longer
-exist and graphs now live only in the memory subsystem. Ignore it — there is nothing to rebuild and
-no strategy that would consume the result. Legacy vector model names are preserved, but no backend
+`kg-*` tables are dropped. The report says so and asks nothing of you: graphs now live only in the
+memory subsystem, so there is nothing to rebuild. Legacy vector model names are preserved, but no backend
 fingerprint is invented; additions verify the topic's recorded model against the table dimension on
 first write and stamp the fingerprint automatically, so no manual reindex step is needed. A true
 dimension change — the recorded model no longer produces vectors matching the live table — still

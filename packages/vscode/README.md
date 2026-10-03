@@ -87,7 +87,6 @@ src/
 ├── memoryGraphCommand.ts   # RAGnarok: Show Memory Graph command
 ├── memoryGraphPanel.ts     # CSP-restricted local graph webview
 ├── extensionLifecycle.ts   # Startup/shutdown gating and cancellable operation runner
-├── migrationUx.ts          # Storage migration preview and apply prompts
 ├── workspaceContext.ts      # Workspace file discovery for context enrichment
 │
 └── adapters/

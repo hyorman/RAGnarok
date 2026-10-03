@@ -10,7 +10,7 @@ export const STORAGE_FORMAT_FILENAME = "storage-format.json";
  * has to be made here, in the storage layer.
  */
 export const STORAGE_CONFIG_FILENAME = "config.json";
-/** Marks an in-flight `resetStorageToV2` so a crash mid-reset fails closed instead of reading as unversioned data. */
+/** Marks an in-flight `resetStorage` so a crash mid-reset fails closed instead of reading as unversioned data. */
 export const STORAGE_RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
 /**
  * Derived, content-addressed unpacks of shared `.rag` archives. Infrastructure,
@@ -18,30 +18,6 @@ export const STORAGE_RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
  * unversioned legacy layout, and a reset must not sweep it into a backup.
  */
 export const SHARED_TOPIC_CACHE_DIRNAME = ".ragnarok-shared-cache";
-
-export class StorageMigrationInterruptedError extends Error {
-  readonly name = "StorageMigrationInterruptedError";
-  constructor(
-    public readonly migrationId: string,
-    public readonly stage: string,
-    public readonly statePath: string,
-  ) {
-    super(
-      `Storage migration ${migrationId} is interrupted at ${stage}. ` +
-        `Opening the storage in VS Code resumes it automatically; ragnarok-migrate --resume ${migrationId} is the manual fallback.`,
-    );
-  }
-}
-
-export class UnversionedStorageError extends Error {
-  readonly name = "UnversionedStorageError";
-  constructor(public readonly storageDir: string) {
-    super(
-      `Existing unversioned RAGnarōk storage was found at ${storageDir}. ` +
-        `It must be migrated to format v2 before it can be opened.`,
-    );
-  }
-}
 
 export class StorageFormatVersionError extends Error {
   readonly name = "StorageFormatVersionError";
@@ -54,7 +30,7 @@ export class StorageFormatVersionError extends Error {
 }
 
 /**
- * A reset (`resetStorageToV2`) started and never finished -- most likely the
+ * A reset (`resetStorage`) started and never finished -- most likely the
  * process died mid-move, between renaming managed entries into the backup
  * directory and re-marking the storage as v2. Data may now be split between
  * the storage dir and a partial backup, so this must never read as plain
@@ -100,76 +76,12 @@ export interface StorageFormatMarker {
   initializedAt: number;
 }
 
-const INTERRUPTED_MIGRATION_STAGES = new Set([
-  "cutoverPrepared",
-  "legacyBackedUp",
-  "v2Published",
-  "rollbackPrepared",
-  "rollbackV2BackedUp",
-  "rollbackLegacyPublished",
-]);
-
-/**
- * The one scan behind both the fail-closed assertion and the read-only
- * inspection: whether an external migration state records an incomplete
- * namespace cutover for this directory. The state lives outside storage
- * because the source directory can be absent between atomic renames.
- *
- * A corrupt state file throws rather than resolving to `null` — an unreadable
- * record of an in-flight cutover is exactly the case that must not be waved
- * through as "no migration here". Both callers inherit that.
- */
-async function findInterruptedStorageMigration(
-  storageDir: string,
-): Promise<{ migrationId: string; stage: string; statePath: string } | null> {
-  const sourcePath = path.resolve(storageDir);
-  const parent = path.dirname(sourcePath);
-  const prefix = `.${path.basename(sourcePath)}.migration-`;
-  let entries: string[];
-  try {
-    entries = await fs.readdir(parent);
-  } catch (error: any) {
-    if (error?.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-  for (const entry of entries) {
-    if (!entry.startsWith(prefix) || !entry.endsWith(".json")) {
-      continue;
-    }
-    let state: { sourcePath?: string; migrationId?: string; stage?: string };
-    try {
-      state = JSON.parse(await fs.readFile(path.join(parent, entry), "utf8")) as typeof state;
-    } catch {
-      throw new Error(`Migration state is corrupt at ${path.join(parent, entry)}; storage initialization aborted.`);
-    }
-    if (path.resolve(state.sourcePath ?? "") === sourcePath && INTERRUPTED_MIGRATION_STAGES.has(state.stage ?? "")) {
-      return {
-        migrationId: state.migrationId ?? "unknown",
-        stage: state.stage ?? "unknown",
-        statePath: path.join(parent, entry),
-      };
-    }
-  }
-  return null;
-}
-
-/**
- * Refuse normal initialization while an external migration state records an
- * incomplete namespace cutover.
- */
-export async function assertNoInterruptedStorageMigration(storageDir: string): Promise<void> {
-  const interrupted = await findInterruptedStorageMigration(storageDir);
-  if (interrupted) {
-    throw new StorageMigrationInterruptedError(interrupted.migrationId, interrupted.stage, interrupted.statePath);
-  }
-}
-
 export type StorageInspection =
-  | { status: "current" | "empty" }
-  | { status: "legacy" }
-  | { status: "interrupted"; migrationId: string; stage: string; statePath: string }
+  // `unmanagedEntriesPresent` is informational only -- the status is still
+  // "empty" and callers must not branch on it. It exists so a host can say in
+  // its log why a directory that visibly holds files is being initialized as
+  // an empty v2 store, rather than leaving that looking like data loss.
+  | { status: "current" | "empty"; unmanagedEntriesPresent?: boolean }
   | { status: "future-version"; foundVersion: unknown }
   | { status: "reset-interrupted" };
 
@@ -188,11 +100,6 @@ export type StorageInspection =
  * happens to contain.
  */
 export async function inspectStorage(storageDir: string): Promise<StorageInspection> {
-  const interrupted = await findInterruptedStorageMigration(storageDir);
-  if (interrupted) {
-    return { status: "interrupted", ...interrupted };
-  }
-
   // Existence only. A corrupt journal still proves a reset was interrupted,
   // and inspection has no use for the backup path it would have named.
   try {
@@ -209,7 +116,7 @@ export async function inspectStorage(storageDir: string): Promise<StorageInspect
       : { status: "future-version", foundVersion: parsed.formatVersion };
   } catch (error: any) {
     // A present-but-unreadable marker is not "no marker": fail closed the same
-    // way ensureStorageFormatV2 does rather than classifying it as legacy.
+    // way ensureStorageFormat does rather than classifying it as legacy.
     if (error?.code !== "ENOENT") {
       throw error instanceof SyntaxError
         ? new Error(`Invalid ${STORAGE_FORMAT_FILENAME}; storage initialization aborted.`)
@@ -217,7 +124,7 @@ export async function inspectStorage(storageDir: string): Promise<StorageInspect
     }
   }
 
-  return (await hasManagedData(storageDir)) ? { status: "legacy" } : { status: "empty" };
+  return { status: "empty", unmanagedEntriesPresent: await hasManagedData(storageDir) };
 }
 
 /** The six fields the 0.3 release wrote into `vector-<topic>-metadata.json`. */
@@ -342,18 +249,17 @@ async function hasManagedData(storageDir: string): Promise<boolean> {
 }
 
 /** Validate storage format v2, initializing only a genuinely empty directory. */
-export async function ensureStorageFormatV2(storageDir: string): Promise<StorageFormatMarker> {
+export async function ensureStorageFormat(storageDir: string): Promise<StorageFormatMarker> {
   await checkResetJournal(storageDir);
-  return ensureStorageFormatV2Unjournaled(storageDir);
+  return ensureStorageFormatUnjournaled(storageDir);
 }
 
 /**
  * The actual v2 validation/initialization, without the reset-journal check.
- * `resetStorageToV2` calls this directly -- it writes the journal itself and
+ * `resetStorage` calls this directly -- it writes the journal itself and
  * must not immediately trip over it via the public entry point above.
  */
-async function ensureStorageFormatV2Unjournaled(storageDir: string): Promise<StorageFormatMarker> {
-  await assertNoInterruptedStorageMigration(storageDir);
+async function ensureStorageFormatUnjournaled(storageDir: string): Promise<StorageFormatMarker> {
   await fs.mkdir(storageDir, { recursive: true });
   const formatPath = markerPath(storageDir);
   try {
@@ -371,17 +277,17 @@ async function ensureStorageFormatV2Unjournaled(storageDir: string): Promise<Sto
     }
   }
 
-  if (await hasManagedData(storageDir)) {
-    throw new UnversionedStorageError(storageDir);
-  }
-
+  // Pre-v2 content is ignored rather than refused. v2 is the baseline format;
+  // the unversioned 0.3 layout was never released, so anything here that is not
+  // v2 is left untouched on disk and simply not adopted. Stamping the marker
+  // beside it makes this a healthy, empty v2 store.
   const marker: StorageFormatMarker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: Date.now() };
   await atomicWriteJson(formatPath, marker);
   return marker;
 }
 
 /** Move managed content to a timestamped backup, rolling back partial moves. */
-export async function resetStorageToV2(storageDir: string): Promise<string | null> {
+export async function resetStorage(storageDir: string): Promise<string | null> {
   await fs.mkdir(storageDir, { recursive: true });
   const entries = (await fs.readdir(storageDir)).filter((entry) => !isInfrastructureEntry(entry));
   const journalPath = resetJournalPath(storageDir);
@@ -409,7 +315,7 @@ export async function resetStorageToV2(storageDir: string): Promise<string | nul
   await fs.unlink(markerPath(storageDir)).catch(() => undefined);
 
   if (entries.length === 0) {
-    await ensureStorageFormatV2Unjournaled(storageDir);
+    await ensureStorageFormatUnjournaled(storageDir);
     await fs.unlink(journalPath).catch(() => undefined);
     return null;
   }
@@ -421,7 +327,7 @@ export async function resetStorageToV2(storageDir: string): Promise<string | nul
       await fs.rename(path.join(storageDir, entry), path.join(backupDir!, entry));
       moved.push(entry);
     }
-    await ensureStorageFormatV2Unjournaled(storageDir);
+    await ensureStorageFormatUnjournaled(storageDir);
     await fs.unlink(journalPath).catch(() => undefined);
     return backupDir;
   } catch (error) {

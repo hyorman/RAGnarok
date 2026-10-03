@@ -23,7 +23,7 @@ import * as crypto from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { Logger } from "../logger";
-import { atomicWriteJson } from "../utils/storageV2";
+import { atomicWriteJson } from "../utils/storage";
 import { cosineSimilarity } from "../utils/vectorMath";
 import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "./types";
 

@@ -8,7 +8,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { CONFIG, setLoggerFactory, ILoggerFactory } from "@ragnarok/core";
-import { loadConfig, assertNoRemovedEnvVars } from "../src/config";
+import { loadConfig } from "../src/config";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "../src/adapters";
 
 describe("MCP Server", () => {
@@ -108,7 +108,7 @@ describe("MCP Server", () => {
     it("defaults the reranker to its bundled model", () => {
       const config = loadConfig();
       expect(config.rerankerModel).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
-      expect(config.rerankerMaxCandidates).to.equal(20);
+      expect(config.rerankerMaxCandidates).to.equal(40);
       expect(config.rerankerCandidateMultiplier).to.equal(4);
     });
 
@@ -304,76 +304,6 @@ describe("MCP Server", () => {
       ]) {
         expect(config, field).to.not.have.property(field);
       }
-    });
-  });
-
-  // A stdio-only server must not silently ignore HTTP-era configuration:
-  // someone who set TLS certificates and API keys believes they are running a
-  // hardened network service, and a quiet startup would leave that belief intact.
-  describe("assertNoRemovedEnvVars()", () => {
-    const removed = [
-      "RAGNAROK_DEPLOYMENT_MODE",
-      "RAGNAROK_PORT",
-      "RAGNAROK_HTTP_HOST",
-      "RAGNAROK_ALLOWED_HOSTS",
-      "RAGNAROK_CORS_ORIGIN",
-      "RAGNAROK_TLS_CERT_PATH",
-      "RAGNAROK_TLS_KEY_PATH",
-      "RAGNAROK_API_KEY",
-      "RAGNAROK_WRITE_API_KEY",
-      "RAGNAROK_ADMIN_API_KEY",
-      "RAGNAROK_RATE_LIMIT_PER_MINUTE",
-      "RAGNAROK_TRUSTED_PROXIES",
-      "RAGNAROK_TRANSFER_TTL_MS",
-      "RAGNAROK_TRANSFER_MAX_FILE_BYTES",
-      "RAGNAROK_TRANSFER_MAX_AGGREGATE_BYTES",
-      "RAGNAROK_TRANSFER_MAX_SESSIONS",
-    ];
-
-    const saved: Record<string, string | undefined> = {};
-
-    beforeEach(() => {
-      for (const key of removed) {
-        saved[key] = process.env[key];
-        delete process.env[key];
-      }
-    });
-
-    afterEach(() => {
-      for (const key of removed) {
-        if (saved[key] !== undefined) {
-          process.env[key] = saved[key];
-        } else {
-          delete process.env[key];
-        }
-      }
-    });
-
-    for (const name of ["RAGNAROK_DEPLOYMENT_MODE", "RAGNAROK_PORT", "RAGNAROK_TLS_CERT_PATH", "RAGNAROK_API_KEY"]) {
-      it(`rejects ${name}`, () => {
-        process.env[name] = "x";
-        expect(() => assertNoRemovedEnvVars()).to.throw(new RegExp(name));
-      });
-    }
-
-    it("accepts an environment with none of them set", () => {
-      expect(() => assertNoRemovedEnvVars()).to.not.throw();
-    });
-
-    // Not covered here: an empty-string value (`RAGNAROK_API_KEY=`). The guard
-    // tests `!== undefined` rather than truthiness so it still fires, but
-    // Windows deletes an env var assigned "", and this suite runs on
-    // windows-2022 (.github/workflows/release.yml native matrix).
-
-    it("names every offending variable in one message", () => {
-      process.env.RAGNAROK_PORT = "3000";
-      process.env.RAGNAROK_TLS_KEY_PATH = "/etc/tls/key.pem";
-      expect(() => assertNoRemovedEnvVars()).to.throw(/RAGNAROK_PORT.*RAGNAROK_TLS_KEY_PATH/);
-    });
-
-    it("explains that the server is stdio-only", () => {
-      process.env.RAGNAROK_TRANSFER_TTL_MS = "1000";
-      expect(() => assertNoRemovedEnvVars()).to.throw(/stdio only/);
     });
   });
 

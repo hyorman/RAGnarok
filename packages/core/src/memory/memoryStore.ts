@@ -40,13 +40,7 @@ import { GitBranchDetector } from "./gitBranchDetector";
 import { MemoryDecayEngine } from "./memoryDecayEngine";
 import { MemoryScopeLinker } from "./memoryScopeLinker";
 import { cosineSimilarity } from "../utils/vectorMath";
-import {
-  assertNoInterruptedStorageMigration,
-  atomicWriteFile,
-  atomicWriteJson,
-  ensureStorageFormatV2,
-  inspectStorage,
-} from "../utils/storageV2";
+import { atomicWriteFile, atomicWriteJson, ensureStorageFormat, inspectStorage } from "../utils/storage";
 import { acquireOperationLease, StorageBusyError } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
@@ -715,13 +709,6 @@ export class MemoryStore {
       throw new Error("Memory reset requires confirm=true");
     }
     signal?.throwIfAborted();
-    // Fail closed over a half-finished namespace cutover. The operation lease
-    // cannot stand in for this: an INTERRUPTED migration's process is dead, so
-    // it holds no live lease and the lease would simply be granted — and a
-    // migration running inside THIS process is joined through the shared
-    // refcount rather than blocked. Either way `deleteAll` would then run
-    // destructively over a directory that is mid-rename.
-    await assertNoInterruptedStorageMigration(this.storageDir);
     signal?.throwIfAborted();
 
     // Deferred writers flush before the lease is taken: both take the mutation
@@ -850,7 +837,7 @@ export class MemoryStore {
       // Now that a lease is held, this is a write path: the format marker
       // comes first, so the manifest can never be the thing that turns a
       // fresh directory into "unversioned legacy storage".
-      await ensureStorageFormatV2(this.storageDir);
+      await ensureStorageFormat(this.storageDir);
       // Another process may have stamped it while this read was deciding to.
       try {
         const manifest = JSON.parse(await fs.readFile(this.memoryManifestPath, "utf8"));
@@ -879,7 +866,7 @@ export class MemoryStore {
    *
    * Classification is read-only, so two windows opening the same healthy store
    * never contend — the overwhelmingly common case costs nothing. Any
-   * classification other than "current"/"empty" goes to `ensureStorageFormatV2`
+   * classification other than "current"/"empty" goes to `ensureStorageFormat`
    * purely so it raises its own typed error: an interrupted migration, a legacy
    * directory or a future format version must fail closed on reads too.
    *
@@ -903,13 +890,13 @@ export class MemoryStore {
         return true;
       }
       if (inspection.status !== "empty") {
-        await ensureStorageFormatV2(this.storageDir);
+        await ensureStorageFormat(this.storageDir);
         return true;
       }
       if (hasLease) {
         // Re-checked under the lease: another process may have stamped it
         // while this one waited.
-        await ensureStorageFormatV2(this.storageDir);
+        await ensureStorageFormat(this.storageDir);
         return true;
       }
       return this.stampStorageFormatOpportunistically();
@@ -935,7 +922,7 @@ export class MemoryStore {
       throw error;
     }
     try {
-      await ensureStorageFormatV2(this.storageDir);
+      await ensureStorageFormat(this.storageDir);
       return true;
     } finally {
       await lease.release();
@@ -1242,6 +1229,11 @@ export class MemoryStore {
     let watcher: fsSync.FSWatcher;
     try {
       watcher = fsSync.watch(this.storageDir, (_eventType, filename) => this.onRawWatchEvent(filename));
+      // Unref'd for the same reason the debounce and markdown timers below are:
+      // a watcher must not be the handle that keeps a host process alive. Hosts
+      // dispose explicitly, so this only changes the fate of an instance nobody
+      // disposed -- which otherwise pins the event loop open forever.
+      watcher.unref?.();
     } catch (error) {
       if (!this.watcherFailureLogged) {
         this.watcherFailureLogged = true;

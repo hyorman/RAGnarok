@@ -176,6 +176,7 @@ describe("MCP Tools (registerTools)", () => {
       resolveTopicByName: sinon.stub(),
       getVectorStore: sinon.stub().resolves(null),
       reinitializeWithNewModel: sinon.stub().resolves(),
+      refreshSharedTopics: sinon.stub().resolves(),
     } as any;
 
     // -- IConfigProvider --
@@ -405,6 +406,60 @@ describe("MCP Tools (registerTools)", () => {
 
       expect(body.count).to.equal(0);
       expect(body.topics).to.deep.equal([]);
+    });
+
+    it("refresh re-reads the shared folder and reports how many are loaded", async () => {
+      // Shared topics are otherwise only read during initialize(), so without
+      // this action an updated archive needs a server restart.
+      topicManager.refreshSharedTopics.resolves();
+      topicManager.getAllTopics.returns([
+        makeTopic({ id: "shared-aaaaaaaaaaaaaaaa", name: "API Docs", source: "common" }),
+        makeTopic({ id: "shared-bbbbbbbbbbbbbbbb", name: "Runbook", source: "common" }),
+        makeTopic({ id: "topic-1", name: "My Notes", source: "local" }),
+      ]);
+
+      const result = await handlers.rag_topic({ action: "refresh" });
+
+      expect(topicManager.refreshSharedTopics.callCount).to.equal(1);
+      expect(parseResponse(result)).to.deep.equal({ success: true, sharedTopicCount: 2 });
+    });
+
+    it("refresh succeeds with zero shared topics when no folder is configured", async () => {
+      // Review Focus 1: someone who never configured a shared folder will
+      // still call this. Zero shared topics is a successful answer.
+      topicManager.refreshSharedTopics.resolves();
+      topicManager.getAllTopics.returns([makeTopic({ source: "local" })]);
+
+      const result = await handlers.rag_topic({ action: "refresh" });
+
+      expect(result.isError).to.not.equal(true);
+      expect(parseResponse(result)).to.deep.equal({ success: true, sharedTopicCount: 0 });
+    });
+
+    it("refresh succeeds when the configured folder is unreadable", async () => {
+      // Review Focus 2: core's refreshSharedTopics swallows an unreadable
+      // folder and yields zero topics rather than throwing. The tool must not
+      // convert that into an error.
+      topicManager.refreshSharedTopics.resolves();
+      topicManager.getAllTopics.returns([]);
+
+      const result = await handlers.rag_topic({ action: "refresh" });
+
+      expect(result.isError).to.not.equal(true);
+      expect(parseResponse(result)).to.deep.equal({ success: true, sharedTopicCount: 0 });
+    });
+
+    it("refresh does not report storage busy when another process is writing", async () => {
+      // Review Focus 3: refresh takes no write lease by design, so a
+      // concurrent writer cannot block it. A StorageBusyError reaching this
+      // handler would mean something upstream started taking a lease.
+      topicManager.refreshSharedTopics.resolves();
+      topicManager.getAllTopics.returns([makeTopic({ id: "shared-cccccccccccccccc", source: "common" })]);
+
+      const result = await handlers.rag_topic({ action: "refresh" });
+
+      expect(result.isError).to.not.equal(true);
+      expect(JSON.stringify(result).toLowerCase()).to.not.contain("busy");
     });
 
     it("list includes source field defaulting to 'local' and ISO dates", async () => {

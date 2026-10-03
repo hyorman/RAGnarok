@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:0fa36871-24ee-4416-a657-2c959d1b7abd",
+  "serialNumber": "urn:uuid:9950be78-e4f3-42ee-a867-980aea21edc7",
   "version": 1,
   "metadata": {
-    "component": { "type": "application", "name": "ragnarok", "version": "0.7.0" },
+    "component": { "type": "application", "name": "ragnarok", "version": "0.4.1" },
     "properties": [{ "name": "ragnarok:container-base", "value": "node:22-slim" }]
   },
   "components": [
@@ -552,17 +552,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40emnapi%2Fruntime",
       "name": "@emnapi/runtime",
-      "version": "1.9.1",
-      "purl": "pkg:npm/%40emnapi/runtime@1.9.1",
+      "version": "1.11.3",
+      "purl": "pkg:npm/%40emnapi/runtime@1.11.3",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "5588b9f9954b86980ae214344c08e242267aa25d287b8981c7b995bfb21f96c884a74396a15b29ffe7fd55cd613a11344ed90e455ac8d46bf3cab7aaa605ad90"
+          "content": "5f3e13a72922ed7caba5b50ad6347502174075a5f2861638959de778ba1d9a1a6e59fcb63c040de41e3ab00894e2588e5c62e41f2a67fea53e8ef7d64826182c"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.9.1.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.11.3.tgz" }
       ],
       "properties": [
         {
@@ -2138,6 +2138,32 @@
     },
     {
       "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-darwin-arm64",
+      "name": "@img/sharp-darwin-arm64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-darwin-arm64@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "411525150d16c6f756caaa86fd6b48de2ba97c3e6b0739821d749d3ec63dd6c02d56d4e8ed0e1c6facce71c67782a12a92bd1fd40b357a12ea984a43b117fe96"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-darwin-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40img%2Fsharp-darwin-x64",
       "name": "@img/sharp-darwin-x64",
       "version": "0.34.5",
@@ -2156,6 +2182,58 @@
         }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@img/sharp-darwin-x64" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-darwin-x64",
+      "name": "@img/sharp-darwin-x64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-darwin-x64@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f81476e794610e5a72814a4e73f25db759d3e834375c6fc4468e706dc74e7f9437db474ab4f08a3cb4752c9b3d5465d168c6bc975b946b4b6408d397880c5953"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-darwin-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-freebsd-wasm32",
+      "name": "@img/sharp-freebsd-wasm32",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-freebsd-wasm32@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "63fcfdd67119e2e2015f95f79df4e8be353d94734a1586cbda5a4708b54d99740ad3754866f5c106dd0ac5b3c6a7649d19217eda6414e1efa141a58eb7cea203"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-freebsd-wasm32/-/sharp-freebsd-wasm32-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-freebsd-wasm32"
+        }
+      ]
     },
     {
       "type": "library",
@@ -2178,6 +2256,32 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@img/sharp-libvips-darwin-arm64" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-darwin-arm64",
+      "name": "@img/sharp-libvips-darwin-arm64",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-darwin-arm64@1.3.4",
+      "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e51f3d9c162245d5254962713e13be195b5a5f35d2c4a9d1bbfc6a327dca4c0dcbf4407d3b2fcff8d9f67f6be584fb94772fd9bac6f60daadbc93a4609f103bb"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.4.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-libvips-darwin-arm64"
+        }
       ]
     },
     {
@@ -2205,21 +2309,47 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-arm",
-      "name": "@img/sharp-libvips-linux-arm",
-      "version": "1.2.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-linux-arm@1.2.4",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-darwin-x64",
+      "name": "@img/sharp-libvips-darwin-x64",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-darwin-x64@1.3.4",
       "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "6c523bc5c28510b762342568bfc7b8e086b8bb66f203e9775edb008fe43cb5f0b03ba050f220e88d876fa0f32ab0a0e4ba83a8f97e87640d2cd2ad7500d310f0"
+          "content": "891d8e287f34ca2d14f9d529972877ff176916fa6ce98902c2c5de9c8271ab1475bfda3ec6d29319b4bd1fb729b3ed95c6373c0758fdea9ef93664c68c886da5"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.2.4.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.4.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-libvips-darwin-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-arm",
+      "name": "@img/sharp-libvips-linux-arm",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linux-arm@1.3.4",
+      "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "2e646d4ec387baf336fb094ed836f7eddc7932266107416f4ae9dc8b0e3c62374e919cfd2808916e6f2e8de30e03520daa67a2e4d6a91716042b50f565289d9b"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.4.tgz"
         }
       ],
       "properties": [
@@ -2254,21 +2384,47 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-ppc64",
-      "name": "@img/sharp-libvips-linux-ppc64",
-      "version": "1.2.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-linux-ppc64@1.2.4",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-arm64",
+      "name": "@img/sharp-libvips-linux-arm64",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linux-arm64@1.3.4",
       "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "14cbaf1a28cb0d81ba956f9bfd4bf28a5516bb9032bbedebd9dd52f27a2d886088c9853fefa7a283551f326919eefc203abccace541b152b907e09bb19850fa4"
+          "content": "6377605ffea513642141bf86c72d166717e0f4c126fc90636a66694b622494fef1210a0a378873026eca70c546b5a543b779de13d38a042eef01fa2703f2ebd4"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.2.4.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.4.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-libvips-linux-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-ppc64",
+      "name": "@img/sharp-libvips-linux-ppc64",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linux-ppc64@1.3.4",
+      "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "2dee9ba01f136a2d0d8acfa02312292b1ebc50355522a751f138a7e587f5cf62c92502c326f08346a46efa30b6a82a03f9e2289a89e63b0078b26051c5f56961"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.4.tgz"
         }
       ],
       "properties": [
@@ -2282,19 +2438,19 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-riscv64",
       "name": "@img/sharp-libvips-linux-riscv64",
-      "version": "1.2.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-linux-riscv64@1.2.4",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linux-riscv64@1.3.4",
       "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "a150db711e33502d1c7bcdad7ae6d29bec7a1138b1b4a64187fa9b44420e708ddc50bcc3c9bd7c4abfd6732c7b35141e4333a21d335b6451755303d2dac73218"
+          "content": "6879242041cf45d4047a024ddb430b986b71603f51db042bdc2c2975d9eee7e60a32de94cdac7b4bd879829653a3cc32ac6b994a57d0eb739ebcbe664f2382ed"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.2.4.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.4.tgz"
         }
       ],
       "properties": [
@@ -2308,19 +2464,19 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-s390x",
       "name": "@img/sharp-libvips-linux-s390x",
-      "version": "1.2.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-linux-s390x@1.2.4",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linux-s390x@1.3.4",
       "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "aa6a7d56bce03e0328199c8fbeb407aa4d36bb28c0d3f42b4cedba4ea93a978655d0c3d6216e8b4e4a8e228bfe275c84bbb31b150683a7077024a85b26fb91c5"
+          "content": "adafe607a32290448350eed883e322f796c505bf46b0e6d446e8673afdceaa49e319ef6c66b1bcb427bdab4c52206aed2e0be0c3480a9c559c2b86e54a040eb9"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.2.4.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.4.tgz"
         }
       ],
       "properties": [
@@ -2353,21 +2509,47 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linuxmusl-arm64",
-      "name": "@img/sharp-libvips-linuxmusl-arm64",
-      "version": "1.2.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-linuxmusl-arm64@1.2.4",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linux-x64",
+      "name": "@img/sharp-libvips-linux-x64",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linux-x64@1.3.4",
       "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "155407bb0c75208b8da30f5001b614cc9f849fc29c566f4b939fae1944091da66630409998e962c7d1e71fb9f54d1917312d291b1209a2421507d4aea991865f"
+          "content": "189fff4925db9f04837acd36ba60779c324b15c433c3c6b5f15f1fca1aabead579d79b4e10c7489a38f18f502869f311cf9e85dcf1e07ed9e3d5010a494d7393"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.2.4.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-libvips-linux-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linuxmusl-arm64",
+      "name": "@img/sharp-libvips-linuxmusl-arm64",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linuxmusl-arm64@1.3.4",
+      "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "86fba5170b6351c6a0b22b3a041c47c061705a83598e062650b195ad97327cd6e303c84a20b6d1c46835e7fef0e470f25c75d4a2cfe3e9b6805aa9c2c90d8358"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.4.tgz"
         }
       ],
       "properties": [
@@ -2381,19 +2563,19 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-libvips-linuxmusl-x64",
       "name": "@img/sharp-libvips-linuxmusl-x64",
-      "version": "1.2.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-linuxmusl-x64@1.2.4",
+      "version": "1.3.4",
+      "purl": "pkg:npm/%40img/sharp-libvips-linuxmusl-x64@1.3.4",
       "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f8ba72064ecbe386485f0cff5587e095a5ffa24c5ecc449ce94c434a8ca8d8ab3a27173863bb068e9814f6ce0f320aa08e3d60642ca54e278d6a6a80d4c17b0e"
+          "content": "eb35ca784fe9dfd2350260377091b7e5ec8118da8d75d2e75178e1c019ec1a314f5aa7f954a903044a9a1243c3a1312d931c22dafbfc4dcaf6983c8fe12a3b16"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.2.4.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.4.tgz"
         }
       ],
       "properties": [
@@ -2451,19 +2633,19 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linux-arm",
       "name": "@img/sharp-linux-arm",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-linux-arm@0.34.5",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linux-arm@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f5d2eab2fc2d835bae5c11992acc5e9bde7de7eba3bf4b09e958bcc1c4c0352169c15fc638d6ade5e0a4cd0a3fd4eeb3448921d26ffcfb9063ad1afb8c351267"
+          "content": "2c46972b659d5d52b9ca4730d1bb96c8f32c98b2cbdafa472c3eb2acd496f891842f70593c0e2da4a37a89a31ce00c534c0a1a5ffb14d6b38be7595c233e3c65"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.34.5.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.35.5.tgz"
         }
       ],
       "properties": [
@@ -2496,21 +2678,47 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linux-ppc64",
-      "name": "@img/sharp-linux-ppc64",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-linux-ppc64@0.34.5",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linux-arm64",
+      "name": "@img/sharp-linux-arm64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linux-arm64@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ef3ce7c0d6aa5ba62db1fac618303a05190848a000135268d107693585cd307bb6fb4753acf7e54cb364a5cf25ecc50fe4cd7a649714bf2b15596acc79f66ab8"
+          "content": "2d8571e494ec38cd820739b1ade87e9e5eb8ff71fa5dbd3d8922e49ea1f8ef3d93d83145c437852cfe72e1d2707ba1fbb864251cfc8412d22aca8dc362c47075"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.34.5.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-linux-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linux-ppc64",
+      "name": "@img/sharp-linux-ppc64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linux-ppc64@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "415c4002af1ebd5448f626b6bea830ae65ae727e437eff89756ce3ef9a43f289872cf48fedff29db43bc8f1ce309cb8211010eb583995265f5864899d2475ebc"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.35.5.tgz"
         }
       ],
       "properties": [
@@ -2524,19 +2732,19 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linux-riscv64",
       "name": "@img/sharp-linux-riscv64",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-linux-riscv64@0.34.5",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linux-riscv64@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "e75809b8b3d329aee98983da56cf06981ca8eff53bffb4d93aaf9c9d72481d929abc844700fefb7b73761c49777608aa743ff0d3251f8899c823becfb830c577"
+          "content": "2ed76b79782e69abca3833c87f327891f7f1ed436dd689b0b4ad2b721e0405b6d24d73e7c5699849ac9774b270d1f27343dee41edd602ffca1e2dbd4fa70b245"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.34.5.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.35.5.tgz"
         }
       ],
       "properties": [
@@ -2550,19 +2758,19 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linux-s390x",
       "name": "@img/sharp-linux-s390x",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-linux-s390x@0.34.5",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linux-s390x@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "9d0b429343dd29f868dde0b932b6d0a22809da07750a075d50c91a6d48feac17afb3cb59d9c50b3b1e3a13ba325fed385867c006023098c0b456a89e4e24788e"
+          "content": "5196ac4ce162633a2d4ec18e0aee3605f5333fa4eee83a3ff78ee2466d51b0b2af965971c06727e11376ecb89b19671e8b1e18f8f9b0de3b274dc0902205a3a8"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.34.5.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.35.5.tgz"
         }
       ],
       "properties": [
@@ -2595,21 +2803,47 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linuxmusl-arm64",
-      "name": "@img/sharp-linuxmusl-arm64",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-linuxmusl-arm64@0.34.5",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linux-x64",
+      "name": "@img/sharp-linux-x64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linux-x64@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "7e9ac947a1ad46c32de8ac9fab8e08b0285565e18df7b8130f7df5c1e4757b1d5cd6bca90c400137a4e6db16b5c04ea561be437449e4d373593ea03b21ddb5ca"
+          "content": "4b116d2d378922784003d43cdfa92ec76bd935e381404c7ae7caaf6dba1949caf4c08011ca6dc8706996ecaa550f9b1b560d0e8f2fae74541d6b2608672a0da2"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.34.5.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-linux-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linuxmusl-arm64",
+      "name": "@img/sharp-linuxmusl-arm64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linuxmusl-arm64@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f476cc725988d7394d90546cdf3f7f781b438df0f4b0696b5f5cfa6f5ab09a2158e449432e1e010b42cf05d569ef3d435c588a9487339dff9996cb99ccbc50aa"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.35.5.tgz"
         }
       ],
       "properties": [
@@ -2623,19 +2857,19 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-linuxmusl-x64",
       "name": "@img/sharp-linuxmusl-x64",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-linuxmusl-x64@0.34.5",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-linuxmusl-x64@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "260f30353d4c53322f841171562aab1215831b3ab29a8dec57bcfb66c6966d93432d7449668446ae3ba5a7ad1862d578c1f63c54829c5a2763a2394b716addf1"
+          "content": "e0a3a986a074df91eb55da8b65f0a0333cc446b4249333b04619783809113b560295d6da163c925cc68ae77e0ca3457e2e776794993eb1b5322de53450bc83d4"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.34.5.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.35.5.tgz"
         }
       ],
       "properties": [
@@ -2649,22 +2883,48 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-wasm32",
       "name": "@img/sharp-wasm32",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-wasm32@0.34.5",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-wasm32@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0 AND LGPL-3.0-or-later AND MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "39d5931225646363c7c2a91b048f1fac5c504057a41da492914209930cdc95665eeb83b55f8525523aaaa8b68f6d4a4c39093a141bbf1ed9465cd6e522cd21bb"
+          "content": "3edb206b5b2ee2d431f8b2c5d44092f54ea7cf9926ad72a8e9755bb51e3c29edd9471c6069606eec80ed11ed6aba8f218aea709ba585ab15655da49fec820d19"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.34.5.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.5.tgz" }
       ],
       "properties": [
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-wasm32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-webcontainers-wasm32",
+      "name": "@img/sharp-webcontainers-wasm32",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-webcontainers-wasm32@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "85f845fc59a84324d4900d1b20a14eb70e77e8141278131ee8117a4325a5acfc53ef9e3e4c52da67bb0a2937efbccd322602a06984f09c508867f1ae0f0e5250"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-webcontainers-wasm32/-/sharp-webcontainers-wasm32-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-webcontainers-wasm32"
         }
       ]
     },
@@ -2691,21 +2951,47 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-win32-ia32",
-      "name": "@img/sharp-win32-ia32",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-win32-ia32@0.34.5",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-win32-arm64",
+      "name": "@img/sharp-win32-arm64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-win32-arm64@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0 AND LGPL-3.0-or-later" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "155f66ffb3667829921c30f98f8fb8a4d23c0a9dda5be26f2e85dc4d4a3422aca349f01927c7485268a3c75a9a26c22253e1e8b30eb13392a28c05912424a036"
+          "content": "5f8b7b83eed90390ca6e50811171a352aa9e9a3e2f73320d1bfe6f885c002fc878377a987b28f0742bd12c78b811d39423ed99ed4165a7554cfa9fc0b84b66e9"
         }
       ],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.34.5.tgz"
+          "url": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-win32-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-win32-ia32",
+      "name": "@img/sharp-win32-ia32",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-win32-ia32@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0 AND LGPL-3.0-or-later" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e599bcd8ba01738de78703726d9946ed8d4a3bffd986c9f7d3a7d0976f593ae4ad1cb193a370562fcdeaddcce75f4a68c5200cb982f53a7fc11c1c6405e2abe8"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.35.5.tgz"
         }
       ],
       "properties": [
@@ -2735,6 +3021,32 @@
         }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@img/sharp-win32-x64" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-win32-x64",
+      "name": "@img/sharp-win32-x64",
+      "version": "0.35.5",
+      "purl": "pkg:npm/%40img/sharp-win32-x64@0.35.5",
+      "licenses": [{ "license": { "id": "Apache-2.0 AND LGPL-3.0-or-later" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c7be9e1f4bc488795c310bbc63c21e9e7b5a002b5d7694fa5b4c265ed5ab9ca727288ecc1390dd82a8400fa48458e125d6fdb30ef9190e1140f4a9d4470a5faa"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.35.5.tgz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-win32-x64"
+        }
+      ]
     },
     {
       "type": "library",
@@ -5897,17 +6209,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fadm-zip",
       "name": "adm-zip",
-      "version": "0.6.0",
-      "purl": "pkg:npm/adm-zip@0.6.0",
+      "version": "0.6.1",
+      "purl": "pkg:npm/adm-zip@0.6.1",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "5e57abc8c85bba4b1d2ada1f9d667d4a4fb80944db9ace0c6ff114df6499c13a00c99e51815a2cfe48bc9fecabd0b5873862ae6a46d74eeb983472d08e175d82"
+          "content": "5f0ae36bc9f1f5ee68d8dd66cb80ec28278aa5dae7002cabd70b5b3f1043806ccaccac84f6446d04503c99695d23e455943ec205935663fc10dbec9dc0e47a91"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/adm-zip/-/adm-zip-0.6.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/adm-zip/-/adm-zip-0.6.1.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/adm-zip" }]
     },
@@ -14134,17 +14446,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.1",
-      "purl": "pkg:npm/js-yaml@4.3.1",
+      "version": "4.3.2",
+      "purl": "pkg:npm/js-yaml@4.3.2",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
+          "content": "48534ebd227e0e07fff409fdd38631f828129483c2908a5aa38aa8e7596979edb94c845e8dd1f7ae1478119306a0dc77fd33f73bec335ae893165e2ca9b96dcc"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.2.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@langchain/community/node_modules/js-yaml" }
@@ -14154,17 +14466,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.1",
-      "purl": "pkg:npm/js-yaml@4.3.1",
+      "version": "4.3.2",
+      "purl": "pkg:npm/js-yaml@4.3.2",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
+          "content": "48534ebd227e0e07fff409fdd38631f828129483c2908a5aa38aa8e7596979edb94c845e8dd1f7ae1478119306a0dc77fd33f73bec335ae893165e2ca9b96dcc"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.2.tgz" }
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/js-yaml" }
@@ -14174,17 +14486,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.1",
-      "purl": "pkg:npm/js-yaml@4.3.1",
+      "version": "4.3.2",
+      "purl": "pkg:npm/js-yaml@4.3.2",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
+          "content": "48534ebd227e0e07fff409fdd38631f828129483c2908a5aa38aa8e7596979edb94c845e8dd1f7ae1478119306a0dc77fd33f73bec335ae893165e2ca9b96dcc"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.2.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/js-yaml" }]
     },
@@ -14192,17 +14504,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "4.3.1",
-      "purl": "pkg:npm/js-yaml@4.3.1",
+      "version": "4.3.2",
+      "purl": "pkg:npm/js-yaml@4.3.2",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "098e9cac6ab7d77317f06930bc1eedce0a7df6f8d0c58d7efb9cb5d3f04a37f1947c7a9668e19030d66406fa92cec64a5a4fe28f01e55b3ce42ee96c18786359"
+          "content": "48534ebd227e0e07fff409fdd38631f828129483c2908a5aa38aa8e7596979edb94c845e8dd1f7ae1478119306a0dc77fd33f73bec335ae893165e2ca9b96dcc"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.1.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.2.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/js-yaml" }]
     },
@@ -14210,17 +14522,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2F%40langchain%2Fclassic%2Fnode_modules%2Fjs-yaml",
       "name": "js-yaml",
-      "version": "5.2.3",
-      "purl": "pkg:npm/js-yaml@5.2.3",
+      "version": "5.4.2",
+      "purl": "pkg:npm/js-yaml@5.4.2",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "9fe994572517e5b56fec6fc6db3c881ce85dc5fb94d5d63634e1734d051688c51b16cb3c6f9ecd16580209a82053bf304b0e4a552f5c965cde2f2cf247e9f99f"
+          "content": "9be6aabbe2f03b53bab08a2969f8fc1d4565e5a6b0213c1941eff21e93022a369605a03f774ec1fd074c6f7e76f5111fb6253e44c3072f7565b30de138deef5a"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-5.2.3.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-5.4.2.tgz" }
       ],
       "properties": [
         {
@@ -18878,27 +19190,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Fsemver",
-      "name": "semver",
-      "version": "7.7.4",
-      "purl": "pkg:npm/semver@7.7.4",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "bc5282d8812d427561a53efc875629f30cf0adff0233e33328c1c62597c1b738593727111675ec1e4e84e53c4892432c80d4bb99d5f700607bc7640cd9d8b894"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/semver/-/semver-7.7.4.tgz" }],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@huggingface/transformers/node_modules/semver"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40typescript-eslint%2Feslint-plugin%2Fnode_modules%2Fsemver",
       "name": "semver",
       "version": "7.7.4",
@@ -18991,6 +19282,27 @@
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/semver/-/semver-7.7.4.tgz" }],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/typescript-eslint/node_modules/semver" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Fsemver",
+      "name": "semver",
+      "version": "7.8.5",
+      "purl": "pkg:npm/semver@7.8.5",
+      "licenses": [{ "license": { "id": "ISC" } }],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "63bfca0ec6fc2e3a28669c1aa86cae94ee8342592c8029dc7211c693eb19218e1206f52870c044147e54af57c8e1d57e26f974c3a723bee71a222e34a6e462a0"
+        }
+      ],
+      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz" }],
+      "properties": [
+        {
+          "name": "ragnarok:package-lock:location",
+          "value": "node_modules/@huggingface/transformers/node_modules/semver"
+        }
       ]
     },
     {
@@ -19122,16 +19434,16 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Fsharp",
       "name": "sharp",
-      "version": "0.34.5",
-      "purl": "pkg:npm/sharp@0.34.5",
+      "version": "0.35.5",
+      "purl": "pkg:npm/sharp@0.35.5",
       "licenses": [{ "license": { "id": "Apache-2.0" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "3aef48e45b7d58d7026d7ad4f5c3203c17022bc2e2c0ba9c6f2c16dede280d5dfb9f5a73a6e34bb1888057c78e0e78dbb509520f067671411e433e04e781e5b6"
+          "content": "6309f83a7cc6ba4a7b08332ba74f11439d182a6bb01b8edbad980854f4ef05a6807d095197282b46a4abc5d0a22fd33e2e5ccb06227af0847542abf31f28c2ee"
         }
       ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz" }],
+      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/sharp/-/sharp-0.35.5.tgz" }],
       "properties": [
         {
           "name": "ragnarok:package-lock:location",
@@ -21431,17 +21743,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fcheerio%2Fnode_modules%2Fundici",
       "name": "undici",
-      "version": "7.29.0",
-      "purl": "pkg:npm/undici@7.29.0",
+      "version": "7.30.0",
+      "purl": "pkg:npm/undici@7.30.0",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "203c5f95e2e699b4ac91f5925004e23759df9f6ac3baf9cc3aa6f909647dda221fa2303451dfae94e000110e7b2cfafdad69acade5327f9970c9aa3eec634d57"
+          "content": "764ad05de1d26a86a69c8b6561b9b31b4c0562b3346700f108883403b68a8d3cb2861f6cbd1cc234513357e566d39ff27a18c2ce30d9df52977c6123612ced0d"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/undici/-/undici-7.29.0.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/undici/-/undici-7.30.0.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/cheerio/node_modules/undici" }]
     },

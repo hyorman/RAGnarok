@@ -40,10 +40,10 @@ import {
   MemoryService,
   GraphVisualizationService,
   CrossEncoderReranker,
-  ArchiveFolderSource,
+  createSharedTopicSources,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
-import { loadConfig, getServerVersion, assertNoRemovedEnvVars } from "./config";
+import { loadConfig, getServerVersion } from "./config";
 import { ensureConfigFile } from "./configFile";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider, isUsableLLMProvider } from "./llmProviders";
@@ -53,9 +53,6 @@ import type { MutationRunner } from "./tools";
 import { createToolRuntime, drainToolRuntimeThenMemory } from "./toolRuntime";
 
 async function main(): Promise<void> {
-  // Before anything else: an operator who still supplies HTTP-era settings has
-  // a false model of what this process is. Say so instead of ignoring them.
-  assertNoRemovedEnvVars();
   const config = loadConfig();
 
   // Bootstrap logging
@@ -140,7 +137,7 @@ async function main(): Promise<void> {
     embeddingRegistry,
     llmProvider,
     resetStorage: config.resetStorage,
-    sharedTopicSources: config.commonDatabasePath ? [new ArchiveFolderSource(config.commonDatabasePath)] : [],
+    sharedTopicSources: createSharedTopicSources(config.commonDatabasePath),
   });
 
   logger.info(`Loaded ${topicManager.getAllTopics().length} topic(s) from ${config.storageDir}`);
@@ -288,15 +285,13 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error("Fatal error starting MCP server:", error);
-  // Two startup refusals have a concrete next action, and a stdio client shows
-  // the operator nothing but this stream. Naming the action beats making them
-  // decode a storage-format error out of a stack trace.
-  if ((error as Error)?.name === "UnversionedStorageError") {
+  // A stdio client shows the operator nothing but this stream, so a startup
+  // refusal that has a concrete next action names it here. Storage written by
+  // a NEWER build is the one that still does: downgrading cannot read it.
+  if ((error as Error)?.name === "StorageFormatVersionError") {
     console.error(
-      "This storage contains pre-0.4 data. Open it once in VS Code to migrate it automatically, or run ragnarok-migrate.",
+      "This storage was written by a newer RAGnarok build. Upgrade, or point --storage at another directory.",
     );
-  } else if ((error as Error)?.name === "StorageMigrationInterruptedError") {
-    console.error("A storage migration is mid-flight. Open the storage in VS Code to resume it automatically.");
   }
   process.exitCode = 1;
 });

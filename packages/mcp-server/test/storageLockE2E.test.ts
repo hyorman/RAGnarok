@@ -94,14 +94,34 @@ describe("cross-process storage E2E (lock-free reads / busy-error mutations)", f
         true,
       );
       const body = JSON.parse(created.result.content[0].text);
-      expect(body.error).to.equal("Storage is busy: another RAGnarōk process is writing. Retry shortly.");
+      // The pid comes from the lock file the fixture plants. Both hosts now
+      // share one classifier in @ragnarok/core, so this host inherited the
+      // holder pid the VS Code notification always carried.
+      expect(body.error).to.equal("Storage is busy: another RAGnarōk process is writing (pid 99999). Retry shortly.");
+
+      // The same live lock must NOT stop a shared-topic refresh: it takes no
+      // write lease by design. This is the only harness in the repo where a
+      // real lease exists, so it is the only place that claim is testable —
+      // wrapping refresh in the mutation runner would fail here and nowhere else.
+      const refreshed = await server.callTool(3, "rag_topic", { action: "refresh" }, 15_000);
+      expect(refreshed.error, `tool call transport error: ${JSON.stringify(refreshed.error)}`).to.equal(undefined);
+      expect(
+        refreshed.result?.isError,
+        `refresh must not report busy, got: ${JSON.stringify(refreshed.result)}`,
+      ).to.not.equal(true);
+      expect(JSON.parse(refreshed.result.content[0].text)).to.deep.equal({ success: true, sharedTopicCount: 0 });
     } finally {
       fs.rmSync(lockPath, { force: true });
     }
 
     // The server itself never acquired the lease (it lost the race to the
     // foreign holder), so it stays fully functional and exits cleanly.
-    const tools = await server.listTools(3);
+    // Id 4, not 3: the refresh call above already used 3, and the harness
+    // resolves a wait by scanning every message it has ever received for a
+    // matching id without consuming it -- so a reused id silently returns the
+    // EARLIER response. listTools(3) got back the refresh tools/call result,
+    // whose payload has `content` and no `tools`.
+    const tools = await server.listTools(4);
     expect(tools.error).to.equal(undefined);
     expect(tools.result?.tools).to.be.an("array").with.length.greaterThan(0);
     expect(await server.close(), "server did not exit cleanly").to.equal(0);

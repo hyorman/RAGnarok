@@ -44,3 +44,14 @@ export class ArchiveFolderSource implements SharedTopicSource {
     return cache.sync(archives);
   }
 }
+
+/**
+ * The one place that turns a configured path into sources. Both hosts asked
+ * this question at four call sites with the same ternary; a fifth would have
+ * drifted. An unset, empty or whitespace path yields no sources at all —
+ * never a source pointing at "", which would resolve to the working directory.
+ */
+export function createSharedTopicSources(folderPath: string | undefined | null): SharedTopicSource[] {
+  const trimmed = folderPath?.trim();
+  return trimmed ? [new ArchiveFolderSource(trimmed)] : [];
+}

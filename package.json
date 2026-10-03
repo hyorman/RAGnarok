@@ -2,7 +2,7 @@
   "name": "ragnarok",
   "displayName": "RAGnarōk - Local RAG for Copilot",
   "description": "Retrieval-Augmented Generation extension for VSCode with local sentence transformers and semantic chunking",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "workspaces": [
     "packages/core",
     "packages/graph-ui",
@@ -17,7 +17,7 @@
     "url": "https://github.com/hyorman/ragnarok"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=22",
     "vscode": "^1.105.0"
   },
   "categories": [
@@ -172,7 +172,7 @@
         },
         "ragnarok.rerankerMaxCandidates": {
           "type": "number",
-          "default": 20,
+          "default": 40,
           "minimum": 5,
           "maximum": 100,
           "markdownDescription": "**Reranker Max Candidates** — Maximum number of candidates to pass through the cross-encoder. Higher values improve recall but increase latency.",
@@ -648,7 +648,6 @@
   },
   "scripts": {
     "compile": "npm run build --workspaces && npm run version:sync",
-    "migrate:storage": "node packages/core/dist/migrationCli.js migrate",
     "bundle": "node esbuild.mjs",
     "bundle:watch": "node esbuild.mjs --watch",
     "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",
@@ -742,7 +741,7 @@
     "@langchain/core": "1.2.2",
     "@langchain/textsplitters": "1.0.1",
     "@napi-rs/canvas": "0.1.80",
-    "adm-zip": "0.6.0",
+    "adm-zip": "0.6.1",
     "apache-arrow": "^18.1.0",
     "async-mutex": "^0.5.0",
     "binary-extensions": "2.3.0",
@@ -778,6 +777,10 @@
     "ws": "8.21.0",
     "@langchain/community": {
       "pdf-parse": "$pdf-parse"
-    }
+    },
+    "sharp": "^0.35.5",
+    "undici": "^7.30.0",
+    "js-yaml@4": "^4.3.2",
+    "js-yaml@5": "^5.4.2"
   }
 }

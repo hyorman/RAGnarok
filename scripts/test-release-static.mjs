@@ -821,7 +821,7 @@ const releaseDocumentation = await read("docs/RELEASE.md");
 assert.match(releaseDocumentation, /moderate-or-higher/);
 assert.match(releaseDocumentation, /exact, unexpired entries in `release-policy\.json`/);
 assert.match(releaseDocumentation, /prints every accepted\s+finding/);
-for (const [runtimeDependency, version] of Object.entries({ "adm-zip": "0.6.0", yazl: "3.3.1" })) {
+for (const [runtimeDependency, version] of Object.entries({ "adm-zip": "0.6.1", yazl: "3.3.1" })) {
   assert.equal(
     pkg.dependencies[runtimeDependency],
     version,
@@ -1529,7 +1529,6 @@ for (const contract of [
   /tools\/list/,
   /expectedToolCount = 8/,
   /assertStorageLock/,
-  /assertRemovedEnvRejected/,
   /assertRuntimeHardening/,
   /closeCleanly/,
   /ExposedPorts/,

@@ -268,9 +268,16 @@ describe("topic archive safety", function () {
     );
 
     await writeArchiveWithDuplicate(archivePath, topicBytes);
-    expect((await captureError(() => validateAndStageTopicArchive(archivePath, stagingDir))).message).to.include(
-      "duplicate entry",
+    // adm-zip 0.6.1 rejects a physically duplicated entry name while parsing the
+    // central directory, so its error ("Duplicate entry name ...") now arrives
+    // before topicArchive.ts reaches its own check ("Invalid archive: duplicate
+    // entry (...)"). Either source is a correct rejection, so match both rather
+    // than pinning one library's wording -- and assert the property that
+    // actually matters: a duplicated entry stages nothing.
+    expect((await captureError(() => validateAndStageTopicArchive(archivePath, stagingDir))).message).to.match(
+      /duplicate entry/i,
     );
+    expect(await fs.readdir(stagingDir)).to.deep.equal([]);
   });
 
   it("rejects cross-platform absolute, traversal, backslash, and ambiguous paths", function () {

@@ -6,6 +6,7 @@
  */
 import * as vscode from "vscode";
 import {
+  classifyToolError,
   executeTopicRead,
   toolErrorPayload,
   TopicInputError,
@@ -40,6 +41,12 @@ export class TopicTool {
       // Two distinct codes on purpose. Told its input was invalid, a model
       // retries with different arguments — the right move for a bad topic name,
       // and a pointless loop against a down embedding provider or a rate limit.
+      // A recognised kind carries its own caller-ready message; reporting it
+      // as a generic failure would lose the retry hint a busy lease deserves.
+      const classified = classifyToolError(error);
+      if (classified.kind !== "generic") {
+        return toolErrorPayload("TOPIC_TOOL_FAILED", classified.message);
+      }
       const code = error instanceof TopicInputError ? "TOPIC_TOOL_INVALID_INPUT" : "TOPIC_TOOL_FAILED";
       return toolErrorPayload(code, error instanceof Error ? error.message : String(error));
     }
