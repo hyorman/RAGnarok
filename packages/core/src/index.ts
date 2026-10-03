@@ -32,9 +32,7 @@ export {
   Document,
   DocumentSource,
   TextChunk,
-  TopicData,
   TopicsIndex,
-  SearchResult,
   RAGQueryParams,
   RAGQueryResult,
   ExportedTopicData,
@@ -156,7 +154,6 @@ export {
   MEMORY_TABLE_PREFIX,
   DECAY_LAMBDA,
   MIN_CONFIDENCE_THRESHOLD,
-  DECAY_INTERVAL_MS,
 } from "./memory";
 
 // Storage format and durable JSON helpers

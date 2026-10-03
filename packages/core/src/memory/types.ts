@@ -232,5 +232,3 @@ export const MEMORY_TABLE_PREFIX = "_memory";
 export const DECAY_LAMBDA = 0.05;
 /** Below this confidence, entry is considered expired */
 export const MIN_CONFIDENCE_THRESHOLD = 0.1;
-/** Default auto-decay interval: 1 hour */
-export const DECAY_INTERVAL_MS = 60 * 60 * 1000;
