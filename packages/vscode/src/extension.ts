@@ -104,7 +104,7 @@ const defaultRuntimeFactory: ActivationRuntimeFactory = {
 
 /**
  * Keeps the tree views live when another process writes topics.json/a
- * topic-documents file, or when a full-exclusion migration/reset elsewhere
+ * topic-documents file, or when a reset in another window
  * takes the storage tree away and later gives it back. Both kinds refresh
  * both views; `storage-unavailable` additionally warns, since a read racing
  * that window can surface stale or momentarily-missing data.
@@ -119,7 +119,9 @@ export function wireExternalStorageChangeRefresh(
     treeDataProvider.refresh();
     configDataProvider.refresh();
     if (change.kind === "storage-unavailable") {
-      showWarning("RAGnarōk storage is temporarily unavailable (another window is migrating or resetting it)");
+      showWarning(
+        "RAGnarōk storage is temporarily unavailable (another window is resetting it, or the folder was moved)",
+      );
     }
   });
 }
@@ -318,8 +320,8 @@ export async function activateWithServiceFactory(
     lifecycle.addDisposable(configDataProvider);
 
     // Keep both tree views live across external storage changes (another
-    // window writing topics.json/a documents file, or a full-exclusion
-    // migration/reset elsewhere taking the storage tree away and back).
+    // window writing topics.json/a documents file, or a reset
+    // in another window taking the storage tree away and back).
     const externalChangeSubscription = wireExternalStorageChangeRefresh(
       topicManager,
       treeDataProvider,
@@ -352,7 +354,7 @@ export async function activateWithServiceFactory(
     } catch (dbError) {
       logger.error("Failed to load topics", { error: dbError });
       await vscode.window.showErrorMessage(
-        "RAGnarōk could not load the topic index safely. No data was changed. Restore a known-good backup or inspect the storage migration status before retrying.",
+        "RAGnarōk could not load the topic index safely. No data was changed. Restore a known-good backup before retrying.",
         { modal: true },
       );
       throw dbError;
@@ -697,6 +699,19 @@ export async function activateWithServiceFactory(
     // Before cleanup: the views are already visible, and leaving them on the
     // "starting up" text is the difference between a reported failure and a
     // hang the user cannot diagnose.
+    if (error instanceof Error && error.name === "UnsupportedStorageError") {
+      void vscode.window
+        .showErrorMessage(
+          `RAGnarōk cannot open its storage: ${storageDir} holds data from an unsupported pre-0.4 build. Move or delete that folder, then reload the window.`,
+          { modal: true },
+          "Reveal Folder",
+        )
+        .then((choice) => {
+          if (choice === "Reveal Folder") {
+            void vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(storageDir));
+          }
+        });
+    }
     await setActivationFailed(true);
     try {
       await lifecycle.dispose();

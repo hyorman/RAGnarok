@@ -15,7 +15,7 @@ export const STORAGE_RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
 /**
  * Derived, content-addressed unpacks of shared `.rag` archives. Infrastructure,
  * not corpus data: it must not make an otherwise-empty store read as an
- * unversioned legacy layout, and a reset must not sweep it into a backup.
+ * unsupported storage, and a reset must not sweep it into a backup.
  */
 export const SHARED_TOPIC_CACHE_DIRNAME = ".ragnarok-shared-cache";
 
@@ -26,6 +26,22 @@ export class StorageFormatVersionError extends Error {
     public readonly expectedVersion: number,
   ) {
     super(`Unsupported RAGnarōk storage format ${String(foundVersion)}. Expected ${expectedVersion}.`);
+  }
+}
+
+/**
+ * The directory holds RAGnarōk data but no format marker: content from an
+ * unversioned pre-0.4 build. v2 is the only supported format and there is no
+ * converter. It is refused rather than read because v0.3 and v2 share file
+ * paths, so stamping a marker beside it would silently adopt it.
+ */
+export class UnsupportedStorageError extends Error {
+  readonly name = "UnsupportedStorageError";
+  constructor(public readonly storageDir: string) {
+    super(
+      `RAGnarōk storage at ${storageDir} holds data from an unsupported pre-0.4 build. ` +
+        `Move or delete that folder to start a new store.`,
+    );
   }
 }
 
@@ -56,7 +72,7 @@ export class StorageResetInterruptedError extends Error {
  *
  * config.json earns its place on both counts. The MCP server generates it on
  * first run, before storage format validation, so version-gating it would make
- * every fresh install look like unversioned v0.3 storage and refuse to start.
+ * every fresh install look like unsupported pre-0.4 storage and refuse to start.
  * And it holds the operator's settings rather than their corpus, so resetting
  * *data* must leave it exactly where it is instead of sweeping it into a backup.
  */
@@ -77,27 +93,15 @@ export interface StorageFormatMarker {
 }
 
 export type StorageInspection =
-  // `unmanagedEntriesPresent` is informational only -- the status is still
-  // "empty" and callers must not branch on it. It exists so a host can say in
-  // its log why a directory that visibly holds files is being initialized as
-  // an empty v2 store, rather than leaving that looking like data loss.
-  | { status: "current" | "empty"; unmanagedEntriesPresent?: boolean }
+  | { status: "current" | "empty" | "unsupported" }
   | { status: "future-version"; foundVersion: unknown }
   | { status: "reset-interrupted" };
 
 /**
- * Read-only, lock-free classification of a storage directory.
- *
- * Activation needs to know what it is looking at *before* it opens anything,
- * so that an interrupted migration is resumed rather than rediscovered as an
- * open failure. Nothing here writes, creates the directory, or takes a lock —
- * which also means two windows can inspect the same store concurrently and
- * both decide to migrate; the migration lock, not this function, is what
- * settles that race.
- *
- * Order is by severity, not convenience: an interrupted migration or reset
- * describes the directory more truthfully than whatever files it currently
- * happens to contain.
+ * Read-only, lock-free classification of a storage directory: nothing here
+ * writes, creates the directory, or takes a lock. An interrupted reset is
+ * reported ahead of the files it left behind, because it describes the
+ * directory more truthfully than they do.
  */
 export async function inspectStorage(storageDir: string): Promise<StorageInspection> {
   // Existence only. A corrupt journal still proves a reset was interrupted,
@@ -124,7 +128,7 @@ export async function inspectStorage(storageDir: string): Promise<StorageInspect
     }
   }
 
-  return { status: "empty", unmanagedEntriesPresent: await hasManagedData(storageDir) };
+  return (await hasManagedData(storageDir)) ? { status: "unsupported" } : { status: "empty" };
 }
 
 /** The six fields the 0.3 release wrote into `vector-<topic>-metadata.json`. */
@@ -277,10 +281,10 @@ async function ensureStorageFormatUnjournaled(storageDir: string): Promise<Stora
     }
   }
 
-  // Pre-v2 content is ignored rather than refused. v2 is the baseline format;
-  // the unversioned 0.3 layout was never released, so anything here that is not
-  // v2 is left untouched on disk and simply not adopted. Stamping the marker
-  // beside it makes this a healthy, empty v2 store.
+  if (await hasManagedData(storageDir)) {
+    throw new UnsupportedStorageError(storageDir);
+  }
+
   const marker: StorageFormatMarker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: Date.now() };
   await atomicWriteJson(formatPath, marker);
   return marker;

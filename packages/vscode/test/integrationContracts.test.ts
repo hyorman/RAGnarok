@@ -215,7 +215,7 @@ describe("external storage change wiring", function () {
     expect(topicRefreshes).to.equal(2);
     expect(configRefreshes).to.equal(2);
     expect(warnings).to.deep.equal([
-      "RAGnarōk storage is temporarily unavailable (another window is migrating or resetting it)",
+      "RAGnarōk storage is temporarily unavailable (another window is resetting it, or the folder was moved)",
     ]);
 
     subscription.dispose();

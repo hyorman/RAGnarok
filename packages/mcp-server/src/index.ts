@@ -288,9 +288,13 @@ main().catch((error) => {
   // A stdio client shows the operator nothing but this stream, so a startup
   // refusal that has a concrete next action names it here. Storage written by
   // a NEWER build is the one that still does: downgrading cannot read it.
-  if ((error as Error)?.name === "StorageFormatVersionError") {
+  if ((error as Error)?.name === "UnsupportedStorageError") {
     console.error(
-      "This storage was written by a newer RAGnarok build. Upgrade, or point --storage at another directory.",
+      "This storage holds data from an unsupported pre-0.4 build. Start once with RAGNAROK_RESET_STORAGE=1 to move it into a backup folder and begin a new store, or point RAGNAROK_STORAGE_DIR at another directory.",
+    );
+  } else if ((error as Error)?.name === "StorageFormatVersionError") {
+    console.error(
+      "This storage was written by a newer RAGnarok build. Upgrade, or point RAGNAROK_STORAGE_DIR at another directory.",
     );
   }
   process.exitCode = 1;

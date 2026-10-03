@@ -200,6 +200,49 @@ describe("TopicManager operation-scoped write transactions", function () {
     await fs.rm(storageDir, { recursive: true, force: true });
   });
 
+  it("refuses to open a real v0.3-shaped store and leaves every file in place", async function () {
+    const database = path.join(storageDir, "database");
+    await fs.mkdir(path.join(database, "lancedb", "topic-1.lance"), { recursive: true });
+    const topicsJson = JSON.stringify({ topics: { "topic-1": { id: "topic-1", name: "Old", documentCount: 1 } } });
+    await fs.writeFile(path.join(database, "topics.json"), topicsJson);
+    await fs.writeFile(path.join(database, "topic-topic-1-documents.json"), "[]");
+    await fs.writeFile(path.join(database, "vector-topic-1-metadata.json"), "{}");
+
+    let error: Error | undefined;
+    try {
+      await createManagerInTmpDir();
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error?.name).to.equal("UnsupportedStorageError");
+    expect(await fs.readdir(storageDir)).to.deep.equal(["database"]);
+    expect(await fs.readFile(path.join(database, "topics.json"), "utf8")).to.equal(topicsJson);
+  });
+
+  it("opens a refused v0.3-shaped store when started with resetStorage, backing the old data up", async function () {
+    const database = path.join(storageDir, "database");
+    await fs.mkdir(database, { recursive: true });
+    await fs.writeFile(path.join(database, "topics.json"), '{"topics":{}}');
+
+    // The path RAGNAROK_RESET_STORAGE=1 / --reset-storage takes: loadTopics
+    // resets before any format check, so the refusal never fires.
+    manager = await TopicManager.create({
+      storageDir,
+      config,
+      notifier,
+      embeddingService: stubEmbeddingService(),
+      embeddingRegistry: stubEmbeddingRegistry(),
+      resetStorage: true,
+    });
+
+    const backups = (await fs.readdir(storageDir)).filter((entry) => entry.startsWith("backup-v1-"));
+    expect(backups).to.have.length(1);
+    expect(await fs.readFile(path.join(storageDir, backups[0], "database", "topics.json"), "utf8")).to.equal(
+      '{"topics":{}}',
+    );
+  });
+
   it("holds no lease once initialization returns: the lock file does not exist", async function () {
     await createManagerInTmpDir();
 

@@ -3390,7 +3390,7 @@ export class TopicManager {
    * lease rather than try-locking: a first run that silently skipped the stamp
    * would leave the store unversioned. Any other classification is handed to
    * `ensureStorageFormat` unleased purely so it raises its own typed error
-   * (a newer format version, an unreadable marker, an interrupted reset) — it
+   * (a newer format version, an unreadable marker, an interrupted reset, or unsupported pre-0.4 data) — it
    * cannot write on those paths, and taking a lease first would let a
    * StorageBusyError mask the real diagnosis.
    */
@@ -3402,15 +3402,6 @@ export class TopicManager {
     if (inspection.status !== "empty") {
       await ensureStorageFormat(this.storageDir);
       return;
-    }
-    if (inspection.unmanagedEntriesPresent) {
-      // Pre-v2 content is ignored, not adopted and not deleted. Said out loud
-      // because the directory visibly holds files: someone who later wonders
-      // where their old topics went should find the answer here rather than
-      // conclude the store ate them.
-      this.logger.info("Initializing a new v2 store; pre-v2 content in this directory is ignored and left in place", {
-        storageDir: this.storageDir,
-      });
     }
     await this.withOperationLease(async () => {
       // Re-check under the lease: another process may have stamped it while

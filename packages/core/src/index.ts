@@ -163,6 +163,7 @@ export {
   STORAGE_CONFIG_FILENAME,
   StorageFormatVersionError,
   StorageResetInterruptedError,
+  UnsupportedStorageError,
   atomicWriteFile,
   atomicWriteJson,
   ensureStorageFormat,

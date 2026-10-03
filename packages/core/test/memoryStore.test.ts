@@ -882,10 +882,7 @@ describe("MemoryStore reset and cancellation safety", function () {
 describe("MemoryStore standalone format and markdown privacy", function () {
   this.timeout(30000);
 
-  it("writes into a directory holding pre-v2 content without touching it", async function () {
-    // v2 is the baseline, so unversioned content is not adopted and not an
-    // obstacle: the store stamps its marker beside it and proceeds. The old
-    // file stays exactly where the operator left it.
+  it("refuses a directory holding pre-v2 content and leaves it untouched", async function () {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-format-gate-"));
     await fs.writeFile(path.join(directory, "legacy-memory.json"), "{}", "utf8");
     const standalone = new MemoryStore({
@@ -895,9 +892,12 @@ describe("MemoryStore standalone format and markdown privacy", function () {
       markdownPath: null,
     });
 
-    const stored = await standalone.store({ content: "enters the new v2 store" });
-    expect(stored.content).to.equal("enters the new v2 store");
-    expect(await fs.readdir(directory)).to.include.members(["legacy-memory.json", STORAGE_FORMAT_FILENAME]);
+    const error = await captureError(standalone.store({ content: "must not enter unsupported storage" }));
+
+    expect((error as Error).name).to.equal("UnsupportedStorageError");
+    const entries = await fs.readdir(directory);
+    expect(entries).to.include("legacy-memory.json");
+    expect(entries).to.not.include(STORAGE_FORMAT_FILENAME);
     expect(await fs.readFile(path.join(directory, "legacy-memory.json"), "utf8")).to.equal("{}");
     await standalone.dispose();
     await fs.rm(directory, { recursive: true, force: true });

@@ -867,8 +867,8 @@ export class MemoryStore {
    * Classification is read-only, so two windows opening the same healthy store
    * never contend — the overwhelmingly common case costs nothing. Any
    * classification other than "current"/"empty" goes to `ensureStorageFormat`
-   * purely so it raises its own typed error: an interrupted migration, a legacy
-   * directory or a future format version must fail closed on reads too.
+   * purely so it raises its own typed error: unsupported pre-0.4 data,
+   * an interrupted reset or a future format version must fail closed on reads too.
    *
    * The empty case is the only one that writes. A mutation stamps it under its
    * own lease. A read stamps it opportunistically, with a TRY-lock — it never
