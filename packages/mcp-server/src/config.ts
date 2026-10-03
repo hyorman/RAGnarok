@@ -30,41 +30,6 @@ export function getServerVersion(): string {
   return cachedVersion ?? "unknown";
 }
 
-const REMOVED_ENV_VARS = [
-  "RAGNAROK_DEPLOYMENT_MODE",
-  "RAGNAROK_PORT",
-  "RAGNAROK_HTTP_HOST",
-  "RAGNAROK_ALLOWED_HOSTS",
-  "RAGNAROK_CORS_ORIGIN",
-  "RAGNAROK_TLS_CERT_PATH",
-  "RAGNAROK_TLS_KEY_PATH",
-  "RAGNAROK_API_KEY",
-  "RAGNAROK_WRITE_API_KEY",
-  "RAGNAROK_ADMIN_API_KEY",
-  "RAGNAROK_RATE_LIMIT_PER_MINUTE",
-  "RAGNAROK_TRUSTED_PROXIES",
-  "RAGNAROK_TRANSFER_TTL_MS",
-  "RAGNAROK_TRANSFER_MAX_FILE_BYTES",
-  "RAGNAROK_TRANSFER_MAX_AGGREGATE_BYTES",
-  "RAGNAROK_TRANSFER_MAX_SESSIONS",
-] as const;
-
-/**
- * Reject configuration that only made sense for the removed HTTP transport.
- * Failing loudly matters: someone who set TLS certificates and API keys
- * believes they are running a hardened network service, and silently starting
- * a stdio server would leave that belief intact.
- */
-export function assertNoRemovedEnvVars(): void {
-  const present = REMOVED_ENV_VARS.filter((name) => process.env[name] !== undefined);
-  if (present.length > 0) {
-    throw new Error(
-      `These environment variables were removed with the HTTP transport and are no longer supported: ` +
-        `${present.join(", ")}. RAGnarōk MCP serves stdio only.`,
-    );
-  }
-}
-
 export interface McpConfig {
   storageDir: string;
   /** Project root for git-branch-scoped memory (empty = fall back to cwd). */

@@ -43,7 +43,7 @@ import {
   ArchiveFolderSource,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
-import { loadConfig, getServerVersion, assertNoRemovedEnvVars } from "./config";
+import { loadConfig, getServerVersion } from "./config";
 import { ensureConfigFile } from "./configFile";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider, isUsableLLMProvider } from "./llmProviders";
@@ -53,9 +53,6 @@ import type { MutationRunner } from "./tools";
 import { createToolRuntime, drainToolRuntimeThenMemory } from "./toolRuntime";
 
 async function main(): Promise<void> {
-  // Before anything else: an operator who still supplies HTTP-era settings has
-  // a false model of what this process is. Say so instead of ignoring them.
-  assertNoRemovedEnvVars();
   const config = loadConfig();
 
   // Bootstrap logging
