@@ -164,10 +164,10 @@ A setting is resolved from two places, in this order:
 
 **`config.json` → built-in default**
 
-`config.json` is the only way to set the 23 operational settings. Seven more —
+`config.json` is the only way to set the 24 operational settings. Seven more —
 three secrets, two bootstrap paths, two one-shot switches — are environment-only,
 because a file inside the storage directory structurally cannot serve them. There
-is no third path and no overlap: an environment variable named after one of the 23
+is no third path and no overlap: an environment variable named after one of the 24
 is not read, so setting it does nothing.
 
 Precedence is one-directional and there is no write-back: the file beats the
@@ -381,16 +381,13 @@ directory, gets copied with backups, and is readable by anything that can read
 the store. Credentials belong in the process environment, where the MCP client
 that spawns the server owns them.
 
-Between them the two tables are the complete surface: 23 keys in the file, 7
-variables in the environment, nothing else. A variable named after one of the 23
+Between them the two tables are the complete surface: 24 keys in the file, 7
+variables in the environment, nothing else. A variable named after one of the 24
 is simply not read.
 
 Variables that belonged to the **removed HTTP transport** are not read. They are deliberately not listed here, so this guide is never mistaken for documentation of a supported setting.
 
-The difference in treatment is deliberate: those variables implied a capability
-the server no longer has — a listening port, TLS termination, bearer auth — and
-believing you have a hardened network service when nothing is listening is
-dangerous. The 24 imply a value, which simply moved into the file.
+Those variables implied a capability the server no longer has (a listening port, TLS termination, bearer auth), so nothing is documented for them. The operational keys above imply a value, which moved into `config.json`.
 
 ---
 
