@@ -171,6 +171,9 @@ for (const [name, contents] of [
 }
 assert.match(release, /media\/memoryGraph\.js/);
 assert.match(release, /media\/memoryGraph\.css/);
+const copilotInstructions = await readFile(path.join(root, ".github/copilot-instructions.md"), "utf8");
+assert.doesNotMatch(copilotInstructions, /\brtk\b/, "Copilot instructions must describe this project, not a personal CLI wrapper");
+assert.match(copilotInstructions, /npm run test:fast/, "Copilot instructions must name the project's test command");
 assert.doesNotMatch(architecture, /v0\.7 implementation/, "ARCHITECTURE.md must not claim a version");
 assert.doesNotMatch(mcp, /removed-variable rejection/, "MCP guide lists a function that does not exist");
 for (const module of ["graphVisualizationAdapter.ts", "memoryToolAdapter.ts", "toolRuntime.ts"]) {
