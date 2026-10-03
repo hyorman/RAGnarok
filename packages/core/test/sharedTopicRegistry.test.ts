@@ -153,10 +153,7 @@ describe("shared topic registry", function () {
 
     await registry.refresh(["API Docs"]);
 
-    expect(registry.listTopics().map((topic) => topic.name)).to.deep.equal([
-      "API Docs (share)",
-      "API Docs (share 2)",
-    ]);
+    expect(registry.listTopics().map((topic) => topic.name)).to.deep.equal(["API Docs (share)", "API Docs (share 2)"]);
   });
 
   it("answers lookups and tags every topic as common", async function () {

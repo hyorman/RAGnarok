@@ -1393,9 +1393,7 @@ export class CommandHandler {
       const configuredPath = vscode.workspace
         .getConfiguration(VSCODE_CONFIG.ROOT)
         .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
-      await this.topicManager.refreshSharedTopics(
-        createSharedTopicSources(configuredPath),
-      );
+      await this.topicManager.refreshSharedTopics(createSharedTopicSources(configuredPath));
       this.treeDataProvider.refresh();
       vscode.window.showInformationMessage("RAGnarōk: Shared topics refreshed");
     } catch (error) {

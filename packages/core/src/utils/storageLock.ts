@@ -471,11 +471,7 @@ type AcquireAttemptResult =
  * holder currently owns it. Never waits — callers decide what to do with a
  * "busy" result.
  */
-async function tryAcquireOnce(
-  lockPath: string,
-  staleMs: number,
-  heartbeatMs: number,
-): Promise<AcquireAttemptResult> {
+async function tryAcquireOnce(lockPath: string, staleMs: number, heartbeatMs: number): Promise<AcquireAttemptResult> {
   try {
     const handle = await fs.open(lockPath, "wx", 0o600);
     const info: LockFileInfo = {

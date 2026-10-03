@@ -560,9 +560,7 @@ export async function activateWithServiceFactory(
             const configuredPath = vscode.workspace
               .getConfiguration(VSCODE_CONFIG.ROOT)
               .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
-            await topicManager.refreshSharedTopics(
-              createSharedTopicSources(configuredPath),
-            );
+            await topicManager.refreshSharedTopics(createSharedTopicSources(configuredPath));
             treeDataProvider.refresh();
             configDataProvider.refresh();
             vscode.window.showInformationMessage("Shared topics reloaded");

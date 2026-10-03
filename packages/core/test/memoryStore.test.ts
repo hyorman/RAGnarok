@@ -1424,7 +1424,11 @@ describe("MemoryStore lock-free reads and operation leases", function () {
     await writeForeignLease();
 
     const reader = makeStore();
-    const recalled = await reader.recall({ query: "manifest free recall memory", scope: "workspace", reinforce: false });
+    const recalled = await reader.recall({
+      query: "manifest free recall memory",
+      scope: "workspace",
+      reinforce: false,
+    });
     expect(recalled.memories.length).to.be.greaterThan(0);
     expect(await exists(manifestPath()), "a read must not stamp the manifest it could not lease").to.equal(false);
   });
@@ -1499,10 +1503,7 @@ describe("MemoryStore lock-free reads and operation leases", function () {
     // An interrupted migration's process is dead: it holds no live lease, so
     // the operation lease alone would be granted and reset would delete over a
     // half-renamed directory.
-    const statePath = path.join(
-      path.dirname(tempDir),
-      `.${path.basename(tempDir)}.migration-mig-x.json`,
-    );
+    const statePath = path.join(path.dirname(tempDir), `.${path.basename(tempDir)}.migration-mig-x.json`);
     await fs.writeFile(
       statePath,
       JSON.stringify({ sourcePath: tempDir, migrationId: "mig-x", stage: "cutoverPrepared" }),

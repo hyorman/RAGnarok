@@ -160,9 +160,7 @@ describe("storage format v2", () => {
     // The rollback was provably complete, so the store must be genuinely
     // healthy again: marker restored verbatim, journal gone, data untouched.
     expect(await fs.readdir(directory)).to.not.include(STORAGE_RESET_JOURNAL_FILENAME);
-    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(
-      marker,
-    );
+    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(marker);
     expect(await fs.readFile(path.join(directory, "database", "topics.json"), "utf8")).to.equal("v2 data");
     expect(await fs.readFile(path.join(directory, "extra.txt"), "utf8")).to.equal("more v2 data");
 
@@ -212,9 +210,7 @@ describe("storage format v2", () => {
     // The rollback was provably complete (moved was empty), so the store must
     // be healthy again: marker restored verbatim, journal gone, data untouched.
     expect(await fs.readdir(directory)).to.not.include(STORAGE_RESET_JOURNAL_FILENAME);
-    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(
-      marker,
-    );
+    expect(JSON.parse(await fs.readFile(path.join(directory, STORAGE_FORMAT_FILENAME), "utf8"))).to.deep.equal(marker);
     expect(await fs.readFile(path.join(directory, "database", "topics.json"), "utf8")).to.equal("v2 data");
 
     // And the store opens normally afterward instead of throwing
