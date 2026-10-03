@@ -348,7 +348,11 @@ describe("offline v0.3 storage migration", function () {
     expect(Object.keys(index.topics)).to.deep.equal([topicRemap.to]);
   });
 
-  it("marks unverifiable legacy graphs for rebuild and never copies their tables", async function () {
+  it("reports legacy graph tables as discarded, not as pending work, and never copies them", async function () {
+    // There is no document knowledge graph any more, so there is nothing to
+    // rebuild and no strategy that would consume the result. Telling a
+    // migrating user a rebuild "is required" sends them after an action that
+    // does not exist.
     const fixture = await writeLegacyFixture(parent);
     const db = await connect(path.join(fixture.databaseDir, "lancedb"));
     await db.createTable(`kg-entities-${fixture.topicId}`, [
@@ -356,8 +360,10 @@ describe("offline v0.3 storage migration", function () {
     ]);
     db.close();
     const plan = await planStorageMigration(fixture.storageDir);
-    expect(plan.topics[0].graphRebuildRequired).to.equal(true);
-    expect(plan.warnings.some((warning) => warning.includes("knowledge graphs"))).to.equal(true);
+    const graphWarning = plan.warnings.find((warning) => warning.includes("knowledge graph"));
+    expect(graphWarning, "a warning about legacy knowledge graph tables").to.not.equal(undefined);
+    expect(graphWarning!).to.contain("discarded");
+    expect(graphWarning!).to.not.contain("rebuild");
     await applyStorageMigration(fixture.storageDir, {
       nonInteractive: true,
       acceptedBackupPath: plan.backupPath,

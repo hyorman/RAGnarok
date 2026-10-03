@@ -87,7 +87,6 @@ export interface MigrationTopicPlan {
   chunkCount: number;
   embeddingModel: string;
   vectorDimension?: number;
-  graphRebuildRequired: boolean;
   remaps: MigrationRemap[];
 }
 
@@ -846,7 +845,7 @@ async function preparePlan(
   ];
   if (parsed.graphTopicIds.size > 0) {
     warnings.push(
-      "Legacy knowledge graphs are not copied because their embedding identity cannot be proven; rebuild is required.",
+      "Legacy knowledge graph tables were discarded: their embedding identity cannot be proven, and the document knowledge graph they belonged to no longer exists.",
     );
   }
   const backupPath = await uniqueBackupPath(backupPathFor(sourcePath, inventory, migrationId));
@@ -866,7 +865,6 @@ async function preparePlan(
       chunkCount: topic.rows.length,
       embeddingModel: String(topic.metadata.embeddingModel),
       vectorDimension: topic.vectorDimension,
-      graphRebuildRequired: parsed.graphTopicIds.has(topic.sourceTopicId),
       remaps: topic.remaps,
     })),
     remaps,
