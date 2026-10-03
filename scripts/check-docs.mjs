@@ -147,6 +147,16 @@ for (const [pattern, why] of [
 ]) {
   assert.doesNotMatch(readme, pattern, `README.md: ${why}`);
 }
+// The root README is a user guide. Contract detail lives in the package guides
+// and ARCHITECTURE.md; these phrases only appeared in duplicated detail.
+for (const [pattern, why] of [
+  [/Type-Safe|Comprehensive Logging|Rich Icons|like SQLite for vectors/, "feature list items that describe nothing a user can do"],
+  [/GRAPH_VISUALIZATION_RECORD_TOO_LARGE|text\/html;profile=mcp-app/, "memory-graph contract detail belongs in the MCP guide"],
+  [/truthful by construction/, "release-evidence policy belongs in docs/RELEASE.md"],
+  [/Cacheable discovery,\s+list, and resource-read results/, "MCP protocol detail belongs in the MCP guide"],
+]) {
+  assert.doesNotMatch(readme, pattern, `README.md: ${why}`);
+}
 assert.match(architecture, /separate storage/i);
 assert.match(core, /MemoryService/);
 assert.match(vscodeReadme, /confirmation/i);

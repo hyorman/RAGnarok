@@ -105,8 +105,6 @@ Notes:
 - **LanceDB**: Embedded vector database with file-based persistence (no server needed)
 - **Cross-Platform**: Works on Windows, macOS, Linux, and ARM
 - **Per-Topic Stores**: Efficient isolation and management
-- **Serverless**: Truly embedded, like SQLite for vectors
-- **Caching**: Optimized loading and reuse
 
 ### 🎨 **Enhanced UI**
 
@@ -114,20 +112,11 @@ Notes:
 - **Embedding Model Picker**: Tree view lists curated + local models (from `ragnarok.localModelPath`) with download status; click to switch
 - **Statistics Display**: Documents, chunks, store type, model info
 - **Progress Tracking**: Real-time updates during processing
-- **Rich Icons**: Visual hierarchy with emojis and theme icons
-
-### 🛠️ **Developer Experience**
-
-- **Comprehensive Logging**: Debug output at every step
-- **Type-Safe**: Full TypeScript with strict mode
-- **Error Handling**: Robust error recovery throughout
-- **Async-Safe**: Mutex locks prevent race conditions
-- **Configurable**: 15+ settings for customization
 
 ### 🧠 **Standalone Memory Module**
 
 - **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing.
-- **Native VS Code Tools**: the extension contributes exactly three language-model tools — `ragQuery` to search a topic, `ragTopic` to list topics or inspect one topic's statistics and documents, and `ragMemory` for scoped memory operations. `ragQuery` and `ragTopic` are read-only. `ragMemory` stores, recalls, and forgets individual memories, but it has no reset action: wiping memory outright is **Reset Memory** in the RAG sidebar's **Memory** section, behind a modal confirmation, just as creating, renaming, exporting, importing, and deleting topics are sidebar actions. The three tools' input schemas are generated from the canonical JSON Schema contracts in `@ragnarok/core` by `npm run tools:manifest` and drift-checked by `npm run tools:manifest:check`.
+- **Native VS Code Tools**: three language-model tools — `ragQuery` (search a topic), `ragTopic` (list topics or inspect one) and `ragMemory` (store, recall and forget memories). Topic management and **Reset Memory** stay in the sidebar, behind confirmations.
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
 - **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
@@ -137,29 +126,7 @@ Notes:
 
 #### Memory graph visualization
 
-Graphs exist only in the memory subsystem. There is no document knowledge
-graph, no entity extraction over ingested documents, and no `graph` or
-`graph_hybrid` retrieval strategy.
-
-The `rag_memory_visualize` tool exports the local user's own memory graph. It
-accepts exactly
-`{ source: "memory", memoryScope: "workspace", maxNodes? }` or
-`{ source: "memory", memoryScope: "branch", branch, maxNodes? }` and returns the
-deterministic `ragnarok.graph.visualization.v1` document. The default is 500
-nodes, the accepted range is 1 through 2,000, and output is capped at 10,000
-edges and the MCP response-byte limit. Failures surface as
-`GRAPH_VISUALIZATION_RECORD_TOO_LARGE` or `GRAPH_VISUALIZATION_FAILED`; an empty
-or unknown scope returns an empty document rather than fabricated data.
-
-Documents include full persisted node/edge descriptions, provenance,
-confidence, scope/branch fields, and arbitrary metadata, but never embedding
-vectors. In VS Code, run **RAG: Show Memory Graph** to choose workspace or
-current-branch memory and open the interactive command webview. MCP Apps hosts
-instead load the self-contained `ui://ragnarok/graph` resource as
-`text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. Both surfaces use
-the shared renderer and deterministic graph document, but each reads its own
-host's storage. There is no cross-host data sharing. See the
-[MCP server graph contract](packages/mcp-server/README.md#memory-graph-visualization).
+Graphs exist only in the memory subsystem. In VS Code, run **RAG: Show Memory Graph** to view workspace or current-branch memory. MCP clients get the same graph from `rag_memory_visualize`, rendered as an inline app where the client supports MCP Apps. The input contract and limits are in the [MCP server guide](packages/mcp-server/README.md#memory-graph-visualization).
 
 ---
 
@@ -555,29 +522,9 @@ RAGnarok/
 | **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                |
 | **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio transport only) |
 
-### MCP 0.4.0 protocol
+### MCP server
 
-RAGnarok 0.4.0 serves MCP protocol `2026-07-28` only. Clients must use
-`server/discover` or modern version negotiation; legacy `initialize` is
-rejected. There is no compatibility mode and no `Mcp-Session-Id`.
-
-**Stdio is the only transport.** The HTTP transport, shared deployment mode,
-bearer roles, and upload/download handles were removed; the server is a child
-process of one MCP client, running as the user who spawned it. Environment
-variables belonging to the removed transport are not read. Cacheable discovery,
-list, and resource-read results advertise `ttlMs=0` and `cacheScope=private`.
-See the [MCP server guide](packages/mcp-server/README.md) for the complete tool
-surface and configuration.
-
-MCP server settings live in `config.json` in the storage directory, which the
-server generates on first run. That file is the only place they are set — a key
-present in it pins your value, a key absent uses the current built-in default,
-and there is no environment variable for any of them. The environment carries
-only credentials, the two bootstrap paths, and the two one-shot switches. The
-[key table](packages/mcp-server/README.md#configuration) lists both sets.
-
-_(These are the MCP server's settings. The VS Code extension is configured
-separately through the `ragnarok.*` settings above.)_
+The MCP server speaks MCP `2026-07-28` over stdio only, and is configured through `config.json` in its storage directory. The [MCP server guide](packages/mcp-server/README.md) covers the protocol, every tool, and every setting.
 
 ### Build & Test Commands
 
@@ -641,59 +588,11 @@ lease model.
 - [Benchmark gates](docs/BENCHMARKS.md)
 - [Release evidence and publication](docs/RELEASE.md)
 
-Release evidence is truthful by construction: required jobs are recorded as
-passed, failed, or unrun. Docker runtime and all six installed VSIX platform
-combinations are release blockers until their designated CI environments
-execute them; a local compile or package build does not imply those gates
-passed. The release benchmark also exits nonzero with `status: "blocked"` when
-child-process peak RSS, isolated index time, or exact package-size
-measurements are absent; deterministic smoke tests do not stand in for those
-declared measurements.
-
 ---
 
 ## 🏗️ Architecture
 
-### Component Overview
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   VS Code Extension                 │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│  ┌─────────────┐  ┌──────────────┐   ┌────────────┐ │
-│  │ Commands    │  │ Tree View    │   │ RAG Tool   │ │
-│  │ (UI)        │  │ (UI)         │   │ (Copilot)  │ │
-│  └─────┬───────┘  └──────┬───────┘   └─────┬──────┘ │
-│        │                 │                 │        │
-│  ┌─────┴─────────────────┴─────────────────┴──────┐ │
-│  │              Topic Manager                     │ │
-│  │  (Topic lifecycle, caching, coordination)      │ │
-│  └─────┬──────────────────────────────────┬───────┘ │
-│        │                                  │         │
-│  ┌─────┴─────────┐                 ┌──────┴───────┐ │
-│  │ Document      │                 │ RAG Agent    │ │
-│  │ Pipeline      │                 │ (Orchestr.)  │ │
-│  └┬─────────┬────┘                 └┬─────────┬───┘ │
-│   │         │                       │         │     │
-│ ┌─┴────┐ ┌──┴────┐           ┌──────┴──┐ ┌────┴───┐ │
-│ │Loader│ │Chunker│           │ Planner │ │Retriev.│ │
-│ │      │ │       │           │         │ │        │ │
-│ └──┬───┘ └───┬───┘           └────┬────┘ └───┬────┘ │
-│    │         │                    │          │      │
-│  ┌─┴─────────┴────┐          ┌────┴──────────┴────┐ │
-│  │ Embedding      │          │ Vector Store       │ │
-│  │ Service        │          │ (LanceDB)          │ │
-│  │ (Local Models) │          │ (Embedded DB)      │ │
-│  └────────────────┘          └────────────────────┘ │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-                          │
-                   ┌──────┴───────┐
-                   │ LangChain.js │
-                   │ (Foundation) │
-                   └──────────────┘
-```
+`@ragnarok/core` holds ingestion, embeddings, retrieval, reranking, memory and storage with no VS Code dependency. The extension and the MCP server are two thin hosts over it, each with its own storage directory. [ARCHITECTURE.md](ARCHITECTURE.md) describes the storage layout, the write-lease model and the retrieval semantics.
 
 ---
 
