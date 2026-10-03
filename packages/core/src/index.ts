@@ -76,7 +76,6 @@ export type { EmbeddingResolution, EmbeddingServiceRegistryOptions } from "./emb
 // Vector Store
 export {
   VectorStoreFactory,
-  EmbeddingReindexRequiredError,
   VectorStoreMetadataCorruptionError,
   EmbeddingFingerprintMismatchError,
   EmbeddingEndpointMismatchError,

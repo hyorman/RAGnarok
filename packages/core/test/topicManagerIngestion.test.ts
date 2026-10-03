@@ -5,7 +5,6 @@ import * as path from "path";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   EmbeddingFingerprintMismatchError,
-  EmbeddingReindexRequiredError,
   TopicManager,
   VectorStoreMetadataCorruptionError,
   type IConfigProvider,
@@ -303,7 +302,6 @@ describe("TopicManager durable expanded-source ingestion", function () {
 
   it("rethrows typed safety failures instead of converting them into per-file success outcomes", async function () {
     const safetyFailures = [
-      new EmbeddingReindexRequiredError(topicId),
       new VectorStoreMetadataCorruptionError(topicId, "missing"),
       new EmbeddingFingerprintMismatchError(topicId, "fingerprint mismatch"),
     ];

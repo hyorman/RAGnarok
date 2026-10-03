@@ -26,7 +26,6 @@ import {
 import { DocumentPipeline, PipelineOptions, PipelineResult, type PipelineSourceDocument } from "./documentPipeline";
 import {
   EmbeddingFingerprintMismatchError,
-  EmbeddingReindexRequiredError,
   VectorStoreFactory,
   VectorStoreLoadError,
   VectorStoreMetadataCorruptionError,
@@ -1203,11 +1202,7 @@ export class TopicManager {
   }
 
   private isIngestionIntegrityFailure(error: unknown): error is Error {
-    return (
-      error instanceof EmbeddingReindexRequiredError ||
-      error instanceof VectorStoreMetadataCorruptionError ||
-      error instanceof EmbeddingFingerprintMismatchError
-    );
+    return error instanceof VectorStoreMetadataCorruptionError || error instanceof EmbeddingFingerprintMismatchError;
   }
 
   public async addSources(
