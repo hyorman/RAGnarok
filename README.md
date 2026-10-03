@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./assets/icon.png" alt="RAGnarok icon" title="RAGnarok" width="120" height="120" />
-  <h1>RAGnarōk <br/>Local, Agentic Knowledge RAG for VS Code</h2>
+  <h1>RAGnarōk <br/>Local, Agentic Knowledge RAG for VS Code</h1>
   <p><strong>Find precise answers from your files and repos using local embeddings, smart query planning, and embedded vector search.</strong></p>
 </div>
 
@@ -16,8 +16,8 @@ Why install?
 - Embedded LanceDB vector store — no external servers required
 - Works offline with local Transformers.js embedding models
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
-[![LangChain](https://img.shields.io/badge/LangChain.js-0.2-green.svg)](https://js.langchain.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/)
+[![LangChain](https://img.shields.io/badge/LangChain.js-1.x-green.svg)](https://js.langchain.com/)
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.105+-purple.svg)](https://code.visualstudio.com/)
 
 ---
@@ -77,7 +77,7 @@ Notes:
 ### 🧠 **Agentic RAG with Query Planning**
 
 - **Intelligent Query Decomposition**: Automatically breaks complex queries into sub-queries
-  -- **LLM-Powered Planning**: Uses Copilot (VS Code LM API) models such as `gpt-4o` for advanced reasoning (Copilot required; no external API key). LLM usage is optional
+- **LLM-Powered Planning**: Uses Copilot (VS Code LM API) models such as `gpt-4o` for advanced reasoning (Copilot required; no external API key). LLM usage is optional
 - **Heuristic Fallback**: Works without LLM using rule-based planning
 - **Iterative Refinement**: Confidence-based iteration for high-quality results
 - **Parallel/Sequential Execution**: Smart execution strategy based on query complexity
@@ -153,7 +153,7 @@ or unknown scope returns an empty document rather than fabricated data.
 
 Documents include full persisted node/edge descriptions, provenance,
 confidence, scope/branch fields, and arbitrary metadata, but never embedding
-vectors. In VS Code, run **RAGnarok: Show Memory Graph** to choose workspace or
+vectors. In VS Code, run **RAG: Show Memory Graph** to choose workspace or
 current-branch memory and open the interactive command webview. MCP Apps hosts
 instead load the self-contained `ui://ragnarok/graph` resource as
 `text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. Both surfaces use
@@ -180,7 +180,7 @@ npm run compile
 #### From VSIX
 
 ```bash
-code --install-extension ragnarok-0.1.6.vsix
+code --install-extension ragnarok-<version>.vsix
 ```
 
 ### Basic Usage
@@ -228,13 +228,21 @@ Or right-click a topic in the tree view and select the GitHub icon. You can:
   - GitHub Enterprise: `https://github.company.com/team/project`
 - Specify branch (defaults to `main`)
 - Configure ignore patterns (e.g., `*.test.js, docs/*`)
-- Add access token for private repositories (see [Token Management](#github-token-management) below)
+- Add access token for private repositories (see [Token Management](#2d-github-token-management) below)
 
 The extension will recursively load all files from the repository and process them just like local documents.
 
 **Note**: Supports GitHub.com and GitHub Enterprise Server only. The repository must be accessible from your network. For other Git hosting services (GitLab, Bitbucket, etc.), clone the repository locally and add it as local files.
 
-#### 2c. GitHub Token Management
+#### 2c. Add a Web Page
+
+```
+Cmd/Ctrl+Shift+P → RAG: Add Web URL to Topic
+```
+
+Enter a public `http(s)` URL. The page is fetched once, converted to text, chunked and embedded like any other document.
+
+#### 2d. GitHub Token Management
 
 For accessing private repositories, RAGnarōk securely stores GitHub access tokens per host using VS Code's Secret Storage API.
 
@@ -264,7 +272,40 @@ Cmd/Ctrl+Shift+P → RAG: Remove GitHub Token
 
 Select a host to remove its stored token.
 
-#### 2d. Export and Import Topics
+**How to Create a GitHub PAT:**
+
+1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Click "Generate new token (classic)"
+3. Select the `repo` scope
+4. Generate and copy the token
+5. Use the "RAG: Add GitHub Token" command to save it
+
+**Benefits:**
+
+- ✅ Tokens stored securely in VS Code's Secret Storage (not in settings.json)
+- ✅ Support for multiple GitHub hosts (GitHub.com + multiple Enterprise servers)
+- ✅ Automatic token selection based on repository URL
+- ✅ No need to enter token every time you add a repository
+
+#### Manage Topics
+
+**Rename a Topic:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Rename Topic
+```
+
+Or select a topic in the tree view and click the edit icon.
+
+**Delete a Topic:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Delete Topic
+```
+
+Or click the trash icon on a topic. Asks for confirmation.
+
+#### 2e. Export and Import Topics
 
 **Export a Topic:**
 
@@ -288,30 +329,7 @@ Cmd/Ctrl+Shift+P → RAG: Import Topic
 
 Or click the import icon in the tree view title bar. Select an exported topic archive to restore it into your workspace.
 
-**Rename a Topic:**
-
-```
-Cmd/Ctrl+Shift+P → RAG: Rename Topic
-```
-
-Or select a topic in the tree view and click the edit icon.
-
-**How to Create a GitHub PAT:**
-
-1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Click "Generate new token (classic)"
-3. Select the `repo` scope
-4. Generate and copy the token
-5. Use the "RAG: Add GitHub Token" command to save it
-
-**Benefits:**
-
-- ✅ Tokens stored securely in VS Code's Secret Storage (not in settings.json)
-- ✅ Support for multiple GitHub hosts (GitHub.com + multiple Enterprise servers)
-- ✅ Automatic token selection based on repository URL
-- ✅ No need to enter token every time you add a repository
-
-#### 2e. Using Shared Topic Folders
+#### 2f. Using Shared Topic Folders
 
 RAGnarōk reads read-only topics from a folder of exported `.rag` archives via the
 `ragnarok.commonDatabasePath` setting.
@@ -359,7 +377,7 @@ Type: @workspace #ragQuery What is [your question]?
 The RAG tool will:
 
 1. Match your topic semantically
-2. Decompose complex queries (if agentic mode enabled)
+2. Decompose complex queries (an LLM plans when a Copilot model is available; heuristics otherwise)
 3. Perform hybrid retrieval
 4. Return ranked results with context
 
@@ -389,6 +407,46 @@ Cmd/Ctrl+Shift+P → RAG: Refresh Topics
 
 Reloads the topic tree view. Useful after importing topics or external changes.
 
+**Refresh Memory:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Refresh Memory
+```
+
+Reloads the Memory view.
+
+**Reset Memory:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Reset Memory
+```
+
+Deletes all stored memories. A modal confirmation is required, and the action cannot be undone.
+
+**Select Reranker Model:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Select Reranker Model
+```
+
+Chooses the cross-encoder model used for second-stage reranking.
+
+**Select LLM Model:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Select LLM Model
+```
+
+Chooses the Copilot model family used for query planning and evaluation.
+
+**Show Memory Graph:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Show Memory Graph
+```
+
+Opens the interactive memory graph for workspace or current-branch memory.
+
 ---
 
 ## ⚙️ Configuration
@@ -404,20 +462,23 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   "ragnarok.topK": 5,
 
   // Chunk size for splitting documents
-  "ragnarok.chunkSize": 512,
+  "ragnarok.chunkSize": 1000,
 
   // Chunk overlap for context preservation
-  "ragnarok.chunkOverlap": 50,
+  "ragnarok.chunkOverlap": 200,
 
   // Retrieval strategy: vector, hybrid, bm25
   "ragnarok.retrievalStrategy": "hybrid",
 
   // Folder of exported .rag archives providing read-only topics
-  "ragnarok.commonDatabasePath": ""
+  "ragnarok.commonDatabasePath": "",
+
+  // Log verbosity: debug, info, warn, error
+  "ragnarok.logLevel": "info"
 }
 ```
 
-**Note**: GitHub access tokens are now managed via secure Secret Storage, not settings.json. See [GitHub Token Management](#github-token-management) section.
+**Note**: GitHub access tokens are now managed via secure Secret Storage, not settings.json. See [GitHub Token Management](#2d-github-token-management) section.
 
 ### Query Settings
 
@@ -429,15 +490,33 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   // Confidence threshold (0-1) for stopping iteration
   "ragnarok.confidenceThreshold": 0.7,
 
-  // LLM model: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
-  "ragnarok.llmModel": "gpt-4o",
+  // LLM model family; run "RAG: Select LLM Model" to pick from available models
+  "ragnarok.llmModel": "gpt-4o-mini",
 
   // Include workspace context (selected code, active file, imports, symbols)
-  "ragnarok.includeWorkspaceContext": true
+  "ragnarok.includeWorkspaceContext": true,
+
+  // Show reserved auto-generated memories in listings
+  "ragnarok.memoryIncludeAuto": false
 }
 ```
 
-Set `ragnarok.localModelPath` to point at a folder that already contains compatible Transformers.js models (one subfolder per model—e.g., an ONNX export downloaded ahead of time). Entries found here appear in the tree view and can be selected directly, and this local path takes precedence over `ragnarok.embeddingModel`.
+### Reranker Settings
+
+```json
+{
+  // HuggingFace cross-encoder used for second-stage reranking
+  "ragnarok.rerankerModel": "Xenova/ms-marco-MiniLM-L-6-v2",
+
+  // Over-fetch multiplier for first-stage retrieval (1-10)
+  "ragnarok.rerankerCandidateMultiplier": 4,
+
+  // Maximum candidates passed to the cross-encoder (5-100)
+  "ragnarok.rerankerMaxCandidates": 40
+}
+```
+
+Set `ragnarok.localModelPath` to point at a folder that already contains compatible Transformers.js models (one subfolder per model—e.g., an ONNX export downloaded ahead of time). Entries found here appear in the tree view and can be selected directly.
 
 **Available Embedding Models to Download** (local, no API needed):
 
@@ -450,11 +529,7 @@ _The extension ships with `Xenova/all-MiniLM-L6-v2` by default; to use other loc
 
 Any models you place under `ragnarok.localModelPath` show up in the tree view alongside these curated options (with download indicators) and can be loaded with one click.
 
-**LLM Models** (when agentic planning is enabled): models are available via VS Code Copilot / LM API (no external API key required).
-
-- `gpt-4o` (default) - Most intelligent
-- `gpt-4o-mini` - Faster, still capable
-- `gpt-3.5-turbo` - Fastest, most economical
+**LLM Models**: Any Copilot model family available to your account works; run **RAG: Select LLM Model** to choose one. The default is `gpt-4o-mini`. Models are available via VS Code Copilot / LM API (no external API key required).
 
 ---
 
@@ -463,13 +538,12 @@ Any models you place under `ragnarok.localModelPath` show up in the tree view al
 RAGnarōk is organized as an **npm workspaces monorepo** with four packages:
 
 ```
-copilot-rag/
+RAGnarok/
 ├── packages/
 │   ├── core/          # @ragnarok/core — portable RAG engine (no VS Code dependency)
 │   ├── graph-ui/      # @ragnarok/graph-ui — private shared graph renderer/build
 │   ├── vscode/        # @ragnarok/vscode — VS Code extension adapters and UI
 │   └── mcp-server/    # @ragnarok/mcp-server — MCP server for CLI/TUI/GUI agents
-├── test/              # VS Code extension test infrastructure and fixtures
 ├── assets/            # Extension icon and bundled embedding models
 └── scripts/           # Build and packaging helpers
 ```
@@ -646,8 +720,8 @@ User Query: "Compare React hooks vs class components"
     ↓
 ┌───┴────────────────────────────────────────┐
 │ 3. Hybrid Retrieval (for each sub-query)   │
-│    Vector search: 70% weight               │
-│    Keyword search: 30% weight              │
+│    Vector search: 90% weight               │
+│    Keyword search: 10% weight              │
 │    → Returns ranked results                │
 └───┬────────────────────────────────────────┘
     ↓
@@ -693,7 +767,7 @@ User uploads: document1.pdf, document2.md
 ┌───┴────────────────────────────────────────┐
 │ 3. Embedding Generation (Batched)          │
 │    Model: Xenova/all-MiniLM-L6-v2 (local)  │
-│    Batch size: 32 chunks                   │
+│    Batch size: 1,000 local, 100 remote     │
 │    → Generates 384-dim vectors             │
 └───┬────────────────────────────────────────┘
     ↓
@@ -721,11 +795,9 @@ as release evidence.
 ### Optimization Tips
 
 1. **Use local embeddings** for privacy and no API costs
-2. **Enable agent caching** (automatic per topic)
-3. **Adjust chunk size** based on document type
-4. **Use simple mode** for fast queries
-5. **Batch document uploads** for efficiency
-6. **Measure your corpus** — capacity and latency are bounded by local storage,
+2. **Adjust chunk size** based on document type
+3. **Batch document uploads** for efficiency
+4. **Measure your corpus** — capacity and latency are bounded by local storage,
    memory, native dependencies, and workload shape
 
 ---
@@ -737,7 +809,7 @@ as release evidence.
 | Problem                                     | Solution                                                                                                                                                                           |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **"No embeddings provider registered"**     | Ensure a provider (e.g., GitHub Copilot) is installed and active. Set `ragnarok.embeddingBackend` to `huggingface` as a workaround.                                                |
-| **"Proposed API not enabled"**              | The `vscode.lm.computeEmbeddings` API requires `"enabledApiProposals": ["embeddings"]` in the extension manifest. Use VS Code Insiders for full support.                           |
+| **"Proposed API not enabled"**              | Start VS Code with `--enable-proposed-api hyorman.ragnarok`, or add it to `argv.json` as shown under **Enable VS Code LM embeddings** above.                                       |
 | **VS Code LM embedding dimension mismatch** | Switching backends may change the embedding dimension. Existing vector stores need re-indexing after backend changes. Delete the topic and re-add documents.                       |
 | **Fallback warnings appearing frequently**  | If you see repeated "falling back to HuggingFace" messages, either set `ragnarok.embeddingBackend` to `huggingface` explicitly, or check that your VS Code LM provider is running. |
 | **Model not found in VS Code LM**           | Verify the model ID in `ragnarok.embeddingVscodeModelId` matches one listed in `vscode.lm.embeddingModels`. Leave blank to auto-select.                                            |
@@ -749,7 +821,9 @@ as release evidence.
 ### Run Tests
 
 ```bash
-npm test
+npm run test:fast     # core, graph-ui and MCP suites (what CI's quality job runs)
+npm run test:all      # everything, including the VS Code extension-host tests
+npm test              # VS Code extension-host tests only
 ```
 
 ---
@@ -787,6 +861,6 @@ Built with:
 ---
 
 <div align="center">
-  <p>Made with ❤️ by the hyorman</p>
+  <p>Made with ❤️ by hyorman</p>
   <p>⭐ Star us on GitHub if you find this useful!</p>
 </div>

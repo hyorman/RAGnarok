@@ -84,7 +84,7 @@ src/
 ├── memoryTreeView.ts       # Memory sidebar section: stats, refresh, confirmed reset
 ├── memoryHostContext.ts    # Resolves the workspace/branch context memory runs against
 ├── toolRegistrationHost.ts # Injectable vscode.lm seam every LM tool registers through
-├── memoryGraphCommand.ts   # RAGnarok: Show Memory Graph command
+├── memoryGraphCommand.ts   # RAG: Show Memory Graph command
 ├── memoryGraphPanel.ts     # CSP-restricted local graph webview
 ├── extensionLifecycle.ts   # Startup/shutdown gating and cancellable operation runner
 ├── workspaceContext.ts      # Workspace file discovery for context enrichment
@@ -159,7 +159,7 @@ no reset tool: an irreversible wipe of every memory in the extension location is
 confirmation from the user. A model-generated boolean cannot stand in for
 approval, so the model has no path to it at all.
 
-Run **RAGnarok: Show Memory Graph** from the Command Palette, or from the Memory
+Run **RAG: Show Memory Graph** from the Command Palette, or from the Memory
 view's title bar, to choose workspace or current-branch memory and open the
 interactive webview. The webview receives validated graph documents over
 `postMessage`, announces readiness before the host sends data, uses only packaged

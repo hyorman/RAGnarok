@@ -122,7 +122,31 @@ for (const [name, contents] of [
 ]) {
   assert.doesNotMatch(contents, /ragResetMemory/, `${name} must not document the removed ragResetMemory tool`);
 }
-assert.match(vscodeReadme, /RAGnarok: Show Memory Graph/);
+assert.match(vscodeReadme, /RAG: Show Memory Graph/);
+// The README is the user's reference for the extension surface: every
+// contributed setting and Command Palette entry must appear in it, and the
+// facts below were each found to contradict the code.
+const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+const readme = rootReadme;
+for (const key of Object.keys(manifest.contributes.configuration.properties)) {
+  assert.match(readme, new RegExp(key.replace(".", "\\.")), `README.md must document the ${key} setting`);
+}
+for (const command of manifest.contributes.commands) {
+  assert.equal(command.category, "RAG", `${command.command} must use the RAG command category`);
+  assert.match(readme, new RegExp(`RAG: ${command.title}`), `README.md must document "RAG: ${command.title}"`);
+}
+for (const [pattern, why] of [
+  [/70% weight|30% weight/, "hybrid weights are 0.9/0.1 (hybridRetriever.ts)"],
+  [/simple mode|agentic mode/i, "no simple/agentic mode setting exists"],
+  [/Batch size: 32/, "embedding batches are 1000 (local) and 100 (remote)"],
+  [/ragnarok\.embeddingModel/, "there is no ragnarok.embeddingModel setting"],
+  [/gpt-3\.5-turbo|"ragnarok\.llmModel": "gpt-4o"/, "ragnarok.llmModel defaults to gpt-4o-mini"],
+  [/"ragnarok\.chunkSize": 512|"ragnarok\.chunkOverlap": 50/, "chunk defaults are 1000/200"],
+  [/ragnarok-0\.1\.6\.vsix|TypeScript-5\.3|LangChain\.js-0\.2/, "stale version strings"],
+  [/<\/h2>/, "the title opens <h1> and must close </h1>"],
+]) {
+  assert.doesNotMatch(readme, pattern, `README.md: ${why}`);
+}
 assert.match(architecture, /separate storage/i);
 assert.match(core, /MemoryService/);
 assert.match(vscodeReadme, /confirmation/i);

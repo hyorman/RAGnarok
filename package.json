@@ -209,7 +209,7 @@
       },
       {
         "command": "ragnarok.addGithubRepo",
-        "title": "Add Git Repository to Topic",
+        "title": "Add GitHub Repository to Topic",
         "category": "RAG",
         "icon": "$(github)"
       },
@@ -278,11 +278,18 @@
       },
       {
         "command": "ragnarok.selectRerankerModel",
-        "title": "RAGnarok: Select Reranker Model"
+        "title": "Select Reranker Model",
+        "category": "RAG"
+      },
+      {
+        "command": "ragnarok.selectLLMModel",
+        "title": "Select LLM Model",
+        "category": "RAG"
       },
       {
         "command": "ragnarok.showMemoryGraph",
-        "title": "RAGnarok: Show Memory Graph",
+        "title": "Show Memory Graph",
+        "category": "RAG",
         "icon": "$(graph-scatter)"
       },
       {

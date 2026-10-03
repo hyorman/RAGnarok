@@ -191,7 +191,7 @@ The inline MCP App visibly transitions through loading, ready, empty, and access
 states. Keyboard operators can traverse graph items with arrows, open details
 with Enter/Space, close with Escape, and reset the fitted viewport. A missing
 or malformed result must show an alert rather than stale graph content. The VS
-Code instead provides **RAGnarok: Show Memory Graph**, a local command webview
+Code instead provides **RAG: Show Memory Graph**, a local command webview
 over the extension's separate memory root. Neither UI reads the other host's
 data.
 

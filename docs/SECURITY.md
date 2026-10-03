@@ -65,7 +65,7 @@ not HTML interpolation. The tool uses only modern `_meta.ui.resourceUri`, and
 both resource catalog and resource content declare
 `text/html;profile=mcp-app`.
 
-VS Code's **RAGnarok: Show Memory Graph** webview uses separate generated JS/CSS,
+VS Code's **RAG: Show Memory Graph** webview uses separate generated JS/CSS,
 a nonce and restrictive CSP, local resource roots, and the same text-only
 renderer. It reads only VS Code extension memory. The extension contributes no
 reset language-model tool at all: deleting that root is the sidebar's **Reset

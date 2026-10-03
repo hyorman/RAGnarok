@@ -121,7 +121,7 @@ Schema contracts in `@ragnarok/core` and drift-checked by
 equivalent to the same contracts by a parity test. Both hosts run one
 implementation per shared action: `executeQueryTool` for query, `executeTopicRead`
 for topic `list` and `stats`, and `normalizeMemoryInput` plus the same
-`MemoryService.execute` for memory. Its **RAGnarok: Show Memory Graph**
+`MemoryService.execute` for memory. Its **RAG: Show Memory Graph**
 command opens a nonce-protected local webview. MCP retains `rag_memory`,
 `rag_reset_memory` — still a tool, confirmed by `confirm: true`, because a
 headless agent has no sidebar to click — and `rag_memory_visualize`, whose graph
