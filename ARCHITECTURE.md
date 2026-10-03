@@ -1,6 +1,6 @@
 # RAGnarōk architecture
 
-This document describes the v0.7 implementation. Future work is identified as
+This document describes the current implementation. Future work is identified as
 such; passing unit tests is not presented as release evidence.
 
 ## Surfaces
@@ -31,7 +31,9 @@ The configured storage root has one v2 marker and one lease file:
 ```text
 <storage>/
   storage-format.json
+  config.json              # MCP settings
   .ragnarok.lock
+  .ragnarok-shared-cache/  # derived unpacks of shared archives
   database/
     topics.json
     topic-<id>-documents.json

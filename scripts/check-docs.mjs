@@ -171,6 +171,14 @@ for (const [name, contents] of [
 }
 assert.match(release, /media\/memoryGraph\.js/);
 assert.match(release, /media\/memoryGraph\.css/);
+assert.doesNotMatch(architecture, /v0\.7 implementation/, "ARCHITECTURE.md must not claim a version");
+assert.doesNotMatch(mcp, /removed-variable rejection/, "MCP guide lists a function that does not exist");
+for (const module of ["graphVisualizationAdapter.ts", "memoryToolAdapter.ts", "toolRuntime.ts"]) {
+  assert.match(mcp, new RegExp(module.replace(".", "\\.")), `MCP guide module layout must list ${module}`);
+}
+assert.doesNotMatch(core, /@xenova\/transformers/, "core uses @huggingface/transformers");
+const history = await readFile(path.join(root, "docs/BENCHMARK-HISTORY.md"), "utf8");
+assert.match(history, /not release evidence/, "BENCHMARK-HISTORY.md must say it is historical");
 
 for (const relative of staleReports) {
   await access(path.join(root, relative))

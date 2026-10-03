@@ -103,21 +103,6 @@ configured LLM provider. Without one, memories are still stored and recalled by
 vector similarity, the graph stays empty, and every visualization is a
 successful empty document.
 
-The first published output schema is
-`ragnarok.graph.visualization.v1`. The unpublished
-`ragnarok.graph.layout.v1` schema was removed and is not accepted or emitted.
-The deterministic document includes source identity, positioned nodes, edges,
-groups, viewport bounds, original/retained counts, empty/truncated status, and
-ordered truncation reasons. Clients without MCP Apps can consume the same
-document from text or `structuredContent` as machine-readable JSON.
-
-Results contain complete persisted non-vector details. Memory node attributes
-include `description`, `scope`, optional `branch`, `confidence`, `strength`,
-`createdAt`, `updatedAt`, `sourceMemoryIds`, and `metadata`. Edge attributes
-include the corresponding persisted description, provenance, confidence,
-scope/branch, and metadata fields. Arbitrary metadata can contain sensitive
-memory content. Embedding vectors are always excluded.
-
 A record too large to fit the response limit returns
 `GRAPH_VISUALIZATION_RECORD_TOO_LARGE`; any other failure returns
 `GRAPH_VISUALIZATION_FAILED`. Both are stable tool errors in text and structured
@@ -132,14 +117,9 @@ the graph as an inline MCP App:
 
 `resources/list` and `resources/read` use the exact MIME type
 `text/html;profile=mcp-app`. The returned HTML is one self-contained,
-network-free app with no external scripts. The app starts in a loading state,
-renders explicit ready/empty/error states, and clears stale selection and panel
-state for every result. Its SVG has an accessible name; graph items use roving
-keyboard focus; arrow keys move focus; Enter or Space opens text-only details;
-Escape or Close restores focus. Status and error regions are announced,
-controls are touch-sized, and reset refits the viewport. A VS Code extension
-uses a separate command webview built from the shared renderer; it does not read
-this server's storage.
+network-free app with no external scripts. A VS Code extension uses a separate
+command webview built from the shared renderer; it does not read this server's
+storage.
 
 ---
 
@@ -147,13 +127,17 @@ this server's storage.
 
 ```
 src/
-├── index.ts         # Entry point — bootstraps adapters, MCP server, stdio transport
-├── config.ts        # McpConfig type, loadConfig(), removed-variable rejection
-├── configFile.ts    # <storageDir>/config.json — key table, schema, generation
-├── adapters.ts      # Console / env adapters for @ragnarok/core interfaces
-├── llmProviders.ts  # OpenAI, Anthropic, Ollama LLM provider implementations
-├── uiResource.ts    # ui://ragnarok/graph MCP App resource
-└── tools.ts         # Tool definitions & handlers (registerTools)
+├── index.ts                      # Entry point — adapters, core services, stdio transport
+├── config.ts                     # McpConfig type and loadConfig()
+├── configFile.ts                 # <storageDir>/config.json — key table, schema, generation
+├── adapters.ts                   # Console / env adapters for @ragnarok/core interfaces
+├── llmProviders.ts               # OpenAI, Anthropic, Ollama LLM providers
+├── memoryToolAdapter.ts          # rag_memory / rag_reset_memory input and result shaping
+├── graphVisualizationAdapter.ts  # rag_memory_visualize projection and limits
+├── toolRuntime.ts                # Shared tool runtime (abort, drain, response limits)
+├── tools.ts                      # Tool definitions & handlers (registerTools)
+├── uiResource.ts                 # ui://ragnarok/graph MCP App resource
+└── ui/                           # Generated MCP App HTML bundle
 ```
 
 ---

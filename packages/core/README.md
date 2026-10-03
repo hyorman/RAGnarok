@@ -112,7 +112,7 @@ src/
 ├── embeddings/
 │   ├── embeddingService.ts        # Pluggable backend router — selects active embedding backend
 │   ├── embeddingBackend.ts        # Backend interface (EmbeddingBackend)
-│   ├── huggingFaceBackend.ts      # Local ONNX inference via @xenova/transformers
+│   ├── huggingFaceBackend.ts      # Local ONNX inference via @huggingface/transformers
 │   ├── remoteEmbeddingBackend.ts  # Remote HTTP backends (OpenAI / Ollama formats)
 │   └── langchainEmbeddings.ts     # TransformersEmbeddings LangChain adapter
 │

@@ -1,5 +1,7 @@
 # RAGnarōk Retrieval Benchmarks
 
+> Historical results. These timings are approximate and are not release evidence; the current gates and budgets are in [BENCHMARKS.md](BENCHMARKS.md).
+
 Comprehensive benchmark results for RAGnarōk's retrieval strategies, evaluated
 across multiple standard IR datasets. Default results use the **all-MiniLM-L6-v2**
 embedding model (384-dim); see [Model Comparison](#model-comparison) for
