@@ -37,14 +37,13 @@ import type { EmbeddingServiceRegistry } from "../embeddings/embeddingServiceReg
 import { Logger } from "../logger";
 import { EXTENSION } from "../constants";
 import {
-  assertNoInterruptedStorageMigration,
   atomicWriteJson,
-  ensureStorageFormatV2,
+  ensureStorageFormat,
   inspectStorage,
-  resetStorageToV2,
+  resetStorage,
   SHARED_TOPIC_CACHE_DIRNAME,
   STORAGE_RESET_JOURNAL_FILENAME,
-} from "../utils/storageV2";
+} from "../utils/storage";
 import { SharedTopicRegistry } from "../sharedTopics/registry";
 import { SharedTopicReadOnlyError } from "../sharedTopics/types";
 import type { SharedTopicSource } from "../sharedTopics/types";
@@ -400,10 +399,8 @@ export class TopicManager {
       // operation (see runStorageWriteTransaction), so initialization takes a
       // lease only for the two startup steps that genuinely write: stamping
       // the format marker of an empty directory, and an explicit reset.
-      await assertNoInterruptedStorageMigration(this.storageDir);
-
       if (this.options.resetStorage) {
-        const backupPath = await this.withOperationLease(() => resetStorageToV2(this.storageDir));
+        const backupPath = await this.withOperationLease(() => resetStorage(this.storageDir));
         this.logger.warn("Storage reset completed", { backupPath: backupPath ?? "empty storage" });
       } else {
         await this.ensureStorageFormatMarker();
@@ -3392,8 +3389,9 @@ export class TopicManager {
    * never contend. Only the fresh-install case writes, and it waits for the
    * lease rather than try-locking: a first run that silently skipped the stamp
    * would leave the store unversioned. Any other classification is handed to
-   * `ensureStorageFormatV2` unleased purely so it raises its own typed error —
-   * it cannot write on those paths, and taking a lease first would let a
+   * `ensureStorageFormat` unleased purely so it raises its own typed error
+   * (a newer format version, an unreadable marker, an interrupted reset) — it
+   * cannot write on those paths, and taking a lease first would let a
    * StorageBusyError mask the real diagnosis.
    */
   private async ensureStorageFormatMarker(): Promise<void> {
@@ -3402,13 +3400,22 @@ export class TopicManager {
       return;
     }
     if (inspection.status !== "empty") {
-      await ensureStorageFormatV2(this.storageDir);
+      await ensureStorageFormat(this.storageDir);
       return;
+    }
+    if (inspection.unmanagedEntriesPresent) {
+      // Pre-v2 content is ignored, not adopted and not deleted. Said out loud
+      // because the directory visibly holds files: someone who later wonders
+      // where their old topics went should find the answer here rather than
+      // conclude the store ate them.
+      this.logger.info("Initializing a new v2 store; pre-v2 content in this directory is ignored and left in place", {
+        storageDir: this.storageDir,
+      });
     }
     await this.withOperationLease(async () => {
       // Re-check under the lease: another process may have stamped it while
       // we waited.
-      await ensureStorageFormatV2(this.storageDir);
+      await ensureStorageFormat(this.storageDir);
     });
   }
 

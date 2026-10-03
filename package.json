@@ -648,7 +648,6 @@
   },
   "scripts": {
     "compile": "npm run build --workspaces && npm run version:sync",
-    "migrate:storage": "node packages/core/dist/migrationCli.js migrate",
     "bundle": "node esbuild.mjs",
     "bundle:watch": "node esbuild.mjs --watch",
     "compile:tests": "rimraf dist-test && tsc -p ./tsconfig.test.json",

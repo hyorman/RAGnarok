@@ -33,7 +33,6 @@ import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
 import { VIEWS, CONTEXT, COMMANDS, VSCODE_CONFIG } from "./constants";
 import { GitHubTokenManager } from "./githubTokenManager";
 import { ExtensionLifecycle } from "./extensionLifecycle";
-import { createDefaultMigrationUx, openTopicManagerWithMigration } from "./migrationUx";
 import { registerMemoryTools } from "./memoryTools";
 import { MemoryGraphPanel } from "./memoryGraphPanel";
 import { registerMemoryGraphCommand } from "./memoryGraphCommand";
@@ -239,7 +238,7 @@ export async function activateWithServiceFactory(
           return createSharedTopicSources(configuredPath);
         })(),
       });
-    const topicManager = await openTopicManagerWithMigration(storageDir, createDefaultMigrationUx(createTopicManager));
+    const topicManager = await createTopicManager();
     lifecycle.setResources({ topicManager });
     // No workingDir here: branch detection for memory operations flows
     // through resolveMemoryHostContext (active editor / single workspace
