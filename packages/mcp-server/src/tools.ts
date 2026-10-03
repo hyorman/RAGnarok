@@ -86,6 +86,7 @@ const ingestInput = z.discriminatedUnion("source", [
 
 const topicInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list") }).strict(),
+  z.object({ action: z.literal("refresh") }).strict(),
   z
     .object({
       action: z.literal("stats"),
@@ -616,7 +617,7 @@ export function registerTools(
 
   registerTool(
     "rag_topic",
-    "Manage RAG topics: 'list' all topics, 'stats' for one topic (statistics plus its indexed documents), " +
+    "Manage RAG topics: 'list' all topics, 'refresh' to re-read the shared topic folder, 'stats' for one topic (statistics plus its indexed documents), " +
       "'create' a new topic, 'rename' a topic, 'export' a topic as a storage-v2 .rag archive under the configured " +
       "export directory, or 'import' a .rag archive from an allowlisted path (requires confirm: true).",
     topicInput,
@@ -629,6 +630,16 @@ export function registerTools(
           // the executor bounds the TRIMMED one, so both bounds apply.
           case "list":
             return toolJson(await executeTopicRead({ action: "list" }, { topicManager }));
+          case "refresh": {
+            // Shared topics are otherwise only re-read during initialize(), so
+            // without this an updated archive needs a server restart. The VS
+            // Code host has had a refresh command since shared topics shipped;
+            // this closes the gap. refreshSharedTopics never throws and takes
+            // no write lease, so a concurrent writer cannot make it fail.
+            await topicManager.refreshSharedTopics();
+            const sharedTopicCount = topicManager.getAllTopics().filter((topic) => topic.source === "common").length;
+            return toolJson({ success: true, sharedTopicCount });
+          }
           case "stats":
             return toolJson(await executeTopicRead({ action: "stats", topic: input.topic }, { topicManager }));
           case "create": {
