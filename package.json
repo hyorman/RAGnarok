@@ -17,7 +17,7 @@
     "url": "https://github.com/hyorman/ragnarok"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=22",
     "vscode": "^1.105.0"
   },
   "categories": [
@@ -742,7 +742,7 @@
     "@langchain/core": "1.2.2",
     "@langchain/textsplitters": "1.0.1",
     "@napi-rs/canvas": "0.1.80",
-    "adm-zip": "0.6.0",
+    "adm-zip": "0.6.1",
     "apache-arrow": "^18.1.0",
     "async-mutex": "^0.5.0",
     "binary-extensions": "2.3.0",
@@ -778,6 +778,10 @@
     "ws": "8.21.0",
     "@langchain/community": {
       "pdf-parse": "$pdf-parse"
-    }
+    },
+    "sharp": "^0.35.5",
+    "undici": "^7.30.0",
+    "js-yaml@4": "^4.3.2",
+    "js-yaml@5": "^5.4.2"
   }
 }
