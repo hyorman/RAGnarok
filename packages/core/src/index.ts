@@ -176,14 +176,8 @@ export { SharedArchiveCache, deriveSharedTopicId } from "./sharedTopics/archiveC
 export { SharedTopicReadOnlyError } from "./sharedTopics/types";
 export type { SharedTopicSource, SharedTopicSourceContext, ResolvedSharedTopic } from "./sharedTopics/types";
 export { SHARED_TOPIC_CACHE_DIRNAME } from "./utils/storage";
-export {
-  acquireStorageLock,
-  acquireOperationLease,
-  StorageLockHeldError,
-  StorageBusyError,
-  STORAGE_LOCK_FILENAME,
-} from "./utils/storageLock";
-export type { StorageLockHandle, StorageLockOptions, OperationLeaseOptions, LockFileInfo } from "./utils/storageLock";
+export { acquireOperationLease, StorageBusyError, STORAGE_LOCK_FILENAME } from "./utils/storageLock";
+export type { StorageLockHandle, OperationLeaseOptions, LockFileInfo } from "./utils/storageLock";
 export { StorageTransactionCoordinator } from "./utils/storageTransactionCoordinator";
 export type { StorageTransactionFence, StorageTransactionOperation } from "./utils/storageTransactionCoordinator";
 export type {

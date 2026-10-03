@@ -6,9 +6,7 @@
  * Only a MUTATION takes a bounded, operation-scoped lease: when a foreign
  * process already holds a live one, the waiting mutation reports
  * StorageBusyError as a tool error instead of failing the server or hanging
- * forever. (StorageLockHeldError — a hard startup refusal — is reserved for
- * a full-exclusion migration/reset/rollback in another process; that is not
- * what this suite exercises.)
+ * forever.
  */
 import { expect } from "chai";
 import * as fs from "fs";
