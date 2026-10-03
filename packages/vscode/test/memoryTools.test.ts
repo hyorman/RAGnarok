@@ -281,9 +281,13 @@ describe("VS Code native memory tools", function () {
 
     const output = await harness.tools.get(TOOLS.RAG_MEMORY).invoke({ input: { action: "stats" } }, token());
 
-    const text = JSON.stringify(output).toLowerCase();
-    expect(text).to.include("busy");
-    expect(text).to.include("retry");
+    // Structured, like every other output this tool produces: success returns
+    // JSON and service errors return {error:{code,message}}, so a bare
+    // sentence here would break any consumer that parses this tool's output.
+    const payload = outputJson(output) as { error: { code: string; message: string } };
+    expect(payload.error.code).to.equal("STORAGE_BUSY");
+    expect(payload.error.message.toLowerCase()).to.include("busy");
+    expect(payload.error.message.toLowerCase()).to.include("retry");
   });
 
   it("still rejects unexpected non-service errors", async function () {

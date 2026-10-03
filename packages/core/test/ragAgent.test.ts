@@ -1164,13 +1164,31 @@ describe("RAGAgent", function () {
         new LangChainDocument({ pageContent: "JavaScript runs in browsers", metadata: { chunkId: "c2" } }),
         new LangChainDocument({ pageContent: "TypeScript adds static types", metadata: { chunkId: "c3" } }),
       ]);
+      // A reranker MUST be attached, or `if (this.reranker)` short-circuits
+      // and min(topK * multiplier, maxCandidates) never runs — the test would
+      // then pass at any ceiling and prove nothing.
+      const requestedTopK: number[] = [];
+      const reranker = {
+        rerank: async (_query: string, candidates: any[], topK: number) => {
+          requestedTopK.push(candidates.length);
+          return candidates.slice(0, topK);
+        },
+        getMaxCandidates: () => 40,
+        initialize: async () => {},
+        isAvailable: () => true,
+        dispose: () => {},
+      };
       const smallAgent = new RAGAgent(mockConfig, mockLLMProvider);
-      await smallAgent.initialize(smallStore);
+      await smallAgent.initialize(smallStore, { reranker });
 
       const result = await smallAgent.query("what language has types?", defaultQueryOptions({ topK: 10 }));
 
       expect(result.results.length).to.be.greaterThan(0);
       expect(result.results.length).to.be.at.most(3);
+      // The store holds 3 documents, so the over-fetch of min(10 * 4, 40) = 40
+      // is satisfied by everything available and the reranker sees all 3.
+      expect(requestedTopK.every((count) => count <= 3)).to.equal(true);
+      expect(requestedTopK.length).to.be.greaterThan(0);
     });
   });
 });

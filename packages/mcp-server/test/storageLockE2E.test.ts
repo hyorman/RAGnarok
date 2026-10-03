@@ -98,6 +98,18 @@ describe("cross-process storage E2E (lock-free reads / busy-error mutations)", f
       // share one classifier in @ragnarok/core, so this host inherited the
       // holder pid the VS Code notification always carried.
       expect(body.error).to.equal("Storage is busy: another RAGnarōk process is writing (pid 99999). Retry shortly.");
+
+      // The same live lock must NOT stop a shared-topic refresh: it takes no
+      // write lease by design. This is the only harness in the repo where a
+      // real lease exists, so it is the only place that claim is testable —
+      // wrapping refresh in the mutation runner would fail here and nowhere else.
+      const refreshed = await server.callTool(3, "rag_topic", { action: "refresh" }, 15_000);
+      expect(refreshed.error, `tool call transport error: ${JSON.stringify(refreshed.error)}`).to.equal(undefined);
+      expect(
+        refreshed.result?.isError,
+        `refresh must not report busy, got: ${JSON.stringify(refreshed.result)}`,
+      ).to.not.equal(true);
+      expect(JSON.parse(refreshed.result.content[0].text)).to.deep.equal({ success: true, sharedTopicCount: 0 });
     } finally {
       fs.rmSync(lockPath, { force: true });
     }

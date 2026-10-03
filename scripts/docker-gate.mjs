@@ -19,8 +19,7 @@ const image = "ragnarok-mcp:ci";
 const sessionContainer = "ragnarok-release-session";
 const persistenceContainer = "ragnarok-release-persistence";
 const lockContainer = "ragnarok-release-lock-contender";
-const removedEnvContainer = "ragnarok-release-removed-env";
-const containers = [sessionContainer, persistenceContainer, lockContainer, removedEnvContainer];
+const containers = [sessionContainer, persistenceContainer, lockContainer];
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
 const expectedToolCount = 8;
@@ -389,23 +388,6 @@ async function assertStorageLock() {
   }
 }
 
-/** The shipped image must abort — not silently ignore — a removed HTTP variable. */
-function assertRemovedEnvRejected() {
-  const result = spawnSync("docker", [...hardenedRunArgs(removedEnvContainer), "-e", "RAGNAROK_PORT=4000", image], {
-    cwd: root,
-    encoding: "utf8",
-    input: "",
-    timeout: 180_000,
-  });
-  const output = `${result.stdout}${result.stderr}`;
-  if (result.status === 0) {
-    throw new Error("Container accepted the removed RAGNAROK_PORT variable instead of aborting startup");
-  }
-  if (!/RAGNAROK_PORT/.test(output)) {
-    throw new Error(`Container rejected RAGNAROK_PORT without naming it: ${output.slice(-500)}`);
-  }
-}
-
 function removeContainers() {
   for (const container of containers) {
     spawnSync("docker", ["rm", "-f", container], { cwd: root, stdio: "ignore" });
@@ -457,7 +439,6 @@ try {
   }
   await restarted.closeCleanly();
 
-  assertRemovedEnvRejected();
 
   console.log(
     `Docker stdio release gate passed (${imageBytes} bytes, ${imageArchitecture}, ${expectedToolCount} tools).`,

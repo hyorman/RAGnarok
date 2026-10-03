@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import {
   MemoryServiceError,
+  toolErrorPayload,
   classifyToolError,
   normalizeMemoryInput,
   reduceMemoryOperationResult,
@@ -94,7 +95,13 @@ export function registerMemoryTools(
           // and would otherwise reach the model as an opaque failure.
           const classified = classifyToolError(error);
           if (classified.kind !== "generic") {
-            return registrationHost.createToolResult([registrationHost.createTextPart(classified.message)]);
+            // Structured, matching every other output this tool produces, and
+            // reusing the STORAGE_BUSY code the MCP memory adapter already
+            // emits — a bare sentence would break any consumer that parses it.
+            const code = classified.kind === "storage-busy" ? "STORAGE_BUSY" : "SHARED_TOPIC_READ_ONLY";
+            return registrationHost.createToolResult([
+              registrationHost.createTextPart(JSON.stringify(toolErrorPayload(code, classified.message), null, 2)),
+            ]);
           }
           if (error instanceof MemoryServiceError) {
             return serviceErrorResult(registrationHost, error);

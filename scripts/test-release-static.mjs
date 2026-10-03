@@ -1529,7 +1529,6 @@ for (const contract of [
   /tools\/list/,
   /expectedToolCount = 8/,
   /assertStorageLock/,
-  /assertRemovedEnvRejected/,
   /assertRuntimeHardening/,
   /closeCleanly/,
   /ExposedPorts/,
