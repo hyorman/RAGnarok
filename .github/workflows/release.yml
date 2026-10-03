@@ -75,7 +75,11 @@ jobs:
         include:
           - os: ubuntu-24.04
             gate: linux
-          - os: macos-13
+          # macos-13 is retired and never gets a runner -- it sat at the 24h
+          # workflow ceiling while the linux and windows legs ran. This gate
+          # only needs some macOS, and macos-14 is already proven by the
+          # vsix-installed matrix below.
+          - os: macos-14
             gate: macos
           - os: windows-2022
             gate: windows
@@ -203,8 +207,12 @@ jobs:
           - target: linux-arm64
             os: ubuntu-24.04-arm
             cli: code
+          # macos-13 was the last Intel runner and is retired. Running the
+          # x64 VSIX here means an arm64 VS Code process, and Rosetta cannot
+          # mix architectures inside one process -- so a failure on this leg
+          # is an architecture mismatch, not a RAGnarok regression.
           - target: darwin-x64
-            os: macos-13
+            os: macos-14
             cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
           - target: darwin-arm64
             os: macos-14
