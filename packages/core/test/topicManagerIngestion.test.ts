@@ -391,43 +391,46 @@ describe("TopicManager durable expanded-source ingestion", function () {
     expect(await readJournal(storageDir)).to.deep.equal([]);
   });
 
-  it("expands legacy directory metadata on removal to avoid vector orphans", async function () {
+  it("removing a URL document that owns no chunks never touches documents nested under its URL", async function () {
     const manager = createManager(storageDir, vectorStore);
-    const directory = path.join(storageDir, "legacy");
-    const legacy: TopicDocument = {
-      id: "legacy-container",
+    const parent: TopicDocument = {
+      id: "docs-root",
       topicId,
-      name: "legacy",
-      filePath: directory,
+      name: "docs",
+      filePath: "https://example.com/docs",
       fileType: "text",
-      source: { type: "file", path: directory },
+      source: { type: "url", url: "https://example.com/docs" },
       addedAt: 1,
-      chunkCount: 2,
+      chunkCount: 0,
     };
-    (manager as any).topicDocuments.set(topicId, new Map([[legacy.id, legacy]]));
+    const child: TopicDocument = {
+      id: "docs-page",
+      topicId,
+      name: "page",
+      filePath: "https://example.com/docs/page",
+      fileType: "text",
+      source: { type: "url", url: "https://example.com/docs/page" },
+      addedAt: 2,
+      chunkCount: 1,
+    };
+    (manager as any).topicDocuments.set(
+      topicId,
+      new Map([
+        [parent.id, parent],
+        [child.id, child],
+      ]),
+    );
     vectorStore.rows = [
       new LangChainDocument({
-        pageContent: "a",
-        metadata: {
-          documentId: "legacy-a",
-          chunkId: "legacy-a-1",
-          source: path.join(directory, "a.txt"),
-        },
-      }),
-      new LangChainDocument({
-        pageContent: "outside",
-        metadata: {
-          documentId: "outside",
-          chunkId: "outside-1",
-          source: path.join(storageDir, "outside.txt"),
-        },
+        pageContent: "page",
+        metadata: { documentId: "docs-page", chunkId: "docs-page-1", source: "https://example.com/docs/page" },
       }),
     ];
 
-    const removed = await manager.removeDocument(topicId, legacy.id);
-    expect(removed.chunksRemoved).to.equal(1);
-    expect(vectorStore.removedDocumentIds).to.include("legacy-a");
-    expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["outside"]);
+    const removed = await manager.removeDocument(topicId, parent.id);
+
+    expect(removed.chunksRemoved).to.equal(0);
+    expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["docs-page"]);
   });
 
   it("journals a committed document removal and recovers idempotently after cleanup failure", async function () {

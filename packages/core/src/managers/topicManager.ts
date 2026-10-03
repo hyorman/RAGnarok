@@ -142,7 +142,6 @@ interface PostCommitCleanupEntry {
   kind: "document";
   topicId: string;
   documents: TopicDocument[];
-  legacyContainer: boolean;
   updatedAt: number;
 }
 
@@ -932,7 +931,6 @@ export class TopicManager {
         ...document,
         source: document.source ? { ...document.source } : undefined,
       })),
-      legacyContainer: Boolean(exactDocument && !exactDocument.containerId),
       updatedAt: Date.now(),
     };
     await this.upsertPostCommitCleanup(cleanupEntry);
@@ -1315,69 +1313,6 @@ export class TopicManager {
     const removedChunkIds = await this.vectorStoreFactory.removeDocument(topicId, documentId);
     signal?.throwIfAborted();
     return removedChunkIds;
-  }
-
-  private async legacyLeafIdsForContainer(topicId: string, container: TopicDocument): Promise<string[]> {
-    if (!this.vectorStoreFactory) {
-      return [];
-    }
-    const rows = await this.vectorStoreFactory.getAllDocuments(topicId, 1_000_000);
-    const containerSource =
-      container.source?.type === "file"
-        ? container.source.path
-        : container.source?.type === "url" || container.source?.type === "github"
-          ? container.source.url
-          : (container.canonicalSource ?? container.filePath);
-    let containerUrl: URL | undefined;
-    try {
-      containerUrl = new URL(containerSource);
-      containerUrl.hash = "";
-    } catch {
-      // Local path comparison below.
-    }
-    const containerPath = containerUrl ? undefined : path.resolve(containerSource);
-    const matchesContainer = (candidate: string): boolean => {
-      if (!candidate) {
-        return false;
-      }
-      if (containerUrl) {
-        try {
-          const candidateUrl = new URL(candidate);
-          const basePath = containerUrl.pathname.replace(/\/$/, "");
-          return (
-            candidateUrl.origin === containerUrl.origin &&
-            (candidateUrl.pathname === basePath || candidateUrl.pathname.startsWith(`${basePath}/`))
-          );
-        } catch {
-          return false;
-        }
-      }
-      const relative = path.relative(containerPath!, path.resolve(candidate));
-      return (
-        relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-      );
-    };
-    const leafIds = new Set<string>();
-    for (const row of rows) {
-      const leafId = String(row.metadata.documentId ?? "");
-      if (!leafId || leafId === container.id) {
-        continue;
-      }
-      const source = String(row.metadata.source ?? row.metadata.filePath ?? "");
-      let descriptorSource = "";
-      try {
-        const descriptor = JSON.parse(String(row.metadata.sourceDescriptor ?? "{}")) as unknown;
-        if (isRecord(descriptor) && typeof descriptor.source === "string") {
-          descriptorSource = descriptor.source;
-        }
-      } catch {
-        // A malformed legacy descriptor is not evidence for deletion.
-      }
-      if (matchesContainer(source) || matchesContainer(descriptorSource)) {
-        leafIds.add(leafId);
-      }
-    }
-    return [...leafIds];
   }
 
   /**
@@ -2950,7 +2885,7 @@ export class TopicManager {
       ) {
         throw new Error("Post-commit cleanup journal contains an invalid entry");
       }
-      if (!Array.isArray(entry.documents) || typeof entry.legacyContainer !== "boolean") {
+      if (!Array.isArray(entry.documents)) {
         throw new Error("Post-commit cleanup journal contains invalid cleanup details");
       }
     }
@@ -2984,11 +2919,6 @@ export class TopicManager {
     const removedChunkIds: string[] = [];
     for (const document of entry.documents) {
       removedChunkIds.push(...(await this.removeDocumentStorage(entry.topicId, document.id)));
-    }
-    if (entry.legacyContainer && entry.documents.length === 1 && removedChunkIds.length === 0) {
-      for (const legacyLeafId of await this.legacyLeafIdsForContainer(entry.topicId, entry.documents[0])) {
-        removedChunkIds.push(...(await this.removeDocumentStorage(entry.topicId, legacyLeafId)));
-      }
     }
     const stats = await this.vectorStoreFactory.getStoredStats(entry.topicId);
     const existing = await this.vectorStoreFactory.getStoreMetadata(entry.topicId);
