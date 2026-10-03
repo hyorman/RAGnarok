@@ -22,6 +22,16 @@ import {
 import { MemoryStore } from "../src/memory/memoryStore";
 import { EmbeddingService } from "../src/embeddings/embeddingService";
 
+// A live same-host pid for the "someone else holds it" fixtures. NOT 1: that
+// is launchd/init on POSIX only. Windows has no pid 1, so process.kill(1, 0)
+// raises ESRCH, pidAlive() reports false, and the lock reads as abandoned
+// rather than held -- which is why both same-host fixtures failed there and
+// nowhere else. The parent (npm/node) is alive for the whole run on every
+// platform, and the lock cannot tell it from any other live local holder.
+// The foreign-host fixtures below keep pid 1 deliberately: that path never
+// consults liveness, it ages the heartbeat.
+const LIVE_FOREIGN_PID = process.ppid || process.pid;
+
 function createMockEmbeddingService(): EmbeddingService {
   const embed = async (text: string) => {
     // Deterministic pseudo-embedding: hash characters into a small vector.
@@ -218,8 +228,11 @@ describe("acquireStorageLock", function () {
   });
 
   it("fails fast naming the holder when a live same-host process owns the lock", async function () {
-    // pid 1 (launchd/init) is always alive; kill(1, 0) yields EPERM = alive.
-    await fs.writeFile(lockPath, JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }), "utf8");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: LIVE_FOREIGN_PID, hostname: os.hostname(), acquiredAt: Date.now() }),
+      "utf8",
+    );
 
     let caught: unknown;
     try {
@@ -228,7 +241,7 @@ describe("acquireStorageLock", function () {
       caught = error;
     }
     expect(caught).to.be.instanceOf(StorageLockHeldError);
-    expect((caught as Error).message).to.include("pid 1");
+    expect((caught as Error).message).to.include(`pid ${LIVE_FOREIGN_PID}`);
     expect((caught as Error).message).to.include("RAGNAROK_IGNORE_LOCK");
   });
 
@@ -677,7 +690,7 @@ describe("MemoryStore storage lock integration", function () {
   it("reports a busy storage dir when another live process holds it", async function () {
     await fs.writeFile(
       path.join(tempDir, STORAGE_LOCK_FILENAME),
-      JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }),
+      JSON.stringify({ pid: LIVE_FOREIGN_PID, hostname: os.hostname(), acquiredAt: Date.now() }),
       "utf8",
     );
     const store = new MemoryStore({

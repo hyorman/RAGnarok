@@ -258,7 +258,13 @@ async function syncTree(root: string): Promise<void> {
       if (entry.isDirectory()) {
         await walk(candidate);
       } else if (entry.isFile()) {
-        const handle = await fs.open(candidate, "r");
+        // "r+", not "r": Windows FlushFileBuffers requires a handle with write
+        // access, so fsync on a read-only handle fails EPERM there while POSIX
+        // allows it. These are files the migration just staged, so they are
+        // ours to open for write -- and swallowing the error instead would
+        // quietly drop the durability guarantee that syncTree exists to give,
+        // right before cutover renames the staged tree into place.
+        const handle = await fs.open(candidate, "r+");
         try {
           await handle.sync();
         } finally {

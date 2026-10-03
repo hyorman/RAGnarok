@@ -81,7 +81,10 @@ jobs:
           # vsix-installed matrix below.
           - os: macos-14
             gate: macos
-          - os: windows-2022
+          # windows-2025 is the current image. windows-2022 is the previous
+          # one, and a retired label does not fail -- it queues, which is
+          # exactly what macos-13 did above.
+          - os: windows-2025
             gate: windows
     runs-on: ${{ matrix.os }}
     steps:
@@ -218,7 +221,7 @@ jobs:
             os: macos-14
             cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
           - target: win32-x64
-            os: windows-2022
+            os: windows-2025
             cli: code.cmd
           - target: win32-arm64
             os: windows-11-arm
