@@ -116,7 +116,12 @@ describe("cross-process storage E2E (lock-free reads / busy-error mutations)", f
 
     // The server itself never acquired the lease (it lost the race to the
     // foreign holder), so it stays fully functional and exits cleanly.
-    const tools = await server.listTools(3);
+    // Id 4, not 3: the refresh call above already used 3, and the harness
+    // resolves a wait by scanning every message it has ever received for a
+    // matching id without consuming it -- so a reused id silently returns the
+    // EARLIER response. listTools(3) got back the refresh tools/call result,
+    // whose payload has `content` and no `tools`.
+    const tools = await server.listTools(4);
     expect(tools.error).to.equal(undefined);
     expect(tools.result?.tools).to.be.an("array").with.length.greaterThan(0);
     expect(await server.close(), "server did not exit cleanly").to.equal(0);
