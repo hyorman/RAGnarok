@@ -50,36 +50,5 @@
       "owner": "release-maintainers"
     }
   ],
-  "auditExceptions": [
-    {
-      "advisory": "GHSA-frvp-7c67-39w9",
-      "dependency": "@hono/node-server",
-      "range": "<2.0.5",
-      "via": "@modelcontextprotocol/node@2.0.0",
-      "reason": "RAGnarok uses MCP request conversion; neither MCP Node nor RAGnarok imports Hono serve-static.",
-      "invalidatedBy": "Any serve-static import/use or an MCP Node release compatible with patched Hono.",
-      "expires": "2026-08-31",
-      "owner": "release-maintainers"
-    },
-    {
-      "advisory": "GHSA-f88m-g3jw-g9cj",
-      "dependency": "sharp",
-      "range": "<0.35.0",
-      "via": "@huggingface/transformers@3.8.1",
-      "reason": "RAGnarok invokes only text feature-extraction, tokenization, and sequence-classification pipelines; no image input reaches Sharp.",
-      "invalidatedBy": "Any image pipeline/input support or a Transformers release compatible with patched Sharp.",
-      "expires": "2026-08-31",
-      "owner": "release-maintainers",
-      "sourceGuards": [
-        {
-          "path": "packages/core/src/embeddings/huggingFaceBackend.ts",
-          "sha256": "e256d67517a2b831b95835a391a96058b2e1e7169f8122fe1c1164e21565e1c6"
-        },
-        {
-          "path": "packages/core/src/rerankers/crossEncoderReranker.ts",
-          "sha256": "dfc7a3e14a8e1c08dc0e32958a46a70b2f7e62420a43f5d406472a618d590efd"
-        }
-      ]
-    }
-  ]
+  "auditExceptions": []
 }

@@ -10,51 +10,14 @@ import * as auditPolicyModule from "./audit-policy.mjs";
 import * as releaseStaticPolicy from "./release-static-policy.mjs";
 
 const { evaluateAuditReport, normalizeLocalTarballAuditRanges } = auditPolicyModule;
-const {
-  assertContentAddressedTransformersSources,
-  assertDevOnlyDependency,
-  assertNoHonoServeStatic,
-  assertNoSharpOrImagePipeline,
-} = releaseStaticPolicy;
+const { assertDevOnlyDependency } = releaseStaticPolicy;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 const read = (file) => readFile(path.join(root, file), "utf8");
 const pkg = JSON.parse(await read("package.json"));
 const policy = JSON.parse(await read("release-policy.json"));
-const expectedAuditExceptions = [
-  {
-    advisory: "GHSA-frvp-7c67-39w9",
-    dependency: "@hono/node-server",
-    range: "<2.0.5",
-    via: "@modelcontextprotocol/node@2.0.0",
-    reason: "RAGnarok uses MCP request conversion; neither MCP Node nor RAGnarok imports Hono serve-static.",
-    invalidatedBy: "Any serve-static import/use or an MCP Node release compatible with patched Hono.",
-    expires: "2026-08-31",
-    owner: "release-maintainers",
-  },
-  {
-    advisory: "GHSA-f88m-g3jw-g9cj",
-    dependency: "sharp",
-    range: "<0.35.0",
-    via: "@huggingface/transformers@3.8.1",
-    reason:
-      "RAGnarok invokes only text feature-extraction, tokenization, and sequence-classification pipelines; no image input reaches Sharp.",
-    invalidatedBy: "Any image pipeline/input support or a Transformers release compatible with patched Sharp.",
-    expires: "2026-08-31",
-    owner: "release-maintainers",
-    sourceGuards: [
-      {
-        path: "packages/core/src/embeddings/huggingFaceBackend.ts",
-        sha256: "e256d67517a2b831b95835a391a96058b2e1e7169f8122fe1c1164e21565e1c6",
-      },
-      {
-        path: "packages/core/src/rerankers/crossEncoderReranker.ts",
-        sha256: "dfc7a3e14a8e1c08dc0e32958a46a70b2f7e62420a43f5d406472a618d590efd",
-      },
-    ],
-  },
-];
+const expectedAuditExceptions = [];
 assert.deepEqual(policy.auditExceptions, expectedAuditExceptions);
 
 const fixtureException = {
@@ -220,14 +183,14 @@ const productionInstalledTree = {
     },
   },
 };
+// The repository has no audit exceptions, so the findings that used to be excepted are rejected.
+const retiredFindingsRejected = [
+  { advisory: "GHSA-frvp-7c67-39w9", dependency: "@hono/node-server", range: "<2.0.5" },
+  { advisory: "GHSA-f88m-g3jw-g9cj", dependency: "sharp", range: "<0.35.0" },
+].map((finding) => ({ ...finding, reason: "No exact audit exception" }));
 assert.deepEqual(evaluateAuditReport(productionAuditReport, policy, auditNow, productionInstalledTree), {
-  allowed: expectedAuditExceptions.map(({ advisory, dependency, range, reason }) => ({
-    advisory,
-    dependency,
-    range,
-    reason,
-  })),
-  rejected: [],
+  allowed: [],
+  rejected: retiredFindingsRejected,
 });
 
 const localTarballAuditReport = structuredClone(productionAuditReport);
@@ -253,13 +216,8 @@ assert.deepEqual(
     productionInstalledTree,
   ),
   {
-    allowed: expectedAuditExceptions.map(({ advisory, dependency, range, reason }) => ({
-      advisory,
-      dependency,
-      range,
-      reason,
-    })),
-    rejected: [],
+    allowed: [],
+    rejected: retiredFindingsRejected,
   },
   "known direct local-tarball roots must use their exact installed versions",
 );
@@ -804,11 +762,6 @@ assert.match(
   "packed stdio smoke must reject native abort traces",
 );
 const securityDocumentation = await read("docs/SECURITY.md");
-assert.match(securityDocumentation, /The Sharp exception is content-addressed/);
-assert.match(
-  securityDocumentation,
-  /Changing a guarded\s+integration file or adding a new Transformers source requires security review\s+and an explicit `sourceGuards` path\/hash update/,
-);
 for (const exception of policy.auditExceptions) {
   for (const field of ["advisory", "dependency", "range", "via", "reason", "invalidatedBy", "expires", "owner"]) {
     assert.ok(
@@ -898,14 +851,16 @@ assert.throws(
   /must have exact development dependency/,
 );
 assert.equal(mcpPackage.dependencies["@modelcontextprotocol/server"], "2.0.0");
-assert.equal(mcpPackage.dependencies["@modelcontextprotocol/node"], "2.0.0");
-assert.equal(mcpPackage.dependencies["@modelcontextprotocol/sdk"], undefined);
-assert.equal(mcpPackage.devDependencies["@modelcontextprotocol/client"], "2.0.0");
-assert.equal(mcpPackage.devDependencies["@modelcontextprotocol/sdk"], "1.30.0");
-assert.equal(pkg.devDependencies["@modelcontextprotocol/client"], "2.0.0");
+for (const [scope, manifest] of [
+  ["mcp-server dependencies", mcpPackage.dependencies],
+  ["mcp-server devDependencies", mcpPackage.devDependencies],
+  ["root devDependencies", pkg.devDependencies],
+]) {
+  for (const unused of ["@modelcontextprotocol/node", "@modelcontextprotocol/sdk", "@modelcontextprotocol/client"]) {
+    assert.equal(manifest?.[unused], undefined, `${scope} must not declare the unused ${unused}`);
+  }
+}
 assert.match(mcpPackage.dependencies.zod, /^\^4\.2\.0$/);
-assert.equal(typeof assertNoHonoServeStatic, "function", "Hono reachability guard must be exported");
-assert.equal(typeof assertNoSharpOrImagePipeline, "function", "Sharp/image reachability guard must be exported");
 const generatedGraphBundle = "packages/mcp-server/src/ui/graphAppBundle.ts";
 const productionSourceFiles = [
   ...(await executableFiles("packages/core/src")),
@@ -919,228 +874,6 @@ assert.ok(
 const productionSources = await Promise.all(
   productionSourceFiles.map(async (file) => ({ file, source: await read(file) })),
 );
-const sharpAuditException = policy.auditExceptions.find((exception) => exception.advisory === "GHSA-f88m-g3jw-g9cj");
-const guardedProductionSources = assertContentAddressedTransformersSources(
-  productionSources,
-  sharpAuditException.sourceGuards,
-);
-assert.deepEqual(
-  guardedProductionSources.map(({ file }) => file),
-  sharpAuditException.sourceGuards.map(({ path: guardedPath }) => guardedPath),
-  "content-addressed guard must return the exact reviewed Transformers integration files",
-);
-
-const guardedSourcePath = sharpAuditException.sourceGuards[0].path;
-const reviewerBypasses = [
-  ["import-equals", 'import transformers = require("@huggingface/transformers");'],
-  [
-    "namespace alias propagation",
-    'const transformers = await import("@huggingface/transformers"); const alias = transformers; alias.RawImage;',
-  ],
-  ["property assignment from loadTransformers", "this.transformers = await loadTransformers();"],
-  ["destructuring assignment", "({ pipeline: makePipeline } = transformers);"],
-  ["pipeline alias", "const makePipeline = transformers.pipeline; makePipeline(task, model);"],
-];
-for (const [name, bypass] of reviewerBypasses) {
-  const mutatedSources = productionSources.map((record) =>
-    record.file === guardedSourcePath ? { ...record, source: `${record.source}\n${bypass}\n` } : record,
-  );
-  assert.throws(
-    () => assertContentAddressedTransformersSources(mutatedSources, sharpAuditException.sourceGuards),
-    /content-addressed Transformers guard failed: content hash mismatch/,
-    name,
-  );
-}
-
-const unguardedTransformersSource = {
-  file: "packages/vscode/src/unreviewedTransformers.ts",
-  source: 'import("@huggingface/transformers");',
-};
-assert.throws(
-  () =>
-    assertContentAddressedTransformersSources(
-      [...productionSources, unguardedTransformersSource],
-      sharpAuditException.sourceGuards,
-    ),
-  /content-addressed Transformers guard failed: unguarded Transformers source/,
-);
-assert.throws(
-  () =>
-    assertContentAddressedTransformersSources(
-      [...productionSources, { file: "packages/core/src/directSharp.ts", source: 'import sharp from "sharp";' }],
-      sharpAuditException.sourceGuards,
-    ),
-  /content-addressed Transformers guard failed: direct Sharp reference/,
-);
-
-const guardedSourcePaths = new Set(sharpAuditException.sourceGuards.map(({ path: guardedPath }) => guardedPath));
-const extraGuardPath = productionSources.find(({ file }) => !guardedSourcePaths.has(file)).file;
-const extraGuardSource = productionSources.find(({ file }) => file === extraGuardPath).source;
-const extraGuard = {
-  path: extraGuardPath,
-  sha256: createHash("sha256").update(extraGuardSource).digest("hex"),
-};
-for (const [name, sources, guards, expected] of [
-  [
-    "missing guarded file",
-    productionSources.filter(({ file }) => file !== guardedSourcePath),
-    sharpAuditException.sourceGuards,
-    /guarded source is missing/,
-  ],
-  [
-    "unexpected guard",
-    productionSources,
-    [...sharpAuditException.sourceGuards, extraGuard],
-    /guarded source has no Transformers reference/,
-  ],
-  [
-    "duplicate guard",
-    productionSources,
-    [...sharpAuditException.sourceGuards, sharpAuditException.sourceGuards[0]],
-    /duplicate guarded path/,
-  ],
-  [
-    "malformed guard keys",
-    productionSources,
-    [{ ...sharpAuditException.sourceGuards[0], reviewed: true }, sharpAuditException.sourceGuards[1]],
-    /malformed source guard/,
-  ],
-  [
-    "unsafe guard path",
-    productionSources,
-    [{ ...sharpAuditException.sourceGuards[0], path: "../outside.ts" }, sharpAuditException.sourceGuards[1]],
-    /malformed source guard/,
-  ],
-  [
-    "drive-absolute guard path",
-    productionSources,
-    [{ ...sharpAuditException.sourceGuards[0], path: "C:/outside.ts" }, sharpAuditException.sourceGuards[1]],
-    /malformed source guard/,
-  ],
-  [
-    "guard path outside production roots",
-    productionSources,
-    [{ ...sharpAuditException.sourceGuards[0], path: "scripts/unshipped.ts" }, sharpAuditException.sourceGuards[1]],
-    /malformed source guard/,
-  ],
-  [
-    "wrong-type guard path",
-    productionSources,
-    [{ ...sharpAuditException.sourceGuards[0], path: 42 }, sharpAuditException.sourceGuards[1]],
-    /malformed source guard/,
-  ],
-  [
-    "malformed guard hash",
-    productionSources,
-    [{ ...sharpAuditException.sourceGuards[0], sha256: "A".repeat(64) }, sharpAuditException.sourceGuards[1]],
-    /malformed source guard/,
-  ],
-  [
-    "hash mismatch",
-    productionSources,
-    [{ ...sharpAuditException.sourceGuards[0], sha256: "0".repeat(64) }, sharpAuditException.sourceGuards[1]],
-    /content hash mismatch/,
-  ],
-]) {
-  assert.throws(
-    () => assertContentAddressedTransformersSources(sources, guards),
-    new RegExp(`content-addressed Transformers guard failed: ${expected.source}`),
-    name,
-  );
-}
-const mcpNodeSources = await Promise.all(
-  (await executableFiles("packages/mcp-server/node_modules/@modelcontextprotocol/node/dist")).map(async (file) => ({
-    file,
-    source: await read(file),
-  })),
-);
-assert.doesNotThrow(() => assertNoHonoServeStatic([...productionSources, ...mcpNodeSources]));
-assert.doesNotThrow(() => assertNoSharpOrImagePipeline(guardedProductionSources));
-for (const fixture of [
-  { file: "packages/core/src/fixture.ts", source: 'import { serveStatic } from "@hono/node-server/serve-static";' },
-  { file: "packages/mcp-server/src/fixture.js", source: 'import "@hono/node-server/serve-static";' },
-]) {
-  assert.throws(() => assertNoHonoServeStatic([fixture]), /Hono serve-static must remain unreachable/, fixture.file);
-}
-for (const sourceScope of ["packages/core/src", "packages/mcp-server/src", "packages/vscode/src"]) {
-  for (const [name, source] of [
-    ["direct sharp import", 'import sharp from "sharp";'],
-    ["Sharp import-equals", 'import sharp = require("sharp");'],
-    ["Transformers import-equals", 'import transformers = require("@huggingface/transformers");'],
-    ["direct RawImage API", 'import { RawImage } from "@huggingface/transformers";'],
-    ["direct AutoProcessor API", 'import { AutoProcessor } from "@huggingface/transformers";'],
-    ["direct AutoFeatureExtractor API", 'import { AutoFeatureExtractor } from "@huggingface/transformers";'],
-    ["unknown named export", 'import { TextStreamer } from "@huggingface/transformers";'],
-    ["unknown namespace export", 'import * as hf from "@huggingface/transformers"; hf.TextStreamer;'],
-    ["forbidden image task", 'pipeline("image-classification", model);'],
-    ["unapproved text task", 'pipeline("summarization", model);'],
-    ["dynamic task", "pipeline(task, model);"],
-    ["dynamic property task", "pipeline(config.task, model);"],
-    ["namespace dynamic task", 'import * as hf from "@huggingface/transformers"; hf.pipeline(task, model);'],
-    [
-      "dynamic namespace unapproved task",
-      'const hf = await import("@huggingface/transformers"); hf.pipeline("summarization", model);',
-    ],
-    [
-      "dynamic destructured task",
-      'const { pipeline: makePipeline } = await import("@huggingface/transformers"); makePipeline(task, model);',
-    ],
-    ["direct dynamic namespace task", '(await import("@huggingface/transformers")).pipeline(config.task, model);'],
-  ]) {
-    const fixture = { file: `${sourceScope}/fixture.ts`, source };
-    assert.throws(
-      () => assertNoSharpOrImagePipeline([fixture]),
-      /Sharp and image pipelines must remain unreachable/,
-      `${sourceScope}: ${name}`,
-    );
-  }
-}
-for (const sourceScope of ["packages/core/src", "packages/mcp-server/src", "packages/vscode/src"]) {
-  assert.doesNotThrow(() =>
-    assertNoSharpOrImagePipeline([
-      {
-        file: `${sourceScope}/approved-named.ts`,
-        source:
-          'import { AutoModelForSequenceClassification, AutoTokenizer, pipeline } from "@huggingface/transformers";\n' +
-          'pipeline("feature-extraction", model);\n' +
-          "AutoTokenizer.from_pretrained(model);\n" +
-          "AutoModelForSequenceClassification.from_pretrained(model);",
-      },
-      {
-        file: `${sourceScope}/approved-namespace.ts`,
-        source:
-          'import * as hf from "@huggingface/transformers";\n' +
-          'hf.pipeline("feature-extraction", model);\n' +
-          "hf.AutoTokenizer.from_pretrained(model);\n" +
-          "hf.AutoModelForSequenceClassification.from_pretrained(model);",
-      },
-      {
-        file: `${sourceScope}/approved-dynamic-namespace.ts`,
-        source:
-          'const hf = await import("@huggingface/transformers");\n' +
-          'hf.pipeline("feature-extraction", model);\n' +
-          "hf.AutoTokenizer.from_pretrained(model);",
-      },
-      {
-        file: `${sourceScope}/approved-dynamic-destructure.ts`,
-        source:
-          'const { pipeline: makePipeline, AutoTokenizer } = await import("@huggingface/transformers");\n' +
-          'makePipeline("feature-extraction", model);\n' +
-          "AutoTokenizer.from_pretrained(model);",
-      },
-      {
-        file: `${sourceScope}/approved-current-loader.ts`,
-        source:
-          "const transformers = await loadTransformers();\n" +
-          "const { pipeline, AutoTokenizer, AutoModelForSequenceClassification, env } = transformers;\n" +
-          'pipeline("feature-extraction", model);\n' +
-          "AutoTokenizer.from_pretrained(model);\n" +
-          "AutoModelForSequenceClassification.from_pretrained(model);\n" +
-          "env.backends.onnx.wasm.proxy = false;",
-      },
-    ]),
-  );
-}
 assert.match(await read("packages/core/src/embeddings/huggingFaceBackend.ts"), /pipeline\("feature-extraction"/);
 const crossEncoderSource = await read("packages/core/src/rerankers/crossEncoderReranker.ts");
 assert.match(crossEncoderSource, /AutoModelForSequenceClassification/);

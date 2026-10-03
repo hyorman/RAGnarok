@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:9950be78-e4f3-42ee-a867-980aea21edc7",
+  "serialNumber": "urn:uuid:89c7962f-f818-47f9-ab8d-3d2c08502eaa",
   "version": 1,
   "metadata": {
     "component": { "type": "application", "name": "ragnarok", "version": "0.4.1" },
@@ -1944,26 +1944,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40hono%2Fnode-server",
-      "name": "@hono/node-server",
-      "version": "1.19.17",
-      "purl": "pkg:npm/%40hono/node-server@1.19.17",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "7529de4b9aa189ab995860c278ae28ebde5777d9d4363be249908c42b8f5d1e7adafc5259f5b9c9fa6dba6138ce94ca700c32d348cd9352a4bf6f9c0489c2b3d"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@hono/node-server/-/node-server-1.19.17.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/@hono/node-server" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40huggingface%2Fjinja",
       "name": "@huggingface/jinja",
       "version": "0.5.6",
@@ -3422,47 +3402,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient",
-      "name": "@modelcontextprotocol/client",
-      "version": "2.0.0",
-      "purl": "pkg:npm/%40modelcontextprotocol/client@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f1fd4e821436ae3cc839faa05023fef068945aa46cf3d9e3a162cda807bc91698378fbf7b357d95ec79e8fe4177a6b2c12eb8ebcb2e62cefe4a8cdc8407b484b"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@modelcontextprotocol/client/-/client-2.0.0.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@modelcontextprotocol/client" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2F%40modelcontextprotocol%2Fcore",
-      "name": "@modelcontextprotocol/core",
-      "version": "2.0.0",
-      "purl": "pkg:npm/%40modelcontextprotocol/core@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a49084c061bb2dfafff8f429f594f029735e3b9c336df28bec7dcc6290a8acce28141a10add8e7060128a86f918e1b2f4b514aac36cabb1f8cd478659c65aa70"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@modelcontextprotocol/core/-/core-2.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/@modelcontextprotocol/core"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40modelcontextprotocol%2Fcore",
       "name": "@modelcontextprotocol/core",
       "version": "2.0.0",
@@ -3507,52 +3446,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "packages/graph-ui/node_modules/@modelcontextprotocol/ext-apps"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40modelcontextprotocol%2Fnode",
-      "name": "@modelcontextprotocol/node",
-      "version": "2.0.0",
-      "purl": "pkg:npm/%40modelcontextprotocol/node@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6388400b65dd18351d0ce09b2c3382038f9a2f735495d8ec3969432ff630a40c6b3e1466d711ddee567e98b69cbd9f6ddcf687dbcc2036868b406ac89353f6a6"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@modelcontextprotocol/node/-/node-2.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@modelcontextprotocol/node"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2F%40modelcontextprotocol%2Fsdk",
-      "name": "@modelcontextprotocol/sdk",
-      "version": "1.30.0",
-      "purl": "pkg:npm/%40modelcontextprotocol/sdk@1.30.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c4a77c388ce5a8dcdca9c36e98601aea0f8f5b69230f9beba5c28e9df95d0143cfde3ee59ea30fc254d7426f2017e5301fbdb3d25a9a45b8ebf61a86cf47884c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/@modelcontextprotocol/sdk"
         }
       ]
     },
@@ -6153,24 +6046,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Faccepts",
-      "name": "accepts",
-      "version": "2.0.0",
-      "purl": "pkg:npm/accepts@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e5cbe0e82b4ac1f81d995a98d562225ca7374356e446a18b8bed96ffa6a8fba63b82efd10b046e021184ce1e41e0a96ccd2b932e0658baa16aa396c89a334a9e"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/accepts/-/accepts-2.0.0.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/accepts" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Facorn-jsx",
       "name": "acorn-jsx",
       "version": "5.3.2",
@@ -6326,26 +6201,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fajv-formats",
-      "name": "ajv-formats",
-      "version": "3.0.1",
-      "purl": "pkg:npm/ajv-formats@3.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f2252a979d04511fae51c7514371c3a9ae84572a3776870bf20e5627714d7169aeeb621b90652e7bfa44c8b056f1518a2ae7133e0a9e92ce1f214d43038ca8c1"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/ajv-formats/-/ajv-formats-3.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/ajv-formats" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fajv",
       "name": "ajv",
       "version": "6.14.0",
@@ -6377,22 +6232,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/ajv" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fajv",
-      "name": "ajv",
-      "version": "8.18.0",
-      "purl": "pkg:npm/ajv@8.18.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3e55cf78458c5cc67bb0f60e1ea983c8227371f36b52bddf18d2ad7b35f5e3291738422fc8af3577eab2771f3d298e4eef514a30f690daf05f04523934747adc"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/ajv/-/ajv-8.18.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/ajv" }]
     },
     {
       "type": "library",
@@ -7410,26 +7249,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fbody-parser",
-      "name": "body-parser",
-      "version": "2.3.0",
-      "purl": "pkg:npm/body-parser@2.3.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d9c1a626ea5a36083e414c152c0b9c0ee5aea0c67a117f621c346cc19e65b0d6049b03da4649cc3c22d9cf4ef24f356affcde9e28ff0cdb0d96c1ad3bc619323"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/body-parser/-/body-parser-2.3.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/body-parser" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fcheerio%2Fnode_modules%2Fboolbase",
       "name": "boolbase",
       "version": "1.0.0",
@@ -7827,22 +7646,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fbytes",
-      "name": "bytes",
-      "version": "3.1.2",
-      "purl": "pkg:npm/bytes@3.1.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "fcd7fb4f2cd3c7a4b7c9124e6ce015efde7aafc72bdbe3a3f000b976df3048fdc1400a1e5f9f0da07c8253c3fccc690d5d2b634d28ba7f33ba174a4175c61b12"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/bytes" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fcall-bind-apply-helpers",
       "name": "call-bind-apply-helpers",
       "version": "1.0.2",
@@ -7937,26 +7740,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/call-bound" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcall-bound",
-      "name": "call-bound",
-      "version": "1.0.4",
-      "purl": "pkg:npm/call-bound@1.0.4",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "fb2b3df7b53dea9a382b1fc0069042aa103d12ec49690583420ef6f791f8841a61bf72198346e804abb0629b78617a7a319e4099942753fb72313951a5a49e8e"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/call-bound" }
       ]
     },
     {
@@ -8706,131 +8489,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcontent-disposition",
-      "name": "content-disposition",
-      "version": "1.0.1",
-      "purl": "pkg:npm/content-disposition@1.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a085c848cca7a92aa6db8d64ea4710e54c2db4320b30ae018aeac27c6111130ebe5fd8e492911ee53f4565a029c8b1863a716ec8c599a5da254d732dbc4274f1"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/content-disposition/-/content-disposition-1.0.1.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/content-disposition" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcontent-type",
-      "name": "content-type",
-      "version": "1.0.5",
-      "purl": "pkg:npm/content-type@1.0.5",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9d38ea7dc045122a4a7570afe180d05827e670b64a9bcd65745d29028a53bf2ac51956dc47a3ff54001de46ecdfb4b53afc42a894d2d15a743e852b836d27038"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/content-type/-/content-type-1.0.5.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/content-type" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fbody-parser%2Fnode_modules%2Fcontent-type",
-      "name": "content-type",
-      "version": "2.0.0",
-      "purl": "pkg:npm/content-type@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8ff3bf77b19c642c8d97bfe1c1901beb4eabcea932bda0dcb4b99c91bc4bcc7bc50734c91ee1847687404dc3f7c884680eb2c790801326ebf36c5969fe48b671"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/content-type/-/content-type-2.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/body-parser/node_modules/content-type"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftype-is%2Fnode_modules%2Fcontent-type",
-      "name": "content-type",
-      "version": "2.0.0",
-      "purl": "pkg:npm/content-type@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8ff3bf77b19c642c8d97bfe1c1901beb4eabcea932bda0dcb4b99c91bc4bcc7bc50734c91ee1847687404dc3f7c884680eb2c790801326ebf36c5969fe48b671"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/content-type/-/content-type-2.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "packages/mcp-server/node_modules/type-is/node_modules/content-type"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcookie-signature",
-      "name": "cookie-signature",
-      "version": "1.2.2",
-      "purl": "pkg:npm/cookie-signature@1.2.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0fbeae53bdee9525eb0f5517178284d93331555c21b270a07c0c9383d93c3fa2866639572ab38b7b874940a2370718b9c237ac6681572561253560633d931b86"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/cookie-signature/-/cookie-signature-1.2.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/cookie-signature" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcookie",
-      "name": "cookie",
-      "version": "0.7.2",
-      "purl": "pkg:npm/cookie@0.7.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "ca48b95e72ae7fbe74979d2e193965b7a90a20b6389d0d5e34841ab685c40726797568272aa6e7aa64eb044e41e0dee5acc24a436cad58c8933b6a34bfa130ff"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/cookie/-/cookie-0.7.2.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/cookie" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-electron%2Fnode_modules%2Fcore-util-is",
       "name": "core-util-is",
       "version": "1.0.3",
@@ -8849,45 +8507,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@vscode/test-electron/node_modules/core-util-is"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcors",
-      "name": "cors",
-      "version": "2.8.6",
-      "purl": "pkg:npm/cors@2.8.6",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "b49b590411c0eaf8c801a17a12721aaba95a0413fd6aafd8de8b9526311fa076d105c1c100761c321ff0f0b0eb9363ef20c32af209a8a5ae43e15f1199baf11b"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/cors/-/cors-2.8.6.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/cors" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fcross-spawn",
-      "name": "cross-spawn",
-      "version": "7.0.6",
-      "purl": "pkg:npm/cross-spawn@7.0.6",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "b95d903963f69d6ceccb668ca7c69189b862f5d9731791e0879487681f4e893184c834e2249cb1d2ecb9d505ddc966ed00736e6b85c9cd429c6b73b3294777bc"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/cross-spawn"
         }
       ]
     },
@@ -8949,26 +8568,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/cross-spawn" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fcross-spawn",
-      "name": "cross-spawn",
-      "version": "7.0.6",
-      "purl": "pkg:npm/cross-spawn@7.0.6",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "b95d903963f69d6ceccb668ca7c69189b862f5d9731791e0879487681f4e893184c834e2249cb1d2ecb9d505ddc966ed00736e6b85c9cd429c6b73b3294777bc"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/cross-spawn" }
       ]
     },
     {
@@ -9363,22 +8962,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdebug",
-      "name": "debug",
-      "version": "4.4.3",
-      "purl": "pkg:npm/debug@4.4.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "446c305a7c10be455f6af295b76d8518bc3ec5849dcc04709b4aeee83853540dee994e6165cdbc57790ee2cb6062bcab4e52e9baf808f468a28e5b408cd6dca8"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/debug" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fdecamelize",
       "name": "decamelize",
       "version": "4.0.0",
@@ -9671,22 +9254,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/delayed-stream" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fdepd",
-      "name": "depd",
-      "version": "2.0.0",
-      "purl": "pkg:npm/depd@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "83b9c7e8fe9dc838a8268800006a6b1a90ad5489898693e4feba02cdd6f77c887ad7fb3f9cfb1f47aa27c8cc2408047f3a50b7c810b49444af52840402cb08af"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/depd/-/depd-2.0.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/depd" }]
     },
     {
       "type": "library",
@@ -9994,24 +9561,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fee-first",
-      "name": "ee-first",
-      "version": "1.1.1",
-      "purl": "pkg:npm/ee-first@1.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "58cc26f4b851528f9651a44dfaf46e113a86f3d22066985548d91d16079beac4bf1383ab0c837bb78f0201ec121d773a0bc95e7c3f0a29faf9bd8eb56eb425a3"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/ee-first" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-electron%2Fnode_modules%2Femoji-regex",
       "name": "emoji-regex",
       "version": "10.6.0",
@@ -10137,26 +9686,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/emoji-regex" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fencodeurl",
-      "name": "encodeurl",
-      "version": "2.0.0",
-      "purl": "pkg:npm/encodeurl@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4349fd1d18b89ba26e188575785966bc907b644571bbddc8accca232c182d25acc24c5b3460c7a586aaec9f4206556f7d6f8468179df98f34d5e6c673a4441ae"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/encodeurl" }
       ]
     },
     {
@@ -10715,26 +10244,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fescape-html",
-      "name": "escape-html",
-      "version": "1.0.3",
-      "purl": "pkg:npm/escape-html@1.0.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3624aea59e0e7ae1b0afaf251887b29bf92c219309a1d506392099fc54a74f172b7a46efaab81d53194938ca628da299563009ad6ac6b3fe89cbc38cbb28fda3"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/escape-html/-/escape-html-1.0.3.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/escape-html" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Fescape-string-regexp",
       "name": "escape-string-regexp",
       "version": "4.0.0",
@@ -11139,22 +10648,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fetag",
-      "name": "etag",
-      "version": "1.8.1",
-      "purl": "pkg:npm/etag@1.8.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6882f9171ee66b055adf4d1a976067104e2236fa35a844f12eb3c8fe8d392fbcfa828edf0b0d49e844266cae05989d804bb920545fca1195ae7c17dd0a531c3e"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/etag/-/etag-1.8.1.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/etag" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fopenai%2Fnode_modules%2Fevent-target-shim",
       "name": "event-target-shim",
       "version": "5.0.1",
@@ -11254,98 +10747,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Feventsource-parser",
-      "name": "eventsource-parser",
-      "version": "3.0.6",
-      "purl": "pkg:npm/eventsource-parser@3.0.6",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "568d5a6fe4173f3678b426bc4b0207245692cf2e11e921dfec163bf6b1410dfd2276b699580918ac38c38fcb966929b74b64cafa127bfedd4212667b8d7c3ea6"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.0.6.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/eventsource-parser" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Feventsource-parser",
-      "name": "eventsource-parser",
-      "version": "3.1.0",
-      "purl": "pkg:npm/eventsource-parser@3.1.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9097b3163f5814030b78e4728bb6822f12db0f9fea58c427a0c56554fc8722597b96044909cdc95659fd56097d9f0422d1890c9e17464cc367ec2911440a6d32"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.1.0.tgz"
-        }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/eventsource-parser"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Feventsource",
-      "name": "eventsource",
-      "version": "3.0.7",
-      "purl": "pkg:npm/eventsource@3.0.7",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0914f5593cae4280fbef5196e7a5c464543f66849f5a27756a52860d832692ddb297c517ad5478a6ca6a58d11ca8abd523383a3c096d5a3c5c4923eb6e803888"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/eventsource/-/eventsource-3.0.7.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/eventsource"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Feventsource",
-      "name": "eventsource",
-      "version": "3.0.7",
-      "purl": "pkg:npm/eventsource@3.0.7",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0914f5593cae4280fbef5196e7a5c464543f66849f5a27756a52860d832692ddb297c517ad5478a6ca6a58d11ca8abd523383a3c096d5a3c5c4923eb6e803888"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/eventsource/-/eventsource-3.0.7.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/eventsource" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fexpand-template",
       "name": "expand-template",
       "version": "2.0.3",
@@ -11363,47 +10764,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/expand-template" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fexpress-rate-limit",
-      "name": "express-rate-limit",
-      "version": "8.5.2",
-      "purl": "pkg:npm/express-rate-limit@8.5.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e4a6f7e22a4d5faf780c7e3cbcdf62ada935431df49dbd0f2d81d77c9830e18123882dd91266498703a9f957e2098c05cef153741f50900ad84b99176b6731d8"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/express-rate-limit/-/express-rate-limit-8.5.2.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/express-rate-limit" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fexpress",
-      "name": "express",
-      "version": "5.2.1",
-      "purl": "pkg:npm/express@5.2.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8484b889d5966a2ebd35ecc8751b76c455687da1788fee8834ea4995538b0cef335c6a54544573218935d94522d89ce313358bdc8380c5c4ee6e0cfd3e8d325f"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/express/-/express-5.2.1.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/express" }]
     },
     {
       "type": "library",
@@ -11443,26 +10803,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/eslint/node_modules/fast-deep-equal" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ffast-deep-equal",
-      "name": "fast-deep-equal",
-      "version": "3.1.3",
-      "purl": "pkg:npm/fast-deep-equal@3.1.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "7f7a90f68432f63d808417bf1fd542f75c0b98a042094fe00ce9ca340606e61b303bb04b2a3d3d1dce4760dcfd70623efb19690c22200da8ad56cd3701347ce1"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/fast-deep-equal" }
       ]
     },
     {
@@ -11550,24 +10890,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/fast-uri" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ffast-uri",
-      "name": "fast-uri",
-      "version": "3.1.5",
-      "purl": "pkg:npm/fast-uri@3.1.5",
-      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "807c00d4ef4b0c870aba730a84e6d2fc78a6c2d7a13b59cf50408a02ee53a4a81a3b5f5f716125e1b96259ed635b1545bc85f3b498e34382fc5d0d4453d7fb27"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.5.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/fast-uri" }]
     },
     {
       "type": "library",
@@ -11705,26 +11027,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/fill-range" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ffinalhandler",
-      "name": "finalhandler",
-      "version": "2.1.1",
-      "purl": "pkg:npm/finalhandler@2.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4bc2a866045937e6b9acdc2a4f195965e3e34ffe1c9e6d11395ef42de7511d9d29f2ef5f4480f484951942990a2f3ae8f0b7e60bcb31db76d8ead54dc6ff2940"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/finalhandler/-/finalhandler-2.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/finalhandler" }
       ]
     },
     {
@@ -12077,42 +11379,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/formdata-node" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fforwarded",
-      "name": "forwarded",
-      "version": "0.2.0",
-      "purl": "pkg:npm/forwarded@0.2.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6ee446d1fa41b511d24c238049eea10f6e7cb44b9b16844b6f864d03a3713151cdc3680e7301e8f70c9a6e5ccccce039cfdc40f4bd4a36393f36de8c4fd698a3"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/forwarded/-/forwarded-0.2.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/forwarded" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ffresh",
-      "name": "fresh",
-      "version": "2.0.0",
-      "purl": "pkg:npm/fresh@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "471fd6c9c67ad0739aa8b2808ba70744a288ef3c566c9df53219ed9adc0ca1a4de17b5c51fd861069f2f21368c89d7e58d143a7985822a46932beca45491cfd8"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/fresh/-/fresh-2.0.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/fresh" }]
     },
     {
       "type": "library",
@@ -13132,22 +12398,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fhono",
-      "name": "hono",
-      "version": "4.13.1",
-      "purl": "pkg:npm/hono@4.13.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "91d268155bf6c666b2c3a718d3d1fb01b30932df099f98dd944757b0fec0181745d83229b5594a94e2ca5cfe35c8f8a9e3f6b7c903eff6055c25823c618d3877"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/hono/-/hono-4.13.1.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/hono" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fhosted-git-info",
       "name": "hosted-git-info",
       "version": "4.1.0",
@@ -13230,26 +12480,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/cheerio/node_modules/htmlparser2" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fhttp-errors",
-      "name": "http-errors",
-      "version": "2.0.1",
-      "purl": "pkg:npm/http-errors@2.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "e056d17405fe6d2766a3801416e4b458d88fcfc36016dfabf138603569a5ae3423b7543b651f7ecd395c7b6f39f71e0a497af022c69e4ea0e82909ad3fca4b99"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/http-errors/-/http-errors-2.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/http-errors" }
       ]
     },
     {
@@ -13461,26 +12691,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ficonv-lite",
-      "name": "iconv-lite",
-      "version": "0.7.2",
-      "purl": "pkg:npm/iconv-lite@0.7.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8a6f438c40d0e79b3d7cbe04633380bf4c8caa6301499a7a1b456f1724cc3ca5b1892047523f4d5bfaaa2e65d4c17aeb33b02fa9295309fbea45bd1c33cc98ab"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.7.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/iconv-lite" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fieee754",
       "name": "ieee754",
       "version": "1.2.1",
@@ -13662,24 +12872,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Finherits",
-      "name": "inherits",
-      "version": "2.0.4",
-      "purl": "pkg:npm/inherits@2.0.4",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "93fbc6697e3f6256b75b3c8c0af4d039761e207bea38ab67a8176ecd31e9ce9419cc0b2428c859d8af849c189233dcc64a820578ca572b16b8758799210a9ec1"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/inherits" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fini",
       "name": "ini",
       "version": "1.3.8",
@@ -13694,46 +12886,6 @@
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/ini/-/ini-1.3.8.tgz" }],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/ini" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fip-address",
-      "name": "ip-address",
-      "version": "10.4.0",
-      "purl": "pkg:npm/ip-address@10.4.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a122bde86ae6dda3fa3ab4b6eb7c55c5b3431952fbaf306d61da46aa50c6f2241da1e9c3a13b3f9e4922f837e561b00413c5e5ea8e58c61c65acabc8de7a8a5d"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/ip-address/-/ip-address-10.4.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/ip-address" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fipaddr.js",
-      "name": "ipaddr.js",
-      "version": "1.9.1",
-      "purl": "pkg:npm/ipaddr.js@1.9.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d0a23feb4ef1a31493a07ec68cdd457d26cba14d3e6ed4e2723b1049642587f859ca437c2a998c7fbb98c0f5b747e6a467a47fc35f199574870585e26143cede"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/ipaddr.js" }
       ]
     },
     {
@@ -14043,26 +13195,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fis-promise",
-      "name": "is-promise",
-      "version": "4.0.0",
-      "purl": "pkg:npm/is-promise@4.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "86fa6823a928ae124c9de8f6f3975283a9eed7e7babb1b3bcc6dc16009b96f2a83b2024d5b0c7333acfa8998808104784c9df42660533b0a99530dd69721f701"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/is-promise/-/is-promise-4.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/is-promise" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fmocha%2Fnode_modules%2Fis-unicode-supported",
       "name": "is-unicode-supported",
       "version": "0.1.0",
@@ -14176,27 +13308,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fisexe",
-      "name": "isexe",
-      "version": "2.0.0",
-      "purl": "pkg:npm/isexe@2.0.0",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "447c4c2e9f659ca1c61d19e0f5016144231b600715a67ebdb2648672addfdfac638155564e18f8aaa2db4cb96aed2b23f01f9f210d44b8210623694ab3241e23"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz" }],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/isexe"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fisexe",
       "name": "isexe",
       "version": "2.0.0",
@@ -14244,22 +13355,6 @@
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz" }],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/isexe" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fisexe",
-      "name": "isexe",
-      "version": "2.0.0",
-      "purl": "pkg:npm/isexe@2.0.0",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "447c4c2e9f659ca1c61d19e0f5016144231b600715a67ebdb2648672addfdfac638155564e18f8aaa2db4cb96aed2b23f01f9f210d44b8210623694ab3241e23"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/isexe" }]
     },
     {
       "type": "library",
@@ -14317,43 +13412,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/jackspeak" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fjose",
-      "name": "jose",
-      "version": "6.2.2",
-      "purl": "pkg:npm/jose@6.2.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "77b90f0dddf828efd89f36833a58a41a93aeadf1740720b6b04578700342b5da8b9537c1970da9d783bfe5dff3bf8d2024f6c84317c44b79d2c75fe860dcae65"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/jose/-/jose-6.2.2.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/jose" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fjose",
-      "name": "jose",
-      "version": "6.2.4",
-      "purl": "pkg:npm/jose@6.2.4",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "37c69c1b356c432e8cfdf8c5731b72b0d738437efd4dc33974cfea2a436db071638bcf3200d9d74ebec12de3fbe623e717005f43333f8e0d8167df8766b1c264"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/jose/-/jose-6.2.4.tgz" }],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/jose"
-        }
       ]
     },
     {
@@ -14643,49 +13701,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@vscode/vsce/node_modules/json-schema-traverse"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fjson-schema-traverse",
-      "name": "json-schema-traverse",
-      "version": "1.0.0",
-      "purl": "pkg:npm/json-schema-traverse@1.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "34cf3f3fd9f75e35e12199f594b86415a0024ce5114178d6855e0103f4673aff31be0aadaa9017f483b89914314b1d51968e2dab37aa6f4b0e96bb9a3b2dddba"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/json-schema-traverse/-/json-schema-traverse-1.0.0.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/json-schema-traverse" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fjson-schema-typed",
-      "name": "json-schema-typed",
-      "version": "8.0.2",
-      "purl": "pkg:npm/json-schema-typed@8.0.2",
-      "licenses": [{ "license": { "id": "BSD-2-Clause" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "7d08685dd72f737576f31ec2ec132ce0fe7e90d96051445eda39944f54fffe8051303aeacb540f7a52629b0646a3b1e0f553d5dc4415e419eae216c5cb6bdeb4"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/json-schema-typed/-/json-schema-typed-8.0.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/json-schema-typed" }
       ]
     },
     {
@@ -15661,46 +14676,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fmedia-typer",
-      "name": "media-typer",
-      "version": "1.1.0",
-      "purl": "pkg:npm/media-typer@1.1.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "6a2b27ac33f818d7b4e9470a1675796df30d3c1530e23b0b19a5b059f9c7defd361a706e5d7d8c0959f945bad6a348f7a5ccd48a561b96aedf43b370dade572b"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/media-typer/-/media-typer-1.1.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/media-typer" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fmerge-descriptors",
-      "name": "merge-descriptors",
-      "version": "2.0.0",
-      "purl": "pkg:npm/merge-descriptors@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4a7937d785796b214b869ddf914444b9be96b6305f3dd08f6352e7f3ff26ba7b8bba2621b000600555aca33006f8c58c6d512f71d7296e2f51ef0c36da5f50de"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/merge-descriptors/-/merge-descriptors-2.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/merge-descriptors" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fmerge2",
       "name": "merge2",
       "version": "1.4.1",
@@ -15800,24 +14775,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fmime-db",
-      "name": "mime-db",
-      "version": "1.54.0",
-      "purl": "pkg:npm/mime-db@1.54.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "694e4426e20dd960de982700a76bc505fa7f9b810085626750d492c348b1b3bfe45db77a3e0eb8126c0990d745841f1a5add6c1f60935eb2f1a3f880195de83d"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/mime-db/-/mime-db-1.54.0.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/mime-db" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fmime-types",
       "name": "mime-types",
       "version": "2.1.35",
@@ -15877,26 +14834,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "packages/mcp-server/node_modules/form-data/node_modules/mime-types"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fmime-types",
-      "name": "mime-types",
-      "version": "3.0.2",
-      "purl": "pkg:npm/mime-types@3.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2db833764d21e23ba843d7c22975b86f2d1426a8fe9ce3ab23d309d6c4a3e2723c688d9ea35aa6bd01227b8543d6096c4b6e749f5e4bb16b18b42ba0892b52e4"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/mime-types/-/mime-types-3.0.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/mime-types" }
       ]
     },
     {
@@ -16617,26 +15554,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fnegotiator",
-      "name": "negotiator",
-      "version": "1.0.0",
-      "purl": "pkg:npm/negotiator@1.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f0e7ecfc051087c31a11cae5ab9c4e5f4090f72a53179765efc9a394c35f38ad3c7f3a604c741140f07170f944b48c34c91a70b3e668ff7afee5645bcbbbb71a"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/negotiator/-/negotiator-1.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/negotiator" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40langchain%2Fcommunity%2Fnode_modules%2Fneo-async",
       "name": "neo-async",
       "version": "2.6.2",
@@ -16870,26 +15787,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fobject-assign",
-      "name": "object-assign",
-      "version": "4.1.1",
-      "purl": "pkg:npm/object-assign@4.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "ac98134279149c7d6c170f324fa552537cc3dec5a6bbab19848b1e63c557f8646edcfe85ec5bbe24d0e85df9251256cb2529dcdc55101d57b8714e618fe05c52"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/object-assign/-/object-assign-4.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/object-assign" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fobject-inspect",
       "name": "object-inspect",
       "version": "1.13.4",
@@ -16906,26 +15803,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/object-inspect" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fobject-inspect",
-      "name": "object-inspect",
-      "version": "1.13.4",
-      "purl": "pkg:npm/object-inspect@1.13.4",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "5baee22e5e09d845c41936df78709f7eb8c37e2b6f2c0360d14957df01545124f1f762974457a0307515812a84fb0be101b8b85aa8c683d733cac4d5d84a5b7b"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/object-inspect" }
       ]
     },
     {
@@ -16971,26 +15848,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fon-finished",
-      "name": "on-finished",
-      "version": "2.4.1",
-      "purl": "pkg:npm/on-finished@2.4.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a15973920dc4340842936cddbfb209c1dfd0503e33d91c51c2991c198f29b0255c09864dab8c189d55802c733e6ebb6e26378f5a2605fc2966b83afc0a1e7e92"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/on-finished/-/on-finished-2.4.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/on-finished" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fonce",
       "name": "once",
       "version": "1.4.0",
@@ -17006,22 +15863,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/once" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fonce",
-      "name": "once",
-      "version": "1.4.0",
-      "purl": "pkg:npm/once@1.4.0",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "94d689808fb643951140191c7042874d038f697754c67659125413658d0c15402e684a9ed44f8dcaf81dcff688c8d8ba67d3333b976fd47f27e7cfc610ba77fb"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/once/-/once-1.4.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/once" }]
     },
     {
       "type": "library",
@@ -17731,24 +16572,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fparseurl",
-      "name": "parseurl",
-      "version": "1.3.3",
-      "purl": "pkg:npm/parseurl@1.3.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0a2c9e3b1153fc96723799b4cfd3df5f0e1208127a4b2833d43a65d30aa39610c418604fd469ec51510bd29eb78681b57dc8f77c7ca75e2f4d60ee2758e2fea9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/parseurl/-/parseurl-1.3.3.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/parseurl" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fpath-exists",
       "name": "path-exists",
       "version": "4.0.0",
@@ -17785,29 +16608,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/mocha/node_modules/path-exists" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fpath-key",
-      "name": "path-key",
-      "version": "3.1.1",
-      "purl": "pkg:npm/path-key@3.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a2399e374a9dfb2d23b3312da18e3caf43deab97703049089423aee90e5fe3595f92cc17b8ab58ae18284e92e7c887079b6e1486ac7ee53aa6d889d2c0b844e9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/path-key"
-        }
       ]
     },
     {
@@ -17868,24 +16668,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fpath-key",
-      "name": "path-key",
-      "version": "3.1.1",
-      "purl": "pkg:npm/path-key@3.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a2399e374a9dfb2d23b3312da18e3caf43deab97703049089423aee90e5fe3595f92cc17b8ab58ae18284e92e7c887079b6e1486ac7ee53aa6d889d2c0b844e9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/path-key" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fglob%2Fnode_modules%2Fpath-scurry",
       "name": "path-scurry",
       "version": "1.11.1",
@@ -17942,26 +16724,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/rimraf/node_modules/path-scurry" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fpath-to-regexp",
-      "name": "path-to-regexp",
-      "version": "8.4.0",
-      "purl": "pkg:npm/path-to-regexp@8.4.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3eeb1e1c8bc09f3ddb8eb336ac626d4a0a35ce38316a94cb67bc76a638735b0969e1225080addfde264843092912705a2b3eac78a0400e9338078c9292e632a6"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-8.4.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/path-to-regexp" }
       ]
     },
     {
@@ -18186,49 +16948,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fpkce-challenge",
-      "name": "pkce-challenge",
-      "version": "5.0.1",
-      "purl": "pkg:npm/pkce-challenge@5.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c10d1bfd6e05af4d6ab691e5a92aaca5c8f712106f8a6b1d8742a51e11fc1d166732c11ad1e6b67d350b397392f5c710af7a26f86706464e1efa2b2b65657ca9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/pkce-challenge/-/pkce-challenge-5.0.1.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/pkce-challenge"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fpkce-challenge",
-      "name": "pkce-challenge",
-      "version": "5.0.1",
-      "purl": "pkg:npm/pkce-challenge@5.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c10d1bfd6e05af4d6ab691e5a92aaca5c8f712106f8a6b1d8742a51e11fc1d166732c11ad1e6b67d350b397392f5c710af7a26f86706464e1efa2b2b65657ca9"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/pkce-challenge/-/pkce-challenge-5.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/pkce-challenge" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Fplatform",
       "name": "platform",
       "version": "1.3.6",
@@ -18402,26 +17121,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fproxy-addr",
-      "name": "proxy-addr",
-      "version": "2.0.7",
-      "purl": "pkg:npm/proxy-addr@2.0.7",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "96542c30b4940d43d3e388ddad4fcedfbaa59e27e2b433fe670ae699972848ac8b2afb59c69c95d27dbf6c3fcde2d040019fe024475953b28cadaa0ad7e5d802"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.7.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/proxy-addr" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fpump",
       "name": "pump",
       "version": "3.0.4",
@@ -18512,22 +17211,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fqs",
-      "name": "qs",
-      "version": "6.15.3",
-      "purl": "pkg:npm/qs@6.15.3",
-      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3bd825df30a5e61e5b970d4a194cd02a1039a145d297caf0508339a344b79c25cc9624afcb90f3c7bfc325c23e4b08080aff889de499c21061d684b210703bd4"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/qs/-/qs-6.15.3.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/qs" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fqueue-microtask",
       "name": "queue-microtask",
       "version": "1.2.3",
@@ -18545,44 +17228,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/queue-microtask" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Frange-parser",
-      "name": "range-parser",
-      "version": "1.2.1",
-      "purl": "pkg:npm/range-parser@1.2.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1eb82cc7ea2baa8ca09e68456ca68713a736f7a27e1d30105e8c4417a80dba944e9a6189468cb37c6ddc700bdea8206bc2bff6cb143905577f1939796a03b04a"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/range-parser/-/range-parser-1.2.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/range-parser" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fraw-body",
-      "name": "raw-body",
-      "version": "3.0.2",
-      "purl": "pkg:npm/raw-body@3.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2b9cd08c3965c5691fed9e7125d574fc1d164cdab1eafc46ef4cc9138374901b382e8be6118589cd01b10bd6d2f5100abb76e0338d25adde73a0b275d8c43904"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/raw-body/-/raw-body-3.0.2.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/raw-body" }]
     },
     {
       "type": "library",
@@ -18790,29 +17435,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Frequire-from-string",
-      "name": "require-from-string",
-      "version": "2.0.2",
-      "purl": "pkg:npm/require-from-string@2.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "5dfd2759ee91b1ece214cbbe029f5b8a251b9a996ae92f7fa7eef0ed85cffc904786b5030d48706bebc0372b9bbaa7d9593bde53ffc36151ac0c6ed128bfef13"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/require-from-string/-/require-from-string-2.0.2.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/require-from-string" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Fresolve-from",
       "name": "resolve-from",
       "version": "4.0.0",
@@ -18910,22 +17532,6 @@
           "value": "node_modules/@huggingface/transformers/node_modules/roarr"
         }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Frouter",
-      "name": "router",
-      "version": "2.2.0",
-      "purl": "pkg:npm/router@2.2.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9cb4eb50a9b653288beeb9616a9bbf665e3917036091919a0a965b2076a30d883094908eccb4a4f9c20f027b04a95f79e468c82c99ca6dd402d6754fcfe80061"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/router/-/router-2.2.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/router" }]
     },
     {
       "type": "library",
@@ -19068,26 +17674,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "packages/graph-ui/node_modules/safer-buffer" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fsafer-buffer",
-      "name": "safer-buffer",
-      "version": "2.1.2",
-      "purl": "pkg:npm/safer-buffer@2.1.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "619a372bcd920fb462ca2d04d4440fa232f3ee4a5ea6749023d2323db1c78355d75debdbe5d248eeda72376003c467106c71bbbdcc911e4d1c6f0a9c42b894b6"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/safer-buffer" }
       ]
     },
     {
@@ -19307,22 +17893,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fsend",
-      "name": "send",
-      "version": "1.2.1",
-      "purl": "pkg:npm/send@1.2.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d609d97fb0c572821c6a34e34f08f0b838f3bb3e0f3dc6364ad28f96c180435f981f6d08455ac169749699d8e8c1327abbc45cd353e860e1875df3f599871935"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/send/-/send-1.2.1.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/send" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Fserialize-error",
       "name": "serialize-error",
       "version": "7.0.1",
@@ -19369,26 +17939,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fserve-static",
-      "name": "serve-static",
-      "version": "2.2.1",
-      "purl": "pkg:npm/serve-static@2.2.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c515c19f4a4fa904d54220bcc3242b2acd8c3a55f6e334343ce19a8f492e96dbe8382b2d050339caf3a1015494c0e32342d4efb0f5a83421df3c6c1a6902614f"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/serve-static/-/serve-static-2.2.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/serve-static" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-electron%2Fnode_modules%2Fsetimmediate",
       "name": "setimmediate",
       "version": "1.0.5",
@@ -19412,26 +17962,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fsetprototypeof",
-      "name": "setprototypeof",
-      "version": "1.2.0",
-      "purl": "pkg:npm/setprototypeof@1.2.0",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1392c35fb5aba7ce4a8a5e5b859bf8ea3f2339e6e82aae4932660cde05467461fcc45a4f59750cb0dae53830ab928c4c11e362fd7648c2e46f6385cdc18309a7"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/setprototypeof" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2Fsharp",
       "name": "sharp",
       "version": "0.35.5",
@@ -19448,29 +17978,6 @@
         {
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@huggingface/transformers/node_modules/sharp"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fshebang-command",
-      "name": "shebang-command",
-      "version": "2.0.0",
-      "purl": "pkg:npm/shebang-command@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "907c6bdb366962d766acdd6a0e3aeb5ff675ad1d641bc0f1fa09292b51b87979af5ecc26704d614d6056614ce5ada630d7fc99a7a62e0d8efb62dbdb3747660c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/shebang-command"
         }
       ]
     },
@@ -19536,49 +18043,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fshebang-command",
-      "name": "shebang-command",
-      "version": "2.0.0",
-      "purl": "pkg:npm/shebang-command@2.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "907c6bdb366962d766acdd6a0e3aeb5ff675ad1d641bc0f1fa09292b51b87979af5ecc26704d614d6056614ce5ada630d7fc99a7a62e0d8efb62dbdb3747660c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/shebang-command" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fshebang-regex",
-      "name": "shebang-regex",
-      "version": "3.0.0",
-      "purl": "pkg:npm/shebang-regex@3.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "efef9d161b5cc77df9dee05aabc0c347836ec417ad0730bb6503a19934089c711de9b4ab5dd884cb30af1b4ed9e3851874b4a1594c97b7933fca1cfc7a471bd4"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz" }
-      ],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/shebang-regex"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fshebang-regex",
       "name": "shebang-regex",
       "version": "3.0.0",
@@ -19639,26 +18103,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fshebang-regex",
-      "name": "shebang-regex",
-      "version": "3.0.0",
-      "purl": "pkg:npm/shebang-regex@3.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "efef9d161b5cc77df9dee05aabc0c347836ec417ad0730bb6503a19934089c711de9b4ab5dd884cb30af1b4ed9e3851874b4a1594c97b7933fca1cfc7a471bd4"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/shebang-regex" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fside-channel-list",
       "name": "side-channel-list",
       "version": "1.0.1",
@@ -19682,26 +18126,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fside-channel-list",
-      "name": "side-channel-list",
-      "version": "1.0.1",
-      "purl": "pkg:npm/side-channel-list@1.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9a39ffd1b8bfa145118dce5797b21a5a2fce24926e9aea0915025f0c3c8ee3afa1056b1f69533ae53047ab67a864187397d11c8713a28e991b442f12541414d3"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/side-channel-list/-/side-channel-list-1.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/side-channel-list" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fside-channel-map",
       "name": "side-channel-map",
       "version": "1.0.1",
@@ -19718,26 +18142,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/side-channel-map" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fside-channel-map",
-      "name": "side-channel-map",
-      "version": "1.0.1",
-      "purl": "pkg:npm/side-channel-map@1.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "5428c235f80cb1bcb7b53768d369db8ed33f7b0adaea33c79a94e17a7913621f291bdb9c67fd4ff12a38bb814605e93f063a4e56c0c23282c0fe2b8128815744"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/side-channel-map/-/side-channel-map-1.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/side-channel-map" }
       ]
     },
     {
@@ -19768,29 +18172,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fside-channel-weakmap",
-      "name": "side-channel-weakmap",
-      "version": "1.0.2",
-      "purl": "pkg:npm/side-channel-weakmap@1.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "58f4bf1ef1d04d89c78ac2e8f4c72a0473899361641cefed969be5772ae77a6e1a790a7885a8b7832b61b3083aa74d684a84e5e7cadca621408c5d9baf6024d8"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/side-channel-weakmap" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fside-channel",
       "name": "side-channel",
       "version": "1.1.1",
@@ -19807,26 +18188,6 @@
       ],
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/side-channel" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fside-channel",
-      "name": "side-channel",
-      "version": "1.1.1",
-      "purl": "pkg:npm/side-channel@1.1.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "eb1e9d2bacc97694f3178b1078d631c2dbc1cdfe848381ad95eb12f781cebd3b9d51ec8ad965c06887e60e0b32b2562b441785225b22e78018b05194ba19afad"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/side-channel" }
       ]
     },
     {
@@ -20117,24 +18478,6 @@
           "value": "node_modules/@huggingface/transformers/node_modules/sprintf-js"
         }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fstatuses",
-      "name": "statuses",
-      "version": "2.0.2",
-      "purl": "pkg:npm/statuses@2.0.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0ef132e795770c1eee927468fb888e193e5f3f5b2547cc10a2155d9278a064f32932cb5a289416870898040089137525da94e70138a18416274616501c606247"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/statuses/-/statuses-2.0.2.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/statuses" }]
     },
     {
       "type": "library",
@@ -21102,26 +19445,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftoidentifier",
-      "name": "toidentifier",
-      "version": "1.0.1",
-      "purl": "pkg:npm/toidentifier@1.0.1",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a39b123ca12483f0c840d987e37574fee7ab2eba7355e764521f2d18dbda797a5fa6ec2329e9e54a8c7fd8efc14e5654b447be246eece58844cfad3c3e500744"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz" }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/toidentifier" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:packages%2Fgraph-ui%2Fnode_modules%2Ftough-cookie",
       "name": "tough-cookie",
       "version": "5.1.2",
@@ -21478,24 +19801,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Ftype-is",
-      "name": "type-is",
-      "version": "2.1.0",
-      "purl": "pkg:npm/type-is@2.1.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "7da607c346a705b73f916177cc54c49f14853801945fd1856ce06d86f0dd2ec22512858e14eb52d3380289063022c90bf6219764bde40170fc3a86781a63004c"
-        }
-      ],
-      "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/type-is/-/type-is-2.1.0.tgz" }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/type-is" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Ftyped-rest-client",
       "name": "typed-rest-client",
       "version": "1.8.11",
@@ -21822,22 +20127,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Funpipe",
-      "name": "unpipe",
-      "version": "1.0.0",
-      "purl": "pkg:npm/unpipe@1.0.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a63cb66d8852b2e7f05a52b03dcfa5ddc37bfb0b8994aeaecf461d2443a54036e5ea3a3f6253e2e266fc6a0524542f0117b57c36ecdec8f36a464b00de1ced29"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/unpipe/-/unpipe-1.0.0.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/unpipe" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Feslint%2Fnode_modules%2Furi-js",
       "name": "uri-js",
       "version": "4.4.1",
@@ -21958,22 +20247,6 @@
           "value": "node_modules/@vscode/vsce/node_modules/validate-npm-package-license"
         }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fvary",
-      "name": "vary",
-      "version": "1.1.2",
-      "purl": "pkg:npm/vary@1.1.2",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "04d19b58b7ddd1e50f69b8645d4566d23f2ebaf444c93879a2f45afddca8c3f06a01b649c82fb97d4f88cd03b39802b362a6110084a8461750af778867f3d7aa"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/vary/-/vary-1.1.2.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/vary" }]
     },
     {
       "type": "library",
@@ -22270,27 +20543,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fwhich",
-      "name": "which",
-      "version": "2.0.2",
-      "purl": "pkg:npm/which@2.0.2",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "04b2374e5d535b73ef97bd25df2ab763ae22f9ac29c17aac181616924a8cb676d782b303fb28fbae15b492e103c7325a6171a3116e6881aa4a34c10a34c8e26c"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/which/-/which-2.0.2.tgz" }],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/which"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Fvsce%2Fnode_modules%2Fwhich",
       "name": "which",
       "version": "2.0.2",
@@ -22338,22 +20590,6 @@
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/which/-/which-2.0.2.tgz" }],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/glob/node_modules/which" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fwhich",
-      "name": "which",
-      "version": "2.0.2",
-      "purl": "pkg:npm/which@2.0.2",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "04b2374e5d535b73ef97bd25df2ab763ae22f9ac29c17aac181616924a8cb676d782b303fb28fbae15b492e103c7325a6171a3116e6881aa4a34c10a34c8e26c"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/which/-/which-2.0.2.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/which" }]
     },
     {
       "type": "library",
@@ -22508,22 +20744,6 @@
       "properties": [
         { "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/vsce/node_modules/wrappy" }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fwrappy",
-      "name": "wrappy",
-      "version": "1.0.2",
-      "purl": "pkg:npm/wrappy@1.0.2",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9784a9fc346c7a8afdc0be84bd5dbe4ee427eb774c90f8d9feca7d5e48214c46d5f4a94f4b5c54b19deeeff2103b8c31b5c141e1b82940f45c477402bdeccf71"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz" }],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/wrappy" }]
     },
     {
       "type": "library",
@@ -22865,29 +21085,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:packages%2Fmcp-server%2Fnode_modules%2Fzod-to-json-schema",
-      "name": "zod-to-json-schema",
-      "version": "3.25.2",
-      "purl": "pkg:npm/zod-to-json-schema@3.25.2",
-      "licenses": [{ "license": { "id": "ISC" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3bf3e07e7a53d712920de4184827d12391b2de13dff7598a543b982d41d924c883169b6f3f8d4c4a75a87e6f1d9c29b4db9e9935f64833b0d2cee48c0059e31c"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/zod-to-json-schema/-/zod-to-json-schema-3.25.2.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "packages/mcp-server/node_modules/zod-to-json-schema" }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2Fzod",
       "name": "zod",
       "version": "3.25.76",
@@ -22901,27 +21098,6 @@
       ],
       "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz" }],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/zod" }]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40modelcontextprotocol%2Fclient%2Fnode_modules%2Fzod",
-      "name": "zod",
-      "version": "4.4.3",
-      "purl": "pkg:npm/zod@4.4.3",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cad10d163209165d94c1882575eda37215b61f09b818914b0e249759d4eb25004837d15cca9ee7e0387124489634024c575fc1a967d6fe4920ef55037072724d"
-        }
-      ],
-      "externalReferences": [{ "type": "distribution", "url": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz" }],
-      "properties": [
-        {
-          "name": "ragnarok:package-lock:location",
-          "value": "node_modules/@modelcontextprotocol/client/node_modules/zod"
-        }
-      ]
     },
     {
       "type": "library",
