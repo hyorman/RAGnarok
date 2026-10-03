@@ -723,6 +723,8 @@ assert.deepEqual(mixedCyclicEvaluation, {
 
 const packSmoke = await read("scripts/pack-smoke.mjs");
 assert.match(packSmoke, /spawnSync\("npm", \["audit", "--omit=dev", "--json"\]/);
+assert.match(packSmoke, /const localRoots = \["@ragnarok\/core", "@ragnarok\/mcp-server"\];/);
+assert.match(packSmoke, /new Set\(\[\s*\.\.\.localRoots,/);
 assert.match(packSmoke, /spawnSync\("npm", \["ls", \.\.\.auditViaPackages, "--omit=dev", "--all", "--json"\]/);
 assert.match(packSmoke, /normalizeLocalTarballAuditRanges\(auditReport, localTarballVersions\)/);
 assert.match(packSmoke, /evaluateAuditReport\(normalizedAuditReport, releasePolicy, new Date\(\), installedTree\)/);
@@ -869,7 +871,7 @@ const productionSourceFiles = [
 ];
 assert.ok(
   productionSourceFiles.includes(generatedGraphBundle),
-  "production source guard must include generated source",
+  "production source listing must include the generated graph bundle",
 );
 const productionSources = await Promise.all(
   productionSourceFiles.map(async (file) => ({ file, source: await read(file) })),
