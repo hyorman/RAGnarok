@@ -173,7 +173,7 @@ export {
 } from "./utils/storageV2";
 export type { StorageFormatMarker, StorageInspection } from "./utils/storageV2";
 export { SharedTopicRegistry } from "./sharedTopics/registry";
-export { ArchiveFolderSource } from "./sharedTopics/archiveFolderSource";
+export { ArchiveFolderSource, createSharedTopicSources } from "./sharedTopics/archiveFolderSource";
 export { SharedArchiveCache, deriveSharedTopicId } from "./sharedTopics/archiveCache";
 export { SharedTopicReadOnlyError } from "./sharedTopics/types";
 export type { SharedTopicSource, SharedTopicSourceContext, ResolvedSharedTopic } from "./sharedTopics/types";

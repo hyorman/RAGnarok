@@ -40,7 +40,7 @@ import {
   MemoryService,
   GraphVisualizationService,
   CrossEncoderReranker,
-  ArchiveFolderSource,
+  createSharedTopicSources,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion } from "./config";
@@ -137,7 +137,7 @@ async function main(): Promise<void> {
     embeddingRegistry,
     llmProvider,
     resetStorage: config.resetStorage,
-    sharedTopicSources: config.commonDatabasePath ? [new ArchiveFolderSource(config.commonDatabasePath)] : [],
+    sharedTopicSources: createSharedTopicSources(config.commonDatabasePath),
   });
 
   logger.info(`Loaded ${topicManager.getAllTopics().length} topic(s) from ${config.storageDir}`);

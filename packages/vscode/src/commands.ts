@@ -13,7 +13,7 @@ import {
   sanitizeErrorMessage,
   Topic,
   MemoryStore,
-  ArchiveFolderSource,
+  createSharedTopicSources,
 } from "@ragnarok/core";
 import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
 import { COMMANDS, CONFIG, VSCODE_CONFIG } from "./constants";
@@ -1394,7 +1394,7 @@ export class CommandHandler {
         .getConfiguration(VSCODE_CONFIG.ROOT)
         .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
       await this.topicManager.refreshSharedTopics(
-        configuredPath ? [new ArchiveFolderSource(configuredPath)] : [],
+        createSharedTopicSources(configuredPath),
       );
       this.treeDataProvider.refresh();
       vscode.window.showInformationMessage("RAGnarōk: Shared topics refreshed");

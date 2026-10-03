@@ -19,7 +19,7 @@ import {
   MemoryService,
   GraphVisualizationService,
   RetrievalStrategy,
-  ArchiveFolderSource,
+  createSharedTopicSources,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
 import { VsCodeConfigProvider } from "./adapters/vsCodeConfigProvider";
@@ -236,7 +236,7 @@ export async function activateWithServiceFactory(
           const configuredPath = vscode.workspace
             .getConfiguration(VSCODE_CONFIG.ROOT)
             .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
-          return configuredPath ? [new ArchiveFolderSource(configuredPath)] : [];
+          return createSharedTopicSources(configuredPath);
         })(),
       });
     const topicManager = await openTopicManagerWithMigration(storageDir, createDefaultMigrationUx(createTopicManager));
@@ -561,7 +561,7 @@ export async function activateWithServiceFactory(
               .getConfiguration(VSCODE_CONFIG.ROOT)
               .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
             await topicManager.refreshSharedTopics(
-              configuredPath ? [new ArchiveFolderSource(configuredPath)] : [],
+              createSharedTopicSources(configuredPath),
             );
             treeDataProvider.refresh();
             configDataProvider.refresh();
