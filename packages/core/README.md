@@ -136,7 +136,7 @@ src/
 ├── models/                    # Embedding and reranker model registries
 ├── visualization/             # Deterministic memory-graph visualization documents
 │
-└── utils/                     # Storage v2, lease, migration, archive, shared helpers
+└── utils/                     # Storage format, write lease, archives, shared helpers
 ```
 
 ---
@@ -198,11 +198,7 @@ different model under the same name.
 
 ## Storage compatibility
 
-Core owns the v2 marker, lease, topic and vector stores, standalone memory,
-archive validation, and the offline legacy migrator. One storage root has one
-writer. See the repository [architecture](../../ARCHITECTURE.md),
-[migration guide](../../MIGRATION.md), and
-[operations guide](../../docs/OPERATIONS.md).
+Core owns the v2 marker, the write lease, topic and vector stores, standalone memory, and archive validation. One storage root has one writer at a time. A directory holding data from a pre-0.4 build is refused with `UnsupportedStorageError`. See the repository [architecture](../../ARCHITECTURE.md) and [operations guide](../../docs/OPERATIONS.md).
 
 ---
 

@@ -126,7 +126,7 @@ Notes:
 
 ### 🧠 **Standalone Memory Module**
 
-- **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing or automatic migration.
+- **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing.
 - **Native VS Code Tools**: the extension contributes exactly three language-model tools — `ragQuery` to search a topic, `ragTopic` to list topics or inspect one topic's statistics and documents, and `ragMemory` for scoped memory operations. `ragQuery` and `ragTopic` are read-only. `ragMemory` stores, recalls, and forgets individual memories, but it has no reset action: wiping memory outright is **Reset Memory** in the RAG sidebar's **Memory** section, behind a modal confirmation, just as creating, renaming, exporting, importing, and deleting topics are sidebar actions. The three tools' input schemas are generated from the canonical JSON Schema contracts in `@ragnarok/core` by `npm run tools:manifest` and drift-checked by `npm run tools:manifest:check`.
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
 - **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
@@ -547,7 +547,7 @@ contracts are in the [MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility
 
-Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty 0.3/unversioned storage must be converted before it opens. VS Code converts a supported `v0.3-local` layout automatically on activation and reports where the immutable backup was kept; every other host and layout fails closed and must be converted with the supported offline migrator. Migration never resets or discards a store — a reset is a separate, explicitly consented action. See [MIGRATION.md](MIGRATION.md). Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
+Version 0.4 uses storage format v2 and `.rag` archive format 2.0. A new, empty storage directory initializes automatically. A directory that holds data but no `storage-format.json` comes from an unsupported pre-0.4 build and is refused rather than read: move or delete it to start a new store (the MCP server can instead move it into a backup folder and start fresh with `RAGNAROK_RESET_STORAGE=1`). Embedding fingerprints are persisted per topic and memory store, so incompatible semantic spaces are rejected even when dimensions happen to match.
 
 **Concurrent access:** Reads are lock-free across processes. Any number of
 VS Code windows and MCP server instances may open and read the same storage
@@ -556,16 +556,13 @@ Writes are what serialize: every mutation takes an exclusive per-operation
 lease on the storage directory, waits about five seconds for a foreign writer,
 and then fails with a typed busy error saying another RAGnarōk process is
 writing and to retry, instead of corrupting data. An ingestion holds its lease
-for the whole call. Migration, reset, and rollback still take the store
-exclusively for their entire duration, and other processes are told that
-another window is migrating or resetting. See
+for the whole call. A reset holds the write lease for its whole duration; other processes see the same retryable busy error until it finishes. See
 [the architecture](ARCHITECTURE.md#storage) for the complete concurrency and
 lease model.
 
 ### Delivery and operations
 
 - [Architecture](ARCHITECTURE.md)
-- [Storage migration](MIGRATION.md)
 - [Operations and recovery](docs/OPERATIONS.md)
 - [Security](docs/SECURITY.md)
 - [Benchmark gates](docs/BENCHMARKS.md)
@@ -761,7 +758,7 @@ npm test
 ## 🤝 Contributing
 
 Open an issue before large changes and include the relevant compile, lint,
-test, benchmark, migration, or packaging evidence with the pull request.
+test, benchmark, or packaging evidence with the pull request.
 
 ### Development Setup
 

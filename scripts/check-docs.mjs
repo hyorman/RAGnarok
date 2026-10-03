@@ -7,8 +7,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const canonical = [
   "README.md",
   "ARCHITECTURE.md",
-  "MIGRATION.md",
   "docs/OPERATIONS.md",
+  "docs/RETRIEVAL-PIPELINE.md",
   "docs/SECURITY.md",
   "docs/BENCHMARKS.md",
   "docs/RELEASE.md",
@@ -42,6 +42,14 @@ for (const relative of canonical) {
       throw new Error(`${relative}: broken documentation link ${match[1]}`);
     });
   }
+}
+
+// The storage migrator was deleted: v2 is the only format and pre-0.4 data is
+// refused with UnsupportedStorageError. No canonical doc may describe it.
+for (const relative of canonical) {
+  const contents = await readFile(path.join(root, relative), "utf8");
+  assert.doesNotMatch(contents, /migrat/i, `${relative} still describes the removed storage migration`);
+  assert.doesNotMatch(contents, /storage conversion/i, `${relative} still describes storage conversion`);
 }
 
 const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "utf8");

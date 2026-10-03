@@ -116,5 +116,5 @@ require environments that can actually execute those artifacts.
 
 Release rollback is registry/marketplace-specific. Preserve the manifest,
 provenance, attestation bundle, publication journal, SBOMs, notices, benchmark
-result, smoke logs, and migration notes for every published version so a
+result, smoke logs, and upgrade notes for every published version so a
 withdrawn artifact remains attributable.

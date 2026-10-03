@@ -47,8 +47,8 @@ flowchart LR
 ```
 
 Defaults: `chunkSize` 1000 characters, `chunkOverlap` 200 (`semanticChunker.ts:76-77`). The chunk id
-is content-hashed, so **re-chunking changes every id** — which is why altering chunking is a storage
-migration, not a tweak.
+is content-hashed, so **re-chunking changes every id** — which is why changing chunking
+requires a full reindex.
 
 The default embedding model is `Xenova/all-MiniLM-L6-v2` (384-dim), with VS Code LM and remote
 backends as alternatives. Which one actually runs is decided per topic, not per process — see §2.1.
@@ -171,9 +171,7 @@ Measured quality for these strategies across SciFact, NFCorpus, FiQA, and FRAMES
   exports/                   .rag archives
 ```
 
-Feature directories are created lazily. There are no `kg-*` tables and no `checkpoints-lancedb/`
-directory; the offline migrator recognizes legacy `kg-*` tables only so it can drop them without
-treating them as unknown structure (see [MIGRATION.md](../MIGRATION.md)).
+Feature directories are created lazily. There are no `kg-*` tables and no `checkpoints-lancedb/` directory.
 
 ---
 
