@@ -1242,6 +1242,11 @@ export class MemoryStore {
     let watcher: fsSync.FSWatcher;
     try {
       watcher = fsSync.watch(this.storageDir, (_eventType, filename) => this.onRawWatchEvent(filename));
+      // Unref'd for the same reason the debounce and markdown timers below are:
+      // a watcher must not be the handle that keeps a host process alive. Hosts
+      // dispose explicitly, so this only changes the fate of an instance nobody
+      // disposed -- which otherwise pins the event loop open forever.
+      watcher.unref?.();
     } catch (error) {
       if (!this.watcherFailureLogged) {
         this.watcherFailureLogged = true;
