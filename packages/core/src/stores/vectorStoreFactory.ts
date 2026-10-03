@@ -30,7 +30,7 @@ import {
   atomicWriteJson,
   STORAGE_FORMAT_VERSION,
   type LegacyVectorStoreMetadata,
-} from "../utils/storageV2";
+} from "../utils/storage";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 export interface VectorStoreConfig {

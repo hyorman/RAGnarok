@@ -4,9 +4,6 @@
   "description": "Portable RAG engine - document loading, embedding, vector storage, and retrieval",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": {
-    "ragnarok-migrate": "dist/migrationCli.js"
-  },
   "files": [
     "dist",
     "assets",

@@ -161,49 +161,21 @@ export {
   STORAGE_FORMAT_VERSION,
   STORAGE_FORMAT_FILENAME,
   STORAGE_CONFIG_FILENAME,
-  StorageMigrationInterruptedError,
-  UnversionedStorageError,
   StorageFormatVersionError,
   StorageResetInterruptedError,
   atomicWriteFile,
   atomicWriteJson,
-  ensureStorageFormatV2,
+  ensureStorageFormat,
   inspectStorage,
-  resetStorageToV2,
-} from "./utils/storageV2";
-export type { StorageFormatMarker, StorageInspection } from "./utils/storageV2";
+  resetStorage,
+} from "./utils/storage";
+export type { StorageFormatMarker, StorageInspection } from "./utils/storage";
 export { SharedTopicRegistry } from "./sharedTopics/registry";
 export { ArchiveFolderSource, createSharedTopicSources } from "./sharedTopics/archiveFolderSource";
 export { SharedArchiveCache, deriveSharedTopicId } from "./sharedTopics/archiveCache";
 export { SharedTopicReadOnlyError } from "./sharedTopics/types";
 export type { SharedTopicSource, SharedTopicSourceContext, ResolvedSharedTopic } from "./sharedTopics/types";
-export { SHARED_TOPIC_CACHE_DIRNAME } from "./utils/storageV2";
-export {
-  MIGRATION_REPORT_FILENAME,
-  MIGRATION_STATE_VERSION,
-  StorageMigrationError,
-  applyStorageMigration,
-  findLatestMigrationState,
-  getStorageMigrationStatus,
-  planStorageMigration,
-  prepareStorageMigration,
-  resumeStorageMigration,
-  rollbackStorageMigration,
-} from "./utils/storageMigration";
-export type {
-  LegacyLayout,
-  MigrationApplyOptions,
-  MigrationDiagnosticCode,
-  MigrationInventory,
-  MigrationInventoryFile,
-  MigrationRemap,
-  MigrationReport,
-  MigrationStage,
-  MigrationState,
-  MigrationTopicPlan,
-  PreparedStorageMigration,
-  StorageMigrationPlan,
-} from "./utils/storageMigration";
+export { SHARED_TOPIC_CACHE_DIRNAME } from "./utils/storage";
 export {
   acquireStorageLock,
   acquireOperationLease,
