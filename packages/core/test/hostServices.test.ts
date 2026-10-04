@@ -46,6 +46,42 @@ describe("host service builders", function () {
     ]);
   });
 
+  it("hands the registry the same service builder and the resident cap", async function () {
+    interface BuiltService {
+      backends: EmbeddingBackend[];
+      disposed: boolean;
+    }
+    const built: BuiltService[] = [];
+    const { embeddingRegistry } = createEmbeddingServices({
+      config,
+      notifier,
+      maxResidentLocal: 2,
+      createBackends: () => [{ name: "only" } as unknown as EmbeddingBackend],
+      createService: () => {
+        const record: BuiltService = { backends: [], disposed: false };
+        built.push(record);
+        return {
+          registerBackend: (backend: EmbeddingBackend) => record.backends.push(backend),
+          initialize: async () => undefined,
+          initializeForBackend: async () => undefined,
+          dispose: async () => {
+            record.disposed = true;
+          },
+        } as unknown as EmbeddingService;
+      },
+    });
+    const hostServiceCount = built.length; // the host's default service, built eagerly
+
+    for (const model of ["a", "b", "c"]) {
+      await embeddingRegistry.get({ model, backend: "huggingface", endpointHash: "local" });
+    }
+
+    const registryServices = built.slice(hostServiceCount);
+    expect(registryServices.map((service) => service.backends.length)).to.deep.equal([1, 1, 1]);
+    expect(registryServices.map((service) => service.disposed)).to.deep.equal([true, false, false]);
+    expect(embeddingRegistry.size().local).to.equal(2);
+  });
+
   it("wires one coordinator into both memory services", function () {
     const coordinator = { tag: "coordinator" };
     const seen: unknown[] = [];

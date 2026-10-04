@@ -467,6 +467,47 @@ describe("TopicManager durable expanded-source ingestion", function () {
     await (manager as any).journals.recoverPostCommitCleanup();
   });
 
+  it("reads a cleanup-journal entry an older build wrote and ignores its legacyContainer flag", async function () {
+    const manager = createManager(storageDir, vectorStore);
+    const parent: TopicDocument = {
+      id: "docs-root",
+      topicId,
+      name: "docs",
+      filePath: "https://example.com/docs",
+      fileType: "text",
+      source: { type: "url", url: "https://example.com/docs" },
+      addedAt: 1,
+      chunkCount: 0,
+    };
+    vectorStore.rows = [
+      new LangChainDocument({
+        pageContent: "page",
+        metadata: { documentId: "docs-page", chunkId: "docs-page-1", source: "https://example.com/docs/page" },
+      }),
+    ];
+    const journalPath = path.join(storageDir, "database", "post-commit-cleanup-journal.json");
+    await fs.writeFile(
+      journalPath,
+      JSON.stringify([
+        {
+          version: 1,
+          id: "older-build-entry",
+          kind: "document",
+          topicId,
+          legacyContainer: true,
+          documents: [parent],
+          updatedAt: 1,
+        },
+      ]),
+    );
+
+    await (manager as any).journals.recoverPostCommitCleanup();
+
+    // The flag once made a chunkless removal sweep every document nested under the URL.
+    expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["docs-page"]);
+    expect(JSON.parse(await fs.readFile(journalPath, "utf8"))).to.deep.equal([]);
+  });
+
   it("stops mutation admission and awaits an admitted mutation before async disposal", async function () {
     const manager = createManager(storageDir, vectorStore);
     let releaseSave!: () => void;

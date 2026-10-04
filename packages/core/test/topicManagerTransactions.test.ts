@@ -18,6 +18,7 @@ import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
 } from "../src/utils/storageTransactionCoordinator";
+import { snapshotTree, writeV03Layout } from "./helpers/v03Layout";
 
 const LOCK_FILENAME = ".ragnarok.lock";
 
@@ -201,12 +202,8 @@ describe("TopicManager operation-scoped write transactions", function () {
   });
 
   it("refuses to open a real v0.3-shaped store and leaves every file in place", async function () {
-    const database = path.join(storageDir, "database");
-    await fs.mkdir(path.join(database, "lancedb", "topic-1.lance"), { recursive: true });
-    const topicsJson = JSON.stringify({ topics: { "topic-1": { id: "topic-1", name: "Old", documentCount: 1 } } });
-    await fs.writeFile(path.join(database, "topics.json"), topicsJson);
-    await fs.writeFile(path.join(database, "topic-topic-1-documents.json"), "[]");
-    await fs.writeFile(path.join(database, "vector-topic-1-metadata.json"), "{}");
+    await writeV03Layout(storageDir);
+    const before = await snapshotTree(storageDir);
 
     let error: Error | undefined;
     try {
@@ -216,8 +213,9 @@ describe("TopicManager operation-scoped write transactions", function () {
     }
 
     expect(error?.name).to.equal("UnsupportedStorageError");
-    expect(await fs.readdir(storageDir)).to.deep.equal(["database"]);
-    expect(await fs.readFile(path.join(database, "topics.json"), "utf8")).to.equal(topicsJson);
+    expect(await snapshotTree(storageDir), "no byte added, removed or rewritten, and no marker stamped").to.deep.equal(
+      before,
+    );
   });
 
   it("opens a refused v0.3-shaped store when started with resetStorage, backing the old data up", async function () {

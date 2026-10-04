@@ -9,7 +9,7 @@ import { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegi
 import { VectorStoreFactory } from "../src/stores/vectorStoreFactory";
 import type { EmbeddingFingerprint } from "../src/embeddings/embeddingBackend";
 import type { ILLMProvider } from "../src/interfaces";
-import { STORAGE_FORMAT_FILENAME } from "../src/utils/storage";
+import { writeV03Layout, snapshotTree } from "./helpers/v03Layout";
 
 // ── Mock Embedding Service ───────────────────────────────────────────
 // Returns a deterministic 32-dim vector derived from a simple text hash.
@@ -882,9 +882,10 @@ describe("MemoryStore reset and cancellation safety", function () {
 describe("MemoryStore standalone format and markdown privacy", function () {
   this.timeout(30000);
 
-  it("refuses a directory holding pre-v2 content and leaves it untouched", async function () {
+  it("refuses a directory holding a v0.3 store and leaves it untouched", async function () {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-format-gate-"));
-    await fs.writeFile(path.join(directory, "legacy-memory.json"), "{}", "utf8");
+    await writeV03Layout(directory);
+    const before = await snapshotTree(directory);
     const standalone = new MemoryStore({
       storageDir: directory,
       embeddingService: createMockEmbeddingService(),
@@ -895,10 +896,10 @@ describe("MemoryStore standalone format and markdown privacy", function () {
     const error = await captureError(standalone.store({ content: "must not enter unsupported storage" }));
 
     expect((error as Error).name).to.equal("UnsupportedStorageError");
-    const entries = await fs.readdir(directory);
-    expect(entries).to.include("legacy-memory.json");
-    expect(entries).to.not.include(STORAGE_FORMAT_FILENAME);
-    expect(await fs.readFile(path.join(directory, "legacy-memory.json"), "utf8")).to.equal("{}");
+    expect((error as { entries?: string[] }).entries).to.deep.equal(["database"]);
+    expect(await snapshotTree(directory), "no byte added, removed or rewritten, and no marker stamped").to.deep.equal(
+      before,
+    );
     await standalone.dispose();
     await fs.rm(directory, { recursive: true, force: true });
   });
