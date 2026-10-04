@@ -574,32 +574,36 @@ export class MemoryVectorStore {
       this.trackTable(table);
       const rows = await table.query().limit(100000).toArray();
 
-      return rows.map((row) => ({
-        id: row.id as string,
-        content: row.content as string,
-        scope: row.scope as MemoryScope,
-        branch: (row.branch as string) || undefined,
-        vector: Array.from(row.vector as ArrayLike<number>),
-        createdAt: row.createdAt as number,
-        updatedAt: row.updatedAt as number,
-        accessCount: row.accessCount as number,
-        lastAccessedAt: row.lastAccessedAt as number,
-        tags: JSON.parse(row.tags as string),
-        entityIds: JSON.parse(row.entityIds as string),
-        metadata: JSON.parse(row.metadata as string),
-        confidence: (row.confidence as number) ?? 1.0,
-        expiresAt: (row.expiresAt as number) || undefined,
-        isLatest: row.isLatest === 0 ? false : true,
-        supersededBy: (row.supersededBy as string) || undefined,
-        previousVersionId: (row.previousVersionId as string) || undefined,
-        version: (row.version as number) ?? 1,
-      }));
+      return rows.map((row) => this.rowToEntry(row));
     } catch (error) {
       this.logger.error(`Failed to load entries from ${tableName}`, error);
       throw new Error(
         `Memory store read failed for table ${tableName}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  private rowToEntry(row: Record<string, unknown>): MemoryEntry {
+    return {
+      id: row.id as string,
+      content: row.content as string,
+      scope: row.scope as MemoryScope,
+      branch: (row.branch as string) || undefined,
+      vector: Array.from(row.vector as ArrayLike<number>),
+      createdAt: row.createdAt as number,
+      updatedAt: row.updatedAt as number,
+      accessCount: row.accessCount as number,
+      lastAccessedAt: row.lastAccessedAt as number,
+      tags: JSON.parse(row.tags as string),
+      entityIds: JSON.parse(row.entityIds as string),
+      metadata: JSON.parse(row.metadata as string),
+      confidence: (row.confidence as number) ?? 1.0,
+      expiresAt: (row.expiresAt as number) || undefined,
+      isLatest: row.isLatest === 0 ? false : true,
+      supersededBy: (row.supersededBy as string) || undefined,
+      previousVersionId: (row.previousVersionId as string) || undefined,
+      version: (row.version as number) ?? 1,
+    };
   }
 
   private async searchEntriesUnlocked(
@@ -628,26 +632,7 @@ export class MemoryVectorStore {
       const rows = await table.vectorSearch(queryVector).where("`isLatest` = 1").limit(topK).toArray();
 
       return rows.map((row) => ({
-        entry: {
-          id: row.id as string,
-          content: row.content as string,
-          scope: row.scope as MemoryScope,
-          branch: (row.branch as string) || undefined,
-          vector: Array.from(row.vector as ArrayLike<number>),
-          createdAt: row.createdAt as number,
-          updatedAt: row.updatedAt as number,
-          accessCount: row.accessCount as number,
-          lastAccessedAt: row.lastAccessedAt as number,
-          tags: JSON.parse(row.tags as string),
-          entityIds: JSON.parse(row.entityIds as string),
-          metadata: JSON.parse(row.metadata as string),
-          confidence: (row.confidence as number) ?? 1.0,
-          expiresAt: (row.expiresAt as number) || undefined,
-          isLatest: row.isLatest === 0 ? false : true,
-          supersededBy: (row.supersededBy as string) || undefined,
-          previousVersionId: (row.previousVersionId as string) || undefined,
-          version: (row.version as number) ?? 1,
-        },
+        entry: this.rowToEntry(row),
         // LanceDB returns _distance (L2), convert to similarity: 1 / (1 + distance)
         score: 1 / (1 + ((row._distance as number) ?? 0)),
       }));
@@ -831,28 +816,15 @@ export class MemoryVectorStore {
   // ── Scope Management ───────────────────────────────────────────────
 
   async listBranches(): Promise<string[]> {
-    if (!(await this.dbDirExists())) {
-      return [];
-    }
-    return this.lockedRead(async () => {
-      const db = await this.getDb();
-      const tableNames = await db.tableNames();
-
-      const prefix = `${MEMORY_TABLE_PREFIX}-entries-branch-`;
-      const branches = new Set<string>();
-
-      for (const name of tableNames) {
-        if (name.startsWith(prefix)) {
-          branches.add(this.decodeBranch(name.slice(prefix.length)));
-        }
-      }
-
-      return Array.from(branches);
-    });
+    return this.listBranchesWithPrefix("entries");
   }
 
   /** List branches that have entity graph tables (may differ from entry branches). */
   async listEntityBranches(): Promise<string[]> {
+    return this.listBranchesWithPrefix("entities");
+  }
+
+  private async listBranchesWithPrefix(kind: "entries" | "entities"): Promise<string[]> {
     if (!(await this.dbDirExists())) {
       return [];
     }
@@ -860,7 +832,7 @@ export class MemoryVectorStore {
       const db = await this.getDb();
       const tableNames = await db.tableNames();
 
-      const prefix = `${MEMORY_TABLE_PREFIX}-entities-branch-`;
+      const prefix = `${MEMORY_TABLE_PREFIX}-${kind}-branch-`;
       const branches = new Set<string>();
 
       for (const name of tableNames) {

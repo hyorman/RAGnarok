@@ -62,13 +62,7 @@ async function reduceStore(result: StoreMemoryResult, fits: Fits): Promise<Store
     memory: { ...result.memory, content: result.memory.content.slice(0, length) },
     responseMeta,
   });
-  const minimal = withContent(0);
-
-  if (!(await fits(minimal))) {
-    return minimal;
-  }
-
-  return withContent(await greatestFitting(result.memory.content.length, (length) => fits(withContent(length))));
+  return largestFittingPrefix(result.memory.content.length, withContent, fits);
 }
 
 async function reduceList(result: ListMemoryResult, fits: Fits): Promise<ListMemoryResult> {
@@ -99,13 +93,7 @@ async function reduceListRecords(result: ListMemoryResult, totalCount: number, f
     count,
     responseMeta: tokenBudgetMeta(count, totalCount),
   });
-  const minimal = withCount(0);
-
-  if (!(await fits(minimal))) {
-    return minimal;
-  }
-
-  return withCount(await greatestFitting(totalCount, (count) => fits(withCount(count))));
+  return largestFittingPrefix(totalCount, withCount, fits);
 }
 
 async function reduceRecall(result: RecallMemoryResult, fits: Fits): Promise<RecallMemoryResult> {
@@ -184,12 +172,7 @@ async function reduceHistory(result: HistoryMemoryResult, fits: Fits): Promise<H
     count,
     responseMeta: tokenBudgetMeta(count, totalCount),
   });
-  const minimal = withCount(0);
-  if (!(await fits(minimal))) {
-    return minimal;
-  }
-
-  return withCount(await greatestFitting(totalCount, (count) => fits(withCount(count))));
+  return largestFittingPrefix(totalCount, withCount, fits);
 }
 
 async function reduceLinks(result: LinksMemoryResult, fits: Fits): Promise<LinksMemoryResult> {
@@ -200,13 +183,7 @@ async function reduceLinks(result: LinksMemoryResult, fits: Fits): Promise<Links
     count,
     responseMeta: tokenBudgetMeta(count, totalCount),
   });
-  const minimal = withCount(0);
-
-  if (!(await fits(minimal))) {
-    return minimal;
-  }
-
-  return withCount(await greatestFitting(totalCount, (count) => fits(withCount(count))));
+  return largestFittingPrefix(totalCount, withCount, fits);
 }
 
 async function reduceCommunities(result: CommunitiesMemoryResult, fits: Fits): Promise<CommunitiesMemoryResult> {
@@ -251,11 +228,19 @@ async function reduceCommunities(result: CommunitiesMemoryResult, fits: Fits): P
     count,
     responseMeta: tokenBudgetMeta(count, totalCount),
   });
+  return largestFittingPrefix(totalCount, withCount, fits);
+}
+
+/** The largest prefix that fits the budget, or the empty result when even that does not fit. */
+async function largestFittingPrefix<T extends MemoryOperationResult>(
+  totalCount: number,
+  withCount: (count: number) => T,
+  fits: Fits,
+): Promise<T> {
   const minimal = withCount(0);
   if (!(await fits(minimal))) {
     return minimal;
   }
-
   return withCount(await greatestFitting(totalCount, (count) => fits(withCount(count))));
 }
 

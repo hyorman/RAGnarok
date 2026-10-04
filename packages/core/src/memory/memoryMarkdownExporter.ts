@@ -67,17 +67,7 @@ export class MemoryMarkdownExporter {
       lines.push("");
     }
 
-    if (params.workspaceEntries.length > 0) {
-      lines.push("### Recent Memories");
-      lines.push("");
-      const sorted = this.sortByDate(params.workspaceEntries).slice(0, 20);
-      for (let i = 0; i < sorted.length; i++) {
-        const entry = sorted[i];
-        const date = new Date(entry.createdAt).toISOString().split("T")[0];
-        lines.push(`${i + 1}. "${this.truncate(entry.content, 80)}" (${date})`);
-      }
-      lines.push("");
-    }
+    lines.push(...this.recentMemories(params.workspaceEntries, 20));
 
     // Branch sections
     for (const [branch, entries] of params.branchEntries) {
@@ -115,20 +105,25 @@ export class MemoryMarkdownExporter {
         lines.push("");
       }
 
-      if (entries.length > 0) {
-        lines.push("### Recent Memories");
-        lines.push("");
-        const sorted = this.sortByDate(entries).slice(0, 10);
-        for (let i = 0; i < sorted.length; i++) {
-          const entry = sorted[i];
-          const date = new Date(entry.createdAt).toISOString().split("T")[0];
-          lines.push(`${i + 1}. "${this.truncate(entry.content, 80)}" (${date})`);
-        }
-        lines.push("");
-      }
+      lines.push(...this.recentMemories(entries, 10));
     }
 
     return lines.join("\n");
+  }
+
+  private recentMemories(entries: MemoryEntry[], limit: number): string[] {
+    if (entries.length === 0) {
+      return [];
+    }
+    const lines = ["### Recent Memories", ""];
+    this.sortByDate(entries)
+      .slice(0, limit)
+      .forEach((entry, index) => {
+        const date = new Date(entry.createdAt).toISOString().split("T")[0];
+        lines.push(`${index + 1}. "${this.truncate(entry.content, 80)}" (${date})`);
+      });
+    lines.push("");
+    return lines;
   }
 
   private sortByStrength(entities: MemoryEntity[]): MemoryEntity[] {
