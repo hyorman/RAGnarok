@@ -48,6 +48,7 @@ import { SharedTopicReadOnlyError } from "../sharedTopics/types";
 import type { SharedTopicSource } from "../sharedTopics/types";
 import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
+import { StorageDirectoryWatcher } from "../utils/storageDirectoryWatcher";
 import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
@@ -349,11 +350,7 @@ export class TopicManager {
   // process touched storage" is only meaningful to the manager instance whose
   // caches it might invalidate.
   private readonly externalChangeEmitter = new EventEmitter();
-  private storageWatcher: fsSync.FSWatcher | null = null;
-  private watcherDebounceTimer: NodeJS.Timeout | null = null;
-  private watcherHealthTimer: NodeJS.Timeout | null = null;
-  private watcherRetryTimer: NodeJS.Timeout | null = null;
-  private watcherUnavailable = false;
+  private externalWatcher: StorageDirectoryWatcher | null = null;
   private watcherStopped = false;
 
   /**
@@ -2492,109 +2489,41 @@ export class TopicManager {
 
   // ==================== External-change watcher ====================
   //
-  // Watches the database directory (never a specific file: atomicWriteJson
-  // publishes topics.json and each topic-documents file via rename-over, and
-  // an inode-following file watch goes silent after the first replacement).
-  // Events are filtered to topics.json / topic-<id>-documents.json, debounced
-  // 250ms, and skipped while this process's own write transaction is active
-  // -- the trailing debounce covers the release edge for any interleaved
-  // event that slips past that check. A watch failure, or the directory going
-  // missing, is reported as `storage-unavailable` and retried every 2s until
-  // storage returns, at which point the watch is re-established, the caches
-  // reloaded, and `topics-changed` emitted.
+  // External changes: a foreign process editing topics.json or a
+  // topic-documents file reloads the caches and emits `topics-changed`; the
+  // directory disappearing emits `storage-unavailable` and is retried until it
+  // returns. Mechanics live in StorageDirectoryWatcher.
 
-  /** Start (or restart) the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
+  /** Start the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
   private startExternalChangeWatcher(): void {
     if (this.watcherStopped) {
       return;
     }
-    // Idempotent re-entry: a caller re-establishing the watch (recovery,
-    // or any future accidental double-start) must never leak the previous
-    // handle/health-timer pair.
-    this.closeWatcher();
-    let watcher: fsSync.FSWatcher;
-    try {
-      watcher = fsSync.watch(this.getDatabaseDir(), (_eventType, filename) => {
-        this.onRawWatchEvent(filename);
-      });
-    } catch (error) {
-      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-    watcher.on("error", (error) => {
-      this.logger.warn("Storage directory watch reported an error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.handleWatchOutage();
+    this.externalWatcher ??= new StorageDirectoryWatcher({
+      directory: this.getDatabaseDir(),
+      accepts: (name) => name === EXTENSION.TOPICS_INDEX_FILENAME || /^topic-.*-documents\.json$/.test(name),
+      debounceMs: 250,
+      onChange: () => this.handleDebouncedChange(),
+      onError: (error) =>
+        this.logger.warn("Storage directory watch reported an error", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      outage: {
+        pollMs: 2_000,
+        retryMs: 2_000,
+        exists: () => this.databaseDirExists(),
+        onUnavailable: () => void this.announceUnavailability(),
+        onRecovered: () => this.recoverFromOutage(),
+      },
     });
-    this.storageWatcher = watcher;
-    this.startWatcherHealthCheck();
+    if (!this.externalWatcher.start()) {
+      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()");
+    }
   }
 
   private stopExternalChangeWatcher(): void {
     this.watcherStopped = true;
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-      this.watcherDebounceTimer = null;
-    }
-    if (this.watcherRetryTimer) {
-      clearTimeout(this.watcherRetryTimer);
-      this.watcherRetryTimer = null;
-    }
-    this.closeWatcher();
-  }
-
-  private closeWatcher(): void {
-    if (this.storageWatcher) {
-      try {
-        this.storageWatcher.close();
-      } catch {
-        // Already closed or the underlying handle is gone; nothing to do.
-      }
-      this.storageWatcher = null;
-    }
-    if (this.watcherHealthTimer) {
-      clearInterval(this.watcherHealthTimer);
-      this.watcherHealthTimer = null;
-    }
-  }
-
-  /**
-   * Deliberate poll-augmentation, not an incidental helper: fs.watch alone
-   * cannot satisfy the unavailability contract on every platform. Linux's
-   * inotify backend emits an 'error' when the watched directory disappears,
-   * but macOS's FSEvents-backed watch does not -- it simply stops emitting
-   * events, with no signal that the directory is gone. A purely reactive
-   * design (relying only on `watcher.on("error", ...)`) would leave
-   * `storage-unavailable` undetectable on macOS until some unrelated
-   * qualifying file event happened to fire, which may never happen after a
-   * directory removal/rename -- exactly the scenario acceptance criterion 6
-   * exists to cover.
-   *
-   * The cost of closing that gap: one unref'd `fs.lstat` per manager every 2
-   * seconds while the watcher is otherwise healthy. Negligible, and it never
-   * keeps the process alive -- the timer is `unref()`'d here and explicitly
-   * cleared by `closeWatcher()` on outage or dispose.
-   */
-  private startWatcherHealthCheck(): void {
-    if (this.watcherHealthTimer) {
-      clearInterval(this.watcherHealthTimer);
-    }
-    this.watcherHealthTimer = setInterval(() => {
-      void this.checkStorageHealth();
-    }, 2_000);
-    this.watcherHealthTimer.unref?.();
-  }
-
-  private async checkStorageHealth(): Promise<void> {
-    if (this.watcherStopped || this.watcherUnavailable) {
-      return;
-    }
-    if (!(await this.databaseDirExists())) {
-      this.handleWatchOutage();
-    }
+    this.externalWatcher?.stop();
   }
 
   private async databaseDirExists(): Promise<boolean> {
@@ -2603,33 +2532,6 @@ export class TopicManager {
     } catch {
       return false;
     }
-  }
-
-  private onRawWatchEvent(filename: string | Buffer | null): void {
-    if (this.watcherStopped) {
-      return;
-    }
-    const name = filename ? filename.toString() : null;
-    if (name !== null && name !== EXTENSION.TOPICS_INDEX_FILENAME && !/^topic-.*-documents\.json$/.test(name)) {
-      return;
-    }
-    if (this.activeLease !== null) {
-      // Our own transaction is writing; its reload already applies the
-      // change and there is nothing external to report.
-      return;
-    }
-    this.scheduleDebouncedReload();
-  }
-
-  private scheduleDebouncedReload(): void {
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-    }
-    this.watcherDebounceTimer = setTimeout(() => {
-      this.watcherDebounceTimer = null;
-      void this.handleDebouncedChange();
-    }, 250);
-    this.watcherDebounceTimer.unref?.();
   }
 
   /**
@@ -2648,33 +2550,17 @@ export class TopicManager {
       return;
     }
     if (!dirExists) {
-      this.handleWatchOutage();
+      this.externalWatcher?.reportOutage();
       return;
     }
     try {
-      await this.storageMutationMutex.runExclusive(async () => {
-        // Checked again inside the mutex: dispose() may have run while this
-        // call was queued waiting for a concurrent transaction/refresh.
-        if (this.watcherStopped) {
-          return;
-        }
-        await this.reloadCanonicalState();
-      });
-      if (this.watcherStopped) {
-        return;
-      }
-      // The local names just changed underneath us, so a shared topic may now
-      // collide with one -- the very hole this feature closes for local
-      // mutations, reopened from outside. Names only: a watcher callback is a
-      // hot path, and D5 keeps folder scans out of those.
-      this.reassignSharedTopicNames();
-      this.emitExternalChange({ kind: "topics-changed" });
+      await this.reloadAfterExternalChange();
     } catch (error) {
       if (this.watcherStopped) {
         return;
       }
       if (errnoCode(error) === "ENOENT") {
-        this.handleWatchOutage();
+        this.externalWatcher?.reportOutage();
         return;
       }
       this.logger.warn("Failed to reload storage state after an external change notification", {
@@ -2683,22 +2569,46 @@ export class TopicManager {
     }
   }
 
-  /** Enter (or stay in) the unavailable state: emit once, tear the watch down, and retry every 2s until storage returns. */
-  private handleWatchOutage(): void {
-    if (this.watcherStopped || this.watcherUnavailable) {
+  /** Reload the caches, then announce the change. Bails silently once the watcher is stopped; callers own error handling. */
+  private async reloadAfterExternalChange(): Promise<void> {
+    await this.storageMutationMutex.runExclusive(async () => {
+      // Checked again inside the mutex: dispose() may have run while this
+      // call was queued waiting for a concurrent transaction/refresh.
+      if (this.watcherStopped) {
+        return;
+      }
+      await this.reloadCanonicalState();
+    });
+    if (this.watcherStopped) {
       return;
     }
-    this.watcherUnavailable = true;
-    // A pending debounced reload targets storage that is (or is about to be)
-    // gone; letting it fire later could race a duplicate topics-changed with
-    // the recovery path's own reload-and-emit.
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-      this.watcherDebounceTimer = null;
+    // The local names just changed underneath us, so a shared topic may now
+    // collide with one -- the very hole this feature closes for local
+    // mutations, reopened from outside. Names only: a watcher callback is a
+    // hot path, and D5 keeps folder scans out of those.
+    this.reassignSharedTopicNames();
+    this.emitExternalChange({ kind: "topics-changed" });
+  }
+
+  /** The directory is back and the watch re-established; a throw re-enters the outage and retries. */
+  private async recoverFromOutage(): Promise<void> {
+    if (this.watcherStopped) {
+      return;
     }
-    this.closeWatcher();
-    void this.announceUnavailability();
-    this.scheduleOutageRetry();
+    if (!this.externalWatcher?.watching) {
+      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()");
+    }
+    try {
+      await this.reloadAfterExternalChange();
+    } catch (error) {
+      if (this.watcherStopped) {
+        return;
+      }
+      this.logger.warn("Storage directory returned but reload failed; retrying", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   /**
@@ -2720,59 +2630,6 @@ export class TopicManager {
     }
     this.logger.warn("Storage became unavailable; external-change tracking will retry until it returns", { reason });
     this.emitExternalChange({ kind: "storage-unavailable" });
-  }
-
-  private scheduleOutageRetry(): void {
-    if (this.watcherStopped) {
-      return;
-    }
-    this.watcherRetryTimer = setTimeout(() => {
-      this.watcherRetryTimer = null;
-      void this.attemptWatcherRecovery();
-    }, 2_000);
-    this.watcherRetryTimer.unref?.();
-  }
-
-  /** Same dispose-race discipline as handleDebouncedChange: re-check `watcherStopped` after every await and bail silently. */
-  private async attemptWatcherRecovery(): Promise<void> {
-    if (this.watcherStopped) {
-      return;
-    }
-    const dirExists = await this.databaseDirExists();
-    if (this.watcherStopped) {
-      return;
-    }
-    if (!dirExists) {
-      this.scheduleOutageRetry();
-      return;
-    }
-    this.watcherUnavailable = false;
-    this.startExternalChangeWatcher();
-    try {
-      await this.storageMutationMutex.runExclusive(async () => {
-        if (this.watcherStopped) {
-          return;
-        }
-        await this.reloadCanonicalState();
-      });
-      if (this.watcherStopped) {
-        return;
-      }
-      // The local names just changed underneath us, so a shared topic may now
-      // collide with one -- the very hole this feature closes for local
-      // mutations, reopened from outside. Names only: a watcher callback is a
-      // hot path, and D5 keeps folder scans out of those.
-      this.reassignSharedTopicNames();
-      this.emitExternalChange({ kind: "topics-changed" });
-    } catch (error) {
-      if (this.watcherStopped) {
-        return;
-      }
-      this.logger.warn("Storage directory returned but reload failed; retrying", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.handleWatchOutage();
-    }
   }
 
   /**

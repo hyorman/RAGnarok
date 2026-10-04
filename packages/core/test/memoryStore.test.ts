@@ -1502,11 +1502,10 @@ describe("MemoryStore lock-free reads and operation leases", function () {
   it("closes the storage watcher on dispose", async function () {
     const current = makeStore();
     await current.store({ content: "watcher disposal memory" });
-    expect((current as any).storageWatcher, "a live store watches its storage directory").to.not.equal(null);
+    expect((current as any).storageWatcher?.watching, "a live store watches its storage directory").to.equal(true);
 
     await current.dispose();
     forget(current);
-    expect((current as any).storageWatcher).to.equal(null);
-    expect((current as any).watcherDebounceTimer).to.equal(null);
+    expect((current as any).storageWatcher?.watching).to.equal(false);
   });
 });
