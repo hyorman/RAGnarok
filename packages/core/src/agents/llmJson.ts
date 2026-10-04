@@ -1,11 +1,12 @@
 import type { z } from "zod";
 import type { ILLMModel } from "../interfaces";
+import { isRecord } from "../utils/typeGuards";
 
 /** A model asked for one object sometimes wraps it: `[{…}]` is that object. Any other array is left alone. */
 function unwrapSoleObject(value: unknown): unknown {
   if (Array.isArray(value) && value.length === 1) {
     const [only] = value as unknown[];
-    if (typeof only === "object" && only !== null && !Array.isArray(only)) {
+    if (isRecord(only)) {
       return only;
     }
   }
