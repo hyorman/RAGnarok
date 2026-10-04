@@ -269,8 +269,10 @@ async function main(): Promise<void> {
 main().catch((error) => {
   console.error("Fatal error starting MCP server:", error);
   // A stdio client shows the operator nothing but this stream, so a startup
-  // refusal that has a concrete next action names it here. Storage written by
-  // a NEWER build is the one that still does: downgrading cannot read it.
+  // refusal that has a concrete next action names it here. Both storage
+  // refusals get a hint: pre-0.4 data (UnsupportedStorageError) can be backed
+  // up by a reset, and storage written by a NEWER build
+  // (StorageFormatVersionError) needs an upgrade or another directory.
   if ((error as Error)?.name === "UnsupportedStorageError") {
     console.error(
       "This storage holds data from an unsupported pre-0.4 build. Start once with RAGNAROK_RESET_STORAGE=1 to move it into a backup folder and begin a new store, or point RAGNAROK_STORAGE_DIR at another directory.",

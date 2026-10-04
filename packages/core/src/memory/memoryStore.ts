@@ -872,11 +872,14 @@ export class MemoryStore {
    * The empty case is the only one that writes. A mutation stamps it under its
    * own lease. A read stamps it opportunistically, with a TRY-lock — it never
    * waits, never fails, and skips the stamp entirely when someone else holds
-   * the lease. The stamp cannot simply be skipped on reads: reads create the
-   * LanceDB directory as a side effect of loading, which would leave the store
-   * looking like unversioned 0.3 data and fail every subsequent open closed.
-   * Skipping it is safe only against a live foreign writer, because that writer
-   * stamps the marker under its own lease before it writes anything.
+   * the lease.
+   *
+   * Skipping a read's stamp is safe because of one invariant: a read never
+   * creates the LanceDB directory. Every read in the vector store checks that
+   * the directory exists first and answers empty when it does not, so only a
+   * mutation ever connects, and every mutation holds the lease and stamps the
+   * marker before it writes. Data therefore never appears beside a missing
+   * marker, and an unstamped empty directory stays classified as empty.
    */
   private async ensureStorageReady(hasLease: boolean): Promise<void> {
     if (this.storageReady) {
