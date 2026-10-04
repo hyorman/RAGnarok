@@ -25,6 +25,26 @@ const vscodeApi = (() => {
   }
 })();
 
+interface EmbeddingResult {
+  values: number[];
+}
+
+/**
+ * The proposed `vscode.lm` embeddings surface. It is missing from the public
+ * `vscode` typings, so the shape this backend relies on is declared here.
+ */
+export interface LmEmbeddingsApi {
+  /** Resolves to one result for a string input and an array of results for an array input. */
+  computeEmbeddings(modelId: string, input: string | string[]): Promise<EmbeddingResult | EmbeddingResult[]>;
+  embeddingModels?: string[];
+}
+
+/** An error's `message` when it has one, otherwise the thrown value itself (for logs and 429 detection). */
+function messageOrError(error: unknown): unknown {
+  const message = typeof error === "object" && error !== null ? (error as { message?: unknown }).message : undefined;
+  return message ?? error;
+}
+
 /**
  * Thin wrapper around `vscode.lm.computeEmbeddings` that implements
  * the {@link EmbeddingBackend} interface.
@@ -46,13 +66,16 @@ export class VscodeLmBackend implements EmbeddingBackend {
   private readonly modelIdResolver?: () => string | undefined | null;
 
   /** The LM API surface — defaults to `vscode.lm`, injectable for testing. */
-  private readonly lmApi: any;
+  private readonly lmApi: LmEmbeddingsApi;
 
-  constructor(modelId?: string, options?: { lmApi?: any; modelIdResolver?: () => string | undefined | null }) {
+  constructor(
+    modelId?: string,
+    options?: { lmApi?: LmEmbeddingsApi; modelIdResolver?: () => string | undefined | null },
+  ) {
     this.configuredModelId = modelId ?? "";
     this.resolvedModelId = modelId ?? "";
     this.modelIdResolver = options?.modelIdResolver;
-    this.lmApi = options?.lmApi ?? (vscodeApi?.lm as any);
+    this.lmApi = options?.lmApi ?? (vscodeApi?.lm as unknown as LmEmbeddingsApi); // may be undefined outside the extension host; callers guard
     this.logger = new Logger("VscodeLmBackend");
   }
 
@@ -99,8 +122,8 @@ export class VscodeLmBackend implements EmbeddingBackend {
       }
 
       return true;
-    } catch (error: any) {
-      this.logger.debug("Error probing VS Code LM availability:", error?.message ?? error);
+    } catch (error) {
+      this.logger.debug("Error probing VS Code LM availability:", messageOrError(error));
       return false;
     }
   }
@@ -178,7 +201,7 @@ export class VscodeLmBackend implements EmbeddingBackend {
     }
 
     try {
-      const result: { values: number[] } = await this.lmApi.computeEmbeddings(this.getResolvedModelId(), text);
+      const result = (await this.lmApi.computeEmbeddings(this.getResolvedModelId(), text)) as EmbeddingResult;
       signal?.throwIfAborted();
 
       const values = result.values;
@@ -188,12 +211,12 @@ export class VscodeLmBackend implements EmbeddingBackend {
 
       this.dimension = values.length;
       return values;
-    } catch (error: any) {
+    } catch (error) {
       if (signal?.aborted) {
         throw signal.reason ?? error;
       }
-      this.logger.error(`VS Code LM embed failed: ${error?.message ?? error}`);
-      throw new Error(`VS Code LM embedding failed: ${error?.message ?? error}`);
+      this.logger.error(`VS Code LM embed failed: ${messageOrError(error)}`);
+      throw new Error(`VS Code LM embedding failed: ${messageOrError(error)}`);
     }
   }
 
@@ -271,11 +294,11 @@ export class VscodeLmBackend implements EmbeddingBackend {
 
       this.logger.debug(`Batch embedding complete: ${allEmbeddings.length} vectors, dim=${this.dimension}`);
       return allEmbeddings;
-    } catch (batchError: any) {
+    } catch (batchError) {
       // Fallback: process only the remaining un-embedded texts sequentially
       const remaining = texts.length - completedCount;
       this.logger.warn(
-        `Batch embedding failed at ${completedCount}/${texts.length} (${batchError?.message}), ` +
+        `Batch embedding failed at ${completedCount}/${texts.length} (${messageOrError(batchError)}), ` +
           `falling back to sequential processing for ${remaining} remaining texts`,
       );
 
@@ -301,14 +324,14 @@ export class VscodeLmBackend implements EmbeddingBackend {
     startIdx: number,
     signal?: AbortSignal,
   ): Promise<Array<{ globalIdx: number; values: number[] }>> {
-    let lastError: Error | undefined;
+    let lastError: unknown;
     for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
       signal?.throwIfAborted();
       try {
-        const results: Array<{ values: number[] }> = await this.lmApi.computeEmbeddings(
+        const results = (await this.lmApi.computeEmbeddings(
           this.getResolvedModelId(),
           batchTexts,
-        );
+        )) as EmbeddingResult[];
         signal?.throwIfAborted();
         return results.map((r, idx) => {
           if (!r.values || r.values.length === 0) {
@@ -316,9 +339,9 @@ export class VscodeLmBackend implements EmbeddingBackend {
           }
           return { globalIdx: startIdx + idx, values: r.values };
         });
-      } catch (error: any) {
+      } catch (error) {
         lastError = error;
-        const msg = error?.message ?? String(error);
+        const msg = String(messageOrError(error));
         if (msg.includes("429") && attempt < VscodeLmBackend.MAX_RETRIES) {
           const backoff = VscodeLmBackend.INITIAL_BACKOFF_MS * Math.pow(2, attempt);
           this.logger.warn(
@@ -338,14 +361,14 @@ export class VscodeLmBackend implements EmbeddingBackend {
    * Embed a single text with exponential backoff for rate-limit (429) errors.
    */
   private async embedWithRetry(text: string, signal?: AbortSignal): Promise<number[]> {
-    let lastError: Error | undefined;
+    let lastError: unknown;
     for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
       signal?.throwIfAborted();
       try {
         return await this.embed(text, signal);
-      } catch (error: any) {
+      } catch (error) {
         lastError = error;
-        const msg = error?.message ?? String(error);
+        const msg = String(messageOrError(error));
         if (msg.includes("429") && attempt < VscodeLmBackend.MAX_RETRIES) {
           const backoff = VscodeLmBackend.INITIAL_BACKOFF_MS * Math.pow(2, attempt);
           this.logger.warn(

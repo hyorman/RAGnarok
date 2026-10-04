@@ -9,6 +9,12 @@
 import { ILLMProvider, ILLMModel, ILLMMessage, Logger, PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "./config";
 
+// The SDKs are loaded with `await import(...)`, which resolves their ESM typings; name the same ones here.
+type OpenAIClient = InstanceType<typeof import("openai", { with: { "resolution-mode": "import" } }).default>;
+type AnthropicClient = InstanceType<
+  typeof import("@anthropic-ai/sdk", { with: { "resolution-mode": "import" } }).default
+>;
+
 function deadlineSignal(
   parent: AbortSignal | undefined,
   timeoutMs: number,
@@ -121,18 +127,22 @@ const openAiChunkText =
 /** The part of an Anthropic stream event that carries text. */
 interface AnthropicStreamEvent {
   type?: string;
-  delta?: { type?: string; text?: unknown };
+  delta?: unknown;
 }
 
 /** Text of one Anthropic stream event, or undefined for events that carry none. */
 function anthropicEventText(event: AnthropicStreamEvent): string | undefined {
-  if (event.type !== "content_block_delta" || event.delta?.type !== "text_delta") {
+  if (event.type !== "content_block_delta" || typeof event.delta !== "object" || event.delta === null) {
     return undefined;
   }
-  if (typeof event.delta.text !== "string") {
+  const delta = event.delta as { type?: unknown; text?: unknown };
+  if (delta.type !== "text_delta") {
+    return undefined;
+  }
+  if (typeof delta.text !== "string") {
     throw new Error("Anthropic stream contained invalid text");
   }
-  return event.delta.text;
+  return delta.text;
 }
 
 export function normalizeOllamaBaseUrl(baseUrl: string): string {
@@ -149,7 +159,7 @@ class OpenAICompatibleModel implements ILLMModel {
   id: string;
 
   constructor(
-    private client: any, // OpenAI instance
+    private client: OpenAIClient,
     private modelName: string,
     private requestTimeoutMs: number,
     private label: string,
@@ -178,7 +188,7 @@ class OpenAICompatibleModel implements ILLMModel {
 
 export class OpenAILLMProvider implements ILLMProvider {
   private logger = new Logger("OpenAILLMProvider");
-  private client: any = null;
+  private client: OpenAIClient | null = null;
   private availability = new AvailabilityCache(10_000);
 
   constructor(
@@ -188,7 +198,7 @@ export class OpenAILLMProvider implements ILLMProvider {
     private requestTimeoutMs = 30_000,
   ) {}
 
-  private async getClient(): Promise<any> {
+  private async getClient(): Promise<OpenAIClient> {
     if (!this.client) {
       const { default: OpenAI } = await import("openai");
       this.client = new OpenAI({
@@ -219,7 +229,7 @@ export class OpenAILLMProvider implements ILLMProvider {
   async isAvailable(): Promise<boolean> {
     return this.availability.check(async () => {
       const client = await this.getClient();
-      await withDeadline(this.requestTimeoutMs, (signal) => client.models.list({}, { signal }));
+      await withDeadline(this.requestTimeoutMs, (signal) => client.models.list({ signal }));
     });
   }
 }
@@ -233,7 +243,7 @@ class AnthropicModel implements ILLMModel {
   family: string;
 
   constructor(
-    private client: any, // Anthropic instance
+    private client: AnthropicClient,
     private modelName: string,
     private requestTimeoutMs: number,
   ) {
@@ -244,7 +254,7 @@ class AnthropicModel implements ILLMModel {
   async sendRequest(messages: ILLMMessage[], signal?: AbortSignal): Promise<AsyncIterable<string>> {
     // Anthropic uses a system parameter instead of a system message
     const systemPrompts: string[] = [];
-    const chatMessages: Array<{ role: string; content: string }> = [];
+    const chatMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
 
     for (const m of messages) {
       if (m.role === "system") {
@@ -274,7 +284,7 @@ class AnthropicModel implements ILLMModel {
 
 export class AnthropicLLMProvider implements ILLMProvider {
   private logger = new Logger("AnthropicLLMProvider");
-  private client: any = null;
+  private client: AnthropicClient | null = null;
   private availability = new AvailabilityCache(10_000);
 
   constructor(
@@ -284,7 +294,7 @@ export class AnthropicLLMProvider implements ILLMProvider {
     private requestTimeoutMs = 30_000,
   ) {}
 
-  private async getClient(): Promise<any> {
+  private async getClient(): Promise<AnthropicClient> {
     if (!this.client) {
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
       this.client = new Anthropic({
@@ -322,7 +332,7 @@ export class AnthropicLLMProvider implements ILLMProvider {
 
 export class OllamaLLMProvider implements ILLMProvider {
   private logger = new Logger("OllamaLLMProvider");
-  private client: any = null;
+  private client: OpenAIClient | null = null;
   private availability = new AvailabilityCache(3_000);
 
   constructor(
@@ -331,7 +341,7 @@ export class OllamaLLMProvider implements ILLMProvider {
     private requestTimeoutMs = 30_000,
   ) {}
 
-  private async getClient(): Promise<any> {
+  private async getClient(): Promise<OpenAIClient> {
     if (!this.client) {
       const { default: OpenAI } = await import("openai");
       this.client = new OpenAI({
@@ -356,7 +366,7 @@ export class OllamaLLMProvider implements ILLMProvider {
   async isAvailable(): Promise<boolean> {
     return this.availability.check(async () => {
       const client = await this.getClient();
-      await withDeadline(this.requestTimeoutMs, (signal) => client.models.list({}, { signal }));
+      await withDeadline(this.requestTimeoutMs, (signal) => client.models.list({ signal }));
     });
   }
 }

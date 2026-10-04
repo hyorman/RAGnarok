@@ -22,7 +22,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { McpServer, type ServerContext, type ToolAnnotations } from "@modelcontextprotocol/server";
+import { McpServer, type CallToolResult, type ServerContext, type ToolAnnotations } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   classifyToolError,
@@ -236,12 +236,12 @@ export function buildMemoryInputSchema() {
 
 // Re-serializes JSON text content and mirrors it as structuredContent so
 // clients get a typed payload without the tool handlers building it twice.
-function normalizeToolResult(value: any): any {
+function normalizeToolResult(value: CallToolResult): CallToolResult {
   if (!value?.content) {
     return value;
   }
-  let structuredContent: unknown;
-  const content = value.content.map((item: any) => {
+  let structuredContent: Record<string, unknown> | undefined;
+  const content = value.content.map((item) => {
     if (item?.type !== "text" || typeof item.text !== "string") {
       return item;
     }
@@ -256,7 +256,7 @@ function normalizeToolResult(value: any): any {
   return { ...value, content, ...(structuredContent ? { structuredContent } : {}) };
 }
 
-function responseTooLargeResult(): any {
+function responseTooLargeResult(): CallToolResult {
   return {
     isError: true,
     content: [
@@ -270,10 +270,10 @@ function responseTooLargeResult(): any {
   };
 }
 
-function isResponseTooLargeResult(result: any): boolean {
+function isResponseTooLargeResult(result: CallToolResult): boolean {
   return Boolean(
     result.isError &&
-    result.content?.some((item: any) => {
+    result.content?.some((item) => {
       if (item?.type !== "text" || typeof item.text !== "string") {
         return false;
       }
@@ -287,9 +287,9 @@ function isResponseTooLargeResult(result: any): boolean {
 }
 
 export function measureToolResultForResponse(
-  value: any,
+  value: CallToolResult,
   maxResponseBytes: number,
-): { fits: boolean; responseBytes: number; result: any } {
+): { fits: boolean; responseBytes: number; result: CallToolResult } {
   let result = normalizeToolResult(value);
   let responseBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
   if (responseBytes > maxResponseBytes) {
@@ -325,27 +325,30 @@ export function registerTools(
   };
   const destructiveAnnotations = { ...writeAnnotations, destructiveHint: true };
   const networkWriteAnnotations = { ...writeAnnotations, openWorldHint: true };
-  type ToolHandler = (args: any, context: ServerContext) => Promise<any>;
+  type ToolHandler<Schema extends z.ZodType = z.ZodType> = (
+    args: z.infer<Schema>,
+    context: ServerContext,
+  ) => Promise<CallToolResult>;
   type PendingTool = {
     name: string;
     config: {
       description: string;
-      inputSchema: z.ZodType<any>;
+      inputSchema: z.ZodType;
       annotations: ToolAnnotations;
       _meta?: Record<string, unknown>;
     };
-    handler: ToolHandler;
+    handler: ToolHandler<z.ZodType>;
   };
 
   const pendingTools: PendingTool[] = [];
   const makeRegistrar =
     (enabled: boolean) =>
-    (
+    <Schema extends z.ZodType>(
       name: string,
       description: string,
-      inputSchema: z.ZodType<any>,
+      inputSchema: Schema,
       annotations: ToolAnnotations,
-      handler: ToolHandler,
+      handler: ToolHandler<Schema>,
       _meta?: Record<string, unknown>,
     ): void => {
       if (!enabled) {
@@ -357,7 +360,8 @@ export function registerTools(
         handler: (args, context) =>
           runtime.run(async () => {
             const { result } = measureToolResultForResponse(
-              await handler(args, context),
+              // The server parses `args` with `inputSchema` before calling this.
+              await handler(args as z.infer<Schema>, context),
               config?.maxResponseBytes ?? MCP_LIMITS.responseBytes,
             );
             return result;
@@ -462,7 +466,10 @@ export function registerTools(
 
   type IngestInput = z.infer<typeof ingestInput>;
 
-  async function ingestFiles(input: Extract<IngestInput, { source: "files" }>, context: ServerContext): Promise<any> {
+  async function ingestFiles(
+    input: Extract<IngestInput, { source: "files" }>,
+    context: ServerContext,
+  ): Promise<CallToolResult> {
     const topicMatch = await topicManager.resolveTopicByName(input.topic);
     const matchedTopic = topicMatch.topic;
 
@@ -509,7 +516,10 @@ export function registerTools(
     };
   }
 
-  async function ingestUrl(input: Extract<IngestInput, { source: "url" }>, context: ServerContext): Promise<any> {
+  async function ingestUrl(
+    input: Extract<IngestInput, { source: "url" }>,
+    context: ServerContext,
+  ): Promise<CallToolResult> {
     const parsed = new URL(input.url);
     if (!["http:", "https:"].includes(parsed.protocol)) {
       throw new Error("Only HTTP(S) URLs are supported");
@@ -527,7 +537,10 @@ export function registerTools(
     return toolJson({ success: results.length > 0, outcomes: results });
   }
 
-  async function ingestGithub(input: Extract<IngestInput, { source: "github" }>, context: ServerContext): Promise<any> {
+  async function ingestGithub(
+    input: Extract<IngestInput, { source: "github" }>,
+    context: ServerContext,
+  ): Promise<CallToolResult> {
     const parsed = new URL(input.url);
     if (parsed.username || parsed.password || parsed.protocol !== "https:") {
       throw new Error("GitHub repositories require an HTTPS URL without embedded credentials");

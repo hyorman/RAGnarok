@@ -82,16 +82,16 @@ export class CommandHandler {
       vscode.commands.registerCommand(COMMANDS.CREATE_TOPIC, () =>
         run(COMMANDS.CREATE_TOPIC, (signal) => handler.createTopic(signal)),
       ),
-      vscode.commands.registerCommand(COMMANDS.DELETE_TOPIC, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.DELETE_TOPIC, (item?: { topic?: Topic }) =>
         run(COMMANDS.DELETE_TOPIC, () => handler.deleteTopic(item)),
       ),
-      vscode.commands.registerCommand(COMMANDS.ADD_DOCUMENT, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.ADD_DOCUMENT, (item?: { topic?: Topic }) =>
         run(COMMANDS.ADD_DOCUMENT, (signal) => handler.addDocument(item, signal)),
       ),
-      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_REPO, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_REPO, (item?: { topic?: Topic }) =>
         run(COMMANDS.ADD_GITHUB_REPO, (signal) => handler.addGithubRepo(item, signal)),
       ),
-      vscode.commands.registerCommand(COMMANDS.ADD_WEB_URL, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.ADD_WEB_URL, (item?: { topic?: Topic }) =>
         run(COMMANDS.ADD_WEB_URL, (signal) => handler.addWebUrl(item, signal)),
       ),
       vscode.commands.registerCommand(COMMANDS.REFRESH_TOPICS, () =>
@@ -133,7 +133,7 @@ export class CommandHandler {
         run(COMMANDS.REMOVE_GITHUB_TOKEN, () => handler.removeGithubToken()),
       ),
       // Import/Export commands
-      vscode.commands.registerCommand(COMMANDS.EXPORT_TOPIC, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.EXPORT_TOPIC, (item?: { topic?: Topic }) =>
         run(COMMANDS.EXPORT_TOPIC, () => handler.exportTopic(item)),
       ),
       vscode.commands.registerCommand(COMMANDS.IMPORT_TOPIC, () =>
@@ -142,7 +142,7 @@ export class CommandHandler {
       vscode.commands.registerCommand(COMMANDS.REFRESH_SHARED_TOPICS, () =>
         run(COMMANDS.REFRESH_SHARED_TOPICS, () => handler.refreshSharedTopics()),
       ),
-      vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: { topic?: Topic }) =>
         run(COMMANDS.RENAME_TOPIC, () => handler.renameTopic(item)),
       ),
     ];
@@ -156,7 +156,7 @@ export class CommandHandler {
    */
   public async setEmbeddingModel(model: string): Promise<void> {
     try {
-      if (typeof (this.embeddingService as any).runTransactionalSwitch === "function") {
+      if (typeof this.embeddingService.runTransactionalSwitch === "function") {
         await this.embeddingService.runTransactionalSwitch(
           this.embeddingService.getActiveBackendType() || undefined,
           model,
@@ -181,9 +181,9 @@ export class CommandHandler {
   /**
    * Rename a topic
    */
-  private async renameTopic(item?: any): Promise<void> {
+  private async renameTopic(item?: { topic?: Topic }): Promise<void> {
     try {
-      let topicToRename;
+      let topicToRename: Topic;
 
       // If called from tree view with item
       if (item && item.topic) {
@@ -198,7 +198,7 @@ export class CommandHandler {
         }
 
         const selected = await vscode.window.showQuickPick(
-          topics.map((t: any) => ({
+          topics.map((t) => ({
             label: t.name,
             description: `${t.documentCount} document(s)`,
             detail: t.description,
@@ -305,9 +305,9 @@ export class CommandHandler {
   /**
    * Delete a topic
    */
-  private async deleteTopic(item?: any): Promise<void> {
+  private async deleteTopic(item?: { topic?: Topic }): Promise<void> {
     try {
-      let topicToDelete;
+      let topicToDelete: Topic;
 
       // If called from tree view with item
       if (item && item.topic) {
@@ -322,7 +322,7 @@ export class CommandHandler {
         }
 
         const selected = await vscode.window.showQuickPick(
-          topics.map((t: any) => ({
+          topics.map((t) => ({
             label: t.name,
             description: `${t.documentCount} document(s)`,
             detail: t.description,
@@ -1018,9 +1018,9 @@ export class CommandHandler {
   /**
    * Export a topic to a .rag file
    */
-  private async exportTopic(item?: any): Promise<void> {
+  private async exportTopic(item?: { topic?: Topic }): Promise<void> {
     try {
-      let topicToExport;
+      let topicToExport: Topic;
 
       // If called from tree view with item
       if (item && item.topic) {

@@ -171,6 +171,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** The Node errno code (`"ENOENT"`, ...) carried by a failed filesystem call, if any. */
+function errnoCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -2020,8 +2025,8 @@ export class TopicManager {
       let sourcesBefore: ArchiveSourceFile[];
       try {
         sourcesBefore = await this.collectArchiveSourceFiles(topicId);
-      } catch (error: any) {
-        if (error?.code === "ENOENT" || error?.code === "ESTALE") {
+      } catch (error) {
+        if (errnoCode(error) === "ENOENT" || errnoCode(error) === "ESTALE") {
           await fs.rm(attemptDir, { recursive: true, force: true });
           continue;
         }
@@ -2069,8 +2074,8 @@ export class TopicManager {
               sha256: await this.hashFile(stagedPath),
             },
           });
-        } catch (error: any) {
-          if (error?.code === "ENOENT" || error?.code === "ESTALE") {
+        } catch (error) {
+          if (errnoCode(error) === "ENOENT" || errnoCode(error) === "ESTALE") {
             copyFailed = true;
             break;
           }
@@ -2090,8 +2095,8 @@ export class TopicManager {
       if (!copyFailed) {
         try {
           sourcesAfter = await this.collectArchiveSourceFiles(topicId);
-        } catch (error: any) {
-          if (error?.code === "ENOENT" || error?.code === "ESTALE") {
+        } catch (error) {
+          if (errnoCode(error) === "ENOENT" || errnoCode(error) === "ESTALE") {
             copyFailed = true;
           } else {
             throw error;
@@ -2126,8 +2131,8 @@ export class TopicManager {
       let tableStat: fsSync.Stats;
       try {
         tableStat = await fs.lstat(tableDir);
-      } catch (error: any) {
-        if (error?.code === "ENOENT") {
+      } catch (error) {
+        if (errnoCode(error) === "ENOENT") {
           continue;
         }
         throw error;
@@ -2161,8 +2166,8 @@ export class TopicManager {
         mtimeMs: stat.mtimeMs,
         ctimeMs: stat.ctimeMs,
       });
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") {
         throw error;
       }
     }
@@ -2283,8 +2288,8 @@ export class TopicManager {
     try {
       await fs.lstat(candidatePath);
       return true;
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) === "ENOENT") {
         return false;
       }
       throw error;
@@ -2439,8 +2444,8 @@ export class TopicManager {
     let data: string;
     try {
       data = await fs.readFile(indexPath, "utf-8");
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") {
         throw error;
       }
 
@@ -2664,11 +2669,11 @@ export class TopicManager {
       // hot path, and D5 keeps folder scans out of those.
       this.reassignSharedTopicNames();
       this.emitExternalChange({ kind: "topics-changed" });
-    } catch (error: any) {
+    } catch (error) {
       if (this.watcherStopped) {
         return;
       }
-      if (error?.code === "ENOENT") {
+      if (errnoCode(error) === "ENOENT") {
         this.handleWatchOutage();
         return;
       }
@@ -2859,8 +2864,8 @@ export class TopicManager {
     let parsed: unknown;
     try {
       parsed = JSON.parse(await fs.readFile(this.getPostCommitCleanupJournalPath(), "utf8"));
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) === "ENOENT") {
         return [];
       }
       throw new Error("Post-commit cleanup journal is corrupt; refusing to expose potentially orphaned storage");
@@ -2947,8 +2952,8 @@ export class TopicManager {
     try {
       const parsed = JSON.parse(await fs.readFile(this.getIngestionJournalPath(), "utf8"));
       return Array.isArray(parsed) ? parsed : [];
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) === "ENOENT") {
         return [];
       }
       throw error;
@@ -3156,8 +3161,8 @@ export class TopicManager {
     let data: string;
     try {
       data = await fs.readFile(documentsPath, "utf-8");
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") {
         throw error;
       }
 
@@ -3348,8 +3353,8 @@ export class TopicManager {
     try {
       const staged = await fs.readdir(path.join(this.getDatabaseDir(), ".transactions"));
       return staged.length > 0;
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) === "ENOENT") {
         return false;
       }
       throw error;

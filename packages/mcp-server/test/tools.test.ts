@@ -149,7 +149,7 @@ describe("common tool response wrapper", () => {
   });
 
   it("serializes and measures a fitting non-graph result once", () => {
-    const input = { content: [{ type: "text", text: JSON.stringify({ message: "ok" }) }] };
+    const input = { content: [{ type: "text" as const, text: JSON.stringify({ message: "ok" }) }] };
     const byteLength = sinon.spy(Buffer, "byteLength");
 
     const measurement = measureToolResultForResponse(input, 1024);
