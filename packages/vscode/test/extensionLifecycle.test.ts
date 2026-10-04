@@ -2,7 +2,7 @@ import { expect } from "chai";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { addDocumentsWithLifecycleSignal, NoDocumentsIngestedError } from "../src/commands";
+import { addDocumentsWithLifecycleSignal, NoDocumentsIngestedError } from "../src/ingestionFlow";
 import { ExtensionLifecycle, ExtensionStoppingError, waitForAbortableUi } from "../src/extensionLifecycle";
 
 describe("extension lifecycle", function () {
