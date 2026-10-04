@@ -79,6 +79,9 @@ src/
 ├── ragTool.ts              # Copilot LM tool (ragQuery), per-topic RAGAgent cache
 ├── topicTool.ts            # Read-only Copilot LM tool (ragTopic): list and stats
 ├── commands.ts             # 20+ VS Code commands
+├── ingestionFlow.ts        # Topic picker and ingestion tail shared by the add-document, add-GitHub and add-URL commands
+├── embeddingConfigHandler.ts # Reacts to settings changes: transactional embedding switches, shared folder, tree view
+├── installedSmoke.ts       # Installed-VSIX smoke: temporary topic, ingest, query, delete
 ├── topicTreeView.ts        # Topics & config sidebar tree view providers
 ├── vscodeLmBackend.ts      # Proposed vscode.lm.computeEmbeddings backend
 ├── githubTokenManager.ts   # GitHub PAT management via SecretStorage

@@ -92,6 +92,59 @@ for (const relative of canonical) {
   }
 }
 
+// Each package guide's Module Layout is a map of src/. Every file directly
+// under src/, and every file under a directory the layout expands (lists
+// children for), must be named in it: a split that adds modules has to say
+// what they are, or the map stops being the one place to look.
+function expandedLayoutDirectories(readmeContents, relative) {
+  const section = readmeContents.split(/^## Module Layout$/m)[1];
+  assert.ok(section, `${relative} must have a "Module Layout" section`);
+  const layout = /```[^\n]*\n([\s\S]*?)```/.exec(section)?.[1];
+  assert.ok(layout, `${relative} Module Layout must contain a tree`);
+  const expanded = new Set();
+  let current;
+  for (const line of layout.split("\n")) {
+    const top = /^[├└]── ([^\s/]+)\//.exec(line);
+    if (top) {
+      current = top[1];
+    } else if (current && /^(?:│| ) {3}[├└]── /.test(line)) {
+      expanded.add(current);
+    } else if (/^[├└]── /.test(line)) {
+      current = undefined;
+    }
+  }
+  return expanded;
+}
+async function typeScriptFilesUnder(directory) {
+  const found = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...(await typeScriptFilesUnder(absolute)));
+    else if (entry.name.endsWith(".ts")) found.push(absolute);
+  }
+  return found;
+}
+for (const pkg of ["core", "mcp-server", "vscode"]) {
+  const relative = `packages/${pkg}/README.md`;
+  const readmeContents = await readFile(path.join(root, relative), "utf8");
+  const src = path.join(root, "packages", pkg, "src");
+  const files = new Set();
+  for (const entry of await readdir(src, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".ts")) files.add(path.join(src, entry.name));
+  }
+  for (const directory of expandedLayoutDirectories(readmeContents, relative)) {
+    for (const file of await typeScriptFilesUnder(path.join(src, directory))) files.add(file);
+  }
+  for (const file of files) {
+    const name = path.basename(file);
+    assert.match(
+      readmeContents,
+      new RegExp(`(?<![A-Za-z0-9])${name.replace(".", "\\.")}`),
+      `${relative} Module Layout must list ${path.relative(src, file)}`,
+    );
+  }
+}
+
 const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "utf8");
 assert.doesNotMatch(mcp, /Existing branch-era storage .* intentionally not migrated/);
 // The stdio server has no roles, so the guide must not resurrect a role matrix.
