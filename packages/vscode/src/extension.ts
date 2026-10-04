@@ -163,6 +163,74 @@ function showUnsupportedStorageModal(storageDir: string, error: UnsupportedStora
     });
 }
 
+/**
+ * Registers the Topics and Configuration tree views and keeps both live when
+ * another window writes topics.json or a documents file, or resets the storage.
+ * Registered before the commands, which refresh them.
+ */
+function registerTreeViews(
+  context: vscode.ExtensionContext,
+  lifecycle: ExtensionLifecycle,
+  topicManager: TopicManager,
+  embeddingService: EmbeddingService,
+): { treeDataProvider: TopicTreeDataProvider; configDataProvider: ConfigTreeDataProvider } {
+  // Register Topics tree view
+  const treeDataProvider = new TopicTreeDataProvider(topicManager);
+  const treeView = vscode.window.createTreeView(VIEWS.RAG_TOPICS, {
+    treeDataProvider,
+    showCollapseAll: true,
+  });
+  context.subscriptions.push(treeView);
+  context.subscriptions.push(treeDataProvider);
+  lifecycle.addDisposable(treeView);
+  lifecycle.addDisposable(treeDataProvider);
+
+  // Register Configuration tree view (separate panel, always shows settings)
+  const configDataProvider = new ConfigTreeDataProvider(embeddingService);
+  const configView = vscode.window.createTreeView(VIEWS.RAG_CONFIG, {
+    treeDataProvider: configDataProvider,
+    showCollapseAll: false,
+  });
+  context.subscriptions.push(configView);
+  context.subscriptions.push(configDataProvider);
+  lifecycle.addDisposable(configView);
+  lifecycle.addDisposable(configDataProvider);
+
+  const externalChangeSubscription = wireExternalStorageChangeRefresh(
+    topicManager,
+    treeDataProvider,
+    configDataProvider,
+    (message) => {
+      void vscode.window.showWarningMessage(message);
+    },
+  );
+  context.subscriptions.push(externalChangeSubscription);
+  lifecycle.addDisposable(externalChangeSubscription);
+
+  return { treeDataProvider, configDataProvider };
+}
+
+/**
+ * Loads the topic index and publishes the context keys the views' welcome
+ * content reads. An unreadable index is refused with a modal, then rethrown so
+ * activation rolls back.
+ */
+async function publishTopicContext(topicManager: Pick<TopicManager, "getAllTopics">): Promise<void> {
+  try {
+    const topics = await topicManager.getAllTopics();
+    logger.info(`Loaded ${topics.length} topics`);
+    await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.HAS_TOPICS, topics.length > 0);
+    await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.LOADED, true);
+  } catch (dbError) {
+    logger.error("Failed to load topics", { error: dbError });
+    await vscode.window.showErrorMessage(
+      "RAGnarōk could not load the topic index safely. No data was changed. Restore a known-good backup before retrying.",
+      { modal: true },
+    );
+    throw dbError;
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<RagnarokExtensionApi> {
   return activateWithServiceFactory(context, defaultServiceFactory);
 }
@@ -284,40 +352,12 @@ export async function activateWithServiceFactory(
     // Signal that the extension has started loading (viewsWelcome uses this)
     await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.LOADED, false);
 
-    // Register Topics tree view
-    const treeDataProvider = new TopicTreeDataProvider(topicManager);
-    const treeView = vscode.window.createTreeView(VIEWS.RAG_TOPICS, {
-      treeDataProvider,
-      showCollapseAll: true,
-    });
-    context.subscriptions.push(treeView);
-    context.subscriptions.push(treeDataProvider);
-    lifecycle.addDisposable(treeView);
-    lifecycle.addDisposable(treeDataProvider);
-
-    // Register Configuration tree view (separate panel, always shows settings)
-    const configDataProvider = new ConfigTreeDataProvider(embeddingService);
-    const configView = vscode.window.createTreeView(VIEWS.RAG_CONFIG, {
-      treeDataProvider: configDataProvider,
-      showCollapseAll: false,
-    });
-    context.subscriptions.push(configView);
-    context.subscriptions.push(configDataProvider);
-    lifecycle.addDisposable(configView);
-    lifecycle.addDisposable(configDataProvider);
-
-    // Keep both tree views live when another window writes topics.json or a
-    // documents file, or resets the storage.
-    const externalChangeSubscription = wireExternalStorageChangeRefresh(
+    const { treeDataProvider, configDataProvider } = registerTreeViews(
+      context,
+      lifecycle,
       topicManager,
-      treeDataProvider,
-      configDataProvider,
-      (message) => {
-        void vscode.window.showWarningMessage(message);
-      },
+      embeddingService,
     );
-    context.subscriptions.push(externalChangeSubscription);
-    lifecycle.addDisposable(externalChangeSubscription);
 
     // Register commands
     const commandRegistrations = await CommandHandler.registerCommands(
@@ -331,20 +371,7 @@ export async function activateWithServiceFactory(
     );
     lifecycle.addDisposable(commandRegistrations);
 
-    // Load topics with error handling
-    try {
-      const topics = await topicManager.getAllTopics();
-      logger.info(`Loaded ${topics.length} topics`);
-      await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.HAS_TOPICS, topics.length > 0);
-      await vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.LOADED, true);
-    } catch (dbError) {
-      logger.error("Failed to load topics", { error: dbError });
-      await vscode.window.showErrorMessage(
-        "RAGnarōk could not load the topic index safely. No data was changed. Restore a known-good backup before retrying.",
-        { modal: true },
-      );
-      throw dbError;
-    }
+    await publishTopicContext(topicManager);
 
     // Register RAG tool for Copilot/LLM agents
     let ragToolRegistration: ReturnType<typeof RAGTool.register> | undefined;
