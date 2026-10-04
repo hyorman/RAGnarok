@@ -1,12 +1,26 @@
 import type { z } from "zod";
 import type { ILLMModel } from "../interfaces";
 
-/** The JSON object in an LLM reply: a fenced block when present, else the outermost `{…}`. */
+/** A model asked for one object sometimes wraps it: `[{…}]` is that object. Any other array is left alone. */
+function unwrapSoleObject(value: unknown): unknown {
+  if (Array.isArray(value) && value.length === 1) {
+    const [only] = value as unknown[];
+    if (typeof only === "object" && only !== null && !Array.isArray(only)) {
+      return only;
+    }
+  }
+  return value;
+}
+
+/**
+ * The JSON object in an LLM reply: a fenced block when present, else the
+ * outermost `{…}`. A lone object wrapped in a one-element array is unwrapped.
+ */
 export function extractJsonObject(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
   const candidate = (fenced ? fenced[1] : text).trim();
   try {
-    return JSON.parse(candidate);
+    return unwrapSoleObject(JSON.parse(candidate));
   } catch {
     const braces = candidate.match(/\{[\s\S]*\}/);
     if (!braces) {

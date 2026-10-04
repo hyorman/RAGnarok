@@ -1076,6 +1076,23 @@ describe("RAGAgent", function () {
       expect(followUp!.subQueries.map((sq) => sq.query)).to.deep.equal(["python decorators", "python generators"]);
       expect(followUp!._heuristicFallback).to.not.equal(true);
     });
+
+    it("accepts a reply the LLM wrapped in a one-element array", async function () {
+      const reply = JSON.stringify([{ subQueries: [{ query: "python decorators", reasoning: "r1", topK: 4 }] }]);
+      const llmAgent = new RAGAgent(mockConfig, replyingProvider(reply));
+      const plan: QueryPlan = {
+        originalQuery: "Python features",
+        complexity: "moderate",
+        subQueries: [{ query: "Python basics", reasoning: "r", topK: 5 }],
+        explanation: "test",
+      };
+      const gapAnalysis = llmAgent.analyzeGaps(plan, []);
+
+      const followUp = await llmAgent.generateFollowUpPlan(plan, gapAnalysis, [], defaultQueryOptions());
+
+      // The heuristic fallback would broaden "Python basics" instead.
+      expect(followUp!.subQueries.map((sq) => sq.query)).to.deep.equal(["python decorators"]);
+    });
   });
 
   describe("Iterative Refinement with Query-Aware Store", function () {
