@@ -99,7 +99,9 @@ articleDigests.sort(([left], [right]) => left.localeCompare(right));
 const articleSetSha256 = sha256(`${articleDigests.map((row) => row.join("\0")).join("\n")}\n`);
 if (articleDigests.length !== frames.sampleArticleCount || articleSetSha256 !== frames.sampleArticlesSha256) {
   throw new Error(
-    "FRAMES article acquisition does not match the pinned sample. Do not update checksums without reviewed source evidence.",
+    `FRAMES article acquisition does not match the pinned sample (got ${articleDigests.length} articles, ${articleSetSha256}; ` +
+      `pinned ${frames.sampleArticleCount}, ${frames.sampleArticlesSha256}). ` +
+      "Do not update checksums without reviewed source evidence.",
   );
 }
 

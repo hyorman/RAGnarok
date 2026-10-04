@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "baselineCommit": "ac9ebb1859cb65b8481fd820b66cc122ea3585aa",
-  "corpusManifestSha256": "c5ff91ed7fefb87c2a2530dbd2c7e69c3db54155220a4736e8fe3879739333ed",
+  "corpusManifestSha256": "8432f3bd505ec0a022ecbe231e7bb09bec9c59093683c80f83133dd3f2089063",
   "rankingContract": "squared-l2-unit-cosine-v1",
   "environment": {
     "node": "20-or-22",

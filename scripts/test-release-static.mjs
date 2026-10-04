@@ -2291,6 +2291,12 @@ assert.doesNotMatch(
   "every corpus download goes through downloadWithRetry",
 );
 assert.equal([...acquireCorpora.matchAll(/downloadWithRetry\(/g)].length, 3, "SciFact, FRAMES and every article");
+// A drifted sample has to be diagnosable from the failure alone: it names what was computed and what is pinned.
+assert.match(
+  acquireCorpora,
+  /does not match the pinned sample \(got \$\{articleDigests\.length\} articles, \$\{articleSetSha256\}; `\s*\+\s*`pinned \$\{frames\.sampleArticleCount\}, \$\{frames\.sampleArticlesSha256\}\)\./,
+);
+assert.match(acquireCorpora, /Do not update checksums without reviewed source evidence\./);
 
 const notice = await read("NOTICE");
 const models = JSON.parse(await read("packages/core/assets/models/manifest.json"));

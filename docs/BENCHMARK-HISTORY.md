@@ -177,6 +177,8 @@ superiority on this dataset.
   higher-dim embeddings better capture temporal concepts.
 - 92.5% corpus coverage (2,314/2,503 articles). Improved from 72% through
   incremental caching across runs.
+- The 35-article release sample was re-pinned on 2026-10-04 to the live summaries; figures above were measured on the
+  earlier text.
 
 ---
 
