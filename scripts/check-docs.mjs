@@ -128,6 +128,17 @@ assert.match(vscodeReadme, /RAG: Show Memory Graph/);
 // facts below were each found to contradict the code.
 const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
 const readme = rootReadme;
+// The welcome panels ship inside the extension and are what a user reads when
+// storage is refused. They must not point at a guide that no longer exists.
+for (const entry of manifest.contributes.viewsWelcome) {
+  assert.doesNotMatch(entry.contents, /migrat/i, `viewsWelcome for ${entry.view} still mentions migration`);
+  for (const link of entry.contents.matchAll(/https:\/\/github\.com\/hyorman\/ragnarok\/blob\/main\/([^\s)]+)/g)) {
+    const target = decodeURIComponent(link[1].split("#", 1)[0]);
+    await access(path.join(root, target)).catch(() => {
+      throw new Error(`viewsWelcome for ${entry.view} links to a file that does not exist: ${target}`);
+    });
+  }
+}
 for (const key of Object.keys(manifest.contributes.configuration.properties)) {
   assert.match(readme, new RegExp(key.replace(".", "\\.")), `README.md must document the ${key} setting`);
 }
