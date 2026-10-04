@@ -98,6 +98,40 @@ describe("TopicManager metadata corruption handling", function () {
     expect(await fs.readFile(indexPath, "utf8")).to.equal(corruptContents);
   });
 
+  describe("topic entry source", function () {
+    // No write path in the codebase has ever persisted a topic `source` other
+    // than "local" (imports) or nothing at all (createTopic): "common" was only
+    // ever stamped on in-memory copies, so a v2 store cannot contain it.
+    async function loadWithSource(source: unknown): Promise<unknown> {
+      const entry = { id: "t1", name: "T", createdAt: 1, updatedAt: 1, documentCount: 0, source };
+      await fs.writeFile(
+        path.join(databaseDir, "topics.json"),
+        JSON.stringify({ topics: { t1: entry }, modelName: "test-model", lastUpdated: 1 }),
+        "utf8",
+      );
+      try {
+        await (createManager(storageDir) as any).loadTopicsIndex();
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    }
+
+    it('accepts exactly the sources "local" and "shared", or none', async function () {
+      expect(await loadWithSource("local")).to.equal(undefined);
+      expect(await loadWithSource("shared")).to.equal(undefined);
+      expect(await loadWithSource(undefined)).to.equal(undefined);
+    });
+
+    it('rejects any other source, including the retired "common"', async function () {
+      for (const source of ["common", "remote", "", 1]) {
+        const error = await loadWithSource(source);
+        expect(error, `source ${JSON.stringify(source)}`).to.be.instanceOf(Error);
+        expect((error as Error).message).to.include('invalid topic entry "t1"');
+      }
+    });
+  });
+
   it("propagates non-ENOENT index I/O errors without initializing empty state", async function () {
     const indexPath = path.join(databaseDir, "topics.json");
     await fs.mkdir(indexPath);

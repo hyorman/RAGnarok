@@ -221,14 +221,14 @@ export class TopicTreeItem extends vscode.TreeItem {
     switch (type) {
       case "topic":
         const topic = data as Topic;
-        const isCommon = topic.source === "common";
+        const isShared = topic.source === "shared";
         this.tooltip = topic.description || topic.name;
-        this.description = isCommon
+        this.description = isShared
           ? `${topic.documentCount} document${topic.documentCount !== 1 ? "s" : ""} (read-only)`
           : `${topic.documentCount} document${topic.documentCount !== 1 ? "s" : ""}`;
-        // Use different contextValue for common topics to hide modify actions in menus
-        this.contextValue = isCommon ? "topic-common" : "topic";
-        this.iconPath = new vscode.ThemeIcon(isCommon ? "folder-library" : "folder");
+        // Use different contextValue for shared topics to hide modify actions in menus
+        this.contextValue = isShared ? "topic-shared" : "topic";
+        this.iconPath = new vscode.ThemeIcon(isShared ? "folder-library" : "folder");
         break;
 
       case "document":

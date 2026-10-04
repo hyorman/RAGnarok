@@ -86,7 +86,7 @@ export class SharedTopicRegistry {
         const name = this.assignName(entry.topic.name, source.label, taken);
         taken.add(name.toLowerCase());
         rebuilt.set(entry.sharedId, {
-          topic: { ...entry.topic, id: entry.sharedId, name, source: "common" },
+          topic: { ...entry.topic, id: entry.sharedId, name, source: "shared" },
           documents: entry.documents,
           storeDir: entry.storeDir,
           preferredName: entry.topic.name,

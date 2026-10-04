@@ -14,7 +14,7 @@ describe("ingestion flow", function () {
   it("uses the tree item's topic without prompting", async function () {
     const quickPick = sinon.stub(vscode.window, "showQuickPick").resolves(undefined);
     const picked = await pickWritableTopic(
-      { topicManager: { getAllTopics: () => [], isCommonTopic: () => false }, createTopic: async () => undefined },
+      { topicManager: { getAllTopics: () => [], isSharedTopic: () => false }, createTopic: async () => undefined },
       { topic: topic("t1") },
     );
     expect(picked?.id).to.equal("t1");
@@ -24,7 +24,7 @@ describe("ingestion flow", function () {
   it("refuses a shared topic with a warning", async function () {
     const warning = sinon.stub(vscode.window, "showWarningMessage").resolves(undefined);
     const picked = await pickWritableTopic(
-      { topicManager: { getAllTopics: () => [], isCommonTopic: () => true }, createTopic: async () => undefined },
+      { topicManager: { getAllTopics: () => [], isSharedTopic: () => true }, createTopic: async () => undefined },
       { topic: topic("shared", "Team docs") },
     );
     expect(picked).to.equal(undefined);
@@ -41,7 +41,7 @@ describe("ingestion flow", function () {
       .callsFake((async (items: Promise<readonly unknown[]> | readonly unknown[]) => (await items)[0]) as never);
     const picked = await pickWritableTopic(
       {
-        topicManager: { getAllTopics: () => topics, isCommonTopic: () => false },
+        topicManager: { getAllTopics: () => topics, isSharedTopic: () => false },
         createTopic: async () => {
           topics = [topic("new")];
         },
@@ -56,7 +56,7 @@ describe("ingestion flow", function () {
     let created = false;
     const picked = await pickWritableTopic(
       {
-        topicManager: { getAllTopics: () => [], isCommonTopic: () => false },
+        topicManager: { getAllTopics: () => [], isSharedTopic: () => false },
         createTopic: async () => {
           created = true;
         },

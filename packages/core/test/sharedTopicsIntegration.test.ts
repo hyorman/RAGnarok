@@ -89,9 +89,11 @@ describe("shared topics end to end", function () {
     const topics = consumer.getAllTopics();
     expect(topics).to.have.lengthOf(1);
     expect(topics[0].name).to.equal("API Docs");
-    expect(topics[0].source).to.equal("common");
+    expect(topics[0].source).to.equal("shared");
     expect(topics[0].id).to.match(/^shared-[0-9a-f]{16}$/);
-    expect(consumer.isCommonTopic(topics[0].id)).to.equal(true);
+    expect(consumer.isSharedTopic(topics[0].id)).to.equal(true);
+    const shared = consumer.getAllTopics().find((topic) => topic.id !== undefined && consumer.isSharedTopic(topic.id));
+    expect(shared?.source).to.equal("shared");
 
     // 3. The shared topic is queryable through real LanceDB.
     const store = await consumer.getVectorStore(topics[0].id);
@@ -139,7 +141,7 @@ describe("shared topics end to end", function () {
 
     const topics = consumer.getAllTopics();
     const local = topics.find((entry) => entry.source === "local");
-    const shared = topics.find((entry) => entry.source === "common");
+    const shared = topics.find((entry) => entry.source === "shared");
     expect(local?.name).to.equal("API Docs");
     expect(shared?.name).to.equal("API Docs (share)");
     // Without the post-create refresh both would still be called "API Docs",
@@ -169,7 +171,7 @@ describe("shared topics end to end", function () {
 
     const topics = consumer.getAllTopics();
     expect(topics.find((entry) => entry.source === "local")?.name).to.equal("API Docs");
-    expect(topics.find((entry) => entry.source === "common")?.name).to.equal("API Docs (share)");
+    expect(topics.find((entry) => entry.source === "shared")?.name).to.equal("API Docs (share)");
     const names = topics.map((entry) => entry.name);
     expect(new Set(names).size).to.equal(names.length);
 
@@ -184,7 +186,7 @@ describe("shared topics end to end", function () {
 
     const consumer = await createTestTopicManager(consumerDir, [new ArchiveFolderSource(shareDir)]);
     const local = await consumer.createTopic({ name: "API Docs" });
-    expect(consumer.getAllTopics().find((entry) => entry.source === "common")?.name).to.equal("API Docs (share)");
+    expect(consumer.getAllTopics().find((entry) => entry.source === "shared")?.name).to.equal("API Docs (share)");
 
     await consumer.deleteTopic(local.id);
 
@@ -235,11 +237,11 @@ describe("shared topics end to end", function () {
     const local = await consumer.createTopic({ name: "API Docs" });
 
     expect(scans, "createTopic must not scan the share").to.equal(afterInit);
-    expect(consumer.getAllTopics().find((entry) => entry.source === "common")?.name).to.equal("API Docs (share)");
+    expect(consumer.getAllTopics().find((entry) => entry.source === "shared")?.name).to.equal("API Docs (share)");
 
     await consumer.updateTopic(local.id, { name: "Internal Notes" });
     expect(scans, "updateTopic must not scan the share").to.equal(afterInit);
-    expect(consumer.getAllTopics().find((entry) => entry.source === "common")?.name).to.equal("API Docs");
+    expect(consumer.getAllTopics().find((entry) => entry.source === "shared")?.name).to.equal("API Docs");
 
     await consumer.deleteTopic(local.id);
     expect(scans, "deleteTopic must not scan the share").to.equal(afterInit);

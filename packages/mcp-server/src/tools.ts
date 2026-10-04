@@ -633,7 +633,7 @@ export function registerTools(
             // this closes the gap. refreshSharedTopics never throws and takes
             // no write lease, so a concurrent writer cannot make it fail.
             await topicManager.refreshSharedTopics();
-            const sharedTopicCount = topicManager.getAllTopics().filter((topic) => topic.source === "common").length;
+            const sharedTopicCount = topicManager.getAllTopics().filter((topic) => topic.source === "shared").length;
             return toolJson({ success: true, sharedTopicCount });
           }
           case "stats":

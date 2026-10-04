@@ -216,11 +216,8 @@ export class CommandHandler {
         topicToRename = selected.topic;
       }
 
-      // Check if topic is from common database (read-only)
-      if (this.topicManager.isCommonTopic(topicToRename.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot rename "${topicToRename.name}" - topics from common database are read-only.`,
-        );
+      if (this.topicManager.isSharedTopic(topicToRename.id)) {
+        vscode.window.showWarningMessage(`Cannot rename "${topicToRename.name}": shared topics are read-only.`);
         return;
       }
 
@@ -343,11 +340,8 @@ export class CommandHandler {
         topicToDelete = selected.topic;
       }
 
-      // Check if topic is from common database (read-only)
-      if (this.topicManager.isCommonTopic(topicToDelete.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot delete "${topicToDelete.name}" - topics from common database are read-only.`,
-        );
+      if (this.topicManager.isSharedTopic(topicToDelete.id)) {
+        vscode.window.showWarningMessage(`Cannot delete "${topicToDelete.name}": shared topics are read-only.`);
         return;
       }
 
@@ -1034,7 +1028,7 @@ export class CommandHandler {
       } else {
         // Called from command palette - show picker
         const topics = (await this.topicManager.getAllTopics()).filter(
-          (t) => t.source !== "common", // Only show local topics for export
+          (t) => t.source !== "shared", // Only show local topics for export
         );
 
         if (topics.length === 0) {
@@ -1061,11 +1055,8 @@ export class CommandHandler {
         topicToExport = selected.topic;
       }
 
-      // Check if topic is from common database
-      if (this.topicManager.isCommonTopic(topicToExport.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot export "${topicToExport.name}" - topics from common database cannot be exported.`,
-        );
+      if (this.topicManager.isSharedTopic(topicToExport.id)) {
+        vscode.window.showWarningMessage(`Cannot export "${topicToExport.name}": shared topics cannot be exported.`);
         return;
       }
 

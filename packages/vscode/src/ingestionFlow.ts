@@ -38,7 +38,7 @@ export async function addDocumentsWithLifecycleSignal(
 }
 
 export interface TopicPickerDeps {
-  topicManager: Pick<TopicManager, "getAllTopics" | "isCommonTopic">;
+  topicManager: Pick<TopicManager, "getAllTopics" | "isSharedTopic">;
   createTopic(signal?: AbortSignal): Promise<void>;
 }
 
@@ -78,7 +78,7 @@ export async function pickWritableTopic(
     }
     topic = selected.topic;
   }
-  if (deps.topicManager.isCommonTopic(topic.id)) {
+  if (deps.topicManager.isSharedTopic(topic.id)) {
     vscode.window.showWarningMessage(`Cannot add documents to "${topic.name}": shared topics are read-only.`);
     return undefined;
   }

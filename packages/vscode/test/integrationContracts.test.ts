@@ -142,14 +142,14 @@ describe("VS Code contribution and tree contracts", function () {
       { id: "local", name: "Local", documentCount: 1, createdAt: 0, updatedAt: 0 } as any,
       "topic",
     );
-    const common = new TopicTreeItem(
-      { id: "common", name: "Common", documentCount: 2, createdAt: 0, updatedAt: 0, source: "common" } as any,
+    const shared = new TopicTreeItem(
+      { id: "shared", name: "Shared", documentCount: 2, createdAt: 0, updatedAt: 0, source: "shared" } as any,
       "topic",
     );
     expect(local.label).to.equal("Local");
     expect(local.description).to.equal("1 document");
-    expect(common.description).to.equal("2 documents (read-only)");
-    expect(common.contextValue).to.equal("topic-common");
+    expect(shared.description).to.equal("2 documents (read-only)");
+    expect(shared.contextValue).to.equal("topic-shared");
   });
 });
 

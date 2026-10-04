@@ -222,7 +222,7 @@ function parseTopicsIndex(data: string): TopicsIndex {
       !Number.isInteger(value.documentCount) ||
       (value.documentCount as number) < 0 ||
       (value.description !== undefined && typeof value.description !== "string") ||
-      (value.source !== undefined && value.source !== "local" && value.source !== "common")
+      (value.source !== undefined && value.source !== "local" && value.source !== "shared")
     ) {
       throw new Error(`Invalid ${EXTENSION.TOPICS_INDEX_FILENAME}: invalid topic entry "${topicId}"`);
     }
@@ -321,7 +321,7 @@ export class TopicManager {
   private topicNameVectorCache: Map<string, number[]> = new Map();
   private topicNameVectorModel: string | null = null;
 
-  /** Read-only topics contributed by configured sources. Replaces the common database. */
+  /** Read-only topics contributed by configured shared-topic sources. */
   private readonly sharedTopics: SharedTopicRegistry;
   private readonly sharedTopicsMutex = new Mutex();
   private journalMutex = new Mutex();
@@ -608,7 +608,7 @@ export class TopicManager {
         { type: "delete", destination: path.join(lancedbDir, `${topicId}.lance`) },
       ];
 
-      // Closing the shared factory invalidates handles for every local/common
+      // Closing the shared factory invalidates handles for every local/shared
       // topic, so clear the complete cache before reopening it.
       this.invalidateVectorStoreCache();
       this.vectorStoreFactory.dispose();
@@ -858,7 +858,7 @@ export class TopicManager {
   }
 
   /** True when this topic comes from a shared source and is therefore read-only. */
-  public isCommonTopic(topicId: string): boolean {
+  public isSharedTopic(topicId: string): boolean {
     return this.sharedTopics.has(topicId);
   }
 
@@ -996,14 +996,14 @@ export class TopicManager {
     storageDir: string;
     databaseDir: string;
     topicCount: number;
-    commonTopicCount: number;
+    sharedTopicCount: number;
   }> {
     return {
       formatVersion: 2,
       storageDir: this.storageDir,
       databaseDir: this.getDatabaseDir(),
       topicCount: Object.keys(this.topicsIndex?.topics ?? {}).length,
-      commonTopicCount: this.sharedTopics.listTopics().length,
+      sharedTopicCount: this.sharedTopics.listTopics().length,
     };
   }
 
