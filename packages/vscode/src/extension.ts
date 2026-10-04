@@ -4,7 +4,6 @@
  */
 
 import * as vscode from "vscode";
-import * as fs from "fs/promises";
 import {
   TopicManager,
   EmbeddingService,
@@ -17,7 +16,6 @@ import {
   MemoryOperationCoordinator,
   MemoryService,
   GraphVisualizationService,
-  RetrievalStrategy,
   createSharedTopicSources,
   createEmbeddingServices,
   createMemoryServices,
@@ -38,6 +36,8 @@ import { registerMemoryTools } from "./memoryTools";
 import { MemoryGraphPanel } from "./memoryGraphPanel";
 import { registerMemoryGraphCommand } from "./memoryGraphCommand";
 import { registerMemorySidebar } from "./memoryTreeView";
+import { registerConfigurationHandler } from "./embeddingConfigHandler";
+import { runInstalledSmoke } from "./installedSmoke";
 
 // Install VS Code logger factory before anything else
 setLoggerFactory(new VsCodeLoggerFactory());
@@ -329,227 +329,29 @@ export async function activateWithServiceFactory(
     // Register RAG tool for Copilot/LLM agents
     let ragToolRegistration: ReturnType<typeof RAGTool.register> | undefined;
     try {
-      if (!vscode.lm || typeof vscode.lm.registerTool !== "function") {
-        logger.warn("Language Model API not available. Requires VS Code 1.90+ and GitHub Copilot Chat.");
-        vscode.window
-          .showWarningMessage(
-            "RAG Tool requires VS Code 1.90+ and GitHub Copilot Chat extension to be visible.",
-            "Learn More",
-          )
-          .then((selection) => {
-            if (selection === "Learn More") {
-              vscode.env.openExternal(vscode.Uri.parse("https://code.visualstudio.com/docs/copilot/copilot-chat"));
-            }
-          });
-      } else {
-        ragToolRegistration = RAGTool.register(context, topicManager, embeddingService, configProvider, llmProvider);
-        lifecycle.setResources({ ragTool: ragToolRegistration });
-        lifecycle.addDisposable(ragToolRegistration);
-        // Same guard on purpose: without vscode.lm there is nothing to register.
-        lifecycle.addDisposable(TopicTool.register(context, topicManager));
-        logger.info("RAG query and topic tools registered successfully");
-      }
+      ragToolRegistration = RAGTool.register(context, topicManager, embeddingService, configProvider, llmProvider);
+      lifecycle.setResources({ ragTool: ragToolRegistration });
+      lifecycle.addDisposable(ragToolRegistration);
+      lifecycle.addDisposable(TopicTool.register(context, topicManager));
+      logger.info("RAG query and topic tools registered successfully");
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error("Failed to register RAG tool", { error: errorMessage });
       vscode.window.showWarningMessage(`RAG tool registration failed: ${errorMessage}`);
     }
 
-    // Register configuration change listener for embedding model. The last
-    // successfully committed settings are restored if a transactional switch
-    // or dependent-store validation fails.
-    const initialConfig = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
-    let committedLocalModelPath = initialConfig.get<string>(CONFIG.LOCAL_MODEL_PATH, "");
-    let committedEmbeddingBackend = initialConfig.get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
-    let committedVscodeModel = initialConfig.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
-    const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) =>
-      lifecycle
-        .run("configuration change", async (signal) => {
-          signal.throwIfAborted();
-          const localModelPathSetting = `${VSCODE_CONFIG.ROOT}.${CONFIG.LOCAL_MODEL_PATH}`;
-          const treeViewConfigPaths = [
-            `${VSCODE_CONFIG.ROOT}.${CONFIG.RETRIEVAL_STRATEGY}`,
-            `${VSCODE_CONFIG.ROOT}.${CONFIG.LLM_MODEL}`,
-            `${VSCODE_CONFIG.ROOT}.${CONFIG.MAX_ITERATIONS}`,
-            `${VSCODE_CONFIG.ROOT}.${CONFIG.CONFIDENCE_THRESHOLD}`,
-          ];
-
-          if (event.affectsConfiguration(localModelPathSetting)) {
-            if (embeddingService.isProcessing) {
-              vscode.window.showWarningMessage(
-                "RAGnarōk: Cannot change embedding model while ingestion is in progress. Please wait for it to finish.",
-              );
-              return;
-            }
-
-            logger.info("Embedding local model path changed");
-
-            try {
-              const applyModel = async (): Promise<void> => {
-                await vscode.window.withProgress(
-                  {
-                    location: vscode.ProgressLocation.Notification,
-                    title: `RAGnarōk: Updating embedding model...`,
-                  },
-                  async (progress) => {
-                    progress.report({ message: "Loading embedding model..." });
-                    await embeddingService.runTransactionalSwitch(
-                      embeddingService.getActiveBackendType() || undefined,
-                      undefined,
-                      async () => {
-                        await memoryStore.validateEmbeddingFingerprint();
-                        progress.report({ message: "Reinitializing services..." });
-                        await topicManager.reinitializeWithNewModel();
-                      },
-                    );
-                  },
-                );
-
-                const model = embeddingService.getCurrentModel();
-                logger.info(`Embedding model ready: ${model}`);
-                vscode.window.showInformationMessage(`RAGnarōk: Embedding model set to "${model}"`);
-              };
-
-              await applyModel();
-              committedLocalModelPath = vscode.workspace
-                .getConfiguration(VSCODE_CONFIG.ROOT)
-                .get<string>(CONFIG.LOCAL_MODEL_PATH, "");
-              treeDataProvider.refresh();
-              configDataProvider.refresh();
-            } catch (error) {
-              await vscode.workspace
-                .getConfiguration(VSCODE_CONFIG.ROOT)
-                .update(CONFIG.LOCAL_MODEL_PATH, committedLocalModelPath, vscode.ConfigurationTarget.Workspace);
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              logger.error("Failed to handle embedding model configuration change", {
-                error: errorMessage,
-              });
-              vscode.window.showErrorMessage(`RAGnarōk: Failed to update embedding model: ${errorMessage}`);
-            }
-          }
-
-          // Handle Embedding Backend or VS Code Model ID change
-          const embeddingBackendSetting = `${VSCODE_CONFIG.ROOT}.${CONFIG.EMBEDDING_BACKEND}`;
-          const embeddingVscodeModelSetting = `${VSCODE_CONFIG.ROOT}.${VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID}`;
-          if (
-            event.affectsConfiguration(embeddingBackendSetting) ||
-            event.affectsConfiguration(embeddingVscodeModelSetting)
-          ) {
-            if (embeddingService.isProcessing) {
-              vscode.window.showWarningMessage(
-                "RAGnarōk: Cannot change embedding backend while ingestion is in progress. Please wait for it to finish.",
-              );
-              return;
-            }
-
-            logger.info("Embedding backend configuration changed");
-
-            try {
-              const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
-              let requested = config.get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
-              const requestedModel = config.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
-
-              if (requested === "vscodeLM") {
-                const probe = new VscodeLmBackend(requestedModel || undefined);
-                const ok = await probe.isAvailable();
-                if (!ok) {
-                  logger.warn('Requested VS Code LM backend unavailable; reverting embeddingBackend setting to "auto"');
-                  try {
-                    await vscode.workspace
-                      .getConfiguration(VSCODE_CONFIG.ROOT)
-                      .update(CONFIG.EMBEDDING_BACKEND, "auto", vscode.ConfigurationTarget.Workspace);
-                    requested = "auto";
-                    vscode.window.showWarningMessage(
-                      'Requested VS Code LM embedding backend is not available. Reverting to "auto".',
-                    );
-                  } catch (updateErr: any) {
-                    logger.error("Failed to update embeddingBackend setting to auto", {
-                      error: updateErr?.message ?? updateErr,
-                    });
-                  }
-                }
-              }
-
-              await vscode.window.withProgress(
-                {
-                  location: vscode.ProgressLocation.Notification,
-                  title: `RAGnarōk: Switching embedding backend...`,
-                },
-                async (progress) => {
-                  progress.report({ message: "Resolving backend..." });
-                  await embeddingService.runTransactionalSwitch(
-                    undefined,
-                    requested === "vscodeLM" ? requestedModel || undefined : undefined,
-                    async () => {
-                      await memoryStore.validateEmbeddingFingerprint();
-                      progress.report({ message: "Reinitializing services..." });
-                      await topicManager.reinitializeWithNewModel();
-                    },
-                  );
-                },
-              );
-
-              const model = embeddingService.getCurrentModel();
-              const backend = embeddingService.getActiveBackendType();
-              committedEmbeddingBackend = vscode.workspace
-                .getConfiguration(VSCODE_CONFIG.ROOT)
-                .get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
-              committedVscodeModel = vscode.workspace
-                .getConfiguration(VSCODE_CONFIG.ROOT)
-                .get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
-              logger.info(`Embedding backend switched: ${backend} (model: ${model})`);
-              vscode.window.showInformationMessage(`RAGnarōk: Embedding backend set to "${backend}" (model: ${model})`);
-              treeDataProvider.refresh();
-              configDataProvider.refresh();
-            } catch (error) {
-              const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
-              await config.update(
-                CONFIG.EMBEDDING_BACKEND,
-                committedEmbeddingBackend,
-                vscode.ConfigurationTarget.Workspace,
-              );
-              await config.update(
-                VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID,
-                committedVscodeModel,
-                vscode.ConfigurationTarget.Workspace,
-              );
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              logger.error("Failed to switch embedding backend", {
-                error: errorMessage,
-              });
-              vscode.window.showErrorMessage(`RAGnarōk: Failed to switch embedding backend: ${errorMessage}`);
-            }
-          }
-
-          // Handle shared topics folder change
-          if (event.affectsConfiguration(`${VSCODE_CONFIG.ROOT}.${CONFIG.COMMON_DATABASE_PATH}`)) {
-            logger.info("Shared topics folder configuration changed");
-            const configuredPath = vscode.workspace
-              .getConfiguration(VSCODE_CONFIG.ROOT)
-              .get<string>(CONFIG.COMMON_DATABASE_PATH, "");
-            await topicManager.refreshSharedTopics(createSharedTopicSources(configuredPath));
-            treeDataProvider.refresh();
-            configDataProvider.refresh();
-            vscode.window.showInformationMessage("Shared topics reloaded");
-          }
-
-          const affectsTreeViewConfig = treeViewConfigPaths.some((configPath) =>
-            event.affectsConfiguration(configPath),
-          );
-          if (affectsTreeViewConfig) {
-            logger.debug("Configuration affecting tree view changed, refreshing view");
-            treeDataProvider.refresh();
-            configDataProvider.refresh();
-          }
-        })
-        .catch((error) => {
-          if (lifecycle.isAcceptingOperations) {
-            const message = error instanceof Error ? error.message : String(error);
-            logger.error("Configuration change failed", { error: message });
-            void vscode.window.showErrorMessage(`RAGnarōk: Configuration change failed: ${message}`);
-          }
-        }),
-    );
+    // Register configuration change listener for embedding model/backend,
+    // shared topics and tree-view settings.
+    const configChangeDisposable = registerConfigurationHandler({
+      lifecycle,
+      embeddingService,
+      memoryStore,
+      topicManager,
+      refreshViews: () => {
+        treeDataProvider.refresh();
+        configDataProvider.refresh();
+      },
+    });
     context.subscriptions.push(configChangeDisposable);
     lifecycle.addDisposable(configChangeDisposable);
 
@@ -561,97 +363,9 @@ export async function activateWithServiceFactory(
         activeOperationCount: () => lifecycle.activeOperationCount,
       },
       runInstalledSmoke: () =>
-        lifecycle.run("installed VSIX smoke", async (signal) => {
-          signal.throwIfAborted();
-          const smokeId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const evidenceToken = `ragnarok installed smoke evidence ${smokeId}`;
-          const smokePath = vscode.Uri.joinPath(context.globalStorageUri, `installed-smoke-${smokeId}.txt`).fsPath;
-          await fs.mkdir(context.globalStorageUri.fsPath, { recursive: true });
-          await fs.writeFile(
-            smokePath,
-            `This temporary document contains the unique ${evidenceToken}. It verifies installed artifact ingestion and retrieval.`,
-            "utf8",
-          );
-          let topic: { id: string; name: string } | undefined;
-          let queryExecuted = false;
-          let topicDeleted = false;
-          let cleanupFailure: unknown;
-          try {
-            signal.throwIfAborted();
-            topic = await topicManager.createTopic({
-              name: `RAGnarōk Installed Smoke ${smokeId}`,
-              description: "Temporary topic created by the installed VSIX smoke gate",
-            });
-            if (!ragToolRegistration) {
-              throw new Error("The RAG language-model tool is unavailable in this VS Code build");
-            }
-            const ingestion = await topicManager.addDocuments(topic.id, [smokePath], { signal });
-            const chunksStored = ingestion.reduce(
-              (total, item) => total + item.pipelineResult.metadata.chunksStored,
-              0,
-            );
-            if (chunksStored < 1) {
-              throw new Error("Installed VSIX smoke ingested no document chunks");
-            }
-            signal.throwIfAborted();
-            const queryResult = await ragToolRegistration.tool.executeQuery(
-              {
-                topic: topic.name,
-                query: evidenceToken,
-                topK: 1,
-                retrievalStrategy: RetrievalStrategy.VECTOR,
-              },
-              signal,
-            );
-            const evidence = queryResult.results.find((result) => result.text.includes(evidenceToken));
-            const hasDirectVectorEvidence =
-              evidence?.metadata.scoreKind === "vector_similarity" &&
-              typeof evidence.metadata.componentScores?.vector === "number" &&
-              Number.isFinite(evidence.metadata.componentScores.vector);
-            const hasRerankedVectorEvidence =
-              evidence?.metadata.scoreKind === "cross_encoder_probability" &&
-              evidence.metadata.originalScoreKind === "vector_similarity" &&
-              typeof evidence.metadata.originalComponentScores?.vector === "number" &&
-              Number.isFinite(evidence.metadata.originalComponentScores.vector);
-            if (!evidence || (!hasDirectVectorEvidence && !hasRerankedVectorEvidence)) {
-              throw new Error("Installed VSIX smoke query did not return the ingested content with vector evidence");
-            }
-            queryExecuted = true;
-          } finally {
-            if (topic) {
-              try {
-                await topicManager.deleteTopic(topic.id);
-                topicDeleted = topicManager.getTopic(topic.id) === null;
-              } catch (error) {
-                cleanupFailure = error;
-              }
-            }
-            try {
-              await fs.rm(smokePath, { force: true });
-            } catch (error) {
-              cleanupFailure ??= error;
-            }
-          }
-          if (cleanupFailure) {
-            throw cleanupFailure;
-          }
-          if (!topicDeleted) {
-            throw new Error("Installed VSIX smoke topic remained visible after deletion");
-          }
-          try {
-            await fs.access(smokePath);
-            throw new Error("Installed VSIX smoke temporary document was not cleaned up");
-          } catch (error: any) {
-            if (error?.code !== "ENOENT") {
-              throw error;
-            }
-          }
-          return {
-            topicCreated: true,
-            queryExecuted,
-            topicDeleted,
-          };
-        }),
+        lifecycle.run("installed VSIX smoke", (signal) =>
+          runInstalledSmoke({ context, topicManager, ragTool: ragToolRegistration }, signal),
+        ),
     };
     const installedSmokeCommand = vscode.commands.registerCommand(COMMANDS.INSTALLED_SMOKE, () =>
       api.runInstalledSmoke(),

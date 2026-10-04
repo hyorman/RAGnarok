@@ -1139,6 +1139,8 @@ assert.doesNotMatch(builder, /\.vsce-staging-\$\{target\}/);
 const vsixSmoke = await read("scripts/vsix-smoke.mjs");
 const extensionHostSmoke = await read("scripts/vsix-extension-host-smoke.cjs");
 const extensionEntry = await read("packages/vscode/src/extension.ts");
+const installedSmokeSource = await read("packages/vscode/src/installedSmoke.ts");
+const vscodeConstants = await read("packages/vscode/src/constants.ts");
 const vscodeCommands = await read("packages/vscode/src/commands.ts");
 const vscodeIngestionFlow = await read("packages/vscode/src/ingestionFlow.ts");
 assert.match(vsixSmoke, /runTests\(/);
@@ -1152,9 +1154,15 @@ assert.match(vsixSmoke, /listSupportedBackends/);
 assert.match(extensionHostSmoke, /ragnarok\._runInstalledSmoke/);
 assert.match(extensionHostSmoke, /extension\.extensionPath !== expectedExtensionPath/);
 assert.match(extensionHostSmoke, /topicCreated: true, queryExecuted: true, topicDeleted: true/);
-assert.match(extensionEntry, /topicManager\.addDocuments\(topic\.id, \[smokePath\], \{ signal \}\)/);
-assert.match(extensionEntry, /result\.text\.includes\(evidenceToken\)/);
-assert.match(extensionEntry, /topicManager\.getTopic\(topic\.id\) === null/);
+assert.match(installedSmokeSource, /topicManager\.addDocuments\(topic\.id, \[smokePath\], \{ signal \}\)/);
+assert.match(installedSmokeSource, /result\.text\.includes\(evidenceToken\)/);
+assert.match(installedSmokeSource, /topicManager\.getTopic\(topic\.id\) === null/);
+assert.match(vscodeConstants, /INSTALLED_SMOKE: "ragnarok\._runInstalledSmoke"/);
+assert.match(
+  extensionEntry,
+  /runInstalledSmoke: \(\) =>\s*lifecycle\.run\("installed VSIX smoke", \(signal\) =>\s*runInstalledSmoke\(\{ context, topicManager, ragTool: ragToolRegistration \}, signal\)/,
+);
+assert.match(extensionEntry, /registerCommand\(COMMANDS\.INSTALLED_SMOKE, \(\) =>\s*api\.runInstalledSmoke\(\)/);
 assert.match(vscodeIngestionFlow, /topicManager\.addDocuments\(topicId, sources, \{ \.\.\.options, signal \}\)/);
 assert.match(vscodeCommands, /import \{[^}]*\bingestWithProgress\b[^}]*\} from "\.\/ingestionFlow"/);
 
