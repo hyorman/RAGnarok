@@ -165,7 +165,7 @@ source. Docker uses graph-ui source only while regenerating the MCP bundle and
 does not copy that source or VS webview assets into the runtime image.
 
 The release manifest binds source commit, lockfile, policy, artifacts, gate
-runs, and attestation. Publish commands never rebuild. Docker and six installed
+runs, and attestation. Publish commands never rebuild. Docker and five installed
 VSIX gates remain required even when local development cannot execute them.
 See [docs/RELEASE.md](docs/RELEASE.md) and
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md).

@@ -805,7 +805,25 @@ assert.deepEqual(
     .sort(),
   policy.vsixTargets.map((target) => `package:${target}`).sort(),
 );
-assert.equal(policy.vsixTargets.length, 6);
+// darwin-x64 is not shipped: ONNX Runtime no longer publishes macOS x64 binaries.
+// Every list of VSIX targets must match these five exactly.
+const supportedVsixTargets = ["darwin-arm64", "linux-arm64", "linux-x64", "win32-arm64", "win32-x64"];
+assert.deepEqual([...policy.vsixTargets].sort(), supportedVsixTargets);
+assert.deepEqual(
+  Object.keys(pkg.scripts)
+    .filter((name) => /^publish:(?:win32|darwin|linux)-/.test(name))
+    .sort(),
+  supportedVsixTargets.map((target) => `publish:${target}`),
+);
+assert.deepEqual(
+  [...pkg.scripts.package.matchAll(/npm run package:([a-z0-9-]+)/g)].map((match) => match[1]).sort(),
+  supportedVsixTargets,
+);
+assert.deepEqual(
+  Object.keys(pkg.optionalDependencies).filter((name) => name.includes("darwin-x64")),
+  [],
+  "No darwin-x64 native package may be installed for a VSIX",
+);
 assert.ok(policy.dependencyExceptions.some((item) => item.package === "@langchain/community"));
 for (const [name, evidence] of Object.entries(policy.budgetEvidence)) {
   assert.equal(evidence.measured, true, `Release size budget must have measured evidence: ${name}`);
@@ -1306,6 +1324,10 @@ assert.match(workflow, /download-release-attestation\.mjs/);
 assert.match(workflow, /release-manifest\.attestation\.jsonl/);
 assert.match(workflow, /release-publication-journal-\$\{\{ github\.sha \}\}/);
 assert.doesNotMatch(workflow, /RELEASE_MANIFEST_ATTESTED/);
+assert.deepEqual(
+  workflowDocument.jobs["vsix-installed"].strategy.matrix.include.map((entry) => entry.target).sort(),
+  supportedVsixTargets,
+);
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
@@ -1378,7 +1400,11 @@ assert.match(createManifest, /type: "benchmark"/);
 assert.match(createManifest, /type: "cyclonedx"/);
 assert.match(createManifest, /type: "spdx"/);
 assert.doesNotMatch(createManifest, /sourceRef =/);
-assert.match(verifyManifest, /exactly two npm, six VSIX, and one Docker artifact/);
+assert.match(verifyManifest, /exactly two npm, five VSIX, and one Docker artifact/);
+assert.deepEqual(
+  [...verifyManifest.matchAll(/"vsix-([a-z0-9-]+)"/g)].map((match) => match[1]).sort(),
+  supportedVsixTargets,
+);
 assert.match(verifyManifest, /Benchmark evidence is incomplete or not bound to HEAD/);
 assert.doesNotMatch(verifyManifest, /RAGNAROK_ALLOW_LOCAL_RELEASE/);
 assert.doesNotMatch(verifyManifest, /RELEASE_MANIFEST_ATTESTED/);

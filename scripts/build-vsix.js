@@ -47,7 +47,7 @@ const VSIX_GRAPH_ASSETS = ["memoryGraph.js", "memoryGraph.css"];
  * the program path through cmd.exe — where a space in the repository path, or
  * in the Windows temp directory, becomes a quoting bug. These are Node programs,
  * so the portable answer is to run them the way Node runs anything: hand the
- * script to the current interpreter. Same call on all six targets, no shell, no
+ * script to the current interpreter. Same call on all five targets, no shell, no
  * quoting, and the exact Node already in use.
  */
 function runNodeScript(scriptPath, args, options = {}) {
@@ -108,14 +108,15 @@ function getTargetPlatform() {
     process.exit(1);
   }
 
-  const [platform, arch] = target.split("-");
-  const validPlatforms = ["darwin", "linux", "win32"];
-  const validArchs = ["arm64", "x64"];
-
-  if (!validPlatforms.includes(platform) || !validArchs.includes(arch)) {
-    console.error(`Invalid target: ${target}. Expected {platform}-{arch}`);
+  // release-policy.json is the one list of shipped targets. darwin-x64 is not on
+  // it: ONNX Runtime no longer ships macOS x64 binaries, so that VSIX could not
+  // load local embeddings.
+  const { vsixTargets } = JSON.parse(fs.readFileSync(path.join(ROOT, "release-policy.json"), "utf8"));
+  if (!vsixTargets.includes(target)) {
+    console.error(`Invalid target: ${target}. Expected one of: ${vsixTargets.join(", ")}`);
     process.exit(1);
   }
+  const [platform, arch] = target.split("-");
 
   // LanceDB uses variants like linux-x64-gnu, win32-x64-msvc
   const patterns = [target];
@@ -903,7 +904,7 @@ function assertNoMcpDependencies(stagingDir) {
   // Checked against the staging tree, not the finished archive: vsce can only
   // package what is here, so a directory that is absent cannot be shipped.
   // Reading the .vsix would need a zip reader — `unzip` is not a Windows
-  // command, and this build has to work on all six targets.
+  // command, and this build has to work on all five targets.
   //
   // Only markers unique to the MCP server. `openai` and `@anthropic-ai` are
   // deliberately absent: the MCP server uses them, but so does

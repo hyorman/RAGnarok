@@ -103,7 +103,7 @@ Notes:
 ### 💾 **Vector Storage**
 
 - **LanceDB**: Embedded vector database with file-based persistence (no server needed)
-- **Cross-Platform**: Works on Windows, macOS, Linux, and ARM
+- **Cross-Platform**: Works on Windows and Linux (x64 and arm64) and on Apple Silicon Macs
 - **Per-Topic Stores**: Efficient isolation and management
 
 ### 🎨 **Enhanced UI**
@@ -149,6 +149,10 @@ npm run compile
 ```bash
 code --install-extension ragnarok-<version>.vsix
 ```
+
+Release VSIX files are built for five targets: linux-x64, linux-arm64,
+darwin-arm64, win32-x64, and win32-arm64. Intel Macs (darwin-x64) are not
+supported: ONNX Runtime no longer ships macOS x64 binaries.
 
 ### Basic Usage
 

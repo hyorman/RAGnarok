@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:89c7962f-f818-47f9-ab8d-3d2c08502eaa",
+  "serialNumber": "urn:uuid:03d9c985-e5c5-467a-af86-1b9153b1697d",
   "version": 1,
   "metadata": {
     "component": { "type": "application", "name": "ragnarok", "version": "0.4.1" },
@@ -2144,27 +2144,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40img%2Fsharp-darwin-x64",
-      "name": "@img/sharp-darwin-x64",
-      "version": "0.34.5",
-      "purl": "pkg:npm/%40img/sharp-darwin-x64@0.34.5",
-      "licenses": [{ "license": { "id": "Apache-2.0" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "60d105005ff8290fcf796d0dfabf9a555b28218d3fab1c62905d9259da7e351926301ef2f4b059015a90e328460a6fc7dc7dbbd0e4b292a99030a2c184124313"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.34.5.tgz"
-        }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@img/sharp-darwin-x64" }]
-    },
-    {
-      "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40huggingface%2Ftransformers%2Fnode_modules%2F%40img%2Fsharp-darwin-x64",
       "name": "@img/sharp-darwin-x64",
       "version": "0.35.5",
@@ -2262,29 +2241,6 @@
           "name": "ragnarok:package-lock:location",
           "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-libvips-darwin-arm64"
         }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40img%2Fsharp-libvips-darwin-x64",
-      "name": "@img/sharp-libvips-darwin-x64",
-      "version": "1.2.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-darwin-x64@1.2.4",
-      "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d4839de717d58651b05fecd7bf637dde4d3230e36f52500dca56c9c357936a1f0afc9b698b5e4a0be59289a5ff9c199b9b61f144cd606749d27634acad96c62a"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.2.4.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@img/sharp-libvips-darwin-x64" }
       ]
     },
     {

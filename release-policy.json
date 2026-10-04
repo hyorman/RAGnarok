@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "minimumVscodeVersion": "1.105.0",
   "supportedNodeMajors": [20, 22],
-  "vsixTargets": ["win32-x64", "win32-arm64", "darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64"],
+  "vsixTargets": ["win32-x64", "win32-arm64", "darwin-arm64", "linux-x64", "linux-arm64"],
   "budgets": {
     "bundledModelsUnpackedBytes": 114957244,
     "coreTarballCompressedBytes": 104857600,

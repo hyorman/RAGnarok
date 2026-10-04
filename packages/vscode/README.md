@@ -14,9 +14,11 @@ The extension creates memory storage under `context.globalStorageUri` and uses
 core `MemoryService`; it does not open the MCP server's configured storage root.
 There is no cross-host data sharing with MCP.
 
-Release VSIX files are built for Linux, macOS, and Windows on x64 and arm64.
-Each exact VSIX must pass install/activation/native-load smoke testing on its
-target; see the repository [release procedure](../../docs/RELEASE.md).
+Release VSIX files are built for five targets: linux-x64, linux-arm64,
+darwin-arm64, win32-x64, and win32-arm64. Intel Macs (darwin-x64) are not
+supported: ONNX Runtime no longer ships macOS x64 binaries. Each exact VSIX
+must pass install/activation/native-load smoke testing on its target; see the
+repository [release procedure](../../docs/RELEASE.md).
 
 ---
 
