@@ -12,6 +12,7 @@ import { Logger } from "../logger";
 import { CONFIG, PROVIDER_DEFAULT_MODELS } from "../constants";
 import { RetrievalStrategy } from "../utils/types";
 import { extractKeywords } from "../utils/keywords";
+import { isRecord } from "../utils/typeGuards";
 import type { RAGAgentOptions, RetrievalResult } from "./ragAgent";
 
 /** Default threshold below which a sub-query's results are considered a gap */
@@ -300,10 +301,7 @@ Respond with JSON:
       const validSubQueries = parsed.subQueries
         .filter(
           (sq): sq is Record<string, unknown> & { query: string } =>
-            typeof sq === "object" &&
-            sq !== null &&
-            typeof (sq as Record<string, unknown>).query === "string" &&
-            ((sq as Record<string, unknown>).query as string).trim().length > 0,
+            isRecord(sq) && typeof sq.query === "string" && sq.query.trim().length > 0,
         )
         .slice(0, 3)
         .map((sq) => ({

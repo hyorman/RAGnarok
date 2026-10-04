@@ -5,6 +5,7 @@ import type { Mutex } from "async-mutex";
 import type { VectorStoreFactory } from "../../stores/vectorStoreFactory";
 import { atomicWriteJson } from "../../utils/storage";
 import { errnoCode } from "../../utils/fsPaths";
+import { isFiniteNumber, isRecord } from "../../utils/typeGuards";
 import type { TopicsIndex, Document as TopicDocument } from "../../utils/types";
 import type { PipelineSourceDocument } from "../documentPipeline";
 import type { TopicStorePaths } from "./topicStorePaths";
@@ -28,14 +29,6 @@ export interface PostCommitCleanupEntry {
   topicId: string;
   documents: TopicDocument[];
   updatedAt: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 /** What the ingestion and post-commit cleanup journals need from the `TopicManager` that owns them. */

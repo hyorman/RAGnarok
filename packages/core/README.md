@@ -155,6 +155,7 @@ src/
     ├── storageTransactionCoordinator.ts # Same-filesystem staging for publication boundaries
     ├── storageDirectoryWatcher.ts       # Debounced watch of a storage directory with outage recovery
     ├── fsPaths.ts                       # errnoCode, pathExists, listFilesRecursively
+    ├── typeGuards.ts                    # isRecord and isFiniteNumber, for validating parsed JSON
     ├── topicArchive.ts                  # Topic archive format, path validation, staging
     ├── types.ts                         # Topic, Document, RetrievalStrategy and related types
     ├── keywords.ts                      # Stop words and shared keyword extraction

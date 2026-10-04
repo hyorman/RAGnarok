@@ -38,6 +38,7 @@ import type { SharedTopicSource } from "../sharedTopics/types";
 import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
 import { StorageDirectoryWatcher } from "../utils/storageDirectoryWatcher";
+import { isFiniteNumber, isRecord } from "../utils/typeGuards";
 import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
@@ -102,14 +103,6 @@ export interface AddDocumentResult {
  * another process, or the folder being moved).
  */
 export type StorageExternalChange = { kind: "topics-changed" } | { kind: "storage-unavailable" };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
 
 function isDocumentSource(value: unknown): value is DocumentSource {
   if (!isRecord(value) || typeof value.type !== "string") {
