@@ -95,7 +95,6 @@ src/
 ├── workspaceContext.ts      # Workspace file discovery for context enrichment
 │
 └── adapters/
-    ├── index.ts
     ├── vsCodeConfigProvider.ts   # IConfigProvider → vscode.workspace.getConfiguration
     ├── vsCodeLogger.ts           # ILoggerFactory → vscode.window.createOutputChannel
     ├── vsCodeNotifier.ts         # INotifier → vscode.window.show*Message / withProgress

@@ -39,7 +39,8 @@ self-contained TypeScript HTML bundle and VS Code's `media/memoryGraph.js` and
    `media/memoryGraph.css`; reject graph-ui source, MCP source/SDK/HTML, and any
    other graph-ui file.
 6. Build the Docker image, start it with a read-only root filesystem, verify
-   stdio discovery/tools, storage locking, removed-variable rejection, runtime
+   stdio discovery/tools, that a second server sharing the volume starts and
+   serves, that the image bakes in no removed HTTP-transport variable, runtime
    hardening, graceful shutdown, and architecture. Graph-ui source is a build
    input only: the final image contains the compiled MCP bundle, not graph-ui
    source/dependencies or VS webview assets.

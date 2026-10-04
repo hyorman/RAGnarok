@@ -23,8 +23,10 @@ const containers = [sessionContainer, persistenceContainer, peerContainer];
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
 const expectedToolCount = 8;
-// Mirrors REMOVED_ENV_VARS in packages/mcp-server/src/config.ts: the image must
-// neither bake these in nor tolerate an operator supplying one.
+// The HTTP transport's variables, which nothing reads any more. The image must
+// not bake one in: a stdio-only image carrying them would look like a configured
+// network service. The gate only inspects the image's Env; it never starts the
+// server with one set.
 const removedEnvVars = [
   "RAGNAROK_DEPLOYMENT_MODE",
   "RAGNAROK_PORT",

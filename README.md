@@ -116,7 +116,7 @@ Notes:
 ### 🧠 **Standalone Memory Module**
 
 - **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing.
-- **Native VS Code Tools**: three language-model tools — `ragQuery` (search a topic), `ragTopic` (list topics or inspect one) and `ragMemory` (store, recall and forget memories). Topic management and **Reset Memory** stay in the sidebar, behind confirmations.
+- **Native VS Code Tools**: three language-model tools — `ragQuery` (search a topic) and `ragTopic` (list topics or inspect one), both read-only, and `ragMemory` (store, recall and forget memories). Topic management and **Reset Memory** stay in the sidebar, behind confirmations.
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
 - **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
@@ -545,6 +545,12 @@ npm run test:docs        # Validate canonical documentation links/contracts
 npm run lint             # Lint all packages
 npm run format           # Format all source and test files
 npm run clean            # Clean all build artifacts
+
+# contributes.languageModelTools in package.json is generated, not hand-edited.
+# Edit the input contracts (packages/core/src/tools/toolContracts.ts) or the
+# descriptions (scripts/generate-tool-manifest.mjs), build core, then regenerate:
+npm run tools:manifest         # Rewrite contributes.languageModelTools
+npm run tools:manifest:check   # Exit 1 if package.json has drifted from them
 ```
 
 ### MCP Tools

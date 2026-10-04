@@ -239,6 +239,27 @@ for (const command of manifest.contributes.commands) {
   assert.equal(command.category, "RAG", `${command.command} must use the RAG command category`);
   assert.match(readme, new RegExp(`RAG: ${command.title}`), `README.md must document "RAG: ${command.title}"`);
 }
+// ragQuery and ragTopic only read, and the user guide must say so. ragMemory
+// stores and forgets, so the claim must not be attached to it.
+const nativeTools = rootReadme.split("\n").find((line) => line.startsWith("- **Native VS Code Tools**"));
+assert.ok(nativeTools, 'README.md must keep its "Native VS Code Tools" bullet');
+assert.match(
+  nativeTools,
+  /`ragQuery`.*`ragTopic`.*both read-only.*`ragMemory`/,
+  "README.md must say ragQuery and ragTopic are read-only",
+);
+// contributes.languageModelTools is generated, so a contributor who hand-edits
+// package.json meets the drift check's failure before its cause. The command
+// list that sends contributors to `npm run` must name both scripts, and each
+// must exist.
+for (const script of ["tools:manifest", "tools:manifest:check"]) {
+  assert.ok(manifest.scripts[script], `package.json must define the ${script} script`);
+  assert.match(
+    readme,
+    new RegExp(`npm run ${script}(?![\\w:])`),
+    `README.md Build & Test Commands must name npm run ${script}`,
+  );
+}
 for (const [pattern, why] of [
   [/70% weight|30% weight/, "hybrid weights are 0.9/0.1 (hybridRetriever.ts)"],
   [/simple mode|agentic mode/i, "no simple/agentic mode setting exists"],
@@ -289,6 +310,20 @@ assert.doesNotMatch(
 );
 assert.match(copilotInstructions, /npm run test:fast/, "Copilot instructions must name the project's test command");
 assert.doesNotMatch(architecture, /v0\.7 implementation/, "ARCHITECTURE.md must not claim a version");
+// Nothing scans for the removed HTTP-transport variables, so a guide that says
+// the server rejects, refuses or aborts on one describes a guard that does not
+// exist (the MCP guide used to list one, and SECURITY.md promised one).
+const removedTransportVariables = /removed[- ](?:HTTP[- ])?(?:transport|variable)|network listener/i;
+const claimsRejection = /\b(?:reject|refus|abort)\w*/i;
+for (const relative of canonical) {
+  const sentences = (await readFile(path.join(root, relative), "utf8")).replace(/\s+/g, " ").split(/(?<=[.!?])\s/);
+  for (const sentence of sentences) {
+    assert.ok(
+      !(removedTransportVariables.test(sentence) && claimsRejection.test(sentence)),
+      `${relative} says removed HTTP-transport variables are rejected, but nothing reads or rejects them: "${sentence.slice(0, 80)}"`,
+    );
+  }
+}
 assert.doesNotMatch(mcp, /removed-variable rejection/, "MCP guide lists a function that does not exist");
 for (const module of ["graphVisualizationAdapter.ts", "memoryToolAdapter.ts", "toolRuntime.ts"]) {
   assert.match(mcp, new RegExp(module.replace(".", "\\.")), `MCP guide module layout must list ${module}`);
