@@ -1140,6 +1140,7 @@ const vsixSmoke = await read("scripts/vsix-smoke.mjs");
 const extensionHostSmoke = await read("scripts/vsix-extension-host-smoke.cjs");
 const extensionEntry = await read("packages/vscode/src/extension.ts");
 const vscodeCommands = await read("packages/vscode/src/commands.ts");
+const vscodeIngestionFlow = await read("packages/vscode/src/ingestionFlow.ts");
 assert.match(vsixSmoke, /runTests\(/);
 assert.match(vsixSmoke, /vsix-extension-host-smoke\.cjs/);
 assert.match(vsixSmoke, /RAGNAROK_EXPECTED_EXTENSION_PATH: extensionDir/);
@@ -1154,7 +1155,8 @@ assert.match(extensionHostSmoke, /topicCreated: true, queryExecuted: true, topic
 assert.match(extensionEntry, /topicManager\.addDocuments\(topic\.id, \[smokePath\], \{ signal \}\)/);
 assert.match(extensionEntry, /result\.text\.includes\(evidenceToken\)/);
 assert.match(extensionEntry, /topicManager\.getTopic\(topic\.id\) === null/);
-assert.match(vscodeCommands, /topicManager\.addDocuments\(topicId, sources, \{ \.\.\.options, signal \}\)/);
+assert.match(vscodeIngestionFlow, /topicManager\.addDocuments\(topicId, sources, \{ \.\.\.options, signal \}\)/);
+assert.match(vscodeCommands, /import \{[^}]*\bingestWithProgress\b[^}]*\} from "\.\/ingestionFlow"/);
 
 const packaging = require("./build-vsix.js");
 assert.deepEqual(packaging.VSIX_GRAPH_ASSETS, ["memoryGraph.js", "memoryGraph.css"]);
