@@ -1672,6 +1672,55 @@ assert.deepEqual(
   workflowDocument.jobs["vsix-installed"].strategy.matrix.include.map((entry) => entry.target).sort(),
   supportedVsixTargets,
 );
+// The runner images ship no VS Code and the Linux ones have no display. Every installed-VSIX leg therefore
+// downloads VS Code (VSCODE_VERSION) instead of naming a preinstalled CLI, and a Linux leg runs the smoke
+// under xvfb, which the arm image may not ship. The minimum-version job downloads its own VS Code too.
+const smokeInvocation = /\bnode scripts\/vsix-smoke\.mjs\b/;
+const vsixInstalledSteps = workflowDocument.jobs["vsix-installed"].steps;
+const vsixInstalledSmokeSteps = vsixInstalledSteps.filter((step) => smokeInvocation.test(step.run ?? ""));
+assert.equal(vsixInstalledSmokeSteps.length, 1, "vsix-installed has exactly one smoke step");
+const vsixInstalledSmokeStep = vsixInstalledSmokeSteps[0];
+assert.equal(vsixInstalledSmokeStep.env?.VSCODE_VERSION, "stable", "vsix-installed downloads the stable VS Code");
+assert.ok(
+  !("VSCODE_CLI" in (vsixInstalledSmokeStep.env ?? {})),
+  "vsix-installed names no preinstalled VS Code CLI; the runner images ship none",
+);
+assert.ok(
+  vsixInstalledSmokeStep.run.startsWith("${{ matrix.display }} node scripts/vsix-smoke.mjs"),
+  "the vsix-installed smoke runs under the display command its matrix row names",
+);
+for (const row of workflowDocument.jobs["vsix-installed"].strategy.matrix.include) {
+  assert.ok(!("cli" in row), `vsix-installed row ${row.target} must not name a preinstalled CLI`);
+  const smokeCommand = vsixInstalledSmokeStep.run.replace("${{ matrix.display }}", row.display).trim();
+  assert.equal(
+    smokeCommand.startsWith("xvfb-run -a node scripts/vsix-smoke.mjs "),
+    row.os.startsWith("ubuntu"),
+    `vsix-installed row ${row.target} runs the smoke under xvfb-run -a exactly when it is a Linux row`,
+  );
+  assert.ok(
+    /^(xvfb-run -a )?node scripts\/vsix-smoke\.mjs /.test(smokeCommand),
+    `vsix-installed row ${row.target} has no display command other than xvfb-run -a`,
+  );
+}
+const xvfbEnsureIndex = vsixInstalledSteps.findIndex((step) => String(step.run ?? "").includes("command -v xvfb-run"));
+assert.ok(xvfbEnsureIndex >= 0, "vsix-installed must ensure xvfb-run exists");
+assert.equal(vsixInstalledSteps[xvfbEnsureIndex].if, "runner.os == 'Linux'", "the xvfb step runs on Linux only");
+assert.ok(
+  vsixInstalledSteps[xvfbEnsureIndex].run.includes("apt-get install -y xvfb"),
+  "the xvfb step installs xvfb when xvfb-run is missing",
+);
+assert.ok(
+  xvfbEnsureIndex < vsixInstalledSteps.indexOf(vsixInstalledSmokeStep),
+  "vsix-installed must ensure xvfb-run before the smoke needs it",
+);
+const vscodeMinimumSmokeStep = workflowDocument.jobs["vscode-minimum"].steps.find((step) =>
+  smokeInvocation.test(step.run ?? ""),
+);
+assert.ok(
+  vscodeMinimumSmokeStep?.run.startsWith("xvfb-run -a node scripts/vsix-smoke.mjs"),
+  "vscode-minimum runs the smoke under xvfb-run -a; the runner has no display",
+);
+assert.equal(vscodeMinimumSmokeStep.env?.VSCODE_VERSION, "1.105.0", "vscode-minimum pins the declared minimum VS Code");
 // A core suite that never exits (the Windows hang) must fail in minutes, not at the 45-minute job
 // limit, and must name what kept it alive.
 const coreSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:core:compiled");
@@ -2153,7 +2202,12 @@ const globToRegExp = (glob) =>
   );
 const workflowSmokeGlob = (job) => {
   const globs = workflowDocument.jobs[job].steps
-    .map((step) => /^node scripts\/vsix-smoke\.mjs (artifacts\/.+)$/.exec(step.run ?? "")?.[1])
+    .map(
+      (step) =>
+        /^(?:\$\{\{ matrix\.display \}\} |xvfb-run -a )?node scripts\/vsix-smoke\.mjs (artifacts\/.+)$/.exec(
+          step.run ?? "",
+        )?.[1],
+    )
     .filter(Boolean);
   assert.equal(globs.length, 1, `${job} smokes exactly one VSIX glob`);
   return globs[0];
