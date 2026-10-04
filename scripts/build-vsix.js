@@ -585,7 +585,6 @@ function pruneBloat(stagingDir, targetPlatform) {
   removeMcpWorkspace(stagingDir);
   removeGraphUiWorkspace(stagingDir);
   relaxUnmetPeerDependencies(nm);
-  dropOptionalPeersOnRootDependencies(stagingDir);
 
   // Remove HuggingFace model cache (shouldn't exist in clean install, but just in case)
   const hfCache = path.join(nm, "@huggingface", "transformers", ".cache");
@@ -842,44 +841,6 @@ function removeGraphUiWorkspace(stagingDir) {
  */
 function removeWorkspaceLink(stagingDir, packageName) {
   fs.rmSync(path.join(stagingDir, "node_modules", ...packageName.split("/")), { recursive: true, force: true });
-}
-
-/**
- * Drop optional peer declarations on packages the extension itself depends on
- * directly, in the staged tree only.
- *
- * The root manifest decides which version of its own direct dependencies
- * ships. A third party's optional peer range on the same package cannot change
- * what is installed; it can only make vsce's `npm list --production` fail.
- * @langchain/community declares `@huggingface/transformers ^3.8.1` as an
- * optional peer for its Transformers.js embeddings, which this extension does
- * not ship (pruneLangchainCommunityPackage keeps only the loaders, BM25 and
- * LanceDB entrypoints), while the extension's own embeddings use 4.x.
- */
-function dropOptionalPeersOnRootDependencies(stagingDir) {
-  const nodeModulesDir = path.join(stagingDir, "node_modules");
-  const rootDependencies = new Set(Object.keys(readPackageJson(stagingDir).dependencies ?? {}));
-  let dropped = 0;
-  for (const manifestPath of listTopLevelManifests(nodeModulesDir)) {
-    let pkg;
-    try {
-      pkg = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    } catch {
-      continue; // A manifest we cannot read is not one we can repair.
-    }
-    let changed = false;
-    for (const peer of Object.keys(pkg.peerDependencies ?? {})) {
-      if (!pkg.peerDependenciesMeta?.[peer]?.optional || !rootDependencies.has(peer)) continue;
-      delete pkg.peerDependencies[peer];
-      delete pkg.peerDependenciesMeta[peer];
-      changed = true;
-      dropped += 1;
-    }
-    if (changed) fs.writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + "\n");
-  }
-  if (dropped > 0) {
-    console.log(`  ✓ Dropped ${dropped} optional peer declarations on the extension's own dependencies`);
-  }
 }
 
 /**

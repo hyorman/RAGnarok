@@ -66,9 +66,21 @@ if (!coreTgz || !mcpTgz) fail(`expected two tarballs, got: ${tarballs.join(", ")
 
 // ── 2. Clean consumer install ──────────────────────────────────────────────
 console.log("Installing tarballs into clean consumer...");
+// Every @langchain/community release declares @huggingface/transformers ^3.8.1 as an
+// optional peer while core ships 4.x. Carry the repository root's override so `npm ls`
+// through Transformers is valid here too. The consumer has no direct Transformers
+// dependency, so the override names core's exact version instead of a $ reference.
+const coreManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "packages", "core", "package.json"), "utf8"));
 fs.writeFileSync(
   path.join(consumerDir, "package.json"),
-  JSON.stringify({ name: "pack-smoke-consumer", private: true, version: "1.0.0" }),
+  JSON.stringify({
+    name: "pack-smoke-consumer",
+    private: true,
+    version: "1.0.0",
+    overrides: {
+      "@langchain/community": { "@huggingface/transformers": coreManifest.dependencies["@huggingface/transformers"] },
+    },
+  }),
 );
 execSync(`npm install --no-audit --no-fund "${path.join(packDir, coreTgz)}" "${path.join(packDir, mcpTgz)}"`, {
   cwd: consumerDir,

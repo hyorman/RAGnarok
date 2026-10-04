@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -733,6 +733,25 @@ assert.match(packSmoke, /auditRun\.signal/);
 assert.match(packSmoke, /!\[0, 1\]\.includes\(auditRun\.status\)/);
 assert.match(packSmoke, /Allowed until policy expiry:/);
 assert.doesNotMatch(packSmoke, /npm audit --omit=dev --audit-level=moderate/);
+// Every @langchain/community release declares @huggingface/transformers ^3.8.1 as an optional
+// peer while the tree carries 4.x. The root override lets that edge accept the installed version,
+// so `npm ls` through Transformers (which both audit gates run for an exception approved via
+// Transformers, and vsce runs in VSIX staging) does not exit 1.
+assert.equal(pkg.overrides["@langchain/community"]["@huggingface/transformers"], "$@huggingface/transformers");
+const transformersLs = spawnSync("npm", ["ls", "@huggingface/transformers", "--omit=dev", "--all", "--json"], {
+  cwd: root,
+  encoding: "utf8",
+});
+assert.equal(
+  transformersLs.status,
+  0,
+  `npm ls @huggingface/transformers must be valid: ${transformersLs.stderr.trim()}`,
+);
+assert.match(
+  packSmoke,
+  /overrides: \{\s*"@langchain\/community": \{ "@huggingface\/transformers": coreManifest\.dependencies\["@huggingface\/transformers"\] \}/,
+  "the pack-smoke consumer must carry the root's Transformers peer override",
+);
 assert.match(packSmoke, /proc\.stdin\.end\(\)/, "packed stdio smoke must request graceful EOF shutdown");
 assert.match(
   packSmoke,
@@ -1136,6 +1155,11 @@ assert.doesNotMatch(builder, /napi-v3/);
 assert.match(builder, /Cleaning and rebuilding extension output from source/);
 assert.match(builder, /delete rootPkg\.scripts\?\.\["vscode:prepublish"\]/);
 assert.doesNotMatch(builder, /\.vsce-staging-\$\{target\}/);
+assert.doesNotMatch(
+  builder,
+  /dropOptionalPeersOnRootDependencies/,
+  "VSIX staging relies on the root override, not on deleting peer declarations",
+);
 const vsixSmoke = await read("scripts/vsix-smoke.mjs");
 const extensionHostSmoke = await read("scripts/vsix-extension-host-smoke.cjs");
 const extensionEntry = await read("packages/vscode/src/extension.ts");

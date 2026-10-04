@@ -775,7 +775,8 @@
     "form-data": "4.0.6",
     "ws": "8.21.0",
     "@langchain/community": {
-      "pdf-parse": "$pdf-parse"
+      "pdf-parse": "$pdf-parse",
+      "@huggingface/transformers": "$@huggingface/transformers"
     },
     "undici": "^7.30.0",
     "js-yaml@4": "^4.3.2",
