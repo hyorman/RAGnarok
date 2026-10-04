@@ -28,9 +28,13 @@ export class StorageFormatVersionError extends Error {
  */
 export class UnsupportedStorageError extends Error {
   readonly name = "UnsupportedStorageError";
-  constructor(public readonly storageDir: string) {
+  constructor(
+    public readonly storageDir: string,
+    public readonly entries: readonly string[] = [],
+  ) {
     super(
-      `RAGnarōk storage at ${storageDir} holds data from an unsupported pre-0.4 build. ` +
+      `RAGnarōk storage at ${storageDir} holds data from an unsupported pre-0.4 build` +
+        `${entries.length > 0 ? ` (found: ${entries.join(", ")})` : ""}. ` +
         `Move or delete that folder to start a new store.`,
     );
   }
@@ -56,6 +60,22 @@ export class StorageResetInterruptedError extends Error {
 }
 
 /**
+ * Names the operating system or a file manager creates in a directory the user
+ * never wrote to. Exact, case-sensitive names: an unknown entry still refuses.
+ * lost+found is present at the root of every fresh ext4 volume (a Docker bind
+ * mount), and fsck owns it, so it is never moved into a reset backup either.
+ */
+const FILESYSTEM_CLUTTER_ENTRIES: ReadonlySet<string> = new Set([
+  ".DS_Store",
+  "Thumbs.db",
+  "desktop.ini",
+  "lost+found",
+]);
+
+/** How many triggering entries the refusal names, so a large legacy tree does not flood the message. */
+const UNSUPPORTED_ENTRIES_REPORTED = 5;
+
+/**
  * Infrastructure files, never version-gated or backed up. config.json is
  * generated on first run before format validation (gating it would refuse every
  * fresh install) and holds settings, not corpus, so a data reset must leave it.
@@ -67,6 +87,7 @@ function isInfrastructureEntry(entry: string): boolean {
     entry === STORAGE_CONFIG_FILENAME ||
     entry === STORAGE_RESET_JOURNAL_FILENAME ||
     entry === SHARED_TOPIC_CACHE_DIRNAME ||
+    FILESYSTEM_CLUTTER_ENTRIES.has(entry) ||
     entry.startsWith("backup-v1-")
   );
 }
@@ -111,7 +132,7 @@ export async function inspectStorage(storageDir: string): Promise<StorageInspect
     }
   }
 
-  return (await hasManagedData(storageDir)) ? { status: "unsupported" } : { status: "empty" };
+  return (await managedEntries(storageDir)).length > 0 ? { status: "unsupported" } : { status: "empty" };
 }
 
 /** Durably replace a UTF-8 file using a same-directory atomic rename. */
@@ -178,17 +199,18 @@ async function checkResetJournal(storageDir: string): Promise<void> {
   throw new StorageResetInterruptedError(storageDir, journal.backupDir ?? null);
 }
 
-async function hasManagedData(storageDir: string): Promise<boolean> {
+/** The sorted top-level entries that make a marker-less directory count as holding data. */
+async function managedEntries(storageDir: string): Promise<string[]> {
   let entries: string[];
   try {
     entries = await fs.readdir(storageDir);
   } catch (error: any) {
     if (error?.code === "ENOENT") {
-      return false;
+      return [];
     }
     throw error;
   }
-  return entries.some((entry) => !isInfrastructureEntry(entry));
+  return entries.filter((entry) => !isInfrastructureEntry(entry)).sort();
 }
 
 /** Validate storage format v2, initializing only a genuinely empty directory. */
@@ -216,8 +238,9 @@ async function ensureStorageFormatUnjournaled(storageDir: string): Promise<Stora
     }
   }
 
-  if (await hasManagedData(storageDir)) {
-    throw new UnsupportedStorageError(storageDir);
+  const unsupported = await managedEntries(storageDir);
+  if (unsupported.length > 0) {
+    throw new UnsupportedStorageError(storageDir, unsupported.slice(0, UNSUPPORTED_ENTRIES_REPORTED));
   }
 
   const marker: StorageFormatMarker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: Date.now() };

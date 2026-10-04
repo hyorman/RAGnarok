@@ -12,6 +12,7 @@ import {
   STORAGE_FORMAT_VERSION,
   STORAGE_CONFIG_FILENAME,
   STORAGE_RESET_JOURNAL_FILENAME,
+  UnsupportedStorageError,
 } from "../src/utils/storage";
 import { STORAGE_LOCK_FILENAME } from "../src/utils/storageLock";
 
@@ -54,6 +55,35 @@ describe("storage format v2", () => {
     await fs.mkdir(path.join(directory, "backup-v1-2026-01-01T00-00-00-000Z"));
 
     expect((await ensureStorageFormat(directory)).formatVersion).to.equal(STORAGE_FORMAT_VERSION);
+  });
+
+  it("treats OS and filesystem clutter as empty and stamps the directory", async () => {
+    // lost+found sits at the root of every fresh ext4 volume (a Docker bind
+    // mount); the others are written by file managers. None is RAGnarok data.
+    await fs.writeFile(path.join(directory, ".DS_Store"), "");
+    await fs.writeFile(path.join(directory, "Thumbs.db"), "");
+    await fs.writeFile(path.join(directory, "desktop.ini"), "");
+    await fs.mkdir(path.join(directory, "lost+found"));
+
+    expect(await inspectStorage(directory)).to.deep.equal({ status: "empty" });
+    expect((await ensureStorageFormat(directory)).formatVersion).to.equal(STORAGE_FORMAT_VERSION);
+    expect(await inspectStorage(directory)).to.deep.equal({ status: "current" });
+  });
+
+  it("still refuses pre-0.4 data beside clutter, naming the entries that triggered it", async () => {
+    await fs.mkdir(path.join(directory, "database"));
+    await fs.writeFile(path.join(directory, "database", "topics.json"), '{"topics":{}}');
+    await fs.writeFile(path.join(directory, ".DS_Store"), "");
+
+    const error = await ensureStorageFormat(directory).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).to.be.instanceOf(UnsupportedStorageError);
+    const unsupported = error as UnsupportedStorageError;
+    expect(unsupported.entries).to.include("database");
+    expect(unsupported.entries).to.not.include(".DS_Store");
   });
 
   it("ignores the storage lock file when judging whether a directory holds data", async () => {
