@@ -151,19 +151,79 @@ export function normalizeOllamaBaseUrl(baseUrl: string): string {
 }
 
 // ────────────────────────────────────────────────────────────
+// Shared provider skeleton
+// ────────────────────────────────────────────────────────────
+
+/**
+ * What the SDK-backed providers have in common: a client built on first use, an
+ * availability verdict cached for a TTL, and a `selectModel` that reports a
+ * failure as `null` instead of throwing. A subclass supplies only what differs
+ * between SDKs: how to build the client, which model wraps it, and the cheapest
+ * request that proves the backend answers.
+ */
+abstract class SdkLLMProvider<Client> implements ILLMProvider {
+  private readonly logger: Logger;
+  private readonly availability: AvailabilityCache;
+  private client: Client | null = null;
+
+  protected constructor(
+    private readonly label: string,
+    protected readonly defaultModel: string,
+    protected readonly requestTimeoutMs: number,
+    availabilityTtlMs: number,
+  ) {
+    this.logger = new Logger(`${label}LLMProvider`);
+    this.availability = new AvailabilityCache(availabilityTtlMs);
+  }
+
+  /** Build the SDK client. Runs once, on first use, so only the selected provider's SDK is ever loaded. */
+  protected abstract createClient(): Promise<Client>;
+
+  /** The chat model that sends requests for `modelName` through `client`. */
+  protected abstract createModel(client: Client, modelName: string): ILLMModel;
+
+  /** The cheapest request that proves the backend answers; it rejects when the backend does not. */
+  protected abstract probe(client: Client, signal: AbortSignal): Promise<unknown>;
+
+  async selectModel(options?: { family?: string }): Promise<ILLMModel | null> {
+    try {
+      const client = await this.getClient();
+      return this.createModel(client, options?.family ?? this.defaultModel);
+    } catch (error) {
+      this.logger.error(`Failed to create ${this.label} model`, error);
+      return null;
+    }
+  }
+
+  async isAvailable(): Promise<boolean> {
+    return this.availability.check(async () => {
+      const client = await this.getClient();
+      await withDeadline(this.requestTimeoutMs, (signal) => this.probe(client, signal));
+    });
+  }
+
+  private async getClient(): Promise<Client> {
+    if (!this.client) {
+      this.client = await this.createClient();
+    }
+    return this.client;
+  }
+}
+
+// ────────────────────────────────────────────────────────────
 // OpenAI provider
 // ────────────────────────────────────────────────────────────
 
 /** Chat model on an OpenAI-compatible API; Ollama is driven through the OpenAI SDK. */
 class OpenAICompatibleModel implements ILLMModel {
-  id: string;
+  readonly id: string;
 
   constructor(
     private client: OpenAIClient,
     private modelName: string,
     private requestTimeoutMs: number,
     private label: string,
-    public family: string,
+    public readonly family: string,
   ) {
     this.id = modelName;
   }
@@ -186,51 +246,36 @@ class OpenAICompatibleModel implements ILLMModel {
   }
 }
 
-export class OpenAILLMProvider implements ILLMProvider {
-  private logger = new Logger("OpenAILLMProvider");
-  private client: OpenAIClient | null = null;
-  private availability = new AvailabilityCache(10_000);
-
+export class OpenAILLMProvider extends SdkLLMProvider<OpenAIClient> {
   constructor(
     private apiKey: string,
-    private defaultModel: string,
+    defaultModel: string,
     private baseUrl?: string,
-    private requestTimeoutMs = 30_000,
-  ) {}
-
-  private async getClient(): Promise<OpenAIClient> {
-    if (!this.client) {
-      const { default: OpenAI } = await import("openai");
-      this.client = new OpenAI({
-        apiKey: this.apiKey,
-        ...(this.baseUrl ? { baseURL: this.baseUrl } : {}),
-      });
-    }
-    return this.client;
+    requestTimeoutMs = 30_000,
+  ) {
+    super("OpenAI", defaultModel, requestTimeoutMs, 10_000);
   }
 
-  async selectModel(options?: { family?: string }): Promise<ILLMModel | null> {
-    try {
-      const client = await this.getClient();
-      const modelName = options?.family ?? this.defaultModel;
-      return new OpenAICompatibleModel(
-        client,
-        modelName,
-        this.requestTimeoutMs,
-        "OpenAI",
-        modelName.split("-")[0], // e.g. "gpt" from "gpt-4o-mini"
-      );
-    } catch (error) {
-      this.logger.error("Failed to create OpenAI model", error);
-      return null;
-    }
-  }
-
-  async isAvailable(): Promise<boolean> {
-    return this.availability.check(async () => {
-      const client = await this.getClient();
-      await withDeadline(this.requestTimeoutMs, (signal) => client.models.list({ signal }));
+  protected async createClient(): Promise<OpenAIClient> {
+    const { default: OpenAI } = await import("openai");
+    return new OpenAI({
+      apiKey: this.apiKey,
+      ...(this.baseUrl ? { baseURL: this.baseUrl } : {}),
     });
+  }
+
+  protected createModel(client: OpenAIClient, modelName: string): ILLMModel {
+    return new OpenAICompatibleModel(
+      client,
+      modelName,
+      this.requestTimeoutMs,
+      "OpenAI",
+      modelName.split("-")[0], // e.g. "gpt" from "gpt-4o-mini"
+    );
+  }
+
+  protected probe(client: OpenAIClient, signal: AbortSignal): Promise<unknown> {
+    return client.models.list({ signal });
   }
 }
 
@@ -239,8 +284,8 @@ export class OpenAILLMProvider implements ILLMProvider {
 // ────────────────────────────────────────────────────────────
 
 class AnthropicModel implements ILLMModel {
-  id: string;
-  family: string;
+  readonly id: string;
+  readonly family: string;
 
   constructor(
     private client: AnthropicClient,
@@ -282,47 +327,32 @@ class AnthropicModel implements ILLMModel {
   }
 }
 
-export class AnthropicLLMProvider implements ILLMProvider {
-  private logger = new Logger("AnthropicLLMProvider");
-  private client: AnthropicClient | null = null;
-  private availability = new AvailabilityCache(10_000);
-
+export class AnthropicLLMProvider extends SdkLLMProvider<AnthropicClient> {
   constructor(
     private apiKey: string,
-    private defaultModel: string,
+    defaultModel: string,
     private baseUrl?: string,
-    private requestTimeoutMs = 30_000,
-  ) {}
-
-  private async getClient(): Promise<AnthropicClient> {
-    if (!this.client) {
-      const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      this.client = new Anthropic({
-        apiKey: this.apiKey,
-        ...(this.baseUrl ? { baseURL: this.baseUrl } : {}),
-      });
-    }
-    return this.client;
+    requestTimeoutMs = 30_000,
+  ) {
+    super("Anthropic", defaultModel, requestTimeoutMs, 10_000);
   }
 
-  async selectModel(options?: { family?: string }): Promise<ILLMModel | null> {
-    try {
-      const client = await this.getClient();
-      const modelName = options?.family ?? this.defaultModel;
-      return new AnthropicModel(client, modelName, this.requestTimeoutMs);
-    } catch (error) {
-      this.logger.error("Failed to create Anthropic model", error);
-      return null;
-    }
-  }
-
-  async isAvailable(): Promise<boolean> {
-    return this.availability.check(async () => {
-      const client = await this.getClient();
-      if (client.models?.list) {
-        await withDeadline(this.requestTimeoutMs, (signal) => client.models.list({ limit: 1 }, { signal }));
-      }
+  protected async createClient(): Promise<AnthropicClient> {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    return new Anthropic({
+      apiKey: this.apiKey,
+      ...(this.baseUrl ? { baseURL: this.baseUrl } : {}),
     });
+  }
+
+  protected createModel(client: AnthropicClient, modelName: string): ILLMModel {
+    return new AnthropicModel(client, modelName, this.requestTimeoutMs);
+  }
+
+  protected async probe(client: AnthropicClient, signal: AbortSignal): Promise<void> {
+    if (client.models?.list) {
+      await client.models.list({ limit: 1 }, { signal });
+    }
   }
 }
 
@@ -330,44 +360,29 @@ export class AnthropicLLMProvider implements ILLMProvider {
 // Ollama provider (OpenAI-compatible API)
 // ────────────────────────────────────────────────────────────
 
-export class OllamaLLMProvider implements ILLMProvider {
-  private logger = new Logger("OllamaLLMProvider");
-  private client: OpenAIClient | null = null;
-  private availability = new AvailabilityCache(3_000);
-
+export class OllamaLLMProvider extends SdkLLMProvider<OpenAIClient> {
   constructor(
     private baseUrl: string,
-    private defaultModel: string,
-    private requestTimeoutMs = 30_000,
-  ) {}
-
-  private async getClient(): Promise<OpenAIClient> {
-    if (!this.client) {
-      const { default: OpenAI } = await import("openai");
-      this.client = new OpenAI({
-        baseURL: normalizeOllamaBaseUrl(this.baseUrl),
-        apiKey: "ollama", // Ollama doesn't require a real key
-      });
-    }
-    return this.client;
+    defaultModel: string,
+    requestTimeoutMs = 30_000,
+  ) {
+    super("Ollama", defaultModel, requestTimeoutMs, 3_000);
   }
 
-  async selectModel(options?: { family?: string }): Promise<ILLMModel | null> {
-    try {
-      const client = await this.getClient();
-      const modelName = options?.family ?? this.defaultModel;
-      return new OpenAICompatibleModel(client, modelName, this.requestTimeoutMs, "Ollama", "ollama");
-    } catch (error) {
-      this.logger.error("Failed to create Ollama model", error);
-      return null;
-    }
-  }
-
-  async isAvailable(): Promise<boolean> {
-    return this.availability.check(async () => {
-      const client = await this.getClient();
-      await withDeadline(this.requestTimeoutMs, (signal) => client.models.list({ signal }));
+  protected async createClient(): Promise<OpenAIClient> {
+    const { default: OpenAI } = await import("openai");
+    return new OpenAI({
+      baseURL: normalizeOllamaBaseUrl(this.baseUrl),
+      apiKey: "ollama", // Ollama doesn't require a real key
     });
+  }
+
+  protected createModel(client: OpenAIClient, modelName: string): ILLMModel {
+    return new OpenAICompatibleModel(client, modelName, this.requestTimeoutMs, "Ollama", "ollama");
+  }
+
+  protected probe(client: OpenAIClient, signal: AbortSignal): Promise<unknown> {
+    return client.models.list({ signal });
   }
 }
 

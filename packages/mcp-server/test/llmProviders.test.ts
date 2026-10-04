@@ -6,6 +6,7 @@
 import { expect } from "chai";
 import * as os from "os";
 import * as path from "path";
+import sinon from "sinon";
 import { MemoryStore, PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "../src/config";
 import {
@@ -311,6 +312,138 @@ describe("LLM Providers", function () {
       const provider = new OllamaLLMProvider("http://localhost:11434", "llama3");
       const available = await provider.isAvailable();
       expect(available).to.be.a("boolean");
+    });
+  });
+
+  // ─── Behaviour the three SDK-backed providers share ──────
+
+  describe("shared provider behaviour", function () {
+    afterEach(() => sinon.restore());
+
+    /** A stand-in SDK client whose models.list records its arguments and can be made to fail. */
+    function fakeClient() {
+      const client = {
+        calls: [] as unknown[][],
+        failing: false,
+        models: {
+          async list(...args: unknown[]): Promise<unknown> {
+            client.calls.push(args);
+            if (client.failing) {
+              throw new Error("backend down");
+            }
+            return { data: [] };
+          },
+        },
+      };
+      return client;
+    }
+
+    /** One provider per SDK, each wired to its own fake client, with the availability TTL it is meant to cache for. */
+    function providers() {
+      return [
+        { name: "OpenAI", ttlMs: 10_000, provider: new OpenAILLMProvider("key", "gpt-4o-mini") },
+        { name: "Anthropic", ttlMs: 10_000, provider: new AnthropicLLMProvider("key", "claude-test") },
+        { name: "Ollama", ttlMs: 3_000, provider: new OllamaLLMProvider("http://localhost:11434", "llama3") },
+      ].map((entry) => {
+        const client = fakeClient();
+        (entry.provider as any).client = client;
+        return { ...entry, client };
+      });
+    }
+
+    it("probes OpenAI and Ollama with list({ signal }) and Anthropic with list({ limit: 1 }, { signal })", async function () {
+      const [openai, anthropic, ollama] = providers();
+      for (const { provider } of [openai, anthropic, ollama]) {
+        expect(await provider.isAvailable()).to.equal(true);
+      }
+      for (const { client } of [openai, ollama]) {
+        expect(client.calls).to.have.length(1);
+        expect(client.calls[0]).to.have.length(1);
+        expect(client.calls[0][0]).to.have.property("signal").that.is.instanceOf(AbortSignal);
+      }
+      expect(anthropic.client.calls).to.have.length(1);
+      expect(anthropic.client.calls[0][0]).to.deep.equal({ limit: 1 });
+      expect(anthropic.client.calls[0][1]).to.have.property("signal").that.is.instanceOf(AbortSignal);
+    });
+
+    it("caches the availability verdict for 10s (OpenAI, Anthropic) and 3s (Ollama)", async function () {
+      const clock = sinon.useFakeTimers({ now: 1_000_000, toFake: ["Date"] });
+      for (const { name, ttlMs, provider, client } of providers()) {
+        await provider.isAvailable();
+        await provider.isAvailable();
+        expect(client.calls, `${name}: a second call inside the TTL is served from the cache`).to.have.length(1);
+        clock.tick(ttlMs - 1);
+        await provider.isAvailable();
+        expect(client.calls, `${name}: still cached 1ms before the TTL ends`).to.have.length(1);
+        clock.tick(1);
+        await provider.isAvailable();
+        expect(client.calls, `${name}: probed again once the TTL has passed`).to.have.length(2);
+      }
+    });
+
+    it("reads a failing probe as unavailable instead of throwing", async function () {
+      for (const { name, provider, client } of providers()) {
+        client.failing = true;
+        expect(await provider.isAvailable(), name).to.equal(false);
+      }
+    });
+
+    it("selects the default model, or the requested family, and reports each SDK's family", async function () {
+      const [openai, anthropic, ollama] = providers();
+      const summarize = (models: Array<{ id: string; family: string } | null>) =>
+        models.map((model) => [model?.id, model?.family]);
+
+      const defaults = await Promise.all([openai, anthropic, ollama].map(({ provider }) => provider.selectModel()));
+      expect(summarize(defaults)).to.deep.equal([
+        ["gpt-4o-mini", "gpt"],
+        ["claude-test", "claude"],
+        ["llama3", "ollama"],
+      ]);
+
+      const requested = await Promise.all(
+        [openai, anthropic, ollama].map(({ provider }) => provider.selectModel({ family: "other-model" })),
+      );
+      expect(summarize(requested)).to.deep.equal([
+        ["other-model", "other"],
+        ["other-model", "other"],
+        ["other-model", "ollama"],
+      ]);
+    });
+
+    it("reports a client that cannot be created as no model and unavailable, never as a throw", async function () {
+      for (const { name, provider } of providers()) {
+        (provider as any).getClient = async () => {
+          throw new Error("sdk failed to load");
+        };
+        expect(await provider.selectModel(), name).to.equal(null);
+        expect(await provider.isAvailable(), name).to.equal(false);
+      }
+    });
+
+    it("builds each SDK client once, from the provider's own settings", async function () {
+      const cases: Array<{ provider: any; baseURL: string; apiKey: string }> = [
+        {
+          provider: new OpenAILLMProvider("sk-openai", "gpt-4o-mini", "https://proxy.example.com/v1"),
+          baseURL: "https://proxy.example.com/v1",
+          apiKey: "sk-openai",
+        },
+        {
+          provider: new AnthropicLLMProvider("sk-ant", "claude-test", "https://anthropic.invalid"),
+          baseURL: "https://anthropic.invalid",
+          apiKey: "sk-ant",
+        },
+        {
+          provider: new OllamaLLMProvider("http://localhost:11434/", "llama3"),
+          baseURL: "http://localhost:11434/v1",
+          apiKey: "ollama",
+        },
+      ];
+      for (const { provider, baseURL, apiKey } of cases) {
+        const client = await provider.getClient();
+        expect(await provider.getClient(), "the client is created once").to.equal(client);
+        expect(client.baseURL).to.equal(baseURL);
+        expect(client.apiKey).to.equal(apiKey);
+      }
     });
   });
 });
