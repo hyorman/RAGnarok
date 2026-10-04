@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
+import { downloadWithRetry } from "./benchmark-download.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(path.join(root, "packages/core/benchmarks/data/corpus-manifest.json"), "utf8"));
@@ -15,14 +16,9 @@ const readIfValid = async (relative, expected) => {
     return false;
   }
 };
-const download = async (url) => {
-  const response = await fetch(url, {
-    redirect: "follow",
-    signal: AbortSignal.timeout(120_000),
-    headers: { "user-agent": "RAGnarok-release-benchmark/0.4" },
-  });
-  if (!response.ok) throw new Error(`Benchmark download ${url} returned ${response.status}`);
-  return Buffer.from(await response.arrayBuffer());
+const downloadOptions = {
+  onRetry: ({ url, reason, attempt, attempts, delayMs }) =>
+    console.warn(`Benchmark download ${url} ${reason}; attempt ${attempt} of ${attempts}, retrying in ${delayMs} ms`),
 };
 
 const beir = manifest.corpora.find((corpus) => corpus.id === "beir-scifact-test");
@@ -31,7 +27,7 @@ const beirReady = (
   await Promise.all(beirFiles.map(([relative, expected]) => readIfValid(`.cache/beir/scifact/${relative}`, expected)))
 ).every(Boolean);
 if (!beirReady) {
-  const archive = new AdmZip(await download(beir.source));
+  const archive = new AdmZip(await downloadWithRetry(beir.source, downloadOptions));
   for (const [relative, expected] of beirFiles) {
     const entryName = `scifact/${relative}`;
     const entry = archive.getEntry(entryName);
@@ -47,7 +43,7 @@ if (!beirReady) {
 const frames = manifest.corpora.find((corpus) => corpus.id === "google-frames-test");
 const framesRelative = ".cache/frames/frames-test.tsv";
 if (!(await readIfValid(framesRelative, frames.sha256))) {
-  const contents = await download(frames.source);
+  const contents = await downloadWithRetry(frames.source, downloadOptions);
   if (sha256(contents) !== frames.sha256) throw new Error("FRAMES TSV checksum mismatch");
   await mkdir(path.dirname(path.join(root, framesRelative)), { recursive: true });
   await writeFile(path.join(root, framesRelative), contents);
@@ -88,7 +84,10 @@ for (const rawUrl of urls) {
   try {
     contents = await readFile(destination);
   } catch {
-    const response = await download(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+    const response = await downloadWithRetry(
+      `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`,
+      downloadOptions,
+    );
     const parsed = JSON.parse(response.toString("utf8"));
     contents = Buffer.from(JSON.stringify({ title: parsed.title ?? title, text: parsed.extract ?? "" }));
     await mkdir(path.dirname(destination), { recursive: true });

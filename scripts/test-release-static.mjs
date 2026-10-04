@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as auditPolicyModule from "./audit-policy.mjs";
+import { BENCHMARK_USER_AGENT, downloadWithRetry } from "./benchmark-download.mjs";
 import * as releaseStaticPolicy from "./release-static-policy.mjs";
 import { withContainerdSnapshotter } from "./use-containerd-image-store.mjs";
 
@@ -2196,6 +2197,100 @@ for (const target of policy.vsixTargets) {
     `check-release-assets finds exactly one VSIX for ${target}`,
   );
 }
+
+// Corpus downloads retry what a rate-limited or failing host will accept again, and nothing else. The
+// fake fetch and the recording sleep make every wait observable without waiting.
+const scriptedFetch = (...responses) => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    const next = responses.length > 1 ? responses.shift() : responses[0];
+    if (next instanceof Error) throw next;
+    return next();
+  };
+  return { calls, fetchImpl };
+};
+const reply =
+  (status, headers = {}) =>
+  () =>
+    new Response(status === 200 ? "corpus" : "refused", { status, headers });
+const downloadUrl = "https://en.wikipedia.org/api/rest_v1/page/summary/Irish_Book_Awards";
+const recordedDownload = async (script, options = {}) => {
+  const delays = [];
+  const { calls, fetchImpl } = scriptedFetch(...script);
+  const settled = await downloadWithRetry(downloadUrl, {
+    fetchImpl,
+    sleep: async (milliseconds) => void delays.push(milliseconds),
+    ...options,
+  }).then(
+    (body) => ({ body }),
+    (error) => ({ error }),
+  );
+  return { ...settled, calls, delays };
+};
+
+const retryAfterSeconds = await recordedDownload([reply(429, { "retry-after": "2" }), reply(200)]);
+assert.equal(retryAfterSeconds.body?.toString("utf8"), "corpus");
+assert.deepEqual(retryAfterSeconds.delays, [2000]);
+assert.equal(retryAfterSeconds.calls.length, 2);
+
+const serverErrors = await recordedDownload([reply(503), reply(503), reply(200)]);
+assert.equal(serverErrors.body?.toString("utf8"), "corpus");
+assert.deepEqual(serverErrors.delays, [1000, 2000]);
+
+const notFound = await recordedDownload([reply(404)]);
+assert.equal(notFound.error?.message, `Benchmark download ${downloadUrl} returned 404`);
+assert.deepEqual(notFound.delays, []);
+assert.equal(notFound.calls.length, 1);
+
+const alwaysLimited = await recordedDownload([reply(429)], { attempts: 3 });
+assert.equal(alwaysLimited.error?.message, `Benchmark download ${downloadUrl} returned 429 after 3 attempts`);
+assert.equal(alwaysLimited.calls.length, 3);
+assert.deepEqual(alwaysLimited.delays, [1000, 2000], "no wait follows the last attempt");
+
+assert.deepEqual((await recordedDownload([reply(429, { "retry-after": "600" }), reply(200)])).delays, [60_000]);
+assert.deepEqual(
+  (await recordedDownload([reply(429, { "retry-after": "600" }), reply(200)], { maxDelayMs: 5000 })).delays,
+  [5000],
+);
+assert.deepEqual(
+  (await recordedDownload([reply(503)], { attempts: 8, maxDelayMs: 4000 })).delays,
+  [1000, 2000, 4000, 4000, 4000, 4000, 4000],
+  "exponential backoff is capped as well",
+);
+
+const clock = Date.parse("2026-10-04T12:00:00Z");
+const retryAfterDate = (value) =>
+  recordedDownload([reply(429, { "retry-after": value }), reply(200)], { now: () => clock });
+assert.deepEqual((await retryAfterDate(new Date(clock + 7000).toUTCString())).delays, [7000]);
+assert.deepEqual((await retryAfterDate(new Date(clock - 7000).toUTCString())).delays, [0], "a past date waits zero");
+assert.deepEqual((await retryAfterDate("soon")).delays, [1000], "an unreadable Retry-After falls back to backoff");
+
+const networkError = new TypeError("fetch failed");
+const recovered = await recordedDownload([networkError, reply(200)]);
+assert.equal(recovered.body?.toString("utf8"), "corpus");
+assert.deepEqual(recovered.delays, [1000]);
+const unreachable = await recordedDownload([networkError], { attempts: 2 });
+assert.match(unreachable.error?.message ?? "", /fetch failed after 2 attempts$/);
+assert.equal(unreachable.error?.cause, networkError);
+assert.deepEqual(unreachable.delays, [1000]);
+
+const identified = await recordedDownload([reply(200)]);
+const [identifiedCall] = identified.calls;
+assert.equal(identifiedCall.url, downloadUrl);
+assert.equal(identifiedCall.init.redirect, "follow");
+assert.ok(identifiedCall.init.signal instanceof AbortSignal, "every attempt has its own timeout");
+assert.equal(identifiedCall.init.headers["user-agent"], BENCHMARK_USER_AGENT);
+assert.match(BENCHMARK_USER_AGENT, /^RAGnarok-release-benchmark\/0\.4 \(https:\/\/github\.com\/hyorman\/RAGnarok\)$/);
+
+const acquireCorpora = await read("scripts/acquire-benchmark-corpora.mjs");
+assert.match(acquireCorpora, /import \{ downloadWithRetry \} from "\.\/benchmark-download\.mjs"/);
+assert.doesNotMatch(
+  acquireCorpora,
+  /\bfetch\(|const download = /,
+  "every corpus download goes through downloadWithRetry",
+);
+assert.equal([...acquireCorpora.matchAll(/downloadWithRetry\(/g)].length, 3, "SciFact, FRAMES and every article");
 
 const notice = await read("NOTICE");
 const models = JSON.parse(await read("packages/core/assets/models/manifest.json"));
