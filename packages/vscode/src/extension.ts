@@ -19,6 +19,7 @@ import {
   createSharedTopicSources,
   createEmbeddingServices,
   createMemoryServices,
+  UnsupportedStorageError,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
 import { VsCodeConfigProvider } from "./adapters/vsCodeConfigProvider";
@@ -141,6 +142,25 @@ async function setActivationFailed(failed: boolean): Promise<void> {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+/**
+ * The refusal for a storage folder holding pre-0.4 data: a modal naming the
+ * folder, with what was found in it as the detail, and a way to reveal it.
+ */
+function showUnsupportedStorageModal(storageDir: string, error: UnsupportedStorageError): void {
+  const detail = error.entries.length > 0 ? `Found in that folder: ${error.entries.join(", ")}` : undefined;
+  void vscode.window
+    .showErrorMessage(
+      `RAGnarōk cannot open its storage: ${storageDir} holds data from an unsupported pre-0.4 build. Move or delete that folder, then reload the window.`,
+      { modal: true, detail },
+      "Reveal Folder",
+    )
+    .then((choice) => {
+      if (choice === "Reveal Folder") {
+        void vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(storageDir));
+      }
+    });
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<RagnarokExtensionApi> {
@@ -379,18 +399,8 @@ export async function activateWithServiceFactory(
     // Before cleanup: the views are already visible, and leaving them on the
     // "starting up" text is the difference between a reported failure and a
     // hang the user cannot diagnose.
-    if (error instanceof Error && error.name === "UnsupportedStorageError") {
-      void vscode.window
-        .showErrorMessage(
-          `RAGnarōk cannot open its storage: ${storageDir} holds data from an unsupported pre-0.4 build. Move or delete that folder, then reload the window.`,
-          { modal: true },
-          "Reveal Folder",
-        )
-        .then((choice) => {
-          if (choice === "Reveal Folder") {
-            void vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(storageDir));
-          }
-        });
+    if (error instanceof UnsupportedStorageError) {
+      showUnsupportedStorageModal(storageDir, error);
     }
     await setActivationFailed(true);
     try {
