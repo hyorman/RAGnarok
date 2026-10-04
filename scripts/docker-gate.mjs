@@ -19,7 +19,8 @@ const image = "ragnarok-mcp:ci";
 const sessionContainer = "ragnarok-release-session";
 const persistenceContainer = "ragnarok-release-persistence";
 const peerContainer = "ragnarok-release-volume-peer";
-const containers = [sessionContainer, persistenceContainer, peerContainer];
+const transformersContainer = "ragnarok-release-transformers";
+const containers = [sessionContainer, persistenceContainer, peerContainer, transformersContainer];
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
 const expectedToolCount = 8;
@@ -64,25 +65,20 @@ const containerLogs = (container) => {
   return `${result.stdout}${result.stderr}`.trim();
 };
 
+// The runtime posture every container the gate starts shares.
+const hardeningArgs = [
+  "--init",
+  "--read-only",
+  "--tmpfs",
+  "/tmp:size=256m",
+  "--security-opt",
+  "no-new-privileges",
+  "--cap-drop",
+  "ALL",
+];
+
 function hardenedRunArgs(name) {
-  return [
-    "run",
-    "-i",
-    "--name",
-    name,
-    "--init",
-    "--read-only",
-    "--tmpfs",
-    "/tmp:size=256m",
-    "--security-opt",
-    "no-new-privileges",
-    "--cap-drop",
-    "ALL",
-    "--stop-timeout",
-    "20",
-    "-v",
-    `${volume}:/data/ragnarok`,
-  ];
+  return ["run", "-i", "--name", name, ...hardeningArgs, "--stop-timeout", "20", "-v", `${volume}:/data/ragnarok`];
 }
 
 /**
@@ -259,6 +255,49 @@ async function assertImageContract() {
   return { imageBytes, imageArchitecture };
 }
 
+/**
+ * The image's Dockerfile deletes every @huggingface/transformers/dist file but
+ * transformers.node.{mjs,cjs}, and the stdio conversation below never loads a
+ * model, so an over-pruned image would pass it and fail on the first real
+ * query. Core loads Transformers with import() from /app/packages/core; load it
+ * the same way inside the image (which also loads the onnxruntime-node binding)
+ * and resolve the CJS entry, so both kept files are exercised.
+ */
+function assertTransformersLoads() {
+  const script = [
+    'import { createRequire } from "node:module";',
+    'const transformers = await import("@huggingface/transformers");',
+    'const cjsEntry = createRequire(process.cwd() + "/").resolve("@huggingface/transformers");',
+    'console.log("transformers-ok " + transformers.env.version + " " + cjsEntry);',
+  ].join("\n");
+  const result = spawnSync(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--name",
+      transformersContainer,
+      ...hardeningArgs,
+      "--entrypoint",
+      "node",
+      "-w",
+      "/app/packages/core",
+      image,
+      "--input-type=module",
+      "-e",
+      script,
+    ],
+    { cwd: root, encoding: "utf8", timeout: 60_000 },
+  );
+  const marker = /^transformers-ok (\S+) (\S+\/transformers\.node\.cjs)$/m.exec(result.stdout ?? "");
+  if (result.status !== 0 || !marker) {
+    throw new Error(
+      `The image could not load @huggingface/transformers (exit ${result.status}): ${(result.stderr || result.stdout || "").slice(-1000)}`,
+    );
+  }
+  console.log(marker[0]);
+}
+
 function assertToolSurface(tools) {
   if (!Array.isArray(tools)) {
     throw new Error("tools/list did not return an array");
@@ -423,6 +462,7 @@ try {
   spawnSync("docker", ["volume", "rm", volume], { cwd: root, stdio: "ignore" });
 
   const { imageBytes, imageArchitecture } = await assertImageContract();
+  assertTransformersLoads();
 
   run("docker", ["volume", "create", volume]);
 

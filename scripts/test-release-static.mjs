@@ -1615,6 +1615,10 @@ for (const contract of [
   /tools\/list/,
   /expectedToolCount = 8/,
   /assertSecondServerSharesVolume/,
+  /function assertTransformersLoads\(/,
+  // The gate calls it right after the image contract, so an over-pruned Transformers fails first.
+  /await assertImageContract\(\);\s*\n\s*assertTransformersLoads\(\);/,
+  /transformers-ok/,
   /assertRuntimeHardening/,
   /closeCleanly/,
   /ExposedPorts/,
