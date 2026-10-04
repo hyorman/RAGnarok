@@ -192,6 +192,53 @@ assert.deepEqual(evaluateAuditReport(productionAuditReport, policy, auditNow, pr
   allowed: [],
   rejected: retiredFindingsRejected,
 });
+// The two exceptions this repository carried until 0.4.1, as a fixture policy: with an exception
+// in force, evaluation reaches the installed tree and must find the approved via version there.
+const historicExceptionsPolicy = {
+  auditExceptions: [
+    {
+      ...fixtureException,
+      advisory: "GHSA-frvp-7c67-39w9",
+      dependency: "@hono/node-server",
+      range: "<2.0.5",
+      via: "@modelcontextprotocol/node@2.0.0",
+      reason: "fixture: MCP Node never imports Hono serve-static",
+    },
+    {
+      ...fixtureException,
+      advisory: "GHSA-f88m-g3jw-g9cj",
+      dependency: "sharp",
+      range: "<0.35.0",
+      via: "@huggingface/transformers@3.8.1",
+      reason: "fixture: no image input reaches Sharp",
+    },
+  ],
+};
+const historicAllowed = historicExceptionsPolicy.auditExceptions.map(({ advisory, dependency, range, reason }) => ({
+  advisory,
+  dependency,
+  range,
+  reason,
+}));
+assert.deepEqual(
+  evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, productionInstalledTree),
+  { allowed: historicAllowed, rejected: [] },
+);
+const upgradedViaTree = structuredClone(productionInstalledTree);
+upgradedViaTree.dependencies["@ragnarok/mcp-server"].dependencies["@ragnarok/core"].dependencies[
+  "@huggingface/transformers"
+].version = "3.8.2";
+assert.deepEqual(evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, upgradedViaTree), {
+  allowed: [historicAllowed[0]],
+  rejected: [
+    {
+      advisory: "GHSA-f88m-g3jw-g9cj",
+      dependency: "sharp",
+      range: "<0.35.0",
+      reason: "Approved via version is not installed",
+    },
+  ],
+});
 
 const localTarballAuditReport = structuredClone(productionAuditReport);
 localTarballAuditReport.vulnerabilities["@ragnarok/core"].range = "";
@@ -208,18 +255,21 @@ assert.deepEqual(
   },
   "raw npm local-tarball roots must not weaken audit node validation",
 );
+const normalizedLocalTarballReport = normalizeLocalTarballAuditRanges(localTarballAuditReport, localTarballVersions);
 assert.deepEqual(
-  evaluateAuditReport(
-    normalizeLocalTarballAuditRanges(localTarballAuditReport, localTarballVersions),
-    policy,
-    auditNow,
-    productionInstalledTree,
-  ),
-  {
-    allowed: [],
-    rejected: retiredFindingsRejected,
-  },
-  "known direct local-tarball roots must use their exact installed versions",
+  ["@ragnarok/core", "@ragnarok/mcp-server"].map((name) => normalizedLocalTarballReport.vulnerabilities[name].range),
+  ["0.5.0", "0.5.0"],
+  "known direct local-tarball roots take their installed version as their audit range",
+);
+assert.deepEqual(
+  evaluateAuditReport(normalizedLocalTarballReport, policy, auditNow, productionInstalledTree),
+  { allowed: [], rejected: retiredFindingsRejected },
+  "a normalized local-tarball report is well formed; with no exceptions every finding is rejected",
+);
+assert.deepEqual(
+  evaluateAuditReport(normalizedLocalTarballReport, historicExceptionsPolicy, auditNow, productionInstalledTree),
+  { allowed: historicAllowed, rejected: [] },
+  "a normalized local-tarball report is evaluated against the installed tree",
 );
 for (const [name, mutate] of [
   ["unknown package", (report) => (report.vulnerabilities["@ragnarok/core"].name = "unknown-package")],
