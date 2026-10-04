@@ -1266,9 +1266,31 @@ assert.match(vsixSmoke, /vsix-extension-host-smoke\.cjs/);
 assert.match(vsixSmoke, /RAGNAROK_EXPECTED_EXTENSION_PATH: extensionDir/);
 assert.match(vsixSmoke, /launchArgs: \[\s*workspace,/);
 assert.match(vsixSmoke, /delete process\.env\.ELECTRON_RUN_AS_NODE/);
-assert.match(vsixSmoke, /transformersRequire\("sharp"\)/);
-assert.match(vsixSmoke, /transformersRequire\("onnxruntime-node"\)/);
-assert.match(vsixSmoke, /listSupportedBackends/);
+// Windows will not unlink a DLL a live process has loaded, so the smoke must not load
+// LanceDB, Sharp or ONNX Runtime into its own process: a child process probes them, and
+// the temporary profile (which holds those DLLs) is then deletable, with retries for a
+// VS Code process that is slow to exit.
+assert.doesNotMatch(
+  vsixSmoke,
+  /(?:[Rr]equire\(|import\()\s*["'](?:@lancedb\/lancedb|sharp|onnxruntime-node)["']/,
+  "vsix-smoke must not load native modules in its own process",
+);
+assert.match(
+  vsixSmoke,
+  /execFileSync\(\s*process\.execPath,\s*\[path\.join\(root, "scripts\/vsix-native-probe\.cjs"\), extensionDir\]/,
+  "vsix-smoke must run the native probe in a child Node process",
+);
+assert.match(
+  vsixSmoke,
+  /await rm\(profile, \{[^}]*\bmaxRetries: \d+/,
+  "vsix-smoke must retry deleting its temporary profile",
+);
+const nativeProbe = await read("scripts/vsix-native-probe.cjs");
+assert.match(nativeProbe, /extensionRequire\("@lancedb\/lancedb"\)/);
+assert.match(nativeProbe, /transformersRequire\("sharp"\)/);
+assert.match(nativeProbe, /transformersRequire\("onnxruntime-node"\)/);
+assert.match(nativeProbe, /listSupportedBackends/);
+assert.match(nativeProbe, /console\.log\(\s*JSON\.stringify\(/);
 // VS Code 1.110+ names the macOS binary after the product and 1.140 dropped the
 // Contents/MacOS/Electron link, so the extension-host smoke must launch the real binary.
 const testElectronUtil = require("@vscode/test-electron/out/util.js");

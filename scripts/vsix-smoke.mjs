@@ -1,5 +1,4 @@
 import { execFileSync, execSync } from "node:child_process";
-import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -96,21 +95,24 @@ try {
   );
   if (extensionMatches.length !== 1) throw new Error("Could not resolve the exact installed extension directory");
   const extensionDir = path.join(extensions, extensionMatches[0]);
-  const extensionRequire = createRequire(path.join(extensionDir, "package.json"));
-  const lance = extensionRequire("@lancedb/lancedb");
-  const transformersRoot = path.dirname(path.dirname(extensionRequire.resolve("@huggingface/transformers")));
-  const transformersRequire = createRequire(path.join(transformersRoot, "package.json"));
-  const sharp = transformersRequire("sharp");
-  // Requiring onnxruntime-node loads its native binding for this platform/arch
-  // and asks it for the backends it was built with.
-  const onnxruntime = transformersRequire("onnxruntime-node");
-  const onnxBackends = onnxruntime.listSupportedBackends?.() ?? [];
-  if (
-    typeof lance.connect !== "function" ||
-    !sharp.versions?.sharp ||
-    !onnxBackends.some((backend) => backend.name === "cpu")
-  ) {
+  // A child process loads the native modules: Windows cannot delete a DLL that a live
+  // process has loaded, and this process must be able to remove the profile at the end.
+  const probeOutput = execFileSync(process.execPath, [path.join(root, "scripts/vsix-native-probe.cjs"), extensionDir], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const probeLine = probeOutput
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== "")
+    .at(-1);
+  if (!probeLine) throw new Error("The native module probe printed no result");
+  const probe = JSON.parse(probeLine);
+  if (!probe.lanceConnect || !probe.sharp || !probe.onnxBackends?.includes("cpu")) {
     throw new Error("Installed VSIX native LanceDB/Sharp/ONNX Runtime modules did not load");
+  }
+  if (probe.arch !== process.arch) {
+    throw new Error(`The native module probe ran on ${probe.arch}, not on ${process.arch}`);
   }
   const declaredTarget = ["x64", "arm64"].find((arch) => path.basename(vsix).includes(`-${arch}.vsix`));
   if (declaredTarget && process.arch !== declaredTarget) {
@@ -158,5 +160,7 @@ try {
     `Installed, activated, and create/query/delete smoked ${pkg.publisher}.${pkg.name}@${pkg.version} on VS Code ${version}.`,
   );
 } finally {
-  await rm(profile, { recursive: true, force: true });
+  // Node retries EBUSY, EMFILE, ENFILE, ENOTEMPTY and EPERM, which covers a VS Code
+  // process that is slow to exit and still holds files under the profile.
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
 }
