@@ -44,7 +44,7 @@ export async function connectVsCodeBridge(
     try {
       render(validateGraphVisualizationDocument(restored));
     } catch {
-      // Ignore stale persisted state that no longer matches the graph schema.
+      // Ignore persisted state that does not match the graph schema.
     }
   }
   api.postMessage({ type: "ready" });

@@ -615,7 +615,7 @@ export class DocumentPipeline {
 
   /**
    * Dispose of all resources and clean up
-   * Should be called when DocumentPipeline is no longer needed
+   * Should be called once the DocumentPipeline is finished with
    */
   public dispose(): void {
     this.logger.info("Disposing DocumentPipeline");

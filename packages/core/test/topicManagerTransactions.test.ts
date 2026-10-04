@@ -339,8 +339,8 @@ describe("TopicManager operation-scoped write transactions", function () {
   });
 
   it("still recovers an interrupted transaction when the store is opened", async function () {
-    // Startup no longer builds a session coordinator, so an abandoned staging
-    // directory would otherwise linger until somebody happened to write.
+    // Opening the store probes for pending recovery, so an abandoned staging
+    // directory is repaired rather than lingering until somebody writes.
     await fs.writeFile(
       path.join(storageDir, "storage-format.json"),
       JSON.stringify({ formatVersion: 2, initializedAt: Date.now() }),

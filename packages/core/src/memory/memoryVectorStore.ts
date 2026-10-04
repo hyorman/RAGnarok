@@ -10,9 +10,9 @@
  *   - Branch edges:        `_memory-edges-branch-{encodedBranchName}`
  *
  * Branch names are base64url-encoded in table names: the encoding is
- * reversible (listBranches returns the original name) and collision-free —
- * lossy sanitization previously mapped distinct branches like `feature/foo`
- * and `feature_foo` onto the same table, leaking memory across branches.
+ * reversible (listBranches returns the original name) and collision-free:
+ * lossy sanitization would map distinct branches like `feature/foo` and
+ * `feature_foo` onto the same table, leaking memory across branches.
  */
 
 import { connect } from "@lancedb/lancedb";
@@ -29,8 +29,8 @@ import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "
 
 export class MemoryVectorStore {
   private logger = new Logger("MemoryVectorStore");
-  // Memoized connection — every operation used to reconnect, so a single
-  // store() paid 5+ connects and each recall reconnected again.
+  // Memoized connection: reconnecting per operation would cost a single
+  // store() 5+ connects and make each recall reconnect again.
   private dbPromise: ReturnType<typeof connect> | null = null;
   private db: Connection | null = null;
   private openTables = new Set<Table>();

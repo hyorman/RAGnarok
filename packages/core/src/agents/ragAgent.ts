@@ -564,7 +564,7 @@ export class RAGAgent {
     let iterations = 0;
     let previousGapCount = Infinity;
     let llmFailed = false; // Circuit-breaker for LLM follow-up
-    // Maps follow-up query text → original sub-query text for gap attribution (#1)
+    // Maps follow-up query text → original sub-query text for gap attribution
     let gapTargetMap = new Map<string, string>();
     const maxIter = options.maxIterations;
     const threshold = options.confidenceThreshold;
@@ -586,10 +586,9 @@ export class RAGAgent {
       // Execute current plan
       const iterResults = await this.executeRetrieval(currentPlan, options);
 
-      // Deduplicate new results against existing before accumulating (#4)
       const newUnique = this.deduplicateAgainst(iterResults, allResults);
 
-      // Stamp originalSubQuery on follow-up results for gap attribution (#1)
+      // Stamp originalSubQuery on follow-up results for gap attribution.
       // Done AFTER dedup so only surviving results get attribution
       if (iterations > 1 && gapTargetMap.size > 0) {
         for (const result of newUnique) {
@@ -633,7 +632,7 @@ export class RAGAgent {
       }
 
       // Analyze gaps against the INITIAL plan using ALL accumulated results.
-      // analyzeGaps uses originalSubQuery for attribution (#1)
+      // analyzeGaps uses originalSubQuery for attribution
       const gapAnalysis = this.analyzeGaps(initialPlan, allResults, options.retrievalStrategy);
 
       this.logger.debug("Gap analysis", {
@@ -652,7 +651,7 @@ export class RAGAgent {
       }
 
       // UC-6: Convergence — if gap count didn't decrease AND no new unique docs
-      // were added, we're not making progress (#3)
+      // were added, we're not making progress
       if (iterations > 1 && gapAnalysis.gaps.length >= previousGapCount && newUnique.length === 0) {
         this.logger.info("Convergence detected: no gap reduction or new docs", {
           iterations,
@@ -664,7 +663,7 @@ export class RAGAgent {
       previousGapCount = gapAnalysis.gaps.length;
 
       // Generate follow-up plan to fill gaps, with mapping of follow-up queries
-      // to original sub-queries they target (#1)
+      // to original sub-queries they target
       const newGapTargetMap = new Map<string, string>();
       const followUpPlan = await this.generateFollowUpPlan(
         initialPlan,
@@ -683,7 +682,7 @@ export class RAGAgent {
         break;
       }
 
-      // Circuit-breaker (#2): if LLM was skipped (heuristic used), stop retrying LLM
+      // Circuit-breaker: if LLM was skipped (heuristic used), stop retrying LLM
       if (followUpPlan._heuristicFallback) {
         llmFailed = true;
       }
@@ -719,7 +718,7 @@ export class RAGAgent {
     const subQueryScores = new Map<string, number[]>();
 
     // Group scores by sub-query, using originalSubQuery (if set) to attribute
-    // follow-up results back to the initial-plan sub-query they targeted (#1)
+    // follow-up results back to the initial-plan sub-query they targeted
     for (const result of iterResults) {
       const key = result.originalSubQuery || result.subQuery || plan.originalQuery;
       if (!subQueryScores.has(key)) {
@@ -876,13 +875,13 @@ export class RAGAgent {
         )
         .join("\n");
 
-      // P3: JSON-escape user-controlled values to prevent prompt corruption
+      // JSON-escape user-controlled values to prevent prompt corruption
       const safeOriginalQuery = JSON.stringify(originalPlan.originalQuery);
       const safeComplexity = JSON.stringify(originalPlan.complexity);
       const safeResultSummary = JSON.stringify(resultSummary);
       const safeGapSummary = JSON.stringify(gapSummary);
 
-      // #11: Wrap user-controlled data in XML-style fences to prevent prompt injection
+      // Wrap user-controlled data in XML-style fences to prevent prompt injection
       const prompt = `You are a RAG retrieval refinement assistant. A query plan was executed but some sub-queries produced poor results.
 
 Original Query: ${safeOriginalQuery}
@@ -927,7 +926,7 @@ Respond with JSON:
         return null;
       }
 
-      // P1: Filter out empty/null queries before constructing plan
+      // Filter out empty/null queries before constructing plan
       const validSubQueries = parsed.subQueries
         .filter(
           (sq): sq is Record<string, unknown> & { query: string } =>
@@ -970,8 +969,8 @@ Respond with JSON:
   /**
    * Heuristic follow-up plan generation.
    * Broadens or rephrases gap sub-queries without LLM.
-   * Uses round-robin allocation: one follow-up per gap before any gap gets a second (#8).
-   * Populates gapTargetMap for gap attribution (#1).
+   * Uses round-robin allocation: one follow-up per gap before any gap gets a second.
+   * Populates gapTargetMap for gap attribution.
    */
   private generateFollowUpPlanHeuristic(
     originalPlan: QueryPlan,
@@ -1038,7 +1037,7 @@ Respond with JSON:
       return null;
     }
 
-    // Cap at 3 follow-up queries: primary first, then secondary (#8)
+    // Cap at 3 follow-up queries: primary first, then secondary
     const allFollowUps = [...primaryQueries, ...secondaryQueries];
     const capped = allFollowUps.slice(0, 3);
 
@@ -1130,7 +1129,7 @@ Respond with JSON:
   }
 
   /**
-   * Deduplicate new results against existing results (#4).
+   * Deduplicate new results against existing results.
    * Returns only results not already present in `existing`.
    */
   private deduplicateAgainst(newResults: RetrievalResult[], existing: RetrievalResult[]): RetrievalResult[] {

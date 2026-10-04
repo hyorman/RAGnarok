@@ -286,9 +286,8 @@ export async function activateWithServiceFactory(
     lifecycle.addDisposable(configView);
     lifecycle.addDisposable(configDataProvider);
 
-    // Keep both tree views live across external storage changes (another
-    // window writing topics.json/a documents file, or a reset
-    // in another window taking the storage tree away and back).
+    // Keep both tree views live when another window writes topics.json or a
+    // documents file, or resets the storage.
     const externalChangeSubscription = wireExternalStorageChangeRefresh(
       topicManager,
       treeDataProvider,

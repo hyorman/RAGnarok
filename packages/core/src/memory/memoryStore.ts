@@ -100,9 +100,9 @@ export class MemoryStore {
   private graphLoads = new Map<string, Promise<MemoryGraph>>();
   private entryLoads = new Map<string, Promise<MemoryEntry[]>>();
 
-  // Debounced memories.md regeneration: every mutation used to rescan every
-  // scope twice (markdown + stats) and rewrite the file, and concurrent
-  // fire-and-forget writes could land out of order.
+  // Debounced memories.md regeneration: regenerating on every mutation would
+  // rescan every scope twice (markdown + stats) and rewrite the file, and
+  // concurrent fire-and-forget writes could land out of order.
   private markdownDirty = false;
   private markdownFlushing = false;
   private markdownTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1126,10 +1126,9 @@ export class MemoryStore {
   }
 
   /**
-   * Every read below is lock-free on purpose: taking the session lease here
-   * is exactly what used to kill a second VS Code window on its first memory
-   * read. Reads validate the storage format (never writing it) and then go
-   * straight to the vector store.
+   * Every read below is lock-free: reads validate the storage format (never
+   * writing it) and then go straight to the vector store, so a second window
+   * never waits on a first one's read.
    */
   private async getGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraph> {
     await this.ensureStorageReady(this.holdsMutationLease);

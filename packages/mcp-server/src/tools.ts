@@ -400,10 +400,9 @@ export function registerTools(
         ),
     }),
     readOnlyAnnotations,
-    // No workspace context is supplied: editor state is VS Code's alone. The
-    // empty-topic case is no longer handled here — the shared executor turns it
-    // into the canonical empty payload. Query FAILURES keep MCP's flat
-    // {error: message} transport; only rag_memory speaks {error: {code, message}}.
+    // No workspace context is supplied: editor state is VS Code's alone. Query
+    // failures keep MCP's flat {error: message} shape; only rag_memory uses
+    // {error: {code, message}}.
     async ({ topic, query, topK, retrievalStrategy }, context) => {
       try {
         return toolJson(
@@ -418,10 +417,10 @@ export function registerTools(
   // rag_ingest (files variant) — Add documents to a topic
   //
   // Paths are restricted to the configured allowlist roots
-  // (security.allowedPaths, defaulting to the working directory): a remote
-  // authenticated client must not be able to index — and thus read back —
-  // arbitrary files on the server. Symlinks are resolved before containment
-  // checks so a link inside an allowed root can't escape it.
+  // (security.allowedPaths, defaulting to the working directory), so an agent
+  // steered by injected content cannot index — and so read back — arbitrary
+  // files. Symlinks are resolved before the containment check so a link inside
+  // an allowed root cannot escape it.
   let allowedRootsPromise: Promise<string[]> | undefined;
   const getAllowedRoots = (): Promise<string[]> => {
     allowedRootsPromise ??= (async () => {

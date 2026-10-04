@@ -1,11 +1,7 @@
 /**
- * Merges every configured shared-topic source into one read-only view.
- *
- * Names, not ids, are how agents address topics: rag_query and the VS Code
- * ragQuery tool both take a name, and resolveTopicByName returns the first
- * case-insensitive match with local topics listed first. So a shared topic
- * whose name collides with a local one would be unreachable — hence the
- * disambiguation here.
+ * Merges every configured shared-topic source into one read-only view,
+ * renaming shared topics whose names collide with a local topic's: agents
+ * address topics by name, so a colliding shared topic would be unreachable.
  */
 
 import * as fs from "fs/promises";
@@ -19,11 +15,7 @@ interface RegistryEntry {
   topic: Topic;
   documents: TopicDocument[];
   storeDir: string;
-  /**
-   * The source's own name for this topic, kept apart from `topic.name` so
-   * reassignName() is idempotent: reassigning over an already-suffixed name
-   * would otherwise suffix the suffix.
-   */
+  /** The source's own name, kept apart from `topic.name` so reassignment never suffixes a suffix. */
   preferredName: string;
   /** The contributing source's label, which is what a suffix is built from. */
   sourceLabel: string;
@@ -42,13 +34,7 @@ export class SharedTopicRegistry {
     this.sources = [...sources];
   }
 
-  /**
-   * Re-resolve every source and rebuild the view.
-   *
-   * `reservedNames` are the names shared topics must not collide with — the
-   * local topic names. Comparison is case-insensitive, matching
-   * resolveTopicByName.
-   */
+  /** Re-resolve every source and rebuild the view; `reservedNames` (local topic names) match case-insensitively. */
   public async refresh(reservedNames: Iterable<string>): Promise<void> {
     const taken = new Set<string>();
     for (const name of reservedNames) {
@@ -70,12 +56,10 @@ export class SharedTopicRegistry {
       // Deterministic order so name assignment is reproducible run to run.
       for (const entry of [...resolved].sort((left, right) => left.nativeId.localeCompare(right.nativeId))) {
         if (rebuilt.has(entry.sharedId)) {
-          // Two archives exported from one source topic derive one sharedId,
-          // so only one of them can be served. Skipping the later one makes
-          // the winner deterministic (the sort above is over an equal key
-          // otherwise) and, more visibly, stops assignName running twice: the
-          // first pass would reserve the plain name and the survivor would
-          // display as "<name> (share)" with no "<name>" anywhere.
+          // Two archives exported from one source topic share a sharedId, so only
+          // one is served. Keeping the first makes the winner deterministic and
+          // stops assignName running twice (the survivor would display as
+          // "<name> (share)" with no "<name>" anywhere).
           this.logger.debug("Shared topic id already contributed; keeping the first", {
             source: source.id,
             sharedId: entry.sharedId,
@@ -100,17 +84,10 @@ export class SharedTopicRegistry {
   }
 
   /**
-   * Re-run name assignment over the entries already resolved, with no source
-   * I/O whatsoever.
-   *
-   * This is what a local create/rename/delete needs: the reserved names moved,
-   * so a shared topic may have to step aside or may be free to step back. What
-   * such a mutation must NOT do is re-scan the share -- D5 keeps folder scans
-   * out of every hot path, and on the network mount this feature targets a
-   * readdir can stall for the OS timeout or fail transiently.
-   *
-   * Map iteration is insertion order, which is exactly the order refresh()
-   * assigned in, so this reproduces what a refresh would have produced.
+   * Re-run name assignment over already-resolved entries with no source I/O:
+   * a local create/rename/delete moves the reserved names but must not re-scan
+   * the share (a network-mount readdir can stall or fail). Insertion order is
+   * the order refresh() assigned in, so the result matches a refresh.
    */
   public reassignNames(reservedNames: Iterable<string>): void {
     const taken = new Set<string>();
@@ -137,8 +114,7 @@ export class SharedTopicRegistry {
     return this.entries.get(topicId)?.storeDir;
   }
 
-  /** A copy: getTopic and listTopics clone too, and a caller that mutates what
-   * it gets back would otherwise corrupt the registry until the next refresh. */
+  /** A copy, so a caller cannot corrupt the registry. */
   public getDocuments(topicId: string): TopicDocument[] {
     const entry = this.entries.get(topicId);
     return entry ? [...entry.documents] : [];
@@ -172,17 +148,12 @@ export class SharedTopicRegistry {
   /**
    * Reclaim the cache of a source nobody configures any more.
    *
-   * Age-gated, exactly as SharedArchiveCache.prune is for its transients, and
-   * for the same reason one level up: the cache root lives under the storage
-   * directory, which every process sharing that directory also shares, while
-   * the configured source set is per-process (in VS Code, per window — the
-   * setting is window-scoped). "Not configured here" therefore does not mean
-   * "not in use anywhere", and an unconditional removal would delete another
-   * window's live unpacks out from under its open LanceDB handles.
-   *
+   * Age-gated: the cache root is shared by every process on the storage
+   * directory while the configured source set is per-window, so "not
+   * configured here" does not mean "not in use", and removing unconditionally
+   * would delete another window's live unpacks under its open LanceDB handles.
    * A live process rewrites entries.json on every refresh, so a recent mtime
-   * is the signal that someone is still using this cache. A genuinely
-   * abandoned one is still reclaimed, just a refresh cycle later.
+   * means the cache is in use.
    */
   private async pruneUnconfiguredSourceCaches(): Promise<void> {
     const keep = new Set(this.sources.map((source) => this.cacheDirName(source)));
@@ -201,10 +172,9 @@ export class SharedTopicRegistry {
       try {
         mtimeMs = (await fs.stat(path.join(sourceDir, ENTRIES_FILENAME))).mtimeMs;
       } catch {
-        // No entries.json: a source directory another process created but
-        // whose first sync has not finished yet — on a big share that is
-        // minutes of unpacking. Fall back to the directory's own mtime rather
-        // than deleting on a failed probe.
+        // No entries.json: another process's first sync may still be unpacking
+        // (minutes on a big share). Fall back to the directory's mtime rather
+        // than delete on a failed probe.
         try {
           mtimeMs = (await fs.stat(sourceDir)).mtimeMs;
         } catch {

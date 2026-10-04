@@ -330,8 +330,8 @@ export function ensureConfigFile(storageDir: string, log: (message: string) => v
       return;
     }
     raw.$defaults = defaults;
-    // $envOnly used to be written at creation and never again, so an existing
-    // file's copy drifted unrepairably as the env-only set changed.
+    // $envOnly is rewritten whenever it differs, so an existing file's copy
+    // cannot drift as the env-only set changes.
     raw.$envOnly = ENV_ONLY_DOC;
     replaceFileAtomically(filePath, `${JSON.stringify(raw, null, 2)}\n`, fs.statSync(filePath).mode & 0o777);
   } catch {

@@ -2,14 +2,12 @@
  * Content-addressed unpacks of shared `.rag` archives.
  *
  * The fingerprint is part of each unpack's directory name, so a republished
- * topic is written BESIDE its previous version and never over it: nothing is
- * destructively removed while another process may hold that LanceDB table open.
- * It also means `storeDir` changes on republish, which invalidates
- * TopicManager's vector-store cache key for free.
+ * topic is written BESIDE its previous version, never over it: nothing is
+ * removed while another process may hold that LanceDB table open. `storeDir`
+ * changes on republish, which invalidates TopicManager's vector-store cache key.
  *
- * No write lease is taken. The cache is derived, deterministic and lives
- * outside the managed database directory, so two processes materializing it
- * concurrently is safe by construction.
+ * No write lease is taken: the cache is derived, deterministic and outside the
+ * managed database directory, so concurrent materialization is safe.
  */
 
 import * as fs from "fs/promises";
@@ -24,15 +22,10 @@ import type { ResolvedSharedTopic } from "./types";
 export const ENTRIES_FILENAME = "entries.json";
 const ENTRIES_VERSION = 1;
 /**
- * How long a dot-prefixed transient (our own ".staging-<uuid>" unpack
- * directory, or an atomicWriteJson ".*.tmp") may sit unpublished before
- * `prune()` treats it as orphaned by a crash rather than in-flight from a
- * live concurrent process. Far beyond any real unpack duration, so it cannot
- * race a genuinely live writer.
- *
- * SharedTopicRegistry reuses this threshold for the same reason one level up:
- * a cache root is shared by every process using one storage directory, so an
- * unconfigured source here may be a live source there.
+ * How long a dot-prefixed transient (".staging-<uuid>" unpack directory or an
+ * atomicWriteJson ".*.tmp") may sit unpublished before `prune()` treats it as
+ * orphaned by a crash rather than in flight. SharedTopicRegistry reuses it for
+ * cache roots, which every process on one storage directory shares.
  */
 export const STALE_TRANSIENT_MS = 60 * 60 * 1000;
 
@@ -48,12 +41,10 @@ interface CacheEntry {
   topic: ExportedTopicData["topic"];
   documents: TopicDocument[];
   /**
-   * What the unpack actually contains, recorded at publish time. An empty
-   * topic legitimately ships without a table and the vector metadata is
-   * conditional too, so an unconditional probe would reject a valid unpack --
-   * but without a probe at all a half-deleted one is served forever, because
-   * the archive's fingerprint never changes. Optional: an entries.json
-   * written before this field existed re-unpacks once, then converges.
+   * What the unpack contains, recorded at publish time: an empty topic ships
+   * without a table and vector metadata is conditional, so a fixed probe would
+   * reject valid unpacks, while no probe serves a half-deleted one forever (the
+   * archive's fingerprint never changes). Optional: older entries re-unpack once.
    */
   hasTable?: boolean;
   hasVectorMetadata?: boolean;
@@ -102,10 +93,9 @@ export class SharedArchiveCache {
           continue;
         }
         size = stat.size;
-        // fs.utimes() only round-trips whole milliseconds (Date has no
-        // sub-millisecond field), so a byte-identical restore after a rewrite
-        // can otherwise land on a different mtimeMs than the original write
-        // produced. Round to the millisecond the fingerprint is keyed on that.
+        // fs.utimes() only round-trips whole milliseconds, so round here: a
+        // byte-identical restore after a rewrite could otherwise land on a
+        // different mtimeMs than the original write.
         mtimeMs = Math.round(stat.mtimeMs);
       } catch (error) {
         this.logger.debug("Shared archive could not be stat'ed; skipping", { archivePath, error });
@@ -153,20 +143,16 @@ export class SharedArchiveCache {
   }
 
   /**
-   * Does the unpack still hold everything it was published with?
-   *
-   * Probing only topic.json is not enough: `fs.rm({recursive:true})` removes
-   * children concurrently and an open .lance file can refuse deletion, so a
-   * partially deleted unpack whose topic.json survived would pass and then be
-   * served -- forever, since the fingerprint that keys the warm path is the
-   * archive's, not the unpack's.
+   * Does the unpack still hold everything it was published with? Probing only
+   * topic.json is not enough: a recursive rm removes children concurrently and
+   * an open .lance file can refuse deletion, leaving a partial unpack that would
+   * be served forever, since the fingerprint keys the archive, not the unpack.
    */
   private async unpackExists(
     entry: Pick<CacheEntry, "sharedId" | "fingerprint" | "hasTable" | "hasVectorMetadata">,
   ): Promise<boolean> {
     if (entry.hasTable === undefined || entry.hasVectorMetadata === undefined) {
-      // Recorded by a version that did not track contents. Treat as a failed
-      // probe: one forced re-unpack is cheaper than guessing.
+      // Entry predates content tracking: one forced re-unpack beats guessing.
       return false;
     }
     const dir = this.unpackDir(entry);
@@ -200,10 +186,7 @@ export class SharedArchiveCache {
     }
   }
 
-  /**
-   * Validate, unpack and remap one archive. Returns null when the archive is
-   * unusable — skipped silently, per the shared-topics contract.
-   */
+  /** Validate, unpack and remap one archive; null when it is unusable (skipped silently). */
   private async unpack(
     archivePath: string,
     archiveName: string,
@@ -218,9 +201,8 @@ export class SharedArchiveCache {
       const nativeId = staged.exportData.topic.id;
       const sharedId = deriveSharedTopicId(this.sourceId, nativeId);
 
-      // Remap ids. Renaming the table directory and rewriting JSON is
-      // sufficient: rows inside a LanceDB table are never rewritten, exactly as
-      // commitStagedTopicImport already does for local imports.
+      // Remap ids: renaming the table directory and rewriting JSON suffices, since
+      // rows inside a LanceDB table are never rewritten (as in commitStagedTopicImport).
       const content = staged.contentDir;
       const topic = { ...staged.exportData.topic, id: sharedId };
       const documents = staged.exportData.documents.map((document) => ({ ...document, topicId: sharedId }));
@@ -264,23 +246,18 @@ export class SharedArchiveCache {
       try {
         await fs.rename(content, destination);
       } catch (error) {
-        // The destination name is deterministic (sharedId + fingerprint), so
-        // a rename failure here almost always means another process
-        // published the identical content first — its bytes are ours, so
-        // adopt them. Don't dispatch on the error code: POSIX raises
-        // EEXIST/ENOTEMPTY for a rename onto a non-empty directory, but
-        // Windows raises EPERM for a rename onto ANY existing directory
-        // regardless of emptiness. Probe for the destination directly.
+        // The destination name is deterministic, so a failure here almost always
+        // means another process published identical content first: adopt it.
+        // Don't dispatch on the error code (Windows raises EPERM for a rename
+        // onto ANY existing directory); probe for the destination instead.
         this.logger.debug("Shared unpack could not be renamed into place; probing the destination", {
           destination,
           error,
         });
         if (!(await this.unpackExists(published))) {
-          // Either the destination is not there at all (a real failure —
-          // the retry below rethrows), or it is there but incomplete: a
-          // half-deleted unpack from an interrupted prune. Replacing it is
-          // the only repair, because the archive's fingerprint — and so this
-          // destination name — never changes.
+          // Missing (a real failure; the retry rethrows) or incomplete (a
+          // half-deleted unpack from an interrupted prune): replacing it is the
+          // only repair, since the destination name never changes.
           await fs.rm(destination, { recursive: true, force: true });
           await fs.rename(content, destination);
         }
@@ -321,11 +298,9 @@ export class SharedArchiveCache {
       }
       const fullPath = path.join(this.cacheDir, name);
       if (name.startsWith(".")) {
-        // A leading dot is our own ".staging-<uuid>" unpack directory, or an
-        // atomicWriteJson ".*.tmp" — either may belong to a live concurrent
-        // process, so only reclaim one old enough that no real unpack or
-        // atomic write could still be using it. A crash is the only way one
-        // survives past that age.
+        // A leading dot marks our own ".staging-<uuid>" or an atomicWriteJson
+        // ".*.tmp", which may belong to a live process: reclaim only one old
+        // enough that a crash is the only explanation.
         let mtimeMs: number;
         try {
           mtimeMs = (await fs.stat(fullPath)).mtimeMs;

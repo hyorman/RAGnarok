@@ -13,9 +13,9 @@ export interface GraphToolbarOptions {
 /**
  * Wires the toolbar once per page rather than once per render.
  *
- * The reset handler used to be installed inside `renderDocument`, so it existed
- * only while a graph was on screen: on an empty graph — the exact state a user
- * wants to reload after storing a memory — the button was inert.
+ * The reset handler is installed here rather than inside `renderDocument`, so
+ * it exists even when no graph is on screen: on an empty graph — the exact
+ * state a user wants to reload after storing a memory — the button must work.
  */
 export function installGraphToolbar(options: GraphToolbarOptions = {}): () => void {
   const button = document.querySelector<HTMLButtonElement>("#graph-refresh");

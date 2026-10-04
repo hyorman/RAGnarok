@@ -1,10 +1,9 @@
 /**
  * The Memory section of the RAGnarōk sidebar.
  *
- * This is the user-facing half of the ragResetMemory removal: an irreversible
- * memory wipe is no longer something a model may call, so a human triggers it
- * here behind a modal confirmation. The view also hosts refresh and the
- * existing memory-graph command.
+ * An irreversible memory wipe is not something a model may call, so a human
+ * triggers it here behind a modal confirmation. The view also hosts refresh
+ * and the memory-graph command.
  *
  * Counts can go stale after Copilot stores or forgets a memory through the
  * ragMemory tool. Refresh is the recovery, and reset refreshes on completion;

@@ -118,9 +118,8 @@ export interface AddDocumentResult {
 /**
  * Notifications about storage state changed by something other than this
  * manager's own write transactions: a foreign process editing topics.json or
- * a topic-documents file, or the whole storage tree becoming unreachable
- * because a full-exclusion operation (migration/reset) elsewhere is holding
- * it.
+ * a topic-documents file, or the storage tree becoming unreachable (a reset in
+ * another process, or the folder being moved).
  */
 export type StorageExternalChange = { kind: "topics-changed" } | { kind: "storage-unavailable" };
 
@@ -590,7 +589,7 @@ export class TopicManager {
       await this.assertStorageOwnership();
 
       // The topics index is the visibility boundary and is published first.
-      // Once it no longer advertises the topic, remaining table directories
+      // After it stops advertising the topic, remaining table directories
       // are unreachable cleanup. A pre-commit crash restores every backup.
       const nextTopicsIndex: TopicsIndex = {
         ...this.topicsIndex,
@@ -1614,8 +1613,7 @@ export class TopicManager {
   /**
    * Subscribe to storage changes this manager did not itself make: a foreign
    * process editing topics.json/a topic-documents file (`topics-changed`), or
-   * the storage tree going unreachable because a full-exclusion operation
-   * elsewhere is holding it (`storage-unavailable`).
+   * the storage tree becoming unreachable (`storage-unavailable`).
    */
   public onExternalChange(listener: (change: StorageExternalChange) => void): { dispose(): void } {
     this.externalChangeEmitter.on("change", listener);
@@ -1706,7 +1704,7 @@ export class TopicManager {
 
   /**
    * Dispose of all resources and clean up
-   * Should be called when TopicManager is no longer needed
+   * Should be called once the TopicManager is finished with
    */
   public dispose(): Promise<void> {
     this.disposePromise ??= this.disposeOnce();
@@ -1744,9 +1742,6 @@ export class TopicManager {
     this.isInitialized = false;
     TopicManager._onAgentCacheCleanup.removeAllListeners();
     this.externalChangeEmitter.removeAllListeners();
-
-    // No session lease exists to release: every lease is released by the
-    // transaction that took it, and the drain above waited for those.
 
     this.logger.info("TopicManager disposed");
     if (failures.length > 0) {
@@ -2412,8 +2407,7 @@ export class TopicManager {
 
   /**
    * Where this topic's vector data lives, or undefined for the managed database
-   * directory. One accessor for the five call sites that used to spell out
-   * `isCommonTopic(id) ? commonDatabasePath : <site-specific fallback>`.
+   * directory. Shared topics keep their data in their own store directory.
    */
   private getTopicStoreDir(topicId: string): string | undefined {
     return this.sharedTopics.getStoreDir(topicId);
@@ -2473,7 +2467,7 @@ export class TopicManager {
     const parsedIndex = parseTopicsIndex(data);
     // Load every document file into a temporary map before publishing either
     // the index or documents. A single corrupt topic file therefore cannot
-    // partially replace a manager's previously loaded state during refresh.
+    // partially replace a manager's loaded state during refresh.
     await this.loadAllTopicDocuments(parsedIndex);
     this.topicsIndex = parsedIndex;
 
@@ -2705,8 +2699,8 @@ export class TopicManager {
   /**
    * Diagnostic only: whether a lock file or reset journal is present does not
    * change the retry behaviour (either way storage is unavailable and gets
-   * retried), it only distinguishes "a full-exclusion operation elsewhere has
-   * the tree" from "storage is genuinely gone" for the log line.
+   * retried), it only distinguishes "a reset is in progress in another window"
+   * from "storage is genuinely gone" for the log line.
    */
   private async announceUnavailability(): Promise<void> {
     let reason = "the storage directory is unreachable";
@@ -2714,7 +2708,7 @@ export class TopicManager {
       const lockPath = path.join(this.storageDir, STORAGE_LOCK_FILENAME);
       const journalPath = path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME);
       if ((await this.pathExists(lockPath)) || (await this.pathExists(journalPath))) {
-        reason = "a full-exclusion storage operation (migration/reset) appears to be in progress elsewhere";
+        reason = "a reset appears to be in progress in another window";
       }
     } catch {
       // Best-effort diagnostic only; never let this block the notification.
@@ -3338,12 +3332,10 @@ export class TopicManager {
   /**
    * Read-only probe: has a previous run left anything to recover?
    *
-   * Startup used to roll interrupted work back unconditionally, because it
-   * held a session lock and a session coordinator anyway. Recovery writes, so
-   * it now needs a lease — and a clean open must not take one. Probing keeps
-   * the old guarantee (an interrupted write is repaired when the store is
-   * opened, not deferred to whenever someone happens to write next) while a
-   * healthy store still opens without touching the lock file.
+   * Recovery writes, so it needs a lease — and a clean open must not take one.
+   * Probing means an interrupted write is repaired when the store is opened,
+   * not deferred to whenever someone happens to write next, while a healthy
+   * store still opens without touching the lock file.
    */
   private async hasPendingStorageRecovery(): Promise<boolean> {
     for (const journalPath of [this.getPostCommitCleanupJournalPath(), this.getIngestionJournalPath()]) {

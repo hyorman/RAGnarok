@@ -523,10 +523,10 @@ describe("operation leases", function () {
   });
 
   it("joins a lease already held by the same process", async () => {
-    const session = await acquireOperationLease(dir, { waitMs: 0 });
+    const first = await acquireOperationLease(dir, { waitMs: 0 });
     const op = await acquireOperationLease(dir, { waitMs: 0 }); // must NOT throw StorageBusyError
     await op.release();
-    await session.release();
+    await first.release();
   });
 
   it("throws StorageBusyError with holder info after waitMs against a live foreign holder", async () => {
@@ -603,9 +603,8 @@ describe("MemoryStore storage lock integration", function () {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  // Retyped from the session-lease contract: memory no longer holds a lease
-  // for the life of the store. A mutation takes an operation lease and gives
-  // it straight back, and reads take nothing at all.
+  // Memory holds no lease for the life of the store: a mutation takes an
+  // operation lease and gives it straight back, and reads take nothing at all.
   it("holds an operation lease only for the duration of a mutation", async function () {
     const store = new MemoryStore({
       storageDir: tempDir,

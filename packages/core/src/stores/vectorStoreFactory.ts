@@ -370,7 +370,7 @@ export class VectorStoreFactory {
         stack: error instanceof Error ? error.stack : undefined,
       });
       // A table that exists but cannot be loaded must surface as a failure:
-      // returning null here is what used to let ingestion drop the table.
+      // returning null here would let ingestion drop the table.
       throw new VectorStoreLoadError(topicId, error);
     }
   }
@@ -403,13 +403,13 @@ export class VectorStoreFactory {
   /**
    * Refuses a mutation whose target vectors cannot be safely extended.
    *
-   * A differing model NAME is no longer a refusal. The topic is now read AND
-   * written with the model its own metadata records, so "the configured model
-   * is called something else" is ordinary configuration drift rather than
+   * A differing model NAME is not a refusal. The topic is read AND written
+   * with the model its own metadata records, so "the configured model is
+   * called something else" is ordinary configuration drift rather than
    * corruption — refusing it would forbid a perfectly consistent topic.
    *
-   * What survives is the one condition no per-topic routing can reconcile: the
-   * topic's own model no longer produces the DIMENSION its table holds.
+   * The one condition no per-topic routing can reconcile is refused: the
+   * topic's own model does not produce the DIMENSION its table holds.
    */
   public async validateEmbeddingModel(topicId: string): Promise<void> {
     const metadata = await this.getStoreMetadata(topicId);
@@ -817,9 +817,8 @@ export class VectorStoreFactory {
   private normalizeDocumentMetadata(documents: LangChainDocument[]): LangChainDocument[] {
     return documents.map((doc) => {
       // Keep only essential, consistent metadata fields.
-      // chunkId is required for graph retrieval to hydrate chunks (entities
-      // reference chunks by chunkId), and the position/heading fields drive
-      // source attribution in query results.
+      // chunkId identifies a chunk across re-ingestion, and the position/heading
+      // fields drive source attribution in query results.
       const allowedFields = [
         "source",
         "sourceType",
@@ -1022,10 +1021,9 @@ export class VectorStoreFactory {
   /**
    * Resolves the embedding service for one topic's embedding space.
    *
-   * Every store used to share this factory's single EmbeddingService, which the
-   * most recently loaded topic re-pointed via initialize(model). The registry
-   * hands out one immutable service per (backend, endpoint, model) instead, so
-   * a topic keeps embedding with the model its vectors were built from.
+   * The registry hands out one immutable service per (backend, endpoint,
+   * model), so a topic keeps embedding with the model its vectors were built
+   * from instead of following whichever topic loaded last.
    */
   private async createEmbeddings(modelName: string, backendType?: string): Promise<TransformersEmbeddings> {
     const service = await this.resolveEmbeddingService(modelName, backendType);

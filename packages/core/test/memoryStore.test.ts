@@ -1389,8 +1389,6 @@ describe("MemoryStore lock-free reads and operation leases", function () {
 
     await writeForeignLease();
 
-    // This is the two-window bug: a second VS Code window used to die on its
-    // very first memory read because reads took the session lease.
     const reader = makeStore();
     expect((await reader.list({ scope: "workspace" })).map((entry) => entry.content)).to.include(
       "second window read memory",

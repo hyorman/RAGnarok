@@ -27,8 +27,7 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.GAP_SCORE_THRESHOLD]: 0.3,
       [CONFIG.COMMON_DATABASE_PATH]: this.mcpConfig.commonDatabasePath,
       [CONFIG.RERANKER_MODEL]: this.mcpConfig.rerankerModel,
-      // No RERANKER_ENABLED: reranking is unconditional in every host, and the
-      // key no longer exists in core.
+      // No RERANKER_ENABLED: reranking is unconditional in every host.
       [CONFIG.RERANKER_MAX_CANDIDATES]: this.mcpConfig.rerankerMaxCandidates,
       [CONFIG.RERANKER_CANDIDATE_MULTIPLIER]: this.mcpConfig.rerankerCandidateMultiplier,
     };
