@@ -18,8 +18,8 @@ const policy = JSON.parse(await readFile(path.join(root, "release-policy.json"),
 const image = "ragnarok-mcp:ci";
 const sessionContainer = "ragnarok-release-session";
 const persistenceContainer = "ragnarok-release-persistence";
-const lockContainer = "ragnarok-release-lock-contender";
-const containers = [sessionContainer, persistenceContainer, lockContainer];
+const peerContainer = "ragnarok-release-volume-peer";
+const containers = [sessionContainer, persistenceContainer, peerContainer];
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
 const expectedToolCount = 8;
@@ -364,27 +364,49 @@ function seedConfigFile(contents) {
   }
 }
 
-/** A second container on the same volume must fail fast rather than corrupt it. */
-async function assertStorageLock() {
-  const contender = new ContainerSession(lockContainer);
+/**
+ * A second server on the same volume starts and serves alongside the first:
+ * write leases are taken per write, so only concurrent writes contend (and are
+ * serialised). The peer only reads — the persistence assertions below count the
+ * main session's topics.
+ */
+async function assertSecondServerSharesVolume() {
+  const peer = new ContainerSession(peerContainer);
+  let closing = false;
+  // A peer that exits before the gate closes it is a startup refusal, the very
+  // behaviour per-write leases removed: report it at once instead of waiting out
+  // a request timeout. Never settles while the peer is running or closing.
+  const exitedEarly = new Promise((_, reject) => {
+    void peer.exited.then((exitCode) => {
+      if (!closing) {
+        reject(
+          new Error(
+            `Second server on the shared volume exited (${exitCode}) instead of serving: ${peer.stderrText.trim()}`,
+          ),
+        );
+      }
+    });
+  });
+  exitedEarly.catch(() => undefined);
+  const whileRunning = (work) => Promise.race([work, exitedEarly]);
   try {
-    for (let attempt = 0; attempt < 45; attempt++) {
-      const exitCode = await Promise.race([
-        contender.exited,
-        new Promise((resolve) => setTimeout(() => resolve(undefined), 1_000)),
-      ]);
-      if (exitCode === undefined) {
-        continue;
-      }
-      const logs = contender.stderrText.trim() || containerLogs(lockContainer);
-      if (exitCode === 0 || !/lock|already.*(?:held|use)|another.*process/i.test(logs)) {
-        throw new Error(`Storage-lock contender failed without the expected lock diagnostic (exit ${exitCode})`);
-      }
-      return;
+    await whileRunning(peer.request("server/discover"));
+    const { tools } = await whileRunning(peer.request("tools/list"));
+    if (!Array.isArray(tools) || tools.length !== expectedToolCount) {
+      throw new Error(
+        `Second server exposed ${Array.isArray(tools) ? tools.length : "no"} tools; the stdio surface is exactly ${expectedToolCount}`,
+      );
     }
-    throw new Error("Storage-lock contender remained running instead of failing fast");
+    const listed = await whileRunning(peer.callTool("rag_topic", { action: "list" }));
+    if (!Array.isArray(listed.topics ?? listed)) {
+      throw new Error(`Second server's rag_topic list was not a topic list: ${JSON.stringify(listed)}`);
+    }
+    closing = true;
+    await peer.closeCleanly();
   } finally {
-    contender.process.kill("SIGKILL");
+    if (peer.process.exitCode === null) {
+      peer.process.kill("SIGKILL");
+    }
   }
 }
 
@@ -411,7 +433,7 @@ try {
   await session.request("server/discover");
   assertToolSurface((await session.request("tools/list")).tools);
   assertRuntimeHardening(sessionContainer);
-  await assertStorageLock();
+  await assertSecondServerSharesVolume();
 
   await session.callTool("rag_topic", {
     action: "create",
@@ -438,7 +460,6 @@ try {
     throw new Error(`Topic did not survive a container replacement; saw ${JSON.stringify(names)}`);
   }
   await restarted.closeCleanly();
-
 
   console.log(
     `Docker stdio release gate passed (${imageBytes} bytes, ${imageArchitecture}, ${expectedToolCount} tools).`,

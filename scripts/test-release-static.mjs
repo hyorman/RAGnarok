@@ -1550,7 +1550,7 @@ for (const contract of [
   /server\/discover/,
   /tools\/list/,
   /expectedToolCount = 8/,
-  /assertStorageLock/,
+  /assertSecondServerSharesVolume/,
   /assertRuntimeHardening/,
   /closeCleanly/,
   /ExposedPorts/,
@@ -1558,6 +1558,11 @@ for (const contract of [
 ]) {
   assert.match(dockerGate, contract, `Docker stdio gate must assert ${contract}`);
 }
+assert.doesNotMatch(
+  dockerGate,
+  /remained running instead of failing fast/,
+  "Docker gate must not expect a second server on the same volume to exit: leases are per write, not per process",
+);
 for (const forbidden of [/httpsRequest/, /RAGNAROK_DEPLOYMENT_MODE=shared/, /\/health/, /-p", "4000/]) {
   assert.doesNotMatch(dockerGate, forbidden, `Docker stdio gate must not probe HTTP: ${forbidden}`);
 }
