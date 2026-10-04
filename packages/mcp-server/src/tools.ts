@@ -65,7 +65,6 @@ export function registerTools(
     memoryBranchProvider,
     config,
     runMutation,
-    toolRuntime: runtime,
     readOnlyAnnotations,
     writeAnnotations,
     destructiveAnnotations,

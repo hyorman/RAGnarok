@@ -90,7 +90,6 @@ export function createPathGuard(config: McpConfig | undefined): (filePath: strin
 }
 
 export function registerIngestTools(ctx: ToolContext): void {
-  // rag_ingest (files variant) — Add documents to a topic
   type IngestInput = z.infer<typeof ingestInput>;
 
   async function ingestFiles(
@@ -189,6 +188,7 @@ export function registerIngestTools(ctx: ToolContext): void {
     return ctx.toolJson({ success: results.length > 0, outcomes: results });
   }
 
+  // rag_ingest — Add content to a topic from local files, a web page, or a GitHub repository
   ctx.registerTool(
     "rag_ingest",
     "Add content to a RAG topic from one of three sources: 'files' (local paths inside the server's allowed roots, " +

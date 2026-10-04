@@ -28,7 +28,7 @@ export interface JsonSchemaObject {
 
 /**
  * topicName and query must agree with the MCP server's MCP_LIMITS
- * (packages/mcp-server/src/tools.ts); the memory bounds mirror
+ * (packages/mcp-server/src/tools/shared.ts); the memory bounds mirror
  * validateCommonInput in ../memory/memoryService.ts.
  */
 export const TOOL_LIMITS = Object.freeze({

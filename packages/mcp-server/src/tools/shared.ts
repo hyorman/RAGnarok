@@ -187,7 +187,6 @@ export interface ToolContext {
   memoryBranchProvider?: Pick<MemoryStore, "getCurrentBranch">;
   config?: McpConfig;
   runMutation: MutationRunner;
-  toolRuntime: ToolRuntime;
   readOnlyAnnotations: ToolAnnotations;
   writeAnnotations: ToolAnnotations;
   destructiveAnnotations: ToolAnnotations;

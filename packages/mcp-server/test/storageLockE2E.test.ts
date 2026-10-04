@@ -2,10 +2,10 @@
  * Cross-process storage E2E: lock-free reads + operation-scoped write leases.
  *
  * TopicManager.create takes no lease, so two real server processes can share
- * one storage directory from startup through reads. Only a MUTATION takes a bounded, operation-scoped lease: when a foreign
- * process already holds a live one, the waiting mutation reports
- * StorageBusyError as a tool error instead of failing the server or hanging
- * forever.
+ * one storage directory from startup through reads. Only a MUTATION takes a
+ * bounded, operation-scoped lease: when a foreign process already holds a live
+ * one, the waiting mutation reports StorageBusyError as a tool error instead of
+ * failing the server or hanging forever.
  */
 import { expect } from "chai";
 import * as fs from "fs";
