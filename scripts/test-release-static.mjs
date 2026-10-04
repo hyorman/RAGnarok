@@ -1171,6 +1171,16 @@ await rm(vscodeDownload, { recursive: true, force: true });
 // VS Code CLI is code.cmd: every CLI call goes through runCli.
 assert.match(vsixSmoke, /const viaShell = process\.platform === "win32" && \/\\\.cmd\$\/i\.test\(code\);/);
 assert.doesNotMatch(vsixSmoke, /runArgs\(/, "vsix-smoke must reach the VS Code CLI only through runCli");
+// cmd.exe expands %~dp0 to the current directory, not the batch file's, when a quoted
+// code.cmd was found through PATH, so a bare name is resolved to an absolute path
+// (where.exe is an .exe, no shell) before runCli quotes it.
+assert.match(vsixSmoke, /if \(viaShell && !\/\[\\\\\/\]\/\.test\(code\)\) \{/);
+assert.match(vsixSmoke, /execFileSync\("where\.exe", \[code\], \{ encoding: "utf8" \}\)/);
+assert.match(vsixSmoke, /code = resolved;/);
+assert.ok(
+  vsixSmoke.indexOf('execFileSync("where.exe"') < vsixSmoke.indexOf("const runCli"),
+  "a bare code.cmd must be resolved before runCli quotes it",
+);
 assert.match(extensionHostSmoke, /ragnarok\._runInstalledSmoke/);
 assert.match(extensionHostSmoke, /extension\.extensionPath !== expectedExtensionPath/);
 assert.match(extensionHostSmoke, /topicCreated: true, queryExecuted: true, topicDeleted: true/);

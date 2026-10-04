@@ -58,6 +58,23 @@ try {
   // Windows VS Code CLI is code.cmd. Every argument is a path or flag this script
   // built, so quoting each one is all cmd.exe needs.
   const viaShell = process.platform === "win32" && /\.cmd$/i.test(code);
+  // cmd.exe expands %~dp0 to the current directory, not the batch file's own, when a
+  // quoted batch file was found through PATH (code.cmd opens "%~dp0..\Code.exe"), so a
+  // bare name is resolved to its absolute path first. where.exe is an .exe: no shell.
+  if (viaShell && !/[\\/]/.test(code)) {
+    let located;
+    try {
+      located = execFileSync("where.exe", [code], { encoding: "utf8" });
+    } catch (error) {
+      throw new Error(`where.exe could not find ${code} on PATH; set VSCODE_CLI to its full path`, { cause: error });
+    }
+    const resolved = located
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line !== "");
+    if (!resolved) throw new Error(`where.exe printed no path for ${code}; set VSCODE_CLI to its full path`);
+    code = resolved;
+  }
   const runCli = (args, options) =>
     viaShell
       ? execSync([code, ...baseArgs, ...args].map((value) => `"${value}"`).join(" "), options)
