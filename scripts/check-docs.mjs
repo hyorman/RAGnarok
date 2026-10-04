@@ -30,6 +30,23 @@ const staleReports = [
   "now-create-comprehensive-plan-serialized-rabbit.md",
 ];
 
+/** `RegExp.escape` needs Node 24 and `engines` allows 22, so escape by hand. */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+/**
+ * A name counts as documented only as a whole token: not inside a longer name
+ * (`ragnarok.llm` in `ragnarok.llmModel`) and not as the parent of a dotted key
+ * (`llm` in `llm.provider`). A sentence-ending period is fine.
+ */
+function wholeToken(token) {
+  return new RegExp(`(?<![A-Za-z0-9_.])${escapeRegExp(token).replace(/ /g, "\\s+")}(?![A-Za-z0-9_]|\\.[A-Za-z0-9_])`);
+}
+/** A phrase pin must survive a rewrap, so each space in it matches any whitespace, a line break included. */
+function phrase(text, flags) {
+  return new RegExp(escapeRegExp(text).replace(/ /g, "\\s+"), flags);
+}
+
 for (const relative of canonical) {
   const absolute = path.join(root, relative);
   const contents = await readFile(absolute, "utf8");
@@ -76,6 +93,9 @@ async function sourceFilesByBasename() {
   return byName;
 }
 const sourceFiles = await sourceFilesByBasename();
+const sourceText = (await Promise.all([...sourceFiles.values()].flat().map((file) => readFile(file, "utf8")))).join(
+  "\n",
+);
 for (const relative of canonical) {
   const contents = await readFile(path.join(root, relative), "utf8");
   for (const match of contents.matchAll(/\b([A-Za-z0-9_-]+\.ts):(\d+)(?:-(\d+))?/g)) {
@@ -92,56 +112,97 @@ for (const relative of canonical) {
   }
 }
 
-// Each package guide's Module Layout is a map of src/. Every file directly
-// under src/, and every file under a directory the layout expands (lists
-// children for), must be named in it: a split that adds modules has to say
-// what they are, or the map stops being the one place to look.
-function expandedLayoutDirectories(readmeContents, relative) {
+// Each package guide's Module Layout is a map of src/, and it is checked by
+// path, not by file name: `types.ts` and `index.ts` exist in several
+// directories, so a bare name proves nothing. In both directions, every file
+// directly under src/, every directory directly under src/, and every file
+// under a directory the layout expands (lists children for) must be named at
+// its own path, and everything the layout names must exist. A split that adds
+// modules has to say what they are, or the map stops being the one place to
+// look. A directory listed with no children is a summary of what is inside it;
+// that is legitimate only where it is declared here, so adding another is a
+// deliberate edit to this list rather than a quiet omission.
+const summarisedDirectories = {
+  core: new Set(["sharedTopics", "tools", "memory", "models", "visualization"]),
+  "mcp-server": new Set(["ui"]),
+  vscode: new Set(),
+};
+function parseModuleLayout(readmeContents, relative) {
   const section = readmeContents.split(/^## Module Layout$/m)[1];
   assert.ok(section, `${relative} must have a "Module Layout" section`);
   const layout = /```[^\n]*\n([\s\S]*?)```/.exec(section)?.[1];
   assert.ok(layout, `${relative} Module Layout must contain a tree`);
-  const expanded = new Set();
-  let current;
+  const files = new Set();
+  const directories = new Map(); // path under src/ -> { children, comment }
+  const open = []; // names of the directories enclosing the current line
   for (const line of layout.split("\n")) {
-    const top = /^[├└]── ([^\s/]+)\//.exec(line);
-    if (top) {
-      current = top[1];
-    } else if (current && /^(?:│| ) {3}[├└]── /.test(line)) {
-      expanded.add(current);
-    } else if (/^[├└]── /.test(line)) {
-      current = undefined;
+    if (!/[├└]──/.test(line)) continue;
+    const entry = /^((?:│   |    )*)[├└]── (\S+)(?:\s+#\s*(.*?))?\s*$/.exec(line);
+    assert.ok(entry, `${relative} Module Layout: cannot read "${line.trim()}"`);
+    const depth = entry[1].length / 4;
+    assert.ok(depth <= open.length, `${relative} Module Layout: "${line.trim()}" is not inside a directory`);
+    open.length = depth;
+    const isDirectory = entry[2].endsWith("/");
+    const name = isDirectory ? entry[2].slice(0, -1) : entry[2];
+    const entryPath = [...open, name].join("/");
+    if (depth > 0) directories.get(open.join("/")).children += 1;
+    if (isDirectory) {
+      directories.set(entryPath, { children: 0, comment: entry[3] ?? "" });
+      open.push(name);
+    } else {
+      files.add(entryPath);
     }
   }
-  return expanded;
+  return { files, directories };
 }
-async function typeScriptFilesUnder(directory) {
+async function typeScriptFilesUnder(directory, prefix) {
   const found = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) found.push(...(await typeScriptFilesUnder(absolute)));
-    else if (entry.name.endsWith(".ts")) found.push(absolute);
+    const relative = `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...(await typeScriptFilesUnder(path.join(directory, entry.name), relative)));
+    else if (entry.name.endsWith(".ts")) found.push(relative);
   }
   return found;
 }
 for (const pkg of ["core", "mcp-server", "vscode"]) {
   const relative = `packages/${pkg}/README.md`;
-  const readmeContents = await readFile(path.join(root, relative), "utf8");
+  const { files: listed, directories } = parseModuleLayout(await readFile(path.join(root, relative), "utf8"), relative);
   const src = path.join(root, "packages", pkg, "src");
-  const files = new Set();
+  const required = new Set();
   for (const entry of await readdir(src, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith(".ts")) files.add(path.join(src, entry.name));
+    if (entry.isFile() && entry.name.endsWith(".ts")) required.add(entry.name);
+    if (entry.isDirectory()) {
+      assert.ok(directories.has(entry.name), `${relative} Module Layout must list the ${entry.name}/ directory`);
+    }
   }
-  for (const directory of expandedLayoutDirectories(readmeContents, relative)) {
-    for (const file of await typeScriptFilesUnder(path.join(src, directory))) files.add(file);
+  for (const [directory, { children, comment }] of directories) {
+    await access(path.join(src, directory)).catch(() => {
+      throw new Error(`${relative} Module Layout lists ${directory}/, which does not exist`);
+    });
+    if (children > 0) {
+      for (const file of await typeScriptFilesUnder(path.join(src, directory), directory)) required.add(file);
+    } else {
+      assert.ok(
+        summarisedDirectories[pkg].has(directory),
+        `${relative} Module Layout lists ${directory}/ without its files: list them, or declare it summarised in check-docs`,
+      );
+      assert.ok(comment, `${relative} Module Layout must say what the summarised ${directory}/ directory holds`);
+    }
   }
-  for (const file of files) {
-    const name = path.basename(file);
-    assert.match(
-      readmeContents,
-      new RegExp(`(?<![A-Za-z0-9])${name.replace(".", "\\.")}`),
-      `${relative} Module Layout must list ${path.relative(src, file)}`,
+  for (const directory of summarisedDirectories[pkg]) {
+    assert.equal(
+      directories.get(directory)?.children,
+      0,
+      `${relative} Module Layout must list ${directory}/ as a summarised directory (check-docs declares it so)`,
     );
+  }
+  for (const file of required) {
+    assert.ok(listed.has(file), `${relative} Module Layout must list ${file}`);
+  }
+  for (const file of listed) {
+    await access(path.join(src, file)).catch(() => {
+      throw new Error(`${relative} Module Layout lists ${file}, which does not exist`);
+    });
   }
 }
 
@@ -149,25 +210,31 @@ const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "ut
 assert.doesNotMatch(mcp, /Existing branch-era storage .* intentionally not migrated/);
 // The stdio server has no roles, so the guide must not resurrect a role matrix.
 assert.doesNotMatch(mcp, /Shared reader|Shared curator|Shared admin/);
-for (const variable of ["RAGNAROK_STORAGE_DIR"]) {
-  assert.match(mcp, new RegExp(variable), `MCP guide must document ${variable}`);
-}
 // The settings that moved into config.json must be documented by their key.
 // Asserting on the old variable names would pin the guide to a configuration
 // mechanism the server no longer has.
 for (const key of ["security.allowedPaths", "embedding.model", "llm.provider", "limits.maxResponseBytes"]) {
-  assert.match(mcp, new RegExp(key.replace(".", "\\.")), `MCP guide must document ${key}`);
+  assert.match(mcp, wholeToken(key), `MCP guide must document ${key}`);
 }
-// Variables that belonged to the removed HTTP transport are no longer read.
-// Naming them here would read as documentation of a supported setting.
-for (const removed of [
-  "RAGNAROK_DEPLOYMENT_MODE",
-  "RAGNAROK_ADMIN_API_KEY",
-  "RAGNAROK_TLS_CERT_PATH",
-  "RAGNAROK_TRUSTED_PROXIES",
-  "RAGNAROK_TRANSFER_MAX_FILE_BYTES",
-]) {
-  assert.doesNotMatch(mcp, new RegExp(removed), `MCP guide must not document removed variable ${removed}`);
+// The environment is a closed set, and the MCP guide's table is the whole of
+// it: every RAGNAROK_* variable the shipped sources name is documented there,
+// and no guide names one the sources do not read. That is what keeps a variable
+// of the removed HTTP transport out of every guide, without a list of removed
+// names to maintain. Release tooling reads one more, which only BENCHMARKS.md
+// documents.
+const environmentVariables = (text) => new Set(text.match(/RAGNAROK_[A-Z0-9_]+/g) ?? []);
+const sourceVariables = environmentVariables(sourceText);
+for (const variable of sourceVariables) {
+  assert.match(mcp, wholeToken(variable), `MCP guide must document ${variable}`);
+}
+const releaseToolingVariables = new Set(["RAGNAROK_RELEASE_ARTIFACT_DIR"]);
+for (const relative of canonical) {
+  for (const variable of environmentVariables(await readFile(path.join(root, relative), "utf8"))) {
+    assert.ok(
+      sourceVariables.has(variable) || releaseToolingVariables.has(variable),
+      `${relative} names ${variable}, which nothing reads`,
+    );
+  }
 }
 for (const [name, contents] of [
   ["README.md", await readFile(path.join(root, "README.md"), "utf8")],
@@ -182,13 +249,21 @@ for (const [name, contents] of [
 
 const core = await readFile(path.join(root, "packages/core/README.md"), "utf8");
 for (const strategy of ["VECTOR", "HYBRID", "BM25"]) {
-  assert.match(core, new RegExp(`\\*\\*${strategy}\\*\\*`), `Core guide must document the ${strategy} strategy`);
+  assert.match(
+    core,
+    new RegExp(`\\*\\*${escapeRegExp(strategy)}\\*\\*`),
+    `Core guide must document the ${strategy} strategy`,
+  );
 }
 for (const removed of ["GRAPH_HYBRID", "EnsembleRetriever", "LangGraph"]) {
-  assert.doesNotMatch(core, new RegExp(removed), `Core guide must not document removed subsystem ${removed}`);
+  assert.doesNotMatch(
+    core,
+    new RegExp(escapeRegExp(removed)),
+    `Core guide must not document removed subsystem ${removed}`,
+  );
 }
-assert.match(core, /embedding fingerprint/i);
-assert.match(core, /requires reindexing/i);
+assert.match(core, phrase("embedding fingerprint", "i"));
+assert.match(core, phrase("requires reindexing", "i"));
 
 const rootReadme = await readFile(path.join(root, "README.md"), "utf8");
 const vscodeReadme = await readFile(path.join(root, "packages/vscode/README.md"), "utf8");
@@ -204,7 +279,7 @@ for (const tool of ["ragQuery", "ragTopic", "ragMemory"]) {
     ["root README", rootReadme],
     ["vscode README", vscodeReadme],
   ]) {
-    assert.match(contents, new RegExp(tool), `${name} must document the ${tool} tool`);
+    assert.match(contents, wholeToken(tool), `${name} must document the ${tool} tool`);
   }
 }
 for (const [name, contents] of [
@@ -215,7 +290,7 @@ for (const [name, contents] of [
 ]) {
   assert.doesNotMatch(contents, /ragResetMemory/, `${name} must not document the removed ragResetMemory tool`);
 }
-assert.match(vscodeReadme, /RAG: Show Memory Graph/);
+assert.match(vscodeReadme, phrase("RAG: Show Memory Graph"));
 // The README is the user's reference for the extension surface: every
 // contributed setting and Command Palette entry must appear in it, and the
 // facts below were each found to contradict the code.
@@ -233,11 +308,11 @@ for (const entry of manifest.contributes.viewsWelcome) {
   }
 }
 for (const key of Object.keys(manifest.contributes.configuration.properties)) {
-  assert.match(readme, new RegExp(key.replace(".", "\\.")), `README.md must document the ${key} setting`);
+  assert.match(readme, wholeToken(key), `README.md must document the ${key} setting`);
 }
 for (const command of manifest.contributes.commands) {
   assert.equal(command.category, "RAG", `${command.command} must use the RAG command category`);
-  assert.match(readme, new RegExp(`RAG: ${command.title}`), `README.md must document "RAG: ${command.title}"`);
+  assert.match(readme, wholeToken(`RAG: ${command.title}`), `README.md must document "RAG: ${command.title}"`);
 }
 // ragQuery and ragTopic only read, and the user guide must say so. ragMemory
 // stores and forgets, so the claim must not be attached to it.
@@ -256,7 +331,7 @@ for (const script of ["tools:manifest", "tools:manifest:check"]) {
   assert.ok(manifest.scripts[script], `package.json must define the ${script} script`);
   assert.match(
     readme,
-    new RegExp(`npm run ${script}(?![\\w:])`),
+    new RegExp(`npm run ${escapeRegExp(script)}(?![\\w:])`),
     `README.md Build & Test Commands must name npm run ${script}`,
   );
 }
@@ -288,10 +363,10 @@ for (const [pattern, why] of [
 ]) {
   assert.doesNotMatch(readme, pattern, `README.md: ${why}`);
 }
-assert.match(architecture, /separate storage/i);
+assert.match(architecture, phrase("separate storage", "i"));
 assert.match(core, /MemoryService/);
 assert.match(vscodeReadme, /confirmation/i);
-assert.match(mcp, /inline MCP App/i);
+assert.match(mcp, phrase("inline MCP App", "i"));
 for (const [name, contents] of [
   ["root README", rootReadme],
   ["architecture", architecture],
@@ -311,23 +386,64 @@ assert.doesNotMatch(
 assert.match(copilotInstructions, /npm run test:fast/, "Copilot instructions must name the project's test command");
 assert.doesNotMatch(architecture, /v0\.7 implementation/, "ARCHITECTURE.md must not claim a version");
 // Nothing scans for the removed HTTP-transport variables, so a guide that says
-// the server rejects, refuses or aborts on one describes a guard that does not
-// exist (the MCP guide used to list one, and SECURITY.md promised one).
-const removedTransportVariables = /removed[- ](?:HTTP[- ])?(?:transport|variable)|network listener/i;
-const claimsRejection = /\b(?:reject|refus|abort)\w*/i;
+// the server rejects, refuses, aborts or errors on one describes a guard that
+// does not exist (the MCP guide used to list one, and SECURITY.md promised one).
+// The removed names are the ones the Docker gate checks the image bakes none of;
+// that list is read, not copied. A sentence is about them when it names one, says
+// "removed ... variable/transport", pairs "network listener" with a variable, or
+// (as "Setting one ...") points back at them; "They are rejected" is about them
+// when the sentence before it was. A rejection verb that is negated ("does not
+// reject", "so they are not rejected", "nothing rejects them") is the true claim
+// and is allowed.
+const dockerGate = await readFile(path.join(root, "scripts/docker-gate.mjs"), "utf8");
+const removedList = /const removedEnvVars = \[([^\]]*)\]/.exec(dockerGate)?.[1] ?? "";
+const removedVariables = [...removedList.matchAll(/"(RAGNAROK_[A-Z0-9_]+)"/g)].map((match) => match[1]);
+assert.ok(
+  removedVariables.includes("RAGNAROK_PORT") && removedVariables.includes("RAGNAROK_DEPLOYMENT_MODE"),
+  "scripts/docker-gate.mjs must keep listing the removed HTTP-transport variables in removedEnvVars",
+);
+const namesRemovedVariable = new RegExp(`\\b(?:${removedVariables.join("|")})\\b`);
+const aboutRemovedVariables = (sentence) =>
+  namesRemovedVariable.test(sentence) ||
+  /\bremoved[- ](?:(?:HTTP|transport|environment|network)[- ])*(?:transport|variables?|listener)|\bsetting (?:one|any one|any of them)\b/i.test(
+    sentence,
+  ) ||
+  (/\bnetwork listener\b/i.test(sentence) && /\b(?:variables?|settings?|removed|transport)\b/i.test(sentence));
+const rejectionVerbs =
+  /\b(?:reject|refus|abort|error|invalid|terminat|crash)\w*|\bfail(?:s|ed|ing|ure)?\b|\bexit(?:s|ed|ing)?\b/gi;
+const negation = /\b(?:no|not|never|nothing|neither|nor|cannot|without)\b|n't\b/i;
+const claimsRejection = (sentence) =>
+  [...sentence.matchAll(rejectionVerbs)].some(
+    (verb) =>
+      !negation.test(
+        sentence
+          .slice(0, verb.index)
+          .split(/[;:]|\b(?:and|but|so|yet|then)\b/)
+          .pop(),
+      ),
+  );
 for (const relative of canonical) {
   const sentences = (await readFile(path.join(root, relative), "utf8")).replace(/\s+/g, " ").split(/(?<=[.!?])\s/);
-  for (const sentence of sentences) {
+  sentences.forEach((sentence, index) => {
+    const continuesPrevious =
+      /^(?:they|these|those|such|each|this|doing so)\b/i.test(sentence) &&
+      aboutRemovedVariables(sentences[index - 1] ?? "");
     assert.ok(
-      !(removedTransportVariables.test(sentence) && claimsRejection.test(sentence)),
-      `${relative} says removed HTTP-transport variables are rejected, but nothing reads or rejects them: "${sentence.slice(0, 80)}"`,
+      !((aboutRemovedVariables(sentence) || continuesPrevious) && claimsRejection(sentence)),
+      `${relative} says removed HTTP-transport variables are rejected or cause an error, but nothing reads or rejects them: "${sentence.slice(0, 80)}"`,
     );
-  }
+  });
 }
-assert.doesNotMatch(mcp, /removed-variable rejection/, "MCP guide lists a function that does not exist");
-for (const module of ["graphVisualizationAdapter.ts", "memoryToolAdapter.ts", "toolRuntime.ts"]) {
-  assert.match(mcp, new RegExp(module.replace(".", "\\.")), `MCP guide module layout must list ${module}`);
-}
+assert.match(
+  release,
+  phrase("second server sharing the volume"),
+  "docs/RELEASE.md must say the Docker gate checks that a second server shares the volume",
+);
+assert.doesNotMatch(
+  release,
+  phrase("storage locking"),
+  "docs/RELEASE.md must not list storage locking in the Docker gate",
+);
 assert.doesNotMatch(core, /@xenova\/transformers/, "core uses @huggingface/transformers");
 const history = await readFile(path.join(root, "docs/BENCHMARK-HISTORY.md"), "utf8");
 assert.match(history, /not release evidence/, "BENCHMARK-HISTORY.md must say it is historical");
