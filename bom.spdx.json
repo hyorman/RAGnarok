@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "ragnarok-sbom",
-  "documentNamespace": "https://github.com/hyorman/ragnarok/sbom/c90529accdec34ae8b577a987ec6d1907ce55dd1d6e8fdcae600d4ddcf2e3f07",
+  "documentNamespace": "https://github.com/hyorman/ragnarok/sbom/7067e24e806fc35feff5e0fdb73f0784c016d4cde6b58aff4b3eb98502a05f2b",
   "creationInfo": { "created": "1970-01-01T00:00:00Z", "creators": ["Tool: scripts/generate-sbom.mjs"] },
   "packages": [
     {
@@ -3833,8 +3833,8 @@
     {
       "SPDXID": "SPDXRef-Package-240",
       "name": "@vscode/test-electron",
-      "versionInfo": "2.5.2",
-      "downloadLocation": "https://registry.npmjs.org/@vscode/test-electron/-/test-electron-2.5.2.tgz",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "https://registry.npmjs.org/@vscode/test-electron/-/test-electron-3.1.0.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -3842,7 +3842,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vscode/test-electron@2.5.2"
+          "referenceLocator": "pkg:npm/%40vscode/test-electron@3.1.0"
         }
       ]
     },

@@ -1151,6 +1151,26 @@ assert.match(vsixSmoke, /delete process\.env\.ELECTRON_RUN_AS_NODE/);
 assert.match(vsixSmoke, /transformersRequire\("sharp"\)/);
 assert.match(vsixSmoke, /transformersRequire\("onnxruntime-node"\)/);
 assert.match(vsixSmoke, /listSupportedBackends/);
+// VS Code 1.110+ names the macOS binary after the product and 1.140 dropped the
+// Contents/MacOS/Electron link, so the extension-host smoke must launch the real binary.
+const testElectronUtil = require("@vscode/test-electron/out/util.js");
+const vscodeDownload = await mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-layout-"));
+const vscodeContents = path.join(vscodeDownload, "Visual Studio Code.app", "Contents");
+await mkdir(path.join(vscodeContents, "MacOS"), { recursive: true });
+await writeFile(path.join(vscodeContents, "MacOS", "Code"), "");
+await writeFile(
+  path.join(vscodeContents, "Info.plist"),
+  "<plist><dict><key>CFBundleExecutable</key><string>Code</string></dict></plist>",
+);
+assert.equal(
+  testElectronUtil.downloadDirToExecutablePath(vscodeDownload, "darwin-arm64"),
+  path.join(vscodeContents, "MacOS", "Code"),
+);
+await rm(vscodeDownload, { recursive: true, force: true });
+// Node refuses to spawn a .cmd file without a shell (CVE-2024-27980), and the Windows
+// VS Code CLI is code.cmd: every CLI call goes through runCli.
+assert.match(vsixSmoke, /const viaShell = process\.platform === "win32" && \/\\\.cmd\$\/i\.test\(code\);/);
+assert.doesNotMatch(vsixSmoke, /runArgs\(/, "vsix-smoke must reach the VS Code CLI only through runCli");
 assert.match(extensionHostSmoke, /ragnarok\._runInstalledSmoke/);
 assert.match(extensionHostSmoke, /extension\.extensionPath !== expectedExtensionPath/);
 assert.match(extensionHostSmoke, /topicCreated: true, queryExecuted: true, topicDeleted: true/);

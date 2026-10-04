@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:c90529ac-cdec-44ae-ab57-7a987ec6d190",
+  "serialNumber": "urn:uuid:7067e24e-806f-435f-aff5-e0fdb73f0784",
   "version": 1,
   "metadata": {
     "component": { "type": "application", "name": "ragnarok", "version": "0.4.1" },
@@ -5419,17 +5419,17 @@
       "type": "library",
       "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40vscode%2Ftest-electron",
       "name": "@vscode/test-electron",
-      "version": "2.5.2",
-      "purl": "pkg:npm/%40vscode/test-electron@2.5.2",
+      "version": "3.1.0",
+      "purl": "pkg:npm/%40vscode/test-electron@3.1.0",
       "licenses": [{ "license": { "id": "MIT" } }],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f2e929c6fe3061ed2258c450535f2387324e1e478629b9f0ef15915f7670d56240e1c10a6c772698b3dd3eb3ed2faae10dcae509937ec4a469bf4f67e2044762"
+          "content": "091aafe6ef98628b1eb8d549e93ca8e24d2c1749b1e2a9ca3228510743e3b1417c0dcd162ad097a3a08d2fa9d65a6e5eb1f150b1003fa5e8cc8f865ba4954b4f"
         }
       ],
       "externalReferences": [
-        { "type": "distribution", "url": "https://registry.npmjs.org/@vscode/test-electron/-/test-electron-2.5.2.tgz" }
+        { "type": "distribution", "url": "https://registry.npmjs.org/@vscode/test-electron/-/test-electron-3.1.0.tgz" }
       ],
       "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@vscode/test-electron" }]
     },

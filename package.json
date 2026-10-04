@@ -723,7 +723,7 @@
     "@types/node": "^22.10.5",
     "@types/sinon": "^21.0.0",
     "@types/vscode": "^1.105.0",
-    "@vscode/test-electron": "^2.5.2",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.6.2",
     "chai": "^5.1.2",
     "esbuild": "0.28.1",

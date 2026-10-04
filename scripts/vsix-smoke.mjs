@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
@@ -54,17 +54,21 @@ try {
       reuseMachineInstall: true,
     });
   }
-  const runArgs = (args) => [...baseArgs, ...args];
-  const version = execFileSync(code, runArgs(["--version"]), { encoding: "utf8" }).split(/\r?\n/)[0];
+  // Node refuses to spawn a .cmd file without a shell (CVE-2024-27980), and the
+  // Windows VS Code CLI is code.cmd. Every argument is a path or flag this script
+  // built, so quoting each one is all cmd.exe needs.
+  const viaShell = process.platform === "win32" && /\.cmd$/i.test(code);
+  const runCli = (args, options) =>
+    viaShell
+      ? execSync([code, ...baseArgs, ...args].map((value) => `"${value}"`).join(" "), options)
+      : execFileSync(code, [...baseArgs, ...args], options);
+  const version = runCli(["--version"], { encoding: "utf8" }).split(/\r?\n/)[0];
   if (!atLeast(version, minimum)) throw new Error(`VS Code ${version} is below declared minimum ${minimum}`);
-  execFileSync(
-    code,
-    runArgs(["--extensions-dir", extensions, "--user-data-dir", userData, "--install-extension", vsix, "--force"]),
-    { stdio: "inherit" },
-  );
-  const installed = execFileSync(
-    code,
-    runArgs(["--extensions-dir", extensions, "--user-data-dir", userData, "--list-extensions", "--show-versions"]),
+  runCli(["--extensions-dir", extensions, "--user-data-dir", userData, "--install-extension", vsix, "--force"], {
+    stdio: "inherit",
+  });
+  const installed = runCli(
+    ["--extensions-dir", extensions, "--user-data-dir", userData, "--list-extensions", "--show-versions"],
     { encoding: "utf8" },
   );
   if (!installed.toLowerCase().includes(`${pkg.publisher}.${pkg.name}@${pkg.version}`.toLowerCase())) {
