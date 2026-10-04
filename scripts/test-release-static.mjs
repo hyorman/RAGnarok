@@ -1704,6 +1704,34 @@ for (const setupFile of ["packages/core/test/setup.ts", "packages/mcp-server/tes
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
+// GitHub's classic-store runners use the `docker` buildx driver, which cannot export OCI, so the
+// release image builds on a digest-pinned container builder. Provenance and SBOM attestations stay
+// off so the archive holds exactly one image manifest (create-release-manifest.mjs requires that;
+// the release job attests provenance separately).
+const artifactBuildSteps = workflowDocument.jobs["artifact-build"].steps;
+const ociBuilderIndex = artifactBuildSteps.findIndex((step) => {
+  const run = String(step.run ?? "");
+  return (
+    run.includes("docker buildx create") &&
+    run.includes("--driver docker-container") &&
+    run.includes("--name ragnarok-oci") &&
+    /image=moby\/buildkit:[^@\s]+@sha256:[a-f0-9]{64}/.test(run)
+  );
+});
+const ociBuildIndex = artifactBuildSteps.findIndex((step) =>
+  String(step.run ?? "").includes("type=oci,dest=ragnarok-mcp.oci.tar"),
+);
+assert.ok(
+  ociBuilderIndex >= 0,
+  "artifact-build must create a docker-container builder named ragnarok-oci with a digest-pinned BuildKit image, because the classic-store docker driver cannot export OCI",
+);
+assert.ok(ociBuildIndex > ociBuilderIndex, "the OCI image build must come after the ragnarok-oci builder is created");
+for (const flag of ["--builder ragnarok-oci", "--provenance=false", "--sbom=false"]) {
+  assert.ok(
+    String(artifactBuildSteps[ociBuildIndex].run).includes(flag),
+    `the OCI image build must pass ${flag}, so it runs on the container builder and the archive holds exactly one image manifest`,
+  );
+}
 const benchmarkSteps = workflowDocument.jobs.benchmarks.steps;
 const candidateDownloadIndex = benchmarkSteps.findIndex(
   (step) =>
