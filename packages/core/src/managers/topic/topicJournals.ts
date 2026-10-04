@@ -7,6 +7,7 @@ import { atomicWriteJson } from "../../utils/storage";
 import { errnoCode } from "../../utils/fsPaths";
 import type { TopicsIndex, Document as TopicDocument } from "../../utils/types";
 import type { PipelineSourceDocument } from "../documentPipeline";
+import type { TopicStorePaths } from "./topicStorePaths";
 
 export interface IngestionJournalEntry {
   id: string;
@@ -43,7 +44,7 @@ export interface TopicJournalHost {
   journalMutex: Mutex;
   topicsIndex: TopicsIndex | null;
   topicDocuments: Map<string, Map<string, TopicDocument>>;
-  getDatabaseDir(): string;
+  paths: TopicStorePaths;
   removeDocumentStorage(topicId: string, documentId: string, signal?: AbortSignal): Promise<string[]>;
   summarizePipelineChunks(chunks: LangChainDocument[]): PipelineSourceDocument[];
   createLeafTopicDocuments(
@@ -59,11 +60,11 @@ export class TopicJournals {
   constructor(private readonly host: TopicJournalHost) {}
 
   public getIngestionJournalPath(): string {
-    return path.join(this.host.getDatabaseDir(), "ingestion-journal.json");
+    return path.join(this.host.paths.databaseDir(), "ingestion-journal.json");
   }
 
   public getPostCommitCleanupJournalPath(): string {
-    return path.join(this.host.getDatabaseDir(), "post-commit-cleanup-journal.json");
+    return path.join(this.host.paths.databaseDir(), "post-commit-cleanup-journal.json");
   }
 
   private async readPostCommitCleanupJournal(): Promise<PostCommitCleanupEntry[]> {

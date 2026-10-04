@@ -19,6 +19,7 @@ import {
   validateAndStageTopicArchive,
 } from "../../utils/topicArchive";
 import { errnoCode, listFilesRecursively, pathExists } from "../../utils/fsPaths";
+import type { TopicStorePaths } from "./topicStorePaths";
 import type { Topic, TopicsIndex, Document as TopicDocument, ExportedTopicData } from "../../utils/types";
 
 /**
@@ -61,9 +62,7 @@ export interface TopicArchiveHost {
   logger: Logger;
   embeddingService: EmbeddingService;
   archiveMutex: Mutex;
-  getDatabaseDir(): string;
-  getTopicsIndexPath(): string;
-  getTopicDocumentsPath(topicId: string): string;
+  paths: TopicStorePaths;
   getTopicDocuments(topicId: string): TopicDocument[];
   generateTopicId(): string;
   assertNotSharedTopic(topicId: string, operation: string): void;
@@ -99,7 +98,7 @@ export class TopicArchiveTransfer {
 
   private async exportTopicUnlocked(topicId: string, exportPath: string): Promise<void> {
     this.host.logger.info("Exporting topic", { topicId, exportPath });
-    const databaseDir = this.host.getDatabaseDir();
+    const databaseDir = this.host.paths.databaseDir();
     let stagingDir: string | undefined;
     let temporaryArchivePath: string | undefined;
 
@@ -116,7 +115,7 @@ export class TopicArchiveTransfer {
       // revision now and re-check it once the archive is written, so a
       // mutation that lands mid-export is caught instead of silently
       // shipping a torn archive.
-      const indexHashBeforeExport = await this.hashFile(this.host.getTopicsIndexPath());
+      const indexHashBeforeExport = await this.hashFile(this.host.paths.topicsIndexPath());
 
       await fs.mkdir(databaseDir, { recursive: true });
       stagingDir = await fs.mkdtemp(path.join(databaseDir, ".rag-export-"));
@@ -164,7 +163,7 @@ export class TopicArchiveTransfer {
 
       await archivePromise;
 
-      if ((await this.hashFile(this.host.getTopicsIndexPath())) !== indexHashBeforeExport) {
+      if ((await this.hashFile(this.host.paths.topicsIndexPath())) !== indexHashBeforeExport) {
         throw new Error("Topic storage changed during export; retry the export");
       }
 
@@ -190,7 +189,7 @@ export class TopicArchiveTransfer {
 
   private async importTopicUnlocked(archivePath: string): Promise<Topic> {
     this.host.logger.info("Importing topic", { archivePath });
-    const databaseDir = this.host.getDatabaseDir();
+    const databaseDir = this.host.paths.databaseDir();
     let stagingDir: string | undefined;
 
     try {
@@ -445,7 +444,7 @@ export class TopicArchiveTransfer {
   }
 
   private async collectArchiveSourceFiles(topicId: string): Promise<ArchiveSourceFile[]> {
-    const databaseDir = this.host.getDatabaseDir();
+    const databaseDir = this.host.paths.databaseDir();
     const sources: ArchiveSourceFile[] = [];
     for (const tableName of [topicId]) {
       const tableDir = path.join(databaseDir, "lancedb", `${tableName}.lance`);
@@ -522,7 +521,7 @@ export class TopicArchiveTransfer {
    */
   private async hashTopicsIndexOrAbsent(): Promise<string> {
     try {
-      return await this.hashFile(this.host.getTopicsIndexPath());
+      return await this.hashFile(this.host.paths.topicsIndexPath());
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
         return ABSENT_TOPICS_INDEX_HASH;
@@ -550,7 +549,7 @@ export class TopicArchiveTransfer {
     commit: StagedTopicImportCommit,
     coordinator: StorageTransactionCoordinator,
   ): Promise<void> {
-    const databaseDir = this.host.getDatabaseDir();
+    const databaseDir = this.host.paths.databaseDir();
     const operations: StorageTransactionOperation[] = [];
     const tableMappings = [{ oldName: commit.originalTopicId, newName: commit.newTopicId }];
     for (const mapping of tableMappings) {
@@ -573,13 +572,13 @@ export class TopicArchiveTransfer {
     operations.push({
       type: "replace",
       source: commit.preparedDocumentsPath,
-      destination: this.host.getTopicDocumentsPath(commit.newTopicId),
+      destination: this.host.paths.topicDocumentsPath(commit.newTopicId),
     });
     // Topics index publication is last and is the visibility point.
     operations.push({
       type: "replace",
       source: commit.preparedIndexPath,
-      destination: this.host.getTopicsIndexPath(),
+      destination: this.host.paths.topicsIndexPath(),
     });
 
     for (const operation of operations.slice(0, -1)) {

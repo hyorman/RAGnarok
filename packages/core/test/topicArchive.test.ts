@@ -592,7 +592,7 @@ describe("topic archive safety", function () {
     (manager as any).topicsIndex = index;
     (manager as any).topicDocuments = new Map([["topic-local", new Map()]]);
 
-    const topicsIndexPath = (manager as any).getTopicsIndexPath() as string;
+    const topicsIndexPath = (manager as any).paths.topicsIndexPath() as string;
     const realHashFile = ((manager as any).archiveTransfer.hashFile as (filePath: string) => Promise<string>).bind(
       (manager as any).archiveTransfer,
     );

@@ -43,11 +43,13 @@ import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
 } from "../utils/storageTransactionCoordinator";
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { errnoCode, pathExists } from "../utils/fsPaths";
 import { TopicArchiveTransfer, type TopicArchiveHost } from "./topic/topicArchiveTransfer";
+import { documentIdForSource, generateTopicId, mapFileType } from "./topic/topicIds";
 import { TopicJournals, type PostCommitCleanupEntry, type TopicJournalHost } from "./topic/topicJournals";
+import { TopicStorePaths } from "./topic/topicStorePaths";
 
 export interface TopicManagerOptions {
   storageDir: string;
@@ -231,6 +233,8 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   }
 
   private storageDir: string;
+  /** @internal */
+  readonly paths: TopicStorePaths;
   private config: IConfigProvider;
   private notifier: INotifier;
   /** @internal */
@@ -302,6 +306,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   private constructor(private options: TopicManagerOptions) {
     this.logger = new Logger("TopicManager");
     this.storageDir = options.storageDir;
+    this.paths = new TopicStorePaths(this.storageDir);
     this.sharedTopics = new SharedTopicRegistry(path.join(this.storageDir, SHARED_TOPIC_CACHE_DIRNAME), this.logger);
     this.sharedTopics.setSources(options.sharedTopicSources ?? []);
     this.config = options.config;
@@ -352,7 +357,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       await this.loadTopicsIndex();
 
       // Initialize document pipeline
-      const storageDir = this.getDatabaseDir();
+      const storageDir = this.paths.databaseDir();
       await this.documentPipeline.initialize(storageDir);
 
       this.vectorStoreFactory = new VectorStoreFactory(
@@ -536,13 +541,13 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
         lastUpdated: Date.now(),
       };
       delete nextTopicsIndex.topics[topicId];
-      const preparedIndex = path.join(this.getDatabaseDir(), `.delete-${topicId}-${randomUUID()}.json`);
+      const preparedIndex = path.join(this.paths.databaseDir(), `.delete-${topicId}-${randomUUID()}.json`);
       await atomicWriteJson(preparedIndex, nextTopicsIndex);
-      const lancedbDir = path.join(this.getDatabaseDir(), "lancedb");
+      const lancedbDir = path.join(this.paths.databaseDir(), "lancedb");
       const operations: StorageTransactionOperation[] = [
-        { type: "replace", source: preparedIndex, destination: this.getTopicsIndexPath() },
-        { type: "delete", destination: this.getTopicDocumentsPath(topicId) },
-        { type: "delete", destination: path.join(this.getDatabaseDir(), `vector-${topicId}-metadata.json`) },
+        { type: "replace", source: preparedIndex, destination: this.paths.topicsIndexPath() },
+        { type: "delete", destination: this.paths.topicDocumentsPath(topicId) },
+        { type: "delete", destination: path.join(this.paths.databaseDir(), `vector-${topicId}-metadata.json`) },
         { type: "delete", destination: path.join(lancedbDir, `${topicId}.lance`) },
       ];
 
@@ -559,7 +564,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       } finally {
         await fs.rm(preparedIndex, { force: true }).catch(() => undefined);
         this.vectorStoreFactory = new VectorStoreFactory(
-          this.getDatabaseDir(),
+          this.paths.databaseDir(),
           nextTopicsIndex.modelName,
           this.embeddingService,
           this.embeddingRegistry,
@@ -892,16 +897,16 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       documentCount: nextDocuments.size,
       updatedAt: Date.now(),
     };
-    const preparedDocuments = path.join(this.getDatabaseDir(), `.remove-documents-${randomUUID()}.json`);
-    const preparedIndex = path.join(this.getDatabaseDir(), `.remove-index-${randomUUID()}.json`);
+    const preparedDocuments = path.join(this.paths.databaseDir(), `.remove-documents-${randomUUID()}.json`);
+    const preparedIndex = path.join(this.paths.databaseDir(), `.remove-index-${randomUUID()}.json`);
     await atomicWriteJson(preparedDocuments, [...nextDocuments.values()]);
     await atomicWriteJson(preparedIndex, nextIndex);
     try {
       await coordinator.commit(
         "remove-document-metadata",
         [
-          { type: "replace", source: preparedDocuments, destination: this.getTopicDocumentsPath(topicId) },
-          { type: "replace", source: preparedIndex, destination: this.getTopicsIndexPath() },
+          { type: "replace", source: preparedDocuments, destination: this.paths.topicDocumentsPath(topicId) },
+          { type: "replace", source: preparedIndex, destination: this.paths.topicsIndexPath() },
         ],
         { topicId, documentIds: selectedDocuments.map((document) => document.id) },
       );
@@ -941,7 +946,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
     return {
       formatVersion: 2,
       storageDir: this.storageDir,
-      databaseDir: this.getDatabaseDir(),
+      databaseDir: this.paths.databaseDir(),
       topicCount: Object.keys(this.topicsIndex?.topics ?? {}).length,
       sharedTopicCount: this.sharedTopics.listTopics().length,
     };
@@ -999,7 +1004,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
             : /^https?:\/\//i.test(filePath)
               ? { type: "url", url: filePath }
               : { type: "file", path: path.resolve(filePath) };
-        const stableDocumentId = this.documentIdForSource(filePath, source.type === "url" ? "web" : source.type);
+        const stableDocumentId = documentIdForSource(filePath, source.type === "url" ? "web" : source.type);
         const transactionId = `ingest-${randomUUID()}`;
         const plannedDocument: TopicDocument = {
           id: stableDocumentId,
@@ -1011,7 +1016,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
               ? "github"
               : options?.loaderOptions?.fileType === "web"
                 ? "web"
-                : this.mapFileType(fileExt),
+                : mapFileType(fileExt),
           source,
           addedAt: Date.now(),
           chunkCount: 0,
@@ -1387,7 +1392,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       throw error;
     }
 
-    const location = this.getTopicStoreDir(topicId) ?? this.getDatabaseDir();
+    const location = this.getTopicStoreDir(topicId) ?? this.paths.databaseDir();
     const cacheKey = `${location}::${topicId}`;
     // Check cache first
     const cachedStore = this.vectorStoreCache.get(cacheKey);
@@ -1502,7 +1507,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       }
 
       const documentCount = this.getTopicDocuments(topicId).length;
-      const databaseDir = this.getTopicStoreDir(topicId) ?? this.getDatabaseDir();
+      const databaseDir = this.getTopicStoreDir(topicId) ?? this.paths.databaseDir();
       const metadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
 
       let chunkCount = 0;
@@ -1593,7 +1598,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
 
     try {
       const topicIds = this.topicsIndex ? Object.keys(this.topicsIndex.topics) : [];
-      const storageDir = this.getDatabaseDir();
+      const storageDir = this.paths.databaseDir();
       const currentModel = this.embeddingService.getCurrentModel();
       const replacementPipeline = new DocumentPipeline(
         this.notifier,
@@ -1815,15 +1820,6 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   }
 
   /**
-   * Get the database directory path
-   *
-   * @internal
-   */
-  getDatabaseDir(): string {
-    return path.join(this.storageDir, EXTENSION.DATABASE_DIR);
-  }
-
-  /**
    * Where this topic's vector data lives, or undefined for the managed database
    * directory. Shared topics keep their data in their own store directory.
    */
@@ -1832,20 +1828,11 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   }
 
   /**
-   * Get the topics index file path
-   *
-   * @internal
-   */
-  getTopicsIndexPath(): string {
-    return path.join(this.getDatabaseDir(), EXTENSION.TOPICS_INDEX_FILENAME);
-  }
-
-  /**
    * Ensure storage directory exists
    */
   private async ensureStorageDirectory(): Promise<void> {
     try {
-      await fs.mkdir(this.getDatabaseDir(), { recursive: true });
+      await fs.mkdir(this.paths.databaseDir(), { recursive: true });
     } catch (_error) {
       // Directory might already exist
     }
@@ -1855,7 +1842,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
    * Load topics index from file
    */
   private async loadTopicsIndex(): Promise<void> {
-    const indexPath = this.getTopicsIndexPath();
+    const indexPath = this.paths.topicsIndexPath();
     let data: string;
     try {
       data = await fs.readFile(indexPath, "utf-8");
@@ -1918,7 +1905,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       return;
     }
     this.externalWatcher ??= new StorageDirectoryWatcher({
-      directory: this.getDatabaseDir(),
+      directory: this.paths.databaseDir(),
       accepts: (name) => name === EXTENSION.TOPICS_INDEX_FILENAME || /^topic-.*-documents\.json$/.test(name),
       debounceMs: 250,
       onChange: () => this.handleDebouncedChange(),
@@ -1946,7 +1933,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
 
   private async databaseDirExists(): Promise<boolean> {
     try {
-      return await pathExists(this.getDatabaseDir());
+      return await pathExists(this.paths.databaseDir());
     } catch {
       return false;
     }
@@ -2061,7 +2048,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
 
     try {
       await this.assertStorageOwnership();
-      const indexPath = this.getTopicsIndexPath();
+      const indexPath = this.paths.topicsIndexPath();
       await atomicWriteJson(indexPath, this.topicsIndex);
 
       this.logger.debug("Topics index saved");
@@ -2079,57 +2066,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
    * @internal
    */
   generateTopicId(): string {
-    return `topic-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-  }
-
-  /**
-   * Generate a unique document ID
-   */
-  private generateDocumentId(): string {
-    return `doc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-  }
-
-  private documentIdForSource(source: string, sourceType: "file" | "web" | "github" = "file"): string {
-    let normalized: string;
-    try {
-      const url = new URL(source);
-      url.hash = "";
-      normalized = url.toString();
-    } catch {
-      normalized = path.resolve(source).replace(/\\/g, "/");
-    }
-    return `doc-${createHash("sha256")
-      .update(JSON.stringify({ type: sourceType, source: normalized }))
-      .digest("hex")}`;
-  }
-
-  /**
-   * Map file extension to document file type
-   */
-  private mapFileType(extension: string): "pdf" | "markdown" | "html" | "text" | "web" | "github" {
-    switch (extension.toLowerCase()) {
-      case "pdf":
-        return "pdf";
-      case "md":
-      case "markdown":
-        return "markdown";
-      case "html":
-      case "htm":
-        return "html";
-      case "txt":
-        return "text";
-      default:
-        return "text";
-    }
-  }
-
-  /**
-   * Get the file path for storing topic documents metadata
-   *
-   * @internal
-   */
-  getTopicDocumentsPath(topicId: string): string {
-    return path.join(this.getDatabaseDir(), `topic-${topicId}-documents.json`);
+    return generateTopicId();
   }
 
   /**
@@ -2144,7 +2081,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
         return;
       }
 
-      const documentsPath = this.getTopicDocumentsPath(topicId);
+      const documentsPath = this.paths.topicDocumentsPath(topicId);
       const documentsArray = Array.from(documents.values());
 
       await atomicWriteJson(documentsPath, documentsArray);
@@ -2166,7 +2103,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
    * Load document metadata for a topic from disk
    */
   private async loadTopicDocuments(topicId: string): Promise<Map<string, TopicDocument>> {
-    const documentsPath = this.getTopicDocumentsPath(topicId);
+    const documentsPath = this.paths.topicDocumentsPath(topicId);
     let data: string;
     try {
       data = await fs.readFile(documentsPath, "utf-8");
@@ -2267,7 +2204,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       const previousCoordinator = this.activeCoordinator;
       this.activeLease = lease;
       try {
-        const coordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), lease);
+        const coordinator = new StorageTransactionCoordinator(this.paths.databaseDir(), lease);
         await coordinator.initialize();
         this.activeCoordinator = coordinator;
         // Write-side safety: another process may have written since our caches
@@ -2350,7 +2287,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
     // A crashed transaction leaves its WAL, or an orphaned staging directory,
     // under the coordinator root.
     try {
-      const staged = await fs.readdir(path.join(this.getDatabaseDir(), ".transactions"));
+      const staged = await fs.readdir(path.join(this.paths.databaseDir(), ".transactions"));
       return staged.length > 0;
     } catch (error) {
       if (errnoCode(error) === "ENOENT") {
