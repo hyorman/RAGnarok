@@ -3,9 +3,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { RELEASE_REPOSITORY, RELEASE_WORKFLOW } from "./release-attestation.mjs";
 
-export const NPM_REGISTRY = "https://registry.npmjs.org";
-export const VSCODE_MARKETPLACE = "https://marketplace.visualstudio.com";
-export const DOCKER_REPOSITORY = "ghcr.io/hyorman/ragnarok-mcp";
+const NPM_REGISTRY = "https://registry.npmjs.org";
+const VSCODE_MARKETPLACE = "https://marketplace.visualstudio.com";
+const DOCKER_REPOSITORY = "ghcr.io/hyorman/ragnarok-mcp";
 
 const readJson = async (file) => JSON.parse(await readFile(file, "utf8"));
 

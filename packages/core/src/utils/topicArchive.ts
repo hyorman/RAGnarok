@@ -219,7 +219,7 @@ function validateDocument(value: unknown, topicId: string): value is Document {
   );
 }
 
-export function validateExportedTopicData(value: unknown): ExportedTopicData {
+function validateExportedTopicData(value: unknown): ExportedTopicData {
   if (
     !isRecord(value) ||
     value.version !== TOPIC_ARCHIVE_FORMAT_VERSION ||

@@ -5,7 +5,6 @@
  */
 
 import { LogLevel, ILogger, ILoggerFactory } from "./interfaces";
-export { LogLevel };
 
 /**
  * Console-based logger factory (default fallback)

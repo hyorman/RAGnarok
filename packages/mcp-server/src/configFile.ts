@@ -103,7 +103,7 @@ export const FILE_KEYS: readonly FileKey[] = [
 ];
 
 /** Nested schema, derived from the table. `.strict()` makes unknown keys fatal. */
-export const configFileSchema = (() => {
+const configFileSchema = (() => {
   const sections = new Map<string, Record<string, z.ZodTypeAny>>();
   for (const key of FILE_KEYS) {
     const [section, name] = key.path;

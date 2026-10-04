@@ -3,7 +3,7 @@
  */
 
 // Re-export everything from core
-export { EXTENSION, CONFIG, DEFAULTS } from "@ragnarok/core";
+export { CONFIG, DEFAULTS } from "@ragnarok/core";
 
 /**
  * VS Code-specific configuration keys (not shared with core or MCP)

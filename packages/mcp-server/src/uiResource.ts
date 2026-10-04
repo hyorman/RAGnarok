@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { GRAPH_APP_HTML } from "./ui/graphAppBundle";
 
 const RESOURCE_URI = "ui://ragnarok/graph";
-export const GRAPH_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const GRAPH_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 /**
  * Register the interactive graph visualization MCP App resource.
