@@ -47,6 +47,7 @@ import { createHash, randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { errnoCode, pathExists } from "../utils/fsPaths";
 import { TopicArchiveTransfer, type TopicArchiveHost } from "./topic/topicArchiveTransfer";
+import { TopicJournals, type PostCommitCleanupEntry, type TopicJournalHost } from "./topic/topicJournals";
 
 export interface TopicManagerOptions {
   storageDir: string;
@@ -99,27 +100,6 @@ export interface AddDocumentResult {
  * another process, or the folder being moved).
  */
 export type StorageExternalChange = { kind: "topics-changed" } | { kind: "storage-unavailable" };
-
-interface IngestionJournalEntry {
-  id: string;
-  transactionId?: string;
-  containerId?: string;
-  topicId: string;
-  stage: "started" | "vectorCommitted" | "graphCommitted" | "metadataCommitted";
-  document: TopicDocument;
-  containerLeafIds?: string[];
-  warnings?: Array<{ stage: string; message: string }>;
-  updatedAt: number;
-}
-
-interface PostCommitCleanupEntry {
-  version: 1;
-  id: string;
-  kind: "document";
-  topicId: string;
-  documents: TopicDocument[];
-  updatedAt: number;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -226,7 +206,7 @@ function parseTopicDocuments(data: string, topicId: string): TopicDocument[] {
 /**
  * Manages all topic operations and vector stores
  */
-export class TopicManager implements TopicArchiveHost {
+export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   // Event emitter for agent cache cleanup notifications
   // Allows multiple external components (RAGTool, MCP server) to subscribe without overwriting each other
   private static readonly _onAgentCacheCleanup = new EventEmitter();
@@ -263,7 +243,8 @@ export class TopicManager implements TopicArchiveHost {
   /** @internal */
   topicsIndex: TopicsIndex | null = null;
   private documentPipeline: DocumentPipeline;
-  private vectorStoreFactory: VectorStoreFactory | null = null;
+  /** @internal */
+  vectorStoreFactory: VectorStoreFactory | null = null;
   private isInitialized: boolean = false;
 
   // Cache for loaded vector stores
@@ -281,10 +262,12 @@ export class TopicManager implements TopicArchiveHost {
   /** Read-only topics contributed by configured shared-topic sources. */
   private readonly sharedTopics: SharedTopicRegistry;
   private readonly sharedTopicsMutex = new Mutex();
-  private journalMutex = new Mutex();
+  /** @internal */
+  journalMutex = new Mutex();
   /** @internal */
   archiveMutex = new Mutex();
   private readonly archiveTransfer = new TopicArchiveTransfer(this);
+  private readonly journals = new TopicJournals(this);
   private storageMutationMutex = new Mutex();
   private topicMutationMutexes = new Map<string, Mutex>();
   // Set only for the duration of a write transaction. Reads never take a
@@ -890,7 +873,7 @@ export class TopicManager implements TopicArchiveHost {
       })),
       updatedAt: Date.now(),
     };
-    await this.upsertPostCommitCleanup(cleanupEntry);
+    await this.journals.upsertPostCommitCleanup(cleanupEntry);
 
     // Publish metadata removal before destructive row deletion. A crash after
     // this transaction can leave unreachable rows for cleanup, but can never
@@ -931,8 +914,8 @@ export class TopicManager implements TopicArchiveHost {
 
     let removedChunkIds: string[] = [];
     try {
-      removedChunkIds = await this.completePostCommitCleanup(cleanupEntry);
-      await this.removePostCommitCleanup(cleanupEntry.id);
+      removedChunkIds = await this.journals.completePostCommitCleanup(cleanupEntry);
+      await this.journals.removePostCommitCleanup(cleanupEntry.id);
     } catch (cleanupError) {
       // Metadata publication is the logical delete commit. Returning success is
       // unambiguous; the retained journal makes physical cleanup durable and
@@ -1036,7 +1019,7 @@ export class TopicManager implements TopicArchiveHost {
           canonicalSource: source.type === "file" ? source.path : source.url,
         };
         const journalId = `${transactionId}:container`;
-        await this.upsertIngestionJournal({
+        await this.journals.upsertIngestion({
           id: journalId,
           transactionId,
           containerId: stableDocumentId,
@@ -1072,7 +1055,7 @@ export class TopicManager implements TopicArchiveHost {
           }
           const leafIds = leafDocuments.map((document) => document.id);
           const durableStage = pipelineResult.metadata.graphExtracted ? "graphCommitted" : "vectorCommitted";
-          await this.replaceIngestionTransaction(
+          await this.journals.replaceIngestionTransaction(
             transactionId,
             leafDocuments.map((document) => ({
               id: `${transactionId}:${document.id}`,
@@ -1108,7 +1091,7 @@ export class TopicManager implements TopicArchiveHost {
           this.topicsIndex.lastUpdated = Date.now();
           await this.saveTopicDocuments(topicId);
           await this.saveTopicsIndex();
-          await this.markAndRemoveCommittedIngestion(transactionId);
+          await this.journals.markAndRemoveCommittedIngestion(transactionId);
 
           for (const document of leafDocuments) {
             results.push({ topic, document, pipelineResult });
@@ -1197,7 +1180,8 @@ export class TopicManager implements TopicArchiveHost {
     return outcomes;
   }
 
-  private createLeafTopicDocuments(
+  /** @internal */
+  createLeafTopicDocuments(
     topicId: string,
     container: TopicDocument,
     sources: PipelineSourceDocument[],
@@ -1227,7 +1211,8 @@ export class TopicManager implements TopicArchiveHost {
     });
   }
 
-  private summarizePipelineChunks(chunks: LangChainDocument[]): PipelineSourceDocument[] {
+  /** @internal */
+  summarizePipelineChunks(chunks: LangChainDocument[]): PipelineSourceDocument[] {
     const summaries = new Map<string, PipelineSourceDocument>();
     for (const chunk of chunks) {
       const documentId = String(chunk.metadata.documentId ?? "");
@@ -1262,7 +1247,8 @@ export class TopicManager implements TopicArchiveHost {
     }
   }
 
-  private async removeDocumentStorage(topicId: string, documentId: string, signal?: AbortSignal): Promise<string[]> {
+  /** @internal */
+  async removeDocumentStorage(topicId: string, documentId: string, signal?: AbortSignal): Promise<string[]> {
     if (!this.vectorStoreFactory) {
       throw new Error("TopicManager not initialized");
     }
@@ -2067,7 +2053,8 @@ export class TopicManager implements TopicArchiveHost {
   /**
    * Save topics index to file
    */
-  private async saveTopicsIndex(): Promise<void> {
+  /** @internal */
+  async saveTopicsIndex(): Promise<void> {
     if (!this.topicsIndex) {
       return;
     }
@@ -2145,282 +2132,11 @@ export class TopicManager implements TopicArchiveHost {
     return path.join(this.getDatabaseDir(), `topic-${topicId}-documents.json`);
   }
 
-  private getIngestionJournalPath(): string {
-    return path.join(this.getDatabaseDir(), "ingestion-journal.json");
-  }
-
-  private getPostCommitCleanupJournalPath(): string {
-    return path.join(this.getDatabaseDir(), "post-commit-cleanup-journal.json");
-  }
-
-  private async readPostCommitCleanupJournal(): Promise<PostCommitCleanupEntry[]> {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(await fs.readFile(this.getPostCommitCleanupJournalPath(), "utf8"));
-    } catch (error) {
-      if (errnoCode(error) === "ENOENT") {
-        return [];
-      }
-      throw new Error("Post-commit cleanup journal is corrupt; refusing to expose potentially orphaned storage");
-    }
-    if (!Array.isArray(parsed)) {
-      throw new Error("Post-commit cleanup journal is invalid; expected an array");
-    }
-    for (const entry of parsed) {
-      if (
-        !isRecord(entry) ||
-        entry.version !== 1 ||
-        typeof entry.id !== "string" ||
-        typeof entry.topicId !== "string" ||
-        !isFiniteNumber(entry.updatedAt) ||
-        entry.kind !== "document"
-      ) {
-        throw new Error("Post-commit cleanup journal contains an invalid entry");
-      }
-      if (!Array.isArray(entry.documents)) {
-        throw new Error("Post-commit cleanup journal contains invalid cleanup details");
-      }
-    }
-    return parsed as PostCommitCleanupEntry[];
-  }
-
-  private async upsertPostCommitCleanup(entry: PostCommitCleanupEntry): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = await this.readPostCommitCleanupJournal();
-      const index = entries.findIndex((candidate) => candidate.id === entry.id);
-      if (index >= 0) {
-        entries[index] = entry;
-      } else {
-        entries.push(entry);
-      }
-      await atomicWriteJson(this.getPostCommitCleanupJournalPath(), entries);
-    });
-  }
-
-  private async removePostCommitCleanup(id: string): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = (await this.readPostCommitCleanupJournal()).filter((entry) => entry.id !== id);
-      await atomicWriteJson(this.getPostCommitCleanupJournalPath(), entries);
-    });
-  }
-
-  private async completePostCommitCleanup(entry: PostCommitCleanupEntry): Promise<string[]> {
-    if (!this.vectorStoreFactory) {
-      throw new Error("Vector store is not initialized");
-    }
-    const removedChunkIds: string[] = [];
-    for (const document of entry.documents) {
-      removedChunkIds.push(...(await this.removeDocumentStorage(entry.topicId, document.id)));
-    }
-    const stats = await this.vectorStoreFactory.getStoredStats(entry.topicId);
-    const existing = await this.vectorStoreFactory.getStoreMetadata(entry.topicId);
-    await this.vectorStoreFactory.saveStore(entry.topicId, {
-      ...existing,
-      documentCount: stats.documentCount,
-      chunkCount: stats.chunkCount,
-    });
-    return removedChunkIds;
-  }
-
-  private async recoverPostCommitCleanupJournal(): Promise<void> {
-    const entries = await this.readPostCommitCleanupJournal();
-    for (const entry of entries) {
-      const documents = this.topicDocuments.get(entry.topicId);
-      if (!this.topicsIndex?.topics[entry.topicId]) {
-        await this.removePostCommitCleanup(entry.id);
-        continue;
-      }
-      // If any selected document is still advertised, coordinator recovery
-      // rolled metadata publication back. Physical rows remain live.
-      if (entry.documents.some((document) => documents?.has(document.id))) {
-        await this.removePostCommitCleanup(entry.id);
-        continue;
-      }
-      await this.completePostCommitCleanup(entry);
-      await this.removePostCommitCleanup(entry.id);
-    }
-  }
-
-  private async readIngestionJournal(): Promise<IngestionJournalEntry[]> {
-    try {
-      const parsed = JSON.parse(await fs.readFile(this.getIngestionJournalPath(), "utf8"));
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      if (errnoCode(error) === "ENOENT") {
-        return [];
-      }
-      throw error;
-    }
-  }
-
-  private async upsertIngestionJournal(entry: IngestionJournalEntry): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = await this.readIngestionJournal();
-      const index = entries.findIndex((candidate) => candidate.id === entry.id);
-      if (index >= 0) {
-        entries[index] = entry;
-      } else {
-        entries.push(entry);
-      }
-      await atomicWriteJson(this.getIngestionJournalPath(), entries);
-    });
-  }
-
-  private async replaceIngestionTransaction(
-    transactionId: string,
-    replacement: IngestionJournalEntry[],
-  ): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = (await this.readIngestionJournal()).filter(
-        (entry) => (entry.transactionId ?? entry.id) !== transactionId,
-      );
-      entries.push(...replacement);
-      await atomicWriteJson(this.getIngestionJournalPath(), entries);
-    });
-  }
-
-  private async markAndRemoveCommittedIngestion(transactionId: string): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = await this.readIngestionJournal();
-      const committedAt = Date.now();
-      const marked = entries.map((entry) =>
-        (entry.transactionId ?? entry.id) === transactionId
-          ? { ...entry, stage: "metadataCommitted" as const, updatedAt: committedAt }
-          : entry,
-      );
-      await atomicWriteJson(this.getIngestionJournalPath(), marked);
-      await atomicWriteJson(
-        this.getIngestionJournalPath(),
-        marked.filter((entry) => (entry.transactionId ?? entry.id) !== transactionId),
-      );
-    });
-  }
-
-  private async recoverIngestionJournal(): Promise<void> {
-    if (!this.vectorStoreFactory || !this.topicsIndex) {
-      return;
-    }
-    await this.journalMutex.runExclusive(async () => {
-      const pending = await this.readIngestionJournal();
-      if (pending.length === 0) {
-        return;
-      }
-      const touched = new Set<string>();
-      const rowsByTopic = new Map<string, LangChainDocument[]>();
-      const transactions = new Map<string, IngestionJournalEntry[]>();
-      for (const entry of pending) {
-        const transactionId = entry.transactionId ?? entry.id;
-        const group = transactions.get(transactionId) ?? [];
-        group.push(entry);
-        transactions.set(transactionId, group);
-      }
-
-      for (const [transactionId, originalEntries] of transactions) {
-        const starter = originalEntries.find((entry) => entry.stage === "started") ?? originalEntries[0];
-        const topic = this.topicsIndex!.topics[starter.topicId];
-        if (!topic) {
-          continue;
-        }
-
-        let durableEntries = originalEntries.filter((entry) => entry.stage !== "started");
-        if (durableEntries.length === 0) {
-          let rows = rowsByTopic.get(starter.topicId);
-          if (!rows) {
-            rows = await this.vectorStoreFactory!.getAllDocuments(starter.topicId, 1_000_000);
-            rowsByTopic.set(starter.topicId, rows);
-          }
-          const transactionRows = rows.filter(
-            (row) => String(row.metadata.ingestionTransactionId ?? "") === transactionId,
-          );
-          let sourceDocuments = this.summarizePipelineChunks(transactionRows);
-          if (sourceDocuments.length === 0) {
-            // Backward compatibility for the pre-transaction journal.
-            const legacyCount = await this.vectorStoreFactory!.getDocumentChunkCount(
-              starter.topicId,
-              starter.document.id,
-            );
-            if (legacyCount > 0) {
-              sourceDocuments = [
-                {
-                  documentId: starter.document.id,
-                  canonicalSource: starter.document.filePath,
-                  sourceType: starter.document.fileType === "web" ? "web" : starter.document.fileType,
-                  sourceRevision: starter.document.sourceRevision ?? "",
-                  fileName: starter.document.name,
-                  filePath: starter.document.filePath,
-                  fileType: starter.document.fileType,
-                  chunkCount: legacyCount,
-                },
-              ];
-            }
-          }
-          if (sourceDocuments.length === 0) {
-            // No durable vector row exists for this starter. Recovery rolls it
-            // back by removing the journal record without publishing metadata.
-            continue;
-          }
-          const leaves = this.createLeafTopicDocuments(starter.topicId, starter.document, sourceDocuments);
-          const leafIds = leaves.map((document) => document.id);
-          durableEntries = leaves.map((document) => ({
-            id: `${transactionId}:${document.id}`,
-            transactionId,
-            containerId: starter.containerId ?? starter.document.id,
-            topicId: starter.topicId,
-            stage: "vectorCommitted",
-            document,
-            containerLeafIds: leafIds,
-            updatedAt: Date.now(),
-          }));
-        }
-
-        const documents = this.topicDocuments.get(starter.topicId) ?? new Map<string, TopicDocument>();
-        const durableLeafIds = new Set<string>();
-        for (const entry of durableEntries) {
-          const chunkCount = await this.vectorStoreFactory!.getDocumentChunkCount(entry.topicId, entry.document.id);
-          if (chunkCount === 0) {
-            continue;
-          }
-          durableLeafIds.add(entry.document.id);
-          documents.set(entry.document.id, { ...entry.document, chunkCount });
-        }
-        if (durableLeafIds.size === 0) {
-          continue;
-        }
-        const containerId = starter.containerId ?? starter.document.containerId ?? starter.document.id;
-        const declaredLeafIds = new Set(durableEntries.flatMap((entry) => entry.containerLeafIds ?? []));
-        const desiredLeafIds = declaredLeafIds.size > 0 ? declaredLeafIds : durableLeafIds;
-        const staleDocuments = [...documents.values()].filter(
-          (document) =>
-            (document.containerId === containerId || document.id === containerId) && !desiredLeafIds.has(document.id),
-        );
-        for (const staleDocument of staleDocuments) {
-          await this.removeDocumentStorage(starter.topicId, staleDocument.id);
-          documents.delete(staleDocument.id);
-        }
-
-        this.topicDocuments.set(starter.topicId, documents);
-        topic.documentCount = documents.size;
-        topic.updatedAt = Math.max(topic.updatedAt, ...durableEntries.map((entry) => entry.updatedAt));
-        touched.add(starter.topicId);
-      }
-      for (const topicId of touched) {
-        await this.saveTopicDocuments(topicId);
-      }
-      if (touched.size > 0) {
-        this.topicsIndex!.lastUpdated = Date.now();
-        await this.saveTopicsIndex();
-      }
-      // Every transaction was either completed from proven rows or rolled back
-      // because no durable row existed. The metadata writes above must all
-      // succeed before the journal is cleared.
-      await atomicWriteJson(this.getIngestionJournalPath(), []);
-    });
-  }
-
   /**
    * Save document metadata for a topic to disk
    */
-  private async saveTopicDocuments(topicId: string): Promise<void> {
+  /** @internal */
+  async saveTopicDocuments(topicId: string): Promise<void> {
     try {
       await this.assertStorageOwnership();
       const documents = this.topicDocuments.get(topicId);
@@ -2559,8 +2275,8 @@ export class TopicManager implements TopicArchiveHost {
         // generation back. Reload the canonical files before deriving
         // next-state from them.
         await this.reloadCanonicalState();
-        await this.recoverPostCommitCleanupJournal();
-        await this.recoverIngestionJournal();
+        await this.journals.recoverPostCommitCleanup();
+        await this.journals.recoverIngestion();
         return await operation({ coordinator, lease });
       } finally {
         // Restore rather than clear: a nested acquisition must never drop an
@@ -2623,7 +2339,10 @@ export class TopicManager implements TopicArchiveHost {
    * store still opens without touching the lock file.
    */
   private async hasPendingStorageRecovery(): Promise<boolean> {
-    for (const journalPath of [this.getPostCommitCleanupJournalPath(), this.getIngestionJournalPath()]) {
+    for (const journalPath of [
+      this.journals.getPostCommitCleanupJournalPath(),
+      this.journals.getIngestionJournalPath(),
+    ]) {
       if (await pathExists(journalPath)) {
         return true;
       }

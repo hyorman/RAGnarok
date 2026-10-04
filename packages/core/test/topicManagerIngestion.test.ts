@@ -287,7 +287,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
     expect(pending[0].stage).to.equal("graphCommitted");
 
     const restarted = createManager(storageDir, vectorStore);
-    await (restarted as any).recoverIngestionJournal();
+    await (restarted as any).journals.recoverIngestion();
     expect(restarted.listDocuments(topicId)).to.have.length(1);
     expect(restarted.listDocuments(topicId)[0]).to.include({
       id: "durable-leaf",
@@ -296,7 +296,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
     });
     expect(await readJournal(storageDir)).to.deep.equal([]);
 
-    await (restarted as any).recoverIngestionJournal();
+    await (restarted as any).journals.recoverIngestion();
     expect(restarted.listDocuments(topicId)).to.have.length(1);
   });
 
@@ -357,7 +357,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
     expect((await readJournal(storageDir))[0].stage).to.equal("started");
 
     const restarted = createManager(storageDir, vectorStore);
-    await (restarted as any).recoverIngestionJournal();
+    await (restarted as any).journals.recoverIngestion();
     expect(restarted.listDocuments(topicId).map((document) => document.id)).to.deep.equal(["cancelled-leaf"]);
     expect(await readJournal(storageDir)).to.deep.equal([]);
   });
@@ -376,7 +376,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
       chunkCount: 0,
       containerId: "container-undurable",
     };
-    await (manager as any).upsertIngestionJournal({
+    await (manager as any).journals.upsertIngestion({
       id: `${transactionId}:container`,
       transactionId,
       containerId: planned.id,
@@ -386,7 +386,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
       updatedAt: 1,
     });
 
-    await (manager as any).recoverIngestionJournal();
+    await (manager as any).journals.recoverIngestion();
     expect(manager.listDocuments(topicId)).to.deep.equal([]);
     expect(await readJournal(storageDir)).to.deep.equal([]);
   });
@@ -461,10 +461,10 @@ describe("TopicManager durable expanded-source ingestion", function () {
     const journalPath = path.join(storageDir, "database", "post-commit-cleanup-journal.json");
     expect(JSON.parse(await fs.readFile(journalPath, "utf8"))).to.have.length(1);
 
-    await (manager as any).recoverPostCommitCleanupJournal();
+    await (manager as any).journals.recoverPostCommitCleanup();
     expect(vectorStore.rows).to.deep.equal([]);
     expect(JSON.parse(await fs.readFile(journalPath, "utf8"))).to.deep.equal([]);
-    await (manager as any).recoverPostCommitCleanupJournal();
+    await (manager as any).journals.recoverPostCommitCleanup();
   });
 
   it("stops mutation admission and awaits an admitted mutation before async disposal", async function () {
