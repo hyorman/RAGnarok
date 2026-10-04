@@ -63,18 +63,11 @@ node_modules/**
 !node_modules/turndown/**
 !node_modules/node-fetch/**
 
-# Sharp for image processing
-!node_modules/sharp/**
+# Sharp's platform binaries. Sharp itself and its helpers ship nested under
+# @huggingface/transformers.
 !node_modules/@img/**
-!node_modules/detect-libc/**
-!node_modules/color/**
-!node_modules/color-convert/**
-!node_modules/color-string/**
-!node_modules/color-name/**
-!node_modules/simple-swizzle/**
 
 # Utility dependencies
-!node_modules/semver/**
 !node_modules/async-mutex/**
 !node_modules/cheerio/**
 

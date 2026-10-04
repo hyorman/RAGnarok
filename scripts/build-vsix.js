@@ -8,18 +8,21 @@
  *
  *   1. Clean and rebuild all extension output
  *   2. Create a unique staging directory with the exact workspace manifests and lockfile
- *   2. Copy extension bundle, assets, and metadata
- *   3. npm ci --omit=dev for the target OS/CPU
- *   4. Install target-platform native binaries
- *   5. Prune bloat (maps, unused pdf.js versions, onnxruntime-node platforms, langchain nested)
- *   6. vsce package from the staging directory
- *   7. Copy VSIX back, clean up staging
+ *   3. Copy extension bundle, assets, and metadata
+ *   4. npm ci --omit=dev for the target OS/CPU
+ *   5. Install target-platform native binaries
+ *   6. Prune bloat (maps, unused pdf.js versions, onnxruntime-node platforms, langchain nested)
+ *   7. vsce package from the staging directory
+ *   8. Copy VSIX back, clean up staging
  *
  * Benefits:
  *   - Development node_modules never mutated
- *   - No gutting hacks (npm list not needed since no stubs)
  *   - Reproducible builds
  *   - Every dependency resolution is bound to package-lock.json
+ *
+ * Pruning guts some packages to their package.json rather than deleting them:
+ * vsce lists the files to ship with `npm list --production`, which fails on a
+ * dependency whose directory is missing.
  */
 
 const fs = require("fs");
@@ -625,12 +628,7 @@ function pruneBloat(stagingDir, targetPlatform) {
     "apache-arrow",
     "pdf-parse",
     "cheerio",
-    "archiver",
     "zod",
-    "glob",
-    "sharp",
-    "lodash",
-    "semver",
   ];
   for (const scope of topLevelScopes) {
     const dir = path.join(nm, scope);
@@ -680,10 +678,10 @@ function prunePlatformNativePackages(rootNodeModules, targetPlatform) {
         : null;
       for (const name of fs.readdirSync(scopeDir)) {
         if (getNativePackageConfig(`${config.scope}/${name}`) !== config) continue;
-        // Retain target copies at every dependency depth. Packages such as the
-        // Sharp instance nested under Transformers resolve their optional
-        // @img binary relative to that package; VSCE does not reliably retain
-        // an unrelated root optional package as a substitute.
+        // Keep the target package wherever npm placed it: Transformers' nested
+        // Sharp finds its platform package by walking up from its own
+        // directory. verifyNativePackages fails the build if a second copy is
+        // left at any depth.
         if (name === keep) continue;
         fs.rmSync(path.join(scopeDir, name), { recursive: true, force: true });
         removed++;
@@ -785,13 +783,13 @@ function findFiles(dir, ext) {
  * The extension and the MCP server are independent products that share only
  * `@ragnarok/core`. Staging installs every workspace because `npm ci` validates
  * them all against the lockfile — which drags in the MCP server's dependency
- * tree (`@modelcontextprotocol/*`, `@hono/node-server`, `@anthropic-ai/sdk`,
- * `openai`) under `packages/mcp-server/node_modules/`.
+ * tree (`@modelcontextprotocol/*`, `@anthropic-ai/sdk`, `openai`) under
+ * `packages/mcp-server/node_modules/`.
  *
- * `.vscodeignore` already excludes `packages/**`, so none of it shipped. But it
- * still sat in the tree `npm list` walks, and `@hono/node-server`'s unmet `hono`
- * peer failed the whole build — the extension unable to package because of a
- * dependency belonging to a product it does not include.
+ * `.vscodeignore` already excludes `packages/**`, so none of it ships. But it
+ * still sits in the tree `npm list` walks, where an unmet peer in any MCP
+ * dependency fails the whole build — the extension unable to package because
+ * of a dependency belonging to a product it does not include.
  *
  * The workspace is removed from the staged manifest *after* `npm ci` (before it,
  * the lockfile would not validate) and its directory deleted, so nothing
@@ -843,31 +841,7 @@ function removeWorkspaceLink(stagingDir, packageName) {
   fs.rmSync(path.join(stagingDir, "node_modules", ...packageName.split("/")), { recursive: true, force: true });
 }
 
-/**
- * Mark peer dependencies that were never installed as optional, in the staged
- * tree only.
- *
- * vsce derives the packaged file list by shelling out to
- * `npm list --production`, and npm exits non-zero when a *non-optional* peer is
- * absent. Two packages in this tree declare peers they cannot expect anyone to
- * install and forget to mark them optional:
- *
- *   - @langchain/community (deprecated) requires @browserbasehq/stagehand,
- *     @ibm-cloud/watsonx-ai and ibm-cloud-sdk-core — vendor integrations for
- *     services this extension does not touch.
- *   - @hono/node-server requires hono. It reaches the tree only because staging
- *     installs every workspace, including the MCP server, which the extension
- *     does not ship.
- *
- * npm is right and the manifests are wrong, so the repair belongs here: the
- * staging directory is disposable, and "a peer we deliberately did not install
- * is optional" is exactly what these manifests should have said. Nothing in the
- * source tree is touched, and no package contents change — only the metadata
- * npm reads while enumerating.
- *
- * Deriving this from the tree rather than a hand-written list means a future
- * dependency with the same defect is handled without another fix here.
- */
+/** The package.json path of every package directly under node_modules (scoped ones included). */
 function listTopLevelManifests(nodeModulesDir) {
   const manifests = [];
   if (!fs.existsSync(nodeModulesDir)) return manifests;
@@ -885,6 +859,25 @@ function listTopLevelManifests(nodeModulesDir) {
   return manifests;
 }
 
+/**
+ * Mark peer dependencies that were never installed as optional, in the staged
+ * tree only.
+ *
+ * vsce derives the packaged file list by shelling out to
+ * `npm list --production`, and npm exits non-zero when a *non-optional* peer is
+ * absent. @langchain/community (deprecated) requires @browserbasehq/stagehand,
+ * @ibm-cloud/watsonx-ai and ibm-cloud-sdk-core — vendor integrations for
+ * services this extension does not touch — and forgets to mark them optional.
+ *
+ * npm is right and the manifest is wrong, so the repair belongs here: the
+ * staging directory is disposable, and "a peer we deliberately did not install
+ * is optional" is exactly what the manifest should have said. Nothing in the
+ * source tree is touched, and no package contents change — only the metadata
+ * npm reads while enumerating.
+ *
+ * Deriving this from the tree rather than a hand-written list means a future
+ * dependency with the same defect is handled without another fix here.
+ */
 function relaxUnmetPeerDependencies(nodeModulesDir) {
   if (!fs.existsSync(nodeModulesDir)) return;
 
@@ -1133,6 +1126,7 @@ if (require.main === module) {
     getNativePackageConfig,
     matchesTargetPlatform,
     nativePackageConfigsFor,
+    pruneOnnxruntimeNode,
     prunePlatformNativePackages,
     removeGraphUiWorkspace,
     verifyIntegrity,

@@ -1160,6 +1160,29 @@ assert.doesNotMatch(
   /dropOptionalPeersOnRootDependencies/,
   "VSIX staging relies on the root override, not on deleting peer declarations",
 );
+assert.doesNotMatch(
+  builder,
+  /No gutting hacks|VSCE does not reliably retain|@hono\/node-server requires hono/,
+  "build-vsix comments must describe the current staging",
+);
+// sharp and its helpers ship nested under @huggingface/transformers (already allowlisted);
+// none of them is installed at the root, so a root allowlist line for them is dead.
+for (const name of [
+  "sharp",
+  "detect-libc",
+  "color",
+  "color-convert",
+  "color-string",
+  "color-name",
+  "simple-swizzle",
+  "semver",
+]) {
+  assert.doesNotMatch(
+    vscodeIgnore,
+    new RegExp(`^!node_modules/${name}/\\*\\*$`, "m"),
+    `VSIX allowlist must not name the absent root package ${name}`,
+  );
+}
 const vsixSmoke = await read("scripts/vsix-smoke.mjs");
 const extensionHostSmoke = await read("scripts/vsix-extension-host-smoke.cjs");
 const extensionEntry = await read("packages/vscode/src/extension.ts");
@@ -1368,6 +1391,86 @@ assert.throws(
   /@img[\\/]sharp-linux-x64 does not declare @img\/sharp-libvips-linux-x64/,
 );
 await rm(path.dirname(undeclaredLibvipsTree), { recursive: true, force: true });
+
+// onnxruntime-node loads bin/napi-v*/<platform>/<arch>/onnxruntime_binding.node with no fallback:
+// the prune keeps exactly the target binding and fails the build on none or on an ambiguous pair.
+const onnxTree = await mkdtemp(path.join(os.tmpdir(), "ragnarok-onnx-prune-"));
+await writePackage(onnxTree, "@huggingface/transformers", { version: "4.3.0" });
+const onnxDir = await writePackage(
+  path.join(onnxTree, "@huggingface", "transformers", "node_modules"),
+  "onnxruntime-node",
+  {
+    version: "1.30.0",
+  },
+);
+const onnxBinding = (napi, platform, arch) =>
+  path.join(onnxDir, "bin", napi, platform, arch, "onnxruntime_binding.node");
+for (const [platform, arch] of [
+  ["darwin", "arm64"],
+  ["linux", "x64"],
+  ["linux", "arm64"],
+  ["win32", "x64"],
+]) {
+  await mkdir(path.dirname(onnxBinding("napi-v6", platform, arch)), { recursive: true });
+  await writeFile(onnxBinding("napi-v6", platform, arch), "");
+}
+packaging.pruneOnnxruntimeNode(onnxTree, linuxX64Target);
+await readFile(onnxBinding("napi-v6", "linux", "x64"));
+for (const [platform, arch] of [
+  ["darwin", "arm64"],
+  ["linux", "arm64"],
+  ["win32", "x64"],
+]) {
+  await assert.rejects(readFile(onnxBinding("napi-v6", platform, arch)), `ORT ${platform}/${arch} must be pruned`);
+}
+await mkdir(path.dirname(onnxBinding("napi-v7", "linux", "x64")), { recursive: true });
+await writeFile(onnxBinding("napi-v7", "linux", "x64"), "");
+assert.throws(
+  () => packaging.pruneOnnxruntimeNode(onnxTree, linuxX64Target),
+  /onnxruntime-node: expected 1 linux-x64 binding, found 2/,
+);
+// ONNX Runtime ships no macOS x64 binary since 1.24; such a target must fail, not ship.
+assert.throws(
+  () => packaging.pruneOnnxruntimeNode(onnxTree, { platform: "darwin", arch: "x64", target: "darwin-x64" }),
+  /onnxruntime-node: expected 1 darwin-x64 binding, found 0/,
+);
+await rm(onnxTree, { recursive: true, force: true });
+
+// The Sharp natives checked are the copies Transformers' own Sharp resolves, at the declared versions.
+const matchingSharpTree = await sharpFixture();
+packaging.verifySharpNativesMatchTransformers(matchingSharpTree, linuxX64Target);
+// A stale copy nested under Transformers shadows the root one: it is the copy Sharp loads.
+await writePackage(
+  path.join(matchingSharpTree, "@huggingface", "transformers", "node_modules"),
+  "@img/sharp-linux-x64",
+  {
+    version: "0.34.5",
+  },
+);
+assert.throws(
+  () => packaging.verifySharpNativesMatchTransformers(matchingSharpTree, linuxX64Target),
+  /@img\/sharp-linux-x64@0\.34\.5 does not match the 0\.35\.5/,
+);
+await rm(path.dirname(matchingSharpTree), { recursive: true, force: true });
+const staleLibvipsTree = await sharpFixture({ libvipsVersion: "1.3.3" });
+assert.throws(
+  () => packaging.verifySharpNativesMatchTransformers(staleLibvipsTree, linuxX64Target),
+  /@img\/sharp-libvips-linux-x64@1\.3\.3 does not match the 1\.3\.4/,
+);
+await rm(path.dirname(staleLibvipsTree), { recursive: true, force: true });
+
+// A nested copy beside a root copy ships twice; only one of them is what its consumer loads.
+const depthTree = await mkdtemp(path.join(os.tmpdir(), "ragnarok-native-depth-"));
+for (const name of ["@lancedb/lancedb-linux-x64-gnu", "@img/sharp-linux-x64", "@img/sharp-libvips-linux-x64"]) {
+  await writePackage(depthTree, name);
+}
+packaging.verifyNativePackages(depthTree, linuxX64Target, [{}, {}, {}]);
+await writePackage(path.join(depthTree, "@huggingface", "transformers", "node_modules"), "@img/sharp-linux-x64");
+assert.throws(
+  () => packaging.verifyNativePackages(depthTree, linuxX64Target, [{}, {}, {}]),
+  /Sharp: expected 1 linux-x64 package, found 2/,
+);
+await rm(depthTree, { recursive: true, force: true });
 
 const dockerfile = await read("packages/mcp-server/Dockerfile");
 const dockerignore = await read(".dockerignore");
