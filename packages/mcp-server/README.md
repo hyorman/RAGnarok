@@ -25,7 +25,7 @@ flowchart LR
   client["MCP Client</br>(Claude, Cursor, …)"]
   stdio["serveStdio</br>connection-pinned"]
   server["McpServer factory</br>one server per stdio connection"]
-  tools["Tool handlers\n(tools.ts)"]
+  tools["Tool handlers\n(tools.ts, tools/)"]
   ui["MCP App resource\n(uiResource.ts)"]
   adapters["Adapters\n(EnvConfigProvider,\nConsoleLoggerFactory,\nConsoleNotifier)"]
   llm["LLM Providers\n(OpenAI, Anthropic, Ollama)"]
@@ -135,7 +135,13 @@ src/
 ├── memoryToolAdapter.ts          # rag_memory / rag_reset_memory input and result shaping
 ├── graphVisualizationAdapter.ts  # rag_memory_visualize projection and limits
 ├── toolRuntime.ts                # Tool admission and drain runtime
-├── tools.ts                      # Tool definitions & handlers (registerTools)
+├── tools.ts                      # registerTools — builds the ToolContext, composes the tool groups
+├── tools/
+│   ├── shared.ts                 # ToolContext, tool registrar, annotations, JSON/error helpers, MCP_LIMITS, response sizing
+│   ├── queryTools.ts             # rag_query
+│   ├── ingestTools.ts            # rag_ingest (files, url, github) and the allowed-path guard
+│   ├── topicTools.ts             # rag_topic, rag_delete_topic, rag_remove_document
+│   └── memoryTools.ts            # rag_memory, rag_reset_memory, rag_memory_visualize and the rag_memory input schema
 ├── uiResource.ts                 # ui://ragnarok/graph MCP App resource
 └── ui/                           # Generated MCP App HTML bundle
 ```
