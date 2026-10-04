@@ -1864,9 +1864,6 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
     if (this.watcherStopped) {
       return;
     }
-    if (!this.externalWatcher?.watching) {
-      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()");
-    }
     try {
       await this.reloadAfterExternalChange();
     } catch (error) {

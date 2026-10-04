@@ -11,7 +11,8 @@ export interface StorageDirectoryWatcherOptions {
   /**
    * A watch error, reported before it is handled. Without an outage policy the
    * watch is then closed and `start()` may be called again; with one, the
-   * error enters the outage path.
+   * error enters the outage path. Also receives the error when `fs.watch`
+   * cannot be constructed, once per run of failed `start()` calls.
    */
   onError?(error: unknown): void;
   /** Poll for a vanished directory (macOS FSEvents does not report one) and retry until it returns. */
@@ -37,6 +38,7 @@ export class StorageDirectoryWatcher {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   private unavailable = false;
+  private startFailureReported = false;
 
   constructor(private readonly options: StorageDirectoryWatcherOptions) {}
 
@@ -53,9 +55,14 @@ export class StorageDirectoryWatcher {
     let handle: fsSync.FSWatcher;
     try {
       handle = fsSync.watch(this.options.directory, (_event, filename) => this.onRawEvent(filename));
-    } catch {
+    } catch (error) {
+      if (!this.startFailureReported) {
+        this.startFailureReported = true;
+        this.options.onError?.(error);
+      }
       return false;
     }
+    this.startFailureReported = false;
     handle.unref?.();
     handle.on("error", (error) => {
       this.options.onError?.(error);
@@ -152,8 +159,13 @@ export class StorageDirectoryWatcher {
       if (this.stopped) {
         return;
       }
+      // fs.watch can fail (ENOSPC/EMFILE) just as the directory returns. Stay
+      // unavailable and retry: recovery is announced only once a watch is armed.
+      if (!this.start()) {
+        this.scheduleRetry();
+        return;
+      }
       this.unavailable = false;
-      this.start();
       try {
         await outage.onRecovered();
       } catch {
