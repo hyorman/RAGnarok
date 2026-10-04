@@ -191,9 +191,9 @@ jobs:
       - run: node scripts/pack-smoke.mjs --artifacts=.
       - run: npm run package
       - run: npm run release:assets
-      # OCI export needs a container builder; the classic store's default `docker` driver cannot export OCI.
-      - run: docker buildx create --name ragnarok-oci --driver docker-container --driver-opt image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea --use
-      - run: docker buildx build --builder ragnarok-oci --provenance=false --sbom=false --tag ragnarok-mcp:ci --file packages/mcp-server/Dockerfile --output type=oci,dest=ragnarok-mcp.oci.tar .
+      # The classic image store cannot export, load or push the OCI archive faithfully; the containerd store can.
+      - run: node scripts/use-containerd-image-store.mjs
+      - run: docker buildx build --provenance=false --sbom=false --tag ragnarok-mcp:ci --file packages/mcp-server/Dockerfile --output type=oci,dest=ragnarok-mcp.oci.tar .
       - run: sha256sum *.tgz *.vsix ragnarok-mcp.oci.tar > artifact-sha256.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -288,6 +288,7 @@ jobs:
           path: artifacts
       - run: npm ci
       - run: node scripts/verify-artifact-digests.mjs artifacts/artifact-sha256.txt artifacts
+      - run: node scripts/use-containerd-image-store.mjs
       - run: docker load --input artifacts/ragnarok-mcp.oci.tar
       - run: node scripts/docker-gate.mjs
 
@@ -410,6 +411,7 @@ jobs:
       - run: npm run release:verify
         env:
           GH_TOKEN: ${{ github.token }}
+      - run: node scripts/use-containerd-image-store.mjs
       - run: docker login ghcr.io --username "${{ github.actor }}" --password-stdin <<< "$DOCKER_PASSWORD"
         env:
           DOCKER_PASSWORD: ${{ github.token }}

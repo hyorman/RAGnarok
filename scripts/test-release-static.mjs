@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as auditPolicyModule from "./audit-policy.mjs";
 import * as releaseStaticPolicy from "./release-static-policy.mjs";
+import { withContainerdSnapshotter } from "./use-containerd-image-store.mjs";
 
 const { evaluateAuditReport, normalizeLocalTarballAuditRanges } = auditPolicyModule;
 const { assertDevOnlyDependency } = releaseStaticPolicy;
@@ -1704,34 +1705,62 @@ for (const setupFile of ["packages/core/test/setup.ts", "packages/mcp-server/tes
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
-// GitHub's classic-store runners use the `docker` buildx driver, which cannot export OCI, so the
-// release image builds on a digest-pinned container builder. Provenance and SBOM attestations stay
-// off so the archive holds exactly one image manifest (create-release-manifest.mjs requires that;
-// the release job attests provenance separately).
-const artifactBuildSteps = workflowDocument.jobs["artifact-build"].steps;
-const ociBuilderIndex = artifactBuildSteps.findIndex((step) => {
-  const run = String(step.run ?? "");
-  return (
-    run.includes("docker buildx create") &&
-    run.includes("--driver docker-container") &&
-    run.includes("--name ragnarok-oci") &&
-    /image=moby\/buildkit:[^@\s]+@sha256:[a-f0-9]{64}/.test(run)
-  );
-});
-const ociBuildIndex = artifactBuildSteps.findIndex((step) =>
-  String(step.run ?? "").includes("type=oci,dest=ragnarok-mcp.oci.tar"),
-);
-assert.ok(
-  ociBuilderIndex >= 0,
-  "artifact-build must create a docker-container builder named ragnarok-oci with a digest-pinned BuildKit image, because the classic-store docker driver cannot export OCI",
-);
-assert.ok(ociBuildIndex > ociBuilderIndex, "the OCI image build must come after the ragnarok-oci builder is created");
-for (const flag of ["--builder ragnarok-oci", "--provenance=false", "--sbom=false"]) {
+// GitHub's runners ship Docker with the classic image store: its `docker` buildx driver cannot export
+// OCI, its `docker load` needs a manifest.json that an OCI layout lacks, and `docker push` re-encodes
+// manifests (so the pushed digest would differ from the archived one). Each Docker job therefore
+// switches the runner to the containerd image store before its first build, load or login.
+for (const [jobName, dockerCommand] of [
+  ["artifact-build", "docker buildx build"],
+  ["docker-smoke", "docker load"],
+  ["publish", "docker login"],
+]) {
+  const jobSteps = workflowDocument.jobs[jobName].steps;
+  const switchIndex = jobSteps.findIndex((step) => step.run === "node scripts/use-containerd-image-store.mjs");
+  const dockerIndex = jobSteps.findIndex((step) => String(step.run ?? "").includes(dockerCommand));
+  assert.ok(switchIndex >= 0, `${jobName} must switch the runner to the containerd image store`);
+  assert.ok(dockerIndex >= 0, `${jobName} must run ${dockerCommand}`);
   assert.ok(
-    String(artifactBuildSteps[ociBuildIndex].run).includes(flag),
-    `the OCI image build must pass ${flag}, so it runs on the container builder and the archive holds exactly one image manifest`,
+    switchIndex < dockerIndex,
+    `${jobName} must switch to the containerd image store before its first ${dockerCommand}`,
   );
 }
+const ociBuildStep = workflowDocument.jobs["artifact-build"].steps.find((step) =>
+  String(step.run ?? "").includes("type=oci,dest=ragnarok-mcp.oci.tar"),
+);
+assert.ok(ociBuildStep, "artifact-build must export the release image as an OCI archive");
+for (const flag of ["--provenance=false", "--sbom=false"]) {
+  assert.ok(
+    ociBuildStep.run.includes(flag),
+    `the OCI image build must pass ${flag}, so the archive holds exactly one image manifest`,
+  );
+}
+assert.ok(
+  !ociBuildStep.run.includes("--builder"),
+  "the OCI image build must use the default builder, which the containerd image store lets export OCI",
+);
+for (const [jobName, job] of Object.entries(workflowDocument.jobs)) {
+  for (const step of job.steps ?? []) {
+    assert.ok(
+      !String(step.run ?? "").includes("docker buildx create"),
+      `${jobName} must not create a container builder; the containerd image store replaces it`,
+    );
+  }
+}
+const withContainerdConfig = { "exec-opts": ["native.cgroupdriver=cgroupfs"], "cgroup-parent": "/actions_job" };
+const withContainerdConfigBefore = structuredClone(withContainerdConfig);
+assert.deepEqual(withContainerdSnapshotter(withContainerdConfig), {
+  ...withContainerdConfigBefore,
+  features: { "containerd-snapshotter": true },
+});
+assert.deepEqual(withContainerdSnapshotter({ features: { buildkit: true } }).features, {
+  buildkit: true,
+  "containerd-snapshotter": true,
+});
+assert.deepEqual(
+  withContainerdConfig,
+  withContainerdConfigBefore,
+  "withContainerdSnapshotter must not mutate its input",
+);
 const benchmarkSteps = workflowDocument.jobs.benchmarks.steps;
 const candidateDownloadIndex = benchmarkSteps.findIndex(
   (step) =>
