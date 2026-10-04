@@ -4,7 +4,14 @@
  */
 
 import * as vscode from "vscode";
-import { DocumentLoaderFactory, Logger, type LocalFileType, type Topic, type TopicManager } from "@ragnarok/core";
+import {
+  DocumentLoaderFactory,
+  Logger,
+  type LocalFileType,
+  type PipelineProgress,
+  type Topic,
+  type TopicManager,
+} from "@ragnarok/core";
 import { waitForAbortableUi } from "./extensionLifecycle";
 
 const logger = new Logger("IngestionFlow");
@@ -96,12 +103,30 @@ export interface IngestionRequest {
   /** What was added, for the log and the success message ("Documents", "Web page", …). */
   label: string;
   loaderOptions: NonNullable<Parameters<TopicManager["addDocuments"]>[2]>["loaderOptions"];
-  /** Fraction of the progress bar the pipeline's 0-100 progress fills. */
+  /** Fraction of the progress bar the whole ingest fills, split evenly across the sources. */
   progressShare: number;
   /** Reported before ingestion starts, for sources with a slow first step (a repository listing). */
   initialProgress?: { message: string; increment: number };
-  /** Increment reported with the final "Complete!"; omitted means the message only. */
-  completionIncrement?: number;
+}
+
+/**
+ * `Progress.report` takes increments, but the pipeline reports where it is: 0 to 100 through the stages of one
+ * source, starting again at 0 for the next. This reports how far the pipeline moved since its last report, scaled so
+ * that all the sources together fill `share` of the bar.
+ */
+function pipelineProgressReporter(
+  progress: vscode.Progress<{ message?: string; increment?: number }>,
+  share: number,
+  sourceCount: number,
+): (pipeline: PipelineProgress) => void {
+  const sourceShare = share / Math.max(sourceCount, 1);
+  let previous = 0;
+  return (pipeline) => {
+    // A drop means the pipeline moved on to the next source.
+    const moved = pipeline.progress >= previous ? pipeline.progress - previous : pipeline.progress;
+    previous = pipeline.progress;
+    progress.report({ message: pipeline.message, increment: moved * sourceShare });
+  };
 }
 
 /** Ingest under a progress notification, then report the topic's new totals and refresh the tree. */
@@ -119,15 +144,10 @@ export async function ingestWithProgress(
         progress.report(request.initialProgress);
       }
       const results = await addDocumentsWithLifecycleSignal(deps.topicManager, topic.id, sources, signal, {
-        onProgress: (pipeline) =>
-          progress.report({ message: pipeline.message, increment: pipeline.progress * request.progressShare }),
+        onProgress: pipelineProgressReporter(progress, request.progressShare, sources.length),
         loaderOptions: request.loaderOptions,
       });
-      progress.report(
-        request.completionIncrement === undefined
-          ? { message: "Complete!" }
-          : { message: "Complete!", increment: request.completionIncrement },
-      );
+      progress.report({ message: "Complete!" });
       const chunks = results.reduce((sum, result) => sum + result.pipelineResult.metadata.chunksStored, 0);
       const documents = results.reduce((sum, result) => sum + result.pipelineResult.metadata.originalDocuments, 0);
       logger.info(`${request.label} added: ${documents} documents, ${chunks} chunks`);

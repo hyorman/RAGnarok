@@ -478,7 +478,7 @@ export class CommandHandler {
           title: "Processing documents...",
           label: "Documents",
           loaderOptions: { recursiveDirectory },
-          progressShare: 0.01,
+          progressShare: 1,
         },
         signal,
       );
@@ -704,7 +704,6 @@ export class CommandHandler {
           },
           progressShare: 0.9,
           initialProgress: { message: "Fetching repository structure (this may take a while)...", increment: 10 },
-          completionIncrement: 100,
         },
         signal,
       );
@@ -793,7 +792,7 @@ export class CommandHandler {
           title: "Loading web page...",
           label: "Web page",
           loaderOptions: { fileType: "web" },
-          progressShare: 0.01,
+          progressShare: 1,
         },
         signal,
       );
