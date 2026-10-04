@@ -6,11 +6,6 @@ export function generateTopicId(): string {
   return `topic-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
-/** Generate a unique document ID */
-export function generateDocumentId(): string {
-  return `doc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-}
-
 export function documentIdForSource(source: string, sourceType: "file" | "web" | "github" = "file"): string {
   let normalized: string;
   try {

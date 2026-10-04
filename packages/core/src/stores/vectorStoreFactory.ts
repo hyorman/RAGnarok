@@ -666,24 +666,6 @@ export class VectorStoreFactory {
     return metadata;
   }
 
-  /** Vector dimension of the live table, or null when the table is empty/absent. */
-  private async getTableDimension(topicId: string): Promise<number | null> {
-    const db = await this.getConnection(this.lanceDbUri);
-    if (!(await db.tableNames()).includes(topicId)) {
-      return null;
-    }
-    const table = await db.openTable(topicId);
-    const schema = await table.schema();
-    const vectorField = schema.fields.find((field: { name: string }) => field.name === "vector");
-    const listSize = (vectorField?.type as { listSize?: number } | undefined)?.listSize;
-    if (typeof listSize === "number" && listSize > 0) {
-      return listSize;
-    }
-    const rows = await table.query().limit(1).toArray();
-    const vector = rows[0]?.vector;
-    return vector ? Array.from(vector as ArrayLike<number>).length : null;
-  }
-
   private async hasTable(topicId: string): Promise<boolean> {
     const db = await this.getConnection(this.lanceDbUri);
     return (await db.tableNames()).includes(topicId);
