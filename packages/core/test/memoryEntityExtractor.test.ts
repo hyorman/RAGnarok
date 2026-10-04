@@ -186,9 +186,9 @@ describe("MemoryEntityExtractor", function () {
     });
 
     it("should return empty when LLM times out", async function () {
-      this.timeout(20000);
-      // The extractor uses a 15s timeout; use a delay well beyond that
-      const extractor = new MemoryEntityExtractor(createSlowLLMProvider(30000));
+      // A 50ms extractor timeout against a provider that would take 30s: the
+      // provider is only ever released by the timeout's abort.
+      const extractor = new MemoryEntityExtractor(createSlowLLMProvider(30_000), 50);
       const result = await extractor.extract("Some memory text");
 
       expect(result.entities).to.have.length(0);

@@ -34,13 +34,15 @@ export class MemoryVectorStore {
   private dbPromise: ReturnType<typeof connect> | null = null;
   private db: Connection | null = null;
   private openTables = new Set<Table>();
-  private readonly maxOpenTables = 32;
   // Persistence is drop-table + recreate, so data operations must not
   // interleave: a concurrent save would race the drop ("table already
   // exists") and an overlapping read can hit files deleted mid-drop.
   private opMutex = new Mutex();
 
-  constructor(private lanceDbUri: string) {}
+  constructor(
+    private lanceDbUri: string,
+    private readonly maxOpenTables: number = 32,
+  ) {}
 
   private getDb(): ReturnType<typeof connect> {
     this.dbPromise ??= connect(this.lanceDbUri).then((db) => {

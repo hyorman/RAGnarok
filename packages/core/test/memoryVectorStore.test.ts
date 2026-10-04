@@ -575,8 +575,11 @@ describe("MemoryVectorStore atomic scope recovery", function () {
 
   it("bounds retained table handles across many scopes", async function () {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-handle-soak-"));
-    const bounded = new MemoryVectorStore(path.join(directory, "memory-lancedb"));
-    for (let index = 0; index < 50; index++) {
+    // Every save is a real LanceDB drop-and-recreate, so the cap is lowered to
+    // exceed it with a handful of scopes instead of dozens of fsync-bound saves.
+    const cap = 3;
+    const bounded = new MemoryVectorStore(path.join(directory, "memory-lancedb"), cap);
+    for (let index = 0; index < cap + 4; index++) {
       const branch = `handle-branch-${index}`;
       await bounded.saveEntries(
         [createTestEntry({ scope: "branch", branch, content: `entry ${index}` })],
@@ -584,7 +587,7 @@ describe("MemoryVectorStore atomic scope recovery", function () {
         branch,
       );
     }
-    expect((bounded as any).openTables.size).to.be.at.most(32);
+    expect((bounded as any).openTables.size).to.equal(cap);
     await bounded.dispose();
     await fs.rm(directory, { recursive: true, force: true });
   });

@@ -66,10 +66,16 @@ Respond with ONLY a JSON object:
 ## Memory text:
 `;
 
+/** How long one extraction request may take before the extractor gives up and returns nothing. */
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 15_000;
+
 export class MemoryEntityExtractor {
   private logger = new Logger("MemoryEntityExtractor");
 
-  constructor(private llmProvider: ILLMProvider) {}
+  constructor(
+    private llmProvider: ILLMProvider,
+    private readonly timeoutMs: number = DEFAULT_EXTRACTION_TIMEOUT_MS,
+  ) {}
 
   async extract(text: string, signal?: AbortSignal): Promise<ExtractionResult> {
     try {
@@ -87,7 +93,7 @@ export class MemoryEntityExtractor {
       }
 
       const prompt = EXTRACTION_PROMPT + text;
-      const timeoutSignal = AbortSignal.timeout(15_000);
+      const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
       const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
       try {
