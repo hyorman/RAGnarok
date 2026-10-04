@@ -37,9 +37,9 @@ export {
 export { TopicTreeDataProvider, TopicTreeItem, ConfigTreeDataProvider } from "./topicTreeView";
 export {
   activateWithServiceFactory,
-  createMemoryServices,
   wireExternalStorageChangeRefresh,
   type ActivationRuntimeFactory,
   type ActivationServiceFactory,
   type RagnarokExtensionApi,
 } from "./extension";
+export { createMemoryServices } from "@ragnarok/core";

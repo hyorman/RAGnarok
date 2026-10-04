@@ -8,7 +8,6 @@ import * as fs from "fs/promises";
 import {
   TopicManager,
   EmbeddingService,
-  EmbeddingServiceRegistry,
   Logger,
   setLoggerFactory,
   CONFIG,
@@ -20,6 +19,8 @@ import {
   GraphVisualizationService,
   RetrievalStrategy,
   createSharedTopicSources,
+  createEmbeddingServices,
+  createMemoryServices,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
 import { VsCodeConfigProvider } from "./adapters/vsCodeConfigProvider";
@@ -126,25 +127,6 @@ export function wireExternalStorageChangeRefresh(
   });
 }
 
-export function createMemoryServices(
-  store: MemoryStore,
-  factory: Pick<
-    ActivationServiceFactory,
-    "createMemoryCoordinator" | "createMemoryService" | "createGraphVisualizationService"
-  >,
-): {
-  coordinator: MemoryOperationCoordinator;
-  memoryService: MemoryService;
-  graphService: GraphVisualizationService;
-} {
-  const coordinator = factory.createMemoryCoordinator();
-  return {
-    coordinator,
-    memoryService: factory.createMemoryService(store, coordinator),
-    graphService: factory.createGraphVisualizationService(store, coordinator),
-  };
-}
-
 let activeLifecycle: ExtensionLifecycle | undefined;
 
 /**
@@ -191,37 +173,22 @@ export async function activateWithServiceFactory(
     // Create LLM provider
     const llmProvider = new VsCodeLLMProvider();
 
-    // Builds a fully-backed embedding service. Every service needs the same
-    // backends: one with none registered cannot initialize at all, and the
-    // fallback in EmbeddingService.initialize is disabled for an empty list.
-    // The backend instances are constructed per call on purpose — sharing one
-    // HuggingFaceBackend across services would reintroduce the shared-model bug
-    // one level down, since initializeForBackend re-points the backend itself.
     const modelRegistry = ModelRegistry.getInstance();
-    const buildEmbeddingService = () => {
-      const service = serviceFactory.createEmbeddingService({ config: configProvider, notifier });
-      // VS Code LM embedding backend (proposed embeddings API) first; the
-      // HuggingFace backend is registered last so it is the default fallback.
-      service.registerBackend(
+    const { embeddingService, embeddingRegistry } = createEmbeddingServices({
+      config: configProvider,
+      notifier,
+      // Mirrors McpConfig.maxResidentModels' default; VS Code has no setting for it.
+      maxResidentLocal: 2,
+      createService: (options) => serviceFactory.createEmbeddingService(options),
+      // VS Code LM first; HuggingFace last, so it is the fallback.
+      createBackends: () => [
         new VscodeLmBackend(undefined, {
           modelIdResolver: () => configProvider.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, ""),
         }),
-      );
-      service.registerBackend(new HuggingFaceBackend(modelRegistry, notifier));
-      return service;
-    };
-
-    // Initialize embedding service
-    const embeddingService = buildEmbeddingService();
-    lifecycle.setResources({ embeddingService });
-
-    // One registry for the whole extension host: a registry per consumer would
-    // give each its own resident models and defeat the cap. Mirrors the
-    // McpConfig.maxResidentModels default; VS Code has no contributed setting.
-    const embeddingRegistry = new EmbeddingServiceRegistry({
-      createService: buildEmbeddingService,
-      maxResidentLocal: 2,
+        new HuggingFaceBackend(modelRegistry, notifier),
+      ],
     });
+    lifecycle.setResources({ embeddingService });
     lifecycle.setResources({ embeddingRegistry });
 
     // Initialize TopicManager with VS Code storage path

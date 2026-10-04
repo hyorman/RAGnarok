@@ -4,12 +4,8 @@ import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import {
-  activateWithServiceFactory,
-  createMemoryServices,
-  type ActivationRuntimeFactory,
-  type RagnarokExtensionApi,
-} from "../src/extension";
+import { createMemoryServices } from "@ragnarok/core";
+import { activateWithServiceFactory, type ActivationRuntimeFactory, type RagnarokExtensionApi } from "../src/extension";
 import { COMMANDS, TOOLS, VIEWS } from "../src/constants";
 import { CommandHandler } from "../src/commands";
 import { GitHubTokenManager } from "../src/githubTokenManager";

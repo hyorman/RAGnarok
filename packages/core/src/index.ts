@@ -95,6 +95,8 @@ export type {
   GraphVisualizationOptions,
 } from "./visualization/graphVisualization";
 export { GraphVisualizationService } from "./visualization/graphVisualizationService";
+export { createEmbeddingServices, createMemoryServices, defaultMemoryServiceFactory } from "./hostServices";
+export type { EmbeddingServicesOptions, MemoryServiceFactory, MemoryServices } from "./hostServices";
 export type { GraphVisualizationRequest } from "./visualization/graphVisualizationService";
 
 // Retrievers
