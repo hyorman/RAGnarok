@@ -1034,24 +1034,41 @@ function assertNoMcpDependencies(stagingDir) {
   console.log("  ✓ No MCP dependencies staged for the VSIX");
 }
 
+/**
+ * The VSIX file name is a contract: the release workflow, vsix-smoke, the
+ * release manifest and the asset check each find a file by its `-<target>.vsix`
+ * suffix. vsce's default name is `<name>-<target>-<version>.vsix`, which none
+ * of them accepts, so the name is fixed here and passed to vsce with `--out`.
+ */
+function vsixFileName(manifest, target) {
+  return `${manifest.name}-${manifest.version}-${target}.vsix`;
+}
+
 function packageVsix(stagingDir, targetPlatform) {
   console.log("\nPackaging VSIX...");
 
   assertNoMcpDependencies(stagingDir);
 
-  // Use the root project's vsce binary
-  runNodeScript(resolveDependencyBin("@vscode/vsce", "vsce"), ["package", "--target", targetPlatform.target], {
-    cwd: stagingDir,
-    stdio: "inherit",
-  });
+  // vsce reads the staged manifest, so the file name is derived from it too.
+  const manifest = JSON.parse(fs.readFileSync(path.join(stagingDir, "package.json"), "utf8"));
+  const vsixName = vsixFileName(manifest, targetPlatform.target);
 
-  // Find the generated VSIX and move it to root
-  const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
-  if (!vsix) {
-    throw new Error("No .vsix file produced");
+  // Use the root project's vsce binary
+  runNodeScript(
+    resolveDependencyBin("@vscode/vsce", "vsce"),
+    ["package", "--target", targetPlatform.target, "--out", vsixName],
+    {
+      cwd: stagingDir,
+      stdio: "inherit",
+    },
+  );
+
+  // Copy the file that was asked for, and only that one, to the repository root
+  const src = path.join(stagingDir, vsixName);
+  if (!fs.existsSync(src)) {
+    throw new Error(`vsce did not produce ${vsixName} in ${stagingDir}`);
   }
-  const src = path.join(stagingDir, vsix);
-  const dest = path.join(ROOT, vsix);
+  const dest = path.join(ROOT, vsixName);
   fs.copyFileSync(src, dest);
   console.log(`\n✓ VSIX: ${dest}`);
   return dest;
@@ -1132,5 +1149,6 @@ if (require.main === module) {
     verifyIntegrity,
     verifyNativePackages,
     verifySharpNativesMatchTransformers,
+    vsixFileName,
   };
 }

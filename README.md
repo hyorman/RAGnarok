@@ -147,7 +147,7 @@ npm run compile
 #### From VSIX
 
 ```bash
-code --install-extension ragnarok-<version>.vsix
+code --install-extension ragnarok-<version>-<target>.vsix
 ```
 
 Release VSIX files are built for five targets: linux-x64, linux-arm64,

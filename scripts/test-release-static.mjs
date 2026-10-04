@@ -2121,6 +2121,82 @@ const assetCheck = await read("scripts/check-release-assets.mjs");
 assert.match(assetCheck, /vsixUnpackedBytes/);
 assert.match(assetCheck, /exactly one core and one MCP npm tarball/);
 
+// The VSIX file name is the one contract between its producer (build-vsix) and the four places that
+// find a file by target. vsce's own default name puts the target before the version, which none of
+// them accepts, so the producer fixes the name with --out and this test applies every consumer's rule.
+assert.equal(typeof packaging.vsixFileName, "function", "build-vsix exports vsixFileName");
+assert.equal(
+  packaging.vsixFileName({ name: "ragnarok", version: "0.4.1" }, "linux-x64"),
+  "ragnarok-0.4.1-linux-x64.vsix",
+);
+const packageVsixSource =
+  builder.match(/function packageVsix\(stagingDir, targetPlatform\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+assert.ok(packageVsixSource, "packageVsix must be locatable in build-vsix.js");
+assert.match(packageVsixSource, /vsixFileName\(/, "packageVsix names the file with vsixFileName");
+assert.match(
+  packageVsixSource,
+  /\["package", "--target", targetPlatform\.target, "--out", \w+\]/,
+  "packageVsix passes vsce --out with the computed name",
+);
+assert.doesNotMatch(
+  packageVsixSource,
+  /endsWith\("\.vsix"\)/,
+  "packageVsix copies the exact file, not the first .vsix",
+);
+const globToRegExp = (glob) =>
+  new RegExp(
+    `^${path.posix
+      .basename(glob)
+      .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+      .replaceAll("*", ".*")}$`,
+  );
+const workflowSmokeGlob = (job) => {
+  const globs = workflowDocument.jobs[job].steps
+    .map((step) => /^node scripts\/vsix-smoke\.mjs (artifacts\/.+)$/.exec(step.run ?? "")?.[1])
+    .filter(Boolean);
+  assert.equal(globs.length, 1, `${job} smokes exactly one VSIX glob`);
+  return globs[0];
+};
+const installedGlob = workflowSmokeGlob("vsix-installed");
+const minimumGlob = workflowSmokeGlob("vscode-minimum");
+assert.match(installedGlob, /^artifacts\/\*-\$\{\{ matrix\.target \}\}\.vsix$/);
+assert.match(minimumGlob, /^artifacts\/\*-linux-x64\.vsix$/);
+assert.match(createManifest, /policy\.vsixTargets\.find\(\(target\) => name\.includes\(`-\$\{target\}\.vsix`\)\)/);
+assert.match(
+  vsixSmoke,
+  /\["x64", "arm64"\]\.find\(\(arch\) => path\.basename\(vsix\)\.includes\(`-\$\{arch\}\.vsix`\)\)/,
+);
+assert.match(assetCheck, /name\.includes\(`-\$\{target\}-`\) \|\| name\.includes\(`-\$\{target\}\.`\)/);
+const vsixNames = policy.vsixTargets.map((target) => packaging.vsixFileName(pkg, target));
+assert.equal(new Set(vsixNames).size, policy.vsixTargets.length, "each target has its own VSIX name");
+for (const target of policy.vsixTargets) {
+  const name = packaging.vsixFileName(pkg, target);
+  assert.equal(name, `${pkg.name}-${pkg.version}-${target}.vsix`);
+  assert.deepEqual(
+    vsixNames.filter((candidate) =>
+      globToRegExp(installedGlob.replace("${{ matrix.target }}", target)).test(candidate),
+    ),
+    [name],
+    `the vsix-installed glob finds exactly the ${target} VSIX`,
+  );
+  assert.equal(globToRegExp(minimumGlob).test(name), target === "linux-x64", `vscode-minimum globs only linux-x64`);
+  assert.equal(
+    policy.vsixTargets.find((candidate) => name.includes(`-${candidate}.vsix`)),
+    target,
+    `create-release-manifest identifies the ${target} VSIX`,
+  );
+  assert.equal(
+    ["x64", "arm64"].find((arch) => path.basename(name).includes(`-${arch}.vsix`)),
+    target.split("-")[1],
+    `vsix-smoke reads the architecture of the ${target} VSIX`,
+  );
+  assert.equal(
+    vsixNames.filter((candidate) => candidate.includes(`-${target}-`) || candidate.includes(`-${target}.`)).length,
+    1,
+    `check-release-assets finds exactly one VSIX for ${target}`,
+  );
+}
+
 const notice = await read("NOTICE");
 const models = JSON.parse(await read("packages/core/assets/models/manifest.json"));
 for (const model of models.models) {
