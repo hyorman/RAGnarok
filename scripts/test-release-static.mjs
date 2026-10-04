@@ -923,6 +923,11 @@ assert.match(
   /"\/\/ prettier-ignore\\n"\s*\+\s*`export const GRAPH_APP_HTML = /,
   "Graph UI generator must make its generated export stable under Prettier",
 );
+assert.match(
+  graphAppBuilder,
+  /await mkdir\(path\.dirname\(outputPath\), \{ recursive: true \}\)/,
+  "Graph UI generator must create its output directories (the Docker build stage has no media/)",
+);
 const graphResourceSource = await read("packages/mcp-server/src/uiResource.ts");
 const graphBundleSource = await read(generatedGraphBundle);
 const vscodeGraphScript = await read("media/memoryGraph.js");
@@ -1484,6 +1489,17 @@ assert.match(dockerfile, /--libc=glibc/);
 assert.match(dockerfile, /onnxruntime-node\/bin\/napi-v6/);
 assert.match(dockerfile, /test -f "\$\{onnx_bin\}\/linux\/\$\{onnx_arch\}\/onnxruntime_binding\.node"/);
 assert.match(dockerfile, /onnxruntime-web/);
+// Core loads Transformers with import() (dist/transformers.node.mjs); dist/transformers.node.cjs
+// is the package's require/main entry. The image keeps exactly those two dist files.
+assert.doesNotMatch(dockerfile, /jsep\.wasm/, "Transformers 4 ships no jsep.wasm; a prune line for it is dead");
+assert.match(
+  dockerfile,
+  /find node_modules\/@huggingface\/transformers\/dist -type f \\\n\s+! -name transformers\.node\.mjs ! -name transformers\.node\.cjs -delete/,
+);
+assert.match(dockerfile, /test -f node_modules\/@huggingface\/transformers\/dist\/transformers\.node\.mjs/);
+const transformersManifest = JSON.parse(await read("node_modules/@huggingface/transformers/package.json"));
+assert.equal(transformersManifest.exports.node.import.default, "./dist/transformers.node.mjs");
+assert.equal(transformersManifest.exports.node.require.default, "./dist/transformers.node.cjs");
 assert.match(dockerfile, /find node_modules packages\/core\/node_modules/);
 assert.match(dockerfile, /--from=production-deps \/app\/node_modules\//);
 assert.match(dockerfile, /COPY --chown=node:node/);

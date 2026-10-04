@@ -38,6 +38,9 @@ COPY packages/graph-ui/package.json packages/graph-ui/
 COPY packages/mcp-server/package.json packages/mcp-server/
 COPY packages/vscode/package.json packages/vscode/
 
+# Core loads Transformers with import() (dist/transformers.node.mjs), and
+# dist/transformers.node.cjs is the package's require/main entry. Every other
+# dist file is a browser, minified or WASM-loader variant the server never loads.
 RUN npm ci --omit=dev --omit=peer --ignore-scripts --libc=glibc \
       --workspace=@ragnarok/core \
       --workspace=@ragnarok/mcp-server \
@@ -56,14 +59,11 @@ RUN npm ci --omit=dev --omit=peer --ignore-scripts --libc=glibc \
       node_modules/@huggingface/transformers/node_modules/onnxruntime-web \
       node_modules/@huggingface/transformers/src \
       node_modules/@huggingface/transformers/types \
-      node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.mjs \
-      node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.wasm \
-      node_modules/@huggingface/transformers/dist/transformers.js \
-      node_modules/@huggingface/transformers/dist/transformers.min.js \
-      node_modules/@huggingface/transformers/dist/transformers.web.js \
-      node_modules/@huggingface/transformers/dist/transformers.web.min.js \
       node_modules/@lancedb/lancedb/node_modules/@lancedb/*-musl \
       node_modules/@lancedb/*-musl && \
+    find node_modules/@huggingface/transformers/dist -type f \
+      ! -name transformers.node.mjs ! -name transformers.node.cjs -delete && \
+    test -f node_modules/@huggingface/transformers/dist/transformers.node.mjs && \
     find node_modules packages/core/node_modules packages/mcp-server/node_modules \
       -type f \( -name '*.map' -o -name '*.d.ts' \) -delete
 
