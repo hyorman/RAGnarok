@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import sinon from "sinon";
 import * as vscode from "vscode";
-import type { Topic } from "@ragnarok/core";
+import { DocumentLoaderFactory, type Topic } from "@ragnarok/core";
 import { ingestWithProgress, pickWritableTopic, supportedDocumentFilters } from "../src/ingestionFlow";
 
 const topic = (id: string, name = id) => ({ id, name, documentCount: 0 }) as unknown as Topic;
@@ -71,6 +71,23 @@ describe("ingestion flow", function () {
     const filters = supportedDocumentFilters();
     expect(filters["Supported Documents"]).to.deep.equal(["pdf", "md", "markdown", "html", "htm", "txt"]);
     expect(Object.keys(filters)).to.deep.equal(["All Files", "Supported Documents", "PDF", "Markdown", "HTML", "Text"]);
+  });
+
+  it("derives the per-type groups from core too, so an extension core adds to a type reaches its group", function () {
+    expect(supportedDocumentFilters()).to.deep.include({
+      PDF: ["pdf"],
+      Markdown: ["md", "markdown"],
+      HTML: ["html", "htm"],
+      Text: ["txt"],
+    });
+
+    sinon.stub(DocumentLoaderFactory, "getSupportedExtensionsByType").returns({
+      pdf: [".pdf"],
+      markdown: [".md", ".markdown", ".mdx"],
+      html: [".html", ".htm"],
+      text: [".txt"],
+    });
+    expect(supportedDocumentFilters().Markdown).to.deep.equal(["md", "markdown", "mdx"]);
   });
 
   it("reports progress, announces the new totals and refreshes the tree", async function () {

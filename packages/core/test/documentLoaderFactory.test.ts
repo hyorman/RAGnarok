@@ -7,6 +7,7 @@
 import { expect } from "chai";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { DocumentLoaderFactory } from "../src/index";
 
 describe("DocumentLoaderFactory", function () {
@@ -40,6 +41,41 @@ describe("DocumentLoaderFactory", function () {
       expect(extensions).to.include(".html");
       expect(extensions).to.include(".htm");
       expect(extensions).to.include(".txt");
+    });
+  });
+
+  describe("getSupportedExtensionsByType", function () {
+    it("groups the supported extensions by the loader that reads them", function () {
+      expect(DocumentLoaderFactory.getSupportedExtensionsByType()).to.deep.equal({
+        pdf: [".pdf"],
+        markdown: [".md", ".markdown"],
+        html: [".html", ".htm"],
+        text: [".txt"],
+      });
+    });
+
+    it("lists every supported extension exactly once", function () {
+      const grouped = Object.values(DocumentLoaderFactory.getSupportedExtensionsByType()).flat();
+      expect(grouped).to.have.lengthOf(DocumentLoaderFactory.getSupportedExtensions().length);
+      expect(grouped).to.have.members(DocumentLoaderFactory.getSupportedExtensions());
+    });
+
+    it("selects the loader from the same table, including the alternate and upper-case extensions", async function () {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-extension-table-"));
+      try {
+        const expected: Array<[string, string, string]> = [
+          ["notes.markdown", "# Title\n\nBody text.", "markdown"],
+          ["page.htm", "<html><body><p>Body text.</p></body></html>", "html"],
+          ["PAGE.HTML", "<html><body><p>Body text.</p></body></html>", "html"],
+        ];
+        for (const [fileName, content, fileType] of expected) {
+          const filePath = path.join(directory, fileName);
+          fs.writeFileSync(filePath, content);
+          expect((await factory.loadDocument({ filePath })).fileType, fileName).to.equal(fileType);
+        }
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
     });
   });
 

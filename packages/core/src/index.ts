@@ -44,7 +44,7 @@ export type { ExtractKeywordsOptions } from "./utils/keywords";
 // Loaders
 export { DocumentLoaderFactory } from "./loaders/documentLoaderFactory";
 export type { SupportedFileType, LoaderOptions, LoadedDocument } from "./loaders/documentLoaderFactory";
-export type { DocumentLoader } from "./loaders/types";
+export type { DocumentLoader, LocalFileType } from "./loaders/types";
 export { TextDocumentLoader, LangChainTextLoader } from "./loaders/textLoader";
 export { MarkdownDocumentLoader } from "./loaders/markdownLoader";
 export { HtmlDocumentLoader } from "./loaders/htmlLoader";

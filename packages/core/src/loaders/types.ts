@@ -6,6 +6,9 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 
 export type SupportedFileType = "pdf" | "markdown" | "html" | "text" | "github" | "web";
 
+/** The loader types a local file's extension can select; the others are chosen by URL or an explicit option. */
+export type LocalFileType = Extract<SupportedFileType, "pdf" | "markdown" | "html" | "text">;
+
 export interface LoaderOptions {
   /** File path to load (or GitHub repo URL for github type) */
   filePath: string;

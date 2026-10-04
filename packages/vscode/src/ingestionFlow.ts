@@ -4,7 +4,7 @@
  */
 
 import * as vscode from "vscode";
-import { DocumentLoaderFactory, Logger, type Topic, type TopicManager } from "@ragnarok/core";
+import { DocumentLoaderFactory, Logger, type LocalFileType, type Topic, type TopicManager } from "@ragnarok/core";
 import { waitForAbortableUi } from "./extensionLifecycle";
 
 const logger = new Logger("IngestionFlow");
@@ -141,15 +141,26 @@ export async function ingestWithProgress(
   deps.refresh();
 }
 
+/** The file-dialog group each core loader type is offered under; exhaustive, so a new loader type must be labelled. */
+const FILTER_LABELS: Readonly<Record<LocalFileType, string>> = {
+  pdf: "PDF",
+  markdown: "Markdown",
+  html: "HTML",
+  text: "Text",
+};
+
+const withoutDots = (extensions: readonly string[]): string[] =>
+  extensions.map((extension) => extension.replace(/^\./, ""));
+
 /** File-dialog filters built from the extensions core can load, so a new format cannot drift. */
 export function supportedDocumentFilters(): Record<string, string[]> {
-  const supported = DocumentLoaderFactory.getSupportedExtensions().map((extension) => extension.replace(/^\./, ""));
-  return {
+  const byType = DocumentLoaderFactory.getSupportedExtensionsByType();
+  const filters: Record<string, string[]> = {
     "All Files": ["*"],
-    "Supported Documents": supported,
-    PDF: ["pdf"],
-    Markdown: ["md", "markdown"],
-    HTML: ["html", "htm"],
-    Text: ["txt"],
+    "Supported Documents": withoutDots(DocumentLoaderFactory.getSupportedExtensions()),
   };
+  for (const [fileType, label] of Object.entries(FILTER_LABELS) as Array<[LocalFileType, string]>) {
+    filters[label] = withoutDots(byType[fileType]);
+  }
+  return filters;
 }
