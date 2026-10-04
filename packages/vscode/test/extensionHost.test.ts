@@ -4,12 +4,8 @@ import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import {
-  activateWithServiceFactory,
-  createMemoryServices,
-  type ActivationRuntimeFactory,
-  type RagnarokExtensionApi,
-} from "../src/extension";
+import { createMemoryServices, UnsupportedStorageError } from "@ragnarok/core";
+import { activateWithServiceFactory, type ActivationRuntimeFactory, type RagnarokExtensionApi } from "../src/extension";
 import { COMMANDS, TOOLS, VIEWS } from "../src/constants";
 import { CommandHandler } from "../src/commands";
 import { GitHubTokenManager } from "../src/githubTokenManager";
@@ -222,6 +218,60 @@ describe("real VS Code extension host activation", function () {
     // Cleared on entry so a retry does not inherit the previous panel, set on failure.
     expect(failedStates).to.deep.equal([false, true]);
     expect(contexts.some(([key, value]) => key === "ragnarok.loaded" && value === true)).to.equal(false);
+  });
+
+  // The modal is the only place a user learns why activation refused: it has to
+  // name the folder, say what was found in it, and offer to reveal it.
+  it("refuses unsupported pre-0.4 storage with a modal that lists what was found and can reveal the folder", async function () {
+    const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-unsupported-storage-"));
+    const executed: Array<[string, unknown[]]> = [];
+    const executeCommand = sinon
+      .stub(vscode.commands, "executeCommand")
+      .callsFake(async (command: string, ...args: unknown[]) => {
+        executed.push([command, args]);
+        return undefined as never;
+      });
+    const showErrorMessage = sinon.stub(vscode.window, "showErrorMessage").resolves("Reveal Folder" as never);
+    const serviceFactory = {
+      createEmbeddingService: () => ({ registerBackend: sinon.spy(), dispose: async () => undefined }),
+      createTopicManager: async () => {
+        throw new UnsupportedStorageError(storageDir, ["database", "topics.json"]);
+      },
+      createMemoryStore: () => ({ dispose: async () => undefined }),
+      createMemoryCoordinator: () => ({ stopAdmission: () => undefined, drain: async () => undefined }),
+      createMemoryService: () => ({ execute: sinon.stub(), reset: sinon.stub() }),
+      createGraphVisualizationService: () => ({ generate: sinon.stub() }),
+    };
+    const context = {
+      globalStorageUri: vscode.Uri.file(storageDir),
+      extensionUri: vscode.Uri.file("/extension"),
+      subscriptions: [],
+    };
+
+    let caught: unknown;
+    try {
+      await activateWithServiceFactory(context as any, serviceFactory as any);
+    } catch (error) {
+      caught = error;
+    } finally {
+      executeCommand.restore();
+      showErrorMessage.restore();
+      await fs.rm(storageDir, { recursive: true, force: true });
+    }
+
+    // The refusal still propagates: the modal reports it, it does not swallow it.
+    expect(caught).to.be.instanceOf(UnsupportedStorageError);
+    expect(showErrorMessage.calledOnce).to.equal(true);
+    const [message, options, action] = showErrorMessage.firstCall.args as unknown as [
+      string,
+      vscode.MessageOptions,
+      string,
+    ];
+    expect(message).to.include(context.globalStorageUri.fsPath);
+    expect(options).to.deep.equal({ modal: true, detail: "Found in that folder: database, topics.json" });
+    expect(action).to.equal("Reveal Folder");
+    const reveal = executed.find(([command]) => command === "revealFileInOS");
+    expect((reveal?.[1][0] as vscode.Uri | undefined)?.fsPath).to.equal(context.globalStorageUri.fsPath);
   });
 
   it("offers an opt-in native create/query/delete installed-artifact smoke", async function () {

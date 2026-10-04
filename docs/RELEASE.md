@@ -13,7 +13,7 @@ platform-specific or container gate.
 - CycloneDX and SPDX SBOMs;
 - `release-policy.json` budgets and audited baseline evidence;
 - pinned benchmark manifest and benchmark result;
-- six installed VSIX smoke results;
+- five installed VSIX smoke results, one per target;
 - Docker build/runtime/read-only-filesystem result;
 - npm tarball smoke results;
 - provenance attestation and final artifact digest manifest.
@@ -30,13 +30,17 @@ self-contained TypeScript HTML bundle and VS Code's `media/memoryGraph.js` and
 3. Run `npm run bench:release` on the audited benchmark runner.
 4. Pack core and MCP with lifecycle scripts disabled, inspect contents, install
    them into clean consumers, and run their smoke tests.
-5. Build the VSIX reproducibly. Install and activate it on Linux, macOS, and
-   Windows for the minimum and current supported VS Code versions. Inspect each
-   archive for `dist/extension.js`, `media/memoryGraph.js`, and
+5. Build the VSIX reproducibly for the five targets in `release-policy.json`:
+   linux-x64, linux-arm64, darwin-arm64, win32-x64, and win32-arm64. Intel
+   Macs (darwin-x64) are not supported: ONNX Runtime no longer ships macOS x64
+   binaries. Install and activate each VSIX on its target for the minimum and
+   current supported VS Code versions. Inspect each archive for
+   `dist/extension.js`, `media/memoryGraph.js`, and
    `media/memoryGraph.css`; reject graph-ui source, MCP source/SDK/HTML, and any
    other graph-ui file.
 6. Build the Docker image, start it with a read-only root filesystem, verify
-   stdio discovery/tools, storage locking, removed-variable rejection, runtime
+   stdio discovery/tools, that a second server sharing the volume starts and
+   serves, that the image bakes in no removed HTTP-transport variable, runtime
    hardening, graceful shutdown, and architecture. Graph-ui source is a build
    input only: the final image contains the compiled MCP bundle, not graph-ui
    source/dependencies or VS webview assets.
@@ -111,10 +115,10 @@ journal to the incident record.
 
 Track each required gate as `passed`, `failed`, or `unrun` with its workflow
 run, source SHA, platform, and artifact digest. Do not summarize `unrun` as
-passing. In particular, Docker runtime and the six installed VSIX combinations
+passing. In particular, Docker runtime and the five installed VSIX combinations
 require environments that can actually execute those artifacts.
 
 Release rollback is registry/marketplace-specific. Preserve the manifest,
 provenance, attestation bundle, publication journal, SBOMs, notices, benchmark
-result, smoke logs, and migration notes for every published version so a
+result, smoke logs, and upgrade notes for every published version so a
 withdrawn artifact remains attributable.

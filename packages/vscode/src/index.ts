@@ -37,7 +37,6 @@ export {
 export { TopicTreeDataProvider, TopicTreeItem, ConfigTreeDataProvider } from "./topicTreeView";
 export {
   activateWithServiceFactory,
-  createMemoryServices,
   wireExternalStorageChangeRefresh,
   type ActivationRuntimeFactory,
   type ActivationServiceFactory,

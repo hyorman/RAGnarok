@@ -7,28 +7,16 @@
  */
 
 import * as fs from "fs/promises";
-import * as fsSync from "fs";
 import * as path from "path";
 import { AsyncLocalStorage } from "async_hooks";
-import { ZipFile } from "yazl";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { IConfigProvider, ILLMProvider, INotifier } from "../interfaces";
-import {
-  Topic,
-  TopicsIndex,
-  Document as TopicDocument,
-  ExportedTopicData,
-  TopicSource,
-  TopicMatch,
-  DocumentSource,
-} from "../utils/types";
+import { Topic, TopicsIndex, Document as TopicDocument, TopicSource, TopicMatch, DocumentSource } from "../utils/types";
 import { DocumentPipeline, PipelineOptions, PipelineResult, type PipelineSourceDocument } from "./documentPipeline";
 import {
   EmbeddingFingerprintMismatchError,
-  EmbeddingReindexRequiredError,
   VectorStoreFactory,
-  VectorStoreLoadError,
   VectorStoreMetadataCorruptionError,
 } from "../stores/vectorStoreFactory";
 import { EventEmitter } from "events";
@@ -49,28 +37,20 @@ import { SharedTopicReadOnlyError } from "../sharedTopics/types";
 import type { SharedTopicSource } from "../sharedTopics/types";
 import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
+import { StorageDirectoryWatcher } from "../utils/storageDirectoryWatcher";
+import { isFiniteNumber, isRecord } from "../utils/typeGuards";
 import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
 } from "../utils/storageTransactionCoordinator";
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
-import {
-  TOPIC_ARCHIVE_FORMAT_VERSION,
-  TOPIC_ARCHIVE_LIMITS,
-  type TopicArchiveManifestFile,
-  validateAndStageTopicArchive,
-} from "../utils/topicArchive";
-
-/**
- * Revision stand-in for a topics index file that does not exist yet.
- *
- * The index is published by the first storage write transaction, so a store
- * that has never been mutated has no `topics.json` at all — reader paths no
- * longer write one back on load. Not a valid sha256 digest, so it can never
- * collide with a real hash.
- */
-const ABSENT_TOPICS_INDEX_HASH = "absent";
+import { errnoCode, pathExists } from "../utils/fsPaths";
+import { TopicArchiveTransfer, type TopicArchiveHost } from "./topic/topicArchiveTransfer";
+import { documentIdForSource, generateTopicId, mapFileType } from "./topic/topicIds";
+import { TopicJournals, type PostCommitCleanupEntry, type TopicJournalHost } from "./topic/topicJournals";
+import { TopicStorePaths } from "./topic/topicStorePaths";
+import { TopicVectorStores, type TopicVectorStoreHost } from "./topic/topicVectorStores";
 
 export interface TopicManagerOptions {
   storageDir: string;
@@ -119,64 +99,10 @@ export interface AddDocumentResult {
 /**
  * Notifications about storage state changed by something other than this
  * manager's own write transactions: a foreign process editing topics.json or
- * a topic-documents file, or the whole storage tree becoming unreachable
- * because a full-exclusion operation (migration/reset) elsewhere is holding
- * it.
+ * a topic-documents file, or the storage tree becoming unreachable (a reset in
+ * another process, or the folder being moved).
  */
 export type StorageExternalChange = { kind: "topics-changed" } | { kind: "storage-unavailable" };
-
-interface IngestionJournalEntry {
-  id: string;
-  transactionId?: string;
-  containerId?: string;
-  topicId: string;
-  stage: "started" | "vectorCommitted" | "graphCommitted" | "metadataCommitted";
-  document: TopicDocument;
-  containerLeafIds?: string[];
-  warnings?: Array<{ stage: string; message: string }>;
-  updatedAt: number;
-}
-
-interface PostCommitCleanupEntry {
-  version: 1;
-  id: string;
-  kind: "document";
-  topicId: string;
-  documents: TopicDocument[];
-  legacyContainer: boolean;
-  updatedAt: number;
-}
-
-interface ArchiveSourceFile {
-  sourcePath: string;
-  archivePath: string;
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-}
-
-interface ExportSnapshotFile {
-  stagedPath: string;
-  manifest: TopicArchiveManifestFile;
-}
-
-interface StagedTopicImportCommit {
-  contentDir: string;
-  originalTopicId: string;
-  newTopicId: string;
-  preparedDocumentsPath: string;
-  preparedMetadataPath?: string;
-  preparedIndexPath: string;
-  expectedIndexSha256: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
 
 function isDocumentSource(value: unknown): value is DocumentSource {
   if (!isRecord(value) || typeof value.type !== "string") {
@@ -224,7 +150,7 @@ function parseTopicsIndex(data: string): TopicsIndex {
       !Number.isInteger(value.documentCount) ||
       (value.documentCount as number) < 0 ||
       (value.description !== undefined && typeof value.description !== "string") ||
-      (value.source !== undefined && value.source !== "local" && value.source !== "common")
+      (value.source !== undefined && value.source !== "local" && value.source !== "shared")
     ) {
       throw new Error(`Invalid ${EXTENSION.TOPICS_INDEX_FILENAME}: invalid topic entry "${topicId}"`);
     }
@@ -275,7 +201,7 @@ function parseTopicDocuments(data: string, topicId: string): TopicDocument[] {
 /**
  * Manages all topic operations and vector stores
  */
-export class TopicManager {
+export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVectorStoreHost {
   // Event emitter for agent cache cleanup notifications
   // Allows multiple external components (RAGTool, MCP server) to subscribe without overwriting each other
   private static readonly _onAgentCacheCleanup = new EventEmitter();
@@ -300,34 +226,43 @@ export class TopicManager {
   }
 
   private storageDir: string;
+  /** @internal */
+  readonly paths: TopicStorePaths;
   private config: IConfigProvider;
   private notifier: INotifier;
-  private embeddingService: EmbeddingService;
+  /** @internal */
+  embeddingService: EmbeddingService;
   private embeddingRegistry: EmbeddingServiceRegistry;
   private llmProvider: ILLMProvider | undefined;
 
-  private logger: Logger;
-  private topicsIndex: TopicsIndex | null = null;
+  /** @internal */
+  logger: Logger;
+  /** @internal */
+  topicsIndex: TopicsIndex | null = null;
   private documentPipeline: DocumentPipeline;
-  private vectorStoreFactory: VectorStoreFactory | null = null;
+  /** @internal */
+  vectorStoreFactory: VectorStoreFactory | null = null;
   private isInitialized: boolean = false;
 
-  // Cache for loaded vector stores
-  private vectorStoreCache: Map<string, VectorStore> = new Map();
-
   // Cache for topic documents
-  private topicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
+  /** @internal */
+  topicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
 
   // Memoized topic-name embeddings used by fuzzy topic resolution, valid only
   // for the embedding model recorded alongside them.
   private topicNameVectorCache: Map<string, number[]> = new Map();
   private topicNameVectorModel: string | null = null;
 
-  /** Read-only topics contributed by configured sources. Replaces the common database. */
+  /** Read-only topics contributed by configured shared-topic sources. */
   private readonly sharedTopics: SharedTopicRegistry;
   private readonly sharedTopicsMutex = new Mutex();
-  private journalMutex = new Mutex();
-  private archiveMutex = new Mutex();
+  /** @internal */
+  journalMutex = new Mutex();
+  /** @internal */
+  archiveMutex = new Mutex();
+  private readonly archiveTransfer = new TopicArchiveTransfer(this);
+  private readonly journals = new TopicJournals(this);
+  private readonly vectorStores = new TopicVectorStores(this);
   private storageMutationMutex = new Mutex();
   private topicMutationMutexes = new Map<string, Mutex>();
   // Set only for the duration of a write transaction. Reads never take a
@@ -347,11 +282,7 @@ export class TopicManager {
   // process touched storage" is only meaningful to the manager instance whose
   // caches it might invalidate.
   private readonly externalChangeEmitter = new EventEmitter();
-  private storageWatcher: fsSync.FSWatcher | null = null;
-  private watcherDebounceTimer: NodeJS.Timeout | null = null;
-  private watcherHealthTimer: NodeJS.Timeout | null = null;
-  private watcherRetryTimer: NodeJS.Timeout | null = null;
-  private watcherUnavailable = false;
+  private externalWatcher: StorageDirectoryWatcher | null = null;
   private watcherStopped = false;
 
   /**
@@ -366,6 +297,7 @@ export class TopicManager {
   private constructor(private options: TopicManagerOptions) {
     this.logger = new Logger("TopicManager");
     this.storageDir = options.storageDir;
+    this.paths = new TopicStorePaths(this.storageDir);
     this.sharedTopics = new SharedTopicRegistry(path.join(this.storageDir, SHARED_TOPIC_CACHE_DIRNAME), this.logger);
     this.sharedTopics.setSources(options.sharedTopicSources ?? []);
     this.config = options.config;
@@ -416,7 +348,7 @@ export class TopicManager {
       await this.loadTopicsIndex();
 
       // Initialize document pipeline
-      const storageDir = this.getDatabaseDir();
+      const storageDir = this.paths.databaseDir();
       await this.documentPipeline.initialize(storageDir);
 
       this.vectorStoreFactory = new VectorStoreFactory(
@@ -592,7 +524,7 @@ export class TopicManager {
       await this.assertStorageOwnership();
 
       // The topics index is the visibility boundary and is published first.
-      // Once it no longer advertises the topic, remaining table directories
+      // After it stops advertising the topic, remaining table directories
       // are unreachable cleanup. A pre-commit crash restores every backup.
       const nextTopicsIndex: TopicsIndex = {
         ...this.topicsIndex,
@@ -600,17 +532,17 @@ export class TopicManager {
         lastUpdated: Date.now(),
       };
       delete nextTopicsIndex.topics[topicId];
-      const preparedIndex = path.join(this.getDatabaseDir(), `.delete-${topicId}-${randomUUID()}.json`);
+      const preparedIndex = path.join(this.paths.databaseDir(), `.delete-${topicId}-${randomUUID()}.json`);
       await atomicWriteJson(preparedIndex, nextTopicsIndex);
-      const lancedbDir = path.join(this.getDatabaseDir(), "lancedb");
+      const lancedbDir = path.join(this.paths.databaseDir(), "lancedb");
       const operations: StorageTransactionOperation[] = [
-        { type: "replace", source: preparedIndex, destination: this.getTopicsIndexPath() },
-        { type: "delete", destination: this.getTopicDocumentsPath(topicId) },
-        { type: "delete", destination: path.join(this.getDatabaseDir(), `vector-${topicId}-metadata.json`) },
+        { type: "replace", source: preparedIndex, destination: this.paths.topicsIndexPath() },
+        { type: "delete", destination: this.paths.topicDocumentsPath(topicId) },
+        { type: "delete", destination: path.join(this.paths.databaseDir(), `vector-${topicId}-metadata.json`) },
         { type: "delete", destination: path.join(lancedbDir, `${topicId}.lance`) },
       ];
 
-      // Closing the shared factory invalidates handles for every local/common
+      // Closing the shared factory invalidates handles for every local/shared
       // topic, so clear the complete cache before reopening it.
       this.invalidateVectorStoreCache();
       this.vectorStoreFactory.dispose();
@@ -623,7 +555,7 @@ export class TopicManager {
       } finally {
         await fs.rm(preparedIndex, { force: true }).catch(() => undefined);
         this.vectorStoreFactory = new VectorStoreFactory(
-          this.getDatabaseDir(),
+          this.paths.databaseDir(),
           nextTopicsIndex.modelName,
           this.embeddingService,
           this.embeddingRegistry,
@@ -650,15 +582,7 @@ export class TopicManager {
    * @param topicId - If provided, invalidates only that topic's cache. Otherwise clears all.
    */
   public invalidateVectorStoreCache(topicId?: string): void {
-    if (topicId) {
-      for (const key of this.vectorStoreCache.keys()) {
-        if (key.endsWith(`::${topicId}`)) {
-          this.vectorStoreCache.delete(key);
-        }
-      }
-    } else {
-      this.vectorStoreCache.clear();
-    }
+    this.vectorStores.invalidate(topicId);
   }
 
   /**
@@ -860,7 +784,7 @@ export class TopicManager {
   }
 
   /** True when this topic comes from a shared source and is therefore read-only. */
-  public isCommonTopic(topicId: string): boolean {
+  public isSharedTopic(topicId: string): boolean {
     return this.sharedTopics.has(topicId);
   }
 
@@ -868,8 +792,10 @@ export class TopicManager {
    * Refuse a mutation aimed at a shared topic. Without this, deleteTopic and
    * addDocuments fail with "Topic not found" — technically true (a shared topic
    * is not in the local index) and actively misleading.
+   *
+   * @internal
    */
-  private assertNotSharedTopic(topicId: string, operation: string): void {
+  assertNotSharedTopic(topicId: string, operation: string): void {
     if (!this.sharedTopics.has(topicId)) {
       return;
     }
@@ -933,10 +859,9 @@ export class TopicManager {
         ...document,
         source: document.source ? { ...document.source } : undefined,
       })),
-      legacyContainer: Boolean(exactDocument && !exactDocument.containerId),
       updatedAt: Date.now(),
     };
-    await this.upsertPostCommitCleanup(cleanupEntry);
+    await this.journals.upsertPostCommitCleanup(cleanupEntry);
 
     // Publish metadata removal before destructive row deletion. A crash after
     // this transaction can leave unreachable rows for cleanup, but can never
@@ -955,16 +880,16 @@ export class TopicManager {
       documentCount: nextDocuments.size,
       updatedAt: Date.now(),
     };
-    const preparedDocuments = path.join(this.getDatabaseDir(), `.remove-documents-${randomUUID()}.json`);
-    const preparedIndex = path.join(this.getDatabaseDir(), `.remove-index-${randomUUID()}.json`);
+    const preparedDocuments = path.join(this.paths.databaseDir(), `.remove-documents-${randomUUID()}.json`);
+    const preparedIndex = path.join(this.paths.databaseDir(), `.remove-index-${randomUUID()}.json`);
     await atomicWriteJson(preparedDocuments, [...nextDocuments.values()]);
     await atomicWriteJson(preparedIndex, nextIndex);
     try {
       await coordinator.commit(
         "remove-document-metadata",
         [
-          { type: "replace", source: preparedDocuments, destination: this.getTopicDocumentsPath(topicId) },
-          { type: "replace", source: preparedIndex, destination: this.getTopicsIndexPath() },
+          { type: "replace", source: preparedDocuments, destination: this.paths.topicDocumentsPath(topicId) },
+          { type: "replace", source: preparedIndex, destination: this.paths.topicsIndexPath() },
         ],
         { topicId, documentIds: selectedDocuments.map((document) => document.id) },
       );
@@ -977,8 +902,8 @@ export class TopicManager {
 
     let removedChunkIds: string[] = [];
     try {
-      removedChunkIds = await this.completePostCommitCleanup(cleanupEntry);
-      await this.removePostCommitCleanup(cleanupEntry.id);
+      removedChunkIds = await this.journals.completePostCommitCleanup(cleanupEntry);
+      await this.journals.removePostCommitCleanup(cleanupEntry.id);
     } catch (cleanupError) {
       // Metadata publication is the logical delete commit. Returning success is
       // unambiguous; the retained journal makes physical cleanup durable and
@@ -999,14 +924,14 @@ export class TopicManager {
     storageDir: string;
     databaseDir: string;
     topicCount: number;
-    commonTopicCount: number;
+    sharedTopicCount: number;
   }> {
     return {
       formatVersion: 2,
       storageDir: this.storageDir,
-      databaseDir: this.getDatabaseDir(),
+      databaseDir: this.paths.databaseDir(),
       topicCount: Object.keys(this.topicsIndex?.topics ?? {}).length,
-      commonTopicCount: this.sharedTopics.listTopics().length,
+      sharedTopicCount: this.sharedTopics.listTopics().length,
     };
   }
 
@@ -1062,7 +987,7 @@ export class TopicManager {
             : /^https?:\/\//i.test(filePath)
               ? { type: "url", url: filePath }
               : { type: "file", path: path.resolve(filePath) };
-        const stableDocumentId = this.documentIdForSource(filePath, source.type === "url" ? "web" : source.type);
+        const stableDocumentId = documentIdForSource(filePath, source.type === "url" ? "web" : source.type);
         const transactionId = `ingest-${randomUUID()}`;
         const plannedDocument: TopicDocument = {
           id: stableDocumentId,
@@ -1074,7 +999,7 @@ export class TopicManager {
               ? "github"
               : options?.loaderOptions?.fileType === "web"
                 ? "web"
-                : this.mapFileType(fileExt),
+                : mapFileType(fileExt),
           source,
           addedAt: Date.now(),
           chunkCount: 0,
@@ -1082,7 +1007,7 @@ export class TopicManager {
           canonicalSource: source.type === "file" ? source.path : source.url,
         };
         const journalId = `${transactionId}:container`;
-        await this.upsertIngestionJournal({
+        await this.journals.upsertIngestion({
           id: journalId,
           transactionId,
           containerId: stableDocumentId,
@@ -1118,7 +1043,7 @@ export class TopicManager {
           }
           const leafIds = leafDocuments.map((document) => document.id);
           const durableStage = pipelineResult.metadata.graphExtracted ? "graphCommitted" : "vectorCommitted";
-          await this.replaceIngestionTransaction(
+          await this.journals.replaceIngestionTransaction(
             transactionId,
             leafDocuments.map((document) => ({
               id: `${transactionId}:${document.id}`,
@@ -1154,7 +1079,7 @@ export class TopicManager {
           this.topicsIndex.lastUpdated = Date.now();
           await this.saveTopicDocuments(topicId);
           await this.saveTopicsIndex();
-          await this.markAndRemoveCommittedIngestion(transactionId);
+          await this.journals.markAndRemoveCommittedIngestion(transactionId);
 
           for (const document of leafDocuments) {
             results.push({ topic, document, pipelineResult });
@@ -1203,11 +1128,7 @@ export class TopicManager {
   }
 
   private isIngestionIntegrityFailure(error: unknown): error is Error {
-    return (
-      error instanceof EmbeddingReindexRequiredError ||
-      error instanceof VectorStoreMetadataCorruptionError ||
-      error instanceof EmbeddingFingerprintMismatchError
-    );
+    return error instanceof VectorStoreMetadataCorruptionError || error instanceof EmbeddingFingerprintMismatchError;
   }
 
   public async addSources(
@@ -1247,7 +1168,8 @@ export class TopicManager {
     return outcomes;
   }
 
-  private createLeafTopicDocuments(
+  /** @internal */
+  createLeafTopicDocuments(
     topicId: string,
     container: TopicDocument,
     sources: PipelineSourceDocument[],
@@ -1277,7 +1199,8 @@ export class TopicManager {
     });
   }
 
-  private summarizePipelineChunks(chunks: LangChainDocument[]): PipelineSourceDocument[] {
+  /** @internal */
+  summarizePipelineChunks(chunks: LangChainDocument[]): PipelineSourceDocument[] {
     const summaries = new Map<string, PipelineSourceDocument>();
     for (const chunk of chunks) {
       const documentId = String(chunk.metadata.documentId ?? "");
@@ -1312,7 +1235,8 @@ export class TopicManager {
     }
   }
 
-  private async removeDocumentStorage(topicId: string, documentId: string, signal?: AbortSignal): Promise<string[]> {
+  /** @internal */
+  async removeDocumentStorage(topicId: string, documentId: string, signal?: AbortSignal): Promise<string[]> {
     if (!this.vectorStoreFactory) {
       throw new Error("TopicManager not initialized");
     }
@@ -1320,69 +1244,6 @@ export class TopicManager {
     const removedChunkIds = await this.vectorStoreFactory.removeDocument(topicId, documentId);
     signal?.throwIfAborted();
     return removedChunkIds;
-  }
-
-  private async legacyLeafIdsForContainer(topicId: string, container: TopicDocument): Promise<string[]> {
-    if (!this.vectorStoreFactory) {
-      return [];
-    }
-    const rows = await this.vectorStoreFactory.getAllDocuments(topicId, 1_000_000);
-    const containerSource =
-      container.source?.type === "file"
-        ? container.source.path
-        : container.source?.type === "url" || container.source?.type === "github"
-          ? container.source.url
-          : (container.canonicalSource ?? container.filePath);
-    let containerUrl: URL | undefined;
-    try {
-      containerUrl = new URL(containerSource);
-      containerUrl.hash = "";
-    } catch {
-      // Local path comparison below.
-    }
-    const containerPath = containerUrl ? undefined : path.resolve(containerSource);
-    const matchesContainer = (candidate: string): boolean => {
-      if (!candidate) {
-        return false;
-      }
-      if (containerUrl) {
-        try {
-          const candidateUrl = new URL(candidate);
-          const basePath = containerUrl.pathname.replace(/\/$/, "");
-          return (
-            candidateUrl.origin === containerUrl.origin &&
-            (candidateUrl.pathname === basePath || candidateUrl.pathname.startsWith(`${basePath}/`))
-          );
-        } catch {
-          return false;
-        }
-      }
-      const relative = path.relative(containerPath!, path.resolve(candidate));
-      return (
-        relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-      );
-    };
-    const leafIds = new Set<string>();
-    for (const row of rows) {
-      const leafId = String(row.metadata.documentId ?? "");
-      if (!leafId || leafId === container.id) {
-        continue;
-      }
-      const source = String(row.metadata.source ?? row.metadata.filePath ?? "");
-      let descriptorSource = "";
-      try {
-        const descriptor = JSON.parse(String(row.metadata.sourceDescriptor ?? "{}")) as unknown;
-        if (isRecord(descriptor) && typeof descriptor.source === "string") {
-          descriptorSource = descriptor.source;
-        }
-      } catch {
-        // A malformed legacy descriptor is not evidence for deletion.
-      }
-      if (matchesContainer(source) || matchesContainer(descriptorSource)) {
-        leafIds.add(leafId);
-      }
-    }
-    return [...leafIds];
   }
 
   /**
@@ -1406,132 +1267,11 @@ export class TopicManager {
   }
 
   /**
-   * Get vector store for a topic.
-   *
-   * Reads never take the storage lease, so a concurrent writer's
-   * drop-and-recreate (cross-process table swap) can make the table — or its
-   * metadata file — vanish mid-read. A first attempt landing on "absent"
-   * (table-absent, or a load failure) is ambiguous between a genuinely empty
-   * or corrupt topic and that brief window, so it gets exactly one retry
-   * after a short wait before either outcome is committed to.
-   *
-   * Exactly one retry is authorized per call: the two branches below each
-   * call `retryVectorStoreLoad` at most once, and neither call sits inside a
-   * `catch` that the other could re-enter — a retry that itself throws
-   * `VectorStoreLoadError` propagates immediately rather than triggering a
-   * second, unauthorized retry that could resolve `null` over a real failure.
+   * Get vector store for a topic. Loading, the one-shot retry and the cache
+   * live in `TopicVectorStores`.
    */
   public async getVectorStore(topicId: string): Promise<VectorStore | null> {
-    this.logger.debug("Getting vector store", { topicId });
-
-    let store: VectorStore | null;
-    try {
-      store = await this.loadVectorStoreOnce(topicId);
-    } catch (error) {
-      if (error instanceof VectorStoreLoadError) {
-        return await this.retryVectorStoreLoad(topicId);
-      }
-      this.logger.error("Failed to get vector store", {
-        error: error instanceof Error ? error.message : String(error),
-        topicId,
-      });
-      throw error;
-    }
-    if (store) {
-      return store;
-    }
-
-    // table-absent on the first attempt. A genuinely empty topic has no
-    // vector metadata file either — createStore always writes it at table
-    // creation, and a drop-and-recreate's table-absent window still leaves
-    // the pre-existing metadata on disk — so skip the retry's wait entirely
-    // when there is no metadata to be racing against.
-    if (!(await this.topicHasVectorStoreMetadata(topicId))) {
-      return null;
-    }
-    return await this.retryVectorStoreLoad(topicId);
-  }
-
-  /** The retry point shared by both "table-absent" and "load failed". Called at most once per `getVectorStore` call. */
-  private async retryVectorStoreLoad(topicId: string): Promise<VectorStore | null> {
-    this.invalidateVectorStoreCache(topicId);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    try {
-      // table-absent here is accepted as empty-topic semantics; a second
-      // VectorStoreLoadError is a real failure and must surface, never be
-      // swallowed into a fabricated "empty topic" result.
-      return await this.loadVectorStoreOnce(topicId);
-    } catch (error) {
-      this.logger.error("Failed to get vector store after retry", {
-        error: error instanceof Error ? error.message : String(error),
-        topicId,
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Whether a vector-store metadata file exists for this topic, tolerating
-   * corruption as "exists" rather than propagating it: a present-but-torn
-   * metadata file is itself evidence of an in-flight write, which the caller
-   * should retry rather than fast-path to empty-topic semantics for.
-   */
-  private async topicHasVectorStoreMetadata(topicId: string): Promise<boolean> {
-    if (!this.vectorStoreFactory) {
-      return false;
-    }
-    const customStorageDir = this.getTopicStoreDir(topicId);
-    try {
-      return (await this.vectorStoreFactory.getStoreMetadata(topicId, customStorageDir)) !== null;
-    } catch {
-      return true;
-    }
-  }
-
-  /**
-   * One disk-touching attempt to resolve a topic's vector store: compat
-   * check, cache lookup, then load. A corrupt-metadata refusal from the
-   * compat check is classified the same way `loadStore` classifies its own
-   * metadata-read failure — as `VectorStoreLoadError` — so `getVectorStore`'s
-   * single retry point covers both read paths uniformly.
-   */
-  private async loadVectorStoreOnce(topicId: string): Promise<VectorStore | null> {
-    if (!this.vectorStoreFactory) {
-      throw new Error("TopicManager not initialized");
-    }
-
-    try {
-      await this.ensureEmbeddingModelCompatibility(topicId);
-    } catch (error) {
-      if (error instanceof VectorStoreMetadataCorruptionError) {
-        // Distinguish this from a table-open failure: no table was touched,
-        // the topic's stored embedding metadata itself couldn't be read.
-        throw new VectorStoreLoadError(
-          topicId,
-          new Error(`embedding compatibility check failed before the vector table was opened: ${error.message}`),
-        );
-      }
-      throw error;
-    }
-
-    const location = this.getTopicStoreDir(topicId) ?? this.getDatabaseDir();
-    const cacheKey = `${location}::${topicId}`;
-    // Check cache first
-    const cachedStore = this.vectorStoreCache.get(cacheKey);
-    if (cachedStore) {
-      this.logger.debug("Returning cached vector store", { topicId });
-      return cachedStore;
-    }
-
-    // Load from disk. `undefined` already means "the managed database directory".
-    const store = await this.vectorStoreFactory.loadStore(topicId, this.getTopicStoreDir(topicId));
-
-    if (store) {
-      this.vectorStoreCache.set(cacheKey, store);
-      this.logger.debug("Vector store loaded and cached", { topicId });
-    }
-
-    return store;
+    return this.vectorStores.get(topicId);
   }
 
   /**
@@ -1550,8 +1290,9 @@ export class TopicManager {
    * Does NOT block queries when the backend is available but differs from the
    * current global setting — loadStore() handles routing via scoped embeddings.
    * Throws only when the required backend is truly unavailable.
+   * @internal
    */
-  private async ensureEmbeddingModelCompatibility(topicId: string): Promise<void> {
+  async ensureEmbeddingModelCompatibility(topicId: string): Promise<void> {
     if (!this.vectorStoreFactory) {
       return;
     }
@@ -1629,7 +1370,7 @@ export class TopicManager {
       }
 
       const documentCount = this.getTopicDocuments(topicId).length;
-      const databaseDir = this.getTopicStoreDir(topicId) ?? this.getDatabaseDir();
+      const databaseDir = this.getTopicStoreDir(topicId) ?? this.paths.databaseDir();
       const metadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
 
       let chunkCount = 0;
@@ -1684,8 +1425,7 @@ export class TopicManager {
   /**
    * Subscribe to storage changes this manager did not itself make: a foreign
    * process editing topics.json/a topic-documents file (`topics-changed`), or
-   * the storage tree going unreachable because a full-exclusion operation
-   * elsewhere is holding it (`storage-unavailable`).
+   * the storage tree becoming unreachable (`storage-unavailable`).
    */
   public onExternalChange(listener: (change: StorageExternalChange) => void): { dispose(): void } {
     this.externalChangeEmitter.on("change", listener);
@@ -1721,7 +1461,7 @@ export class TopicManager {
 
     try {
       const topicIds = this.topicsIndex ? Object.keys(this.topicsIndex.topics) : [];
-      const storageDir = this.getDatabaseDir();
+      const storageDir = this.paths.databaseDir();
       const currentModel = this.embeddingService.getCurrentModel();
       const replacementPipeline = new DocumentPipeline(
         this.notifier,
@@ -1756,7 +1496,7 @@ export class TopicManager {
       const previousFactory = this.vectorStoreFactory;
       this.documentPipeline = replacementPipeline;
       this.vectorStoreFactory = replacementFactory;
-      this.vectorStoreCache.clear();
+      this.vectorStores.invalidate();
       previousPipeline.dispose();
       previousFactory?.dispose();
       for (const topicId of topicIds) {
@@ -1776,7 +1516,7 @@ export class TopicManager {
 
   /**
    * Dispose of all resources and clean up
-   * Should be called when TopicManager is no longer needed
+   * Should be called once the TopicManager is finished with
    */
   public dispose(): Promise<void> {
     this.disposePromise ??= this.disposeOnce();
@@ -1805,7 +1545,7 @@ export class TopicManager {
       await close(() => factory.dispose());
     }
 
-    this.vectorStoreCache.clear();
+    this.vectorStores.invalidate();
     this.topicDocuments.clear();
     this.topicNameVectorCache.clear();
     this.topicNameVectorModel = null;
@@ -1814,9 +1554,6 @@ export class TopicManager {
     this.isInitialized = false;
     TopicManager._onAgentCacheCleanup.removeAllListeners();
     this.externalChangeEmitter.removeAllListeners();
-
-    // No session lease exists to release: every lease is released by the
-    // transaction that took it, and the drain above waited for those.
 
     this.logger.info("TopicManager disposed");
     if (failures.length > 0) {
@@ -1833,545 +1570,15 @@ export class TopicManager {
   /**
    * Export a topic to a .rag archive file (ZIP format with DEFLATE compression)
    */
-  public async exportTopic(topicId: string, exportPath: string): Promise<void> {
-    return this.runManagedOperation(() =>
-      this.archiveMutex.runExclusive(() => this.exportTopicUnlocked(topicId, exportPath)),
-    );
+  public exportTopic(...args: Parameters<TopicArchiveTransfer["exportTopic"]>): Promise<void> {
+    return this.archiveTransfer.exportTopic(...args);
   }
 
   /**
    * Import a topic from a .rag archive file
    */
-  public async importTopic(archivePath: string): Promise<Topic> {
-    return this.runManagedOperation(() => this.archiveMutex.runExclusive(() => this.importTopicUnlocked(archivePath)));
-  }
-
-  private async exportTopicUnlocked(topicId: string, exportPath: string): Promise<void> {
-    this.logger.info("Exporting topic", { topicId, exportPath });
-    const databaseDir = this.getDatabaseDir();
-    let stagingDir: string | undefined;
-    let temporaryArchivePath: string | undefined;
-
-    try {
-      if (!this.topicsIndex) {
-        throw new Error("TopicManager not initialized");
-      }
-      this.assertNotSharedTopic(topicId, "export");
-      if (!this.topicsIndex.topics[topicId]) {
-        throw new Error(`Topic not found: ${topicId}`);
-      }
-
-      // Export takes no lease: it is a read. Capture the topics index
-      // revision now and re-check it once the archive is written, so a
-      // mutation that lands mid-export is caught instead of silently
-      // shipping a torn archive.
-      const indexHashBeforeExport = await this.hashFile(this.getTopicsIndexPath());
-
-      await fs.mkdir(databaseDir, { recursive: true });
-      stagingDir = await fs.mkdtemp(path.join(databaseDir, ".rag-export-"));
-      const snapshot = await this.createStableExportSnapshot(topicId, stagingDir);
-      const manifestContents = JSON.stringify(
-        {
-          formatVersion: TOPIC_ARCHIVE_FORMAT_VERSION,
-          files: snapshot.files.map((file) => file.manifest),
-        },
-        null,
-        2,
-      );
-      if (Buffer.byteLength(manifestContents) > TOPIC_ARCHIVE_LIMITS.maxManifestBytes) {
-        throw new Error("Topic is too large to export: archive manifest exceeds size limit");
-      }
-
-      await fs.mkdir(path.dirname(exportPath), { recursive: true });
-      const realDatabaseDir = await fs.realpath(databaseDir);
-      const realExportParent = await fs.realpath(path.dirname(exportPath));
-      if (this.isSameOrNestedPath(realDatabaseDir, realExportParent)) {
-        throw new Error("Export destination cannot be inside the managed database directory");
-      }
-      temporaryArchivePath = path.join(path.dirname(exportPath), `.${path.basename(exportPath)}.${randomUUID()}.tmp`);
-      const output = fsSync.createWriteStream(temporaryArchivePath, { flags: "wx", mode: 0o600 });
-      const zip = new ZipFile();
-      const archivePromise = new Promise<void>((resolve, reject) => {
-        let archiveError: unknown;
-        const closeWithError = (error: unknown) => {
-          archiveError = error;
-          if (!output.destroyed) {
-            output.destroy();
-          }
-        };
-        output.once("close", () => (archiveError === undefined ? resolve() : reject(archiveError)));
-        output.once("error", closeWithError);
-        zip.outputStream.once("error", closeWithError);
-      });
-      zip.outputStream.pipe(output);
-
-      for (const file of snapshot.files) {
-        zip.addFile(file.stagedPath, file.manifest.path);
-      }
-      zip.addBuffer(Buffer.from(manifestContents, "utf8"), "manifest.json");
-      zip.end();
-
-      await archivePromise;
-
-      if ((await this.hashFile(this.getTopicsIndexPath())) !== indexHashBeforeExport) {
-        throw new Error("Topic storage changed during export; retry the export");
-      }
-
-      await fs.rename(temporaryArchivePath, exportPath);
-      temporaryArchivePath = undefined;
-
-      this.logger.info("Topic exported successfully", { topicId, exportPath });
-    } catch (error) {
-      this.logger.error("Failed to export topic", {
-        error: error instanceof Error ? error.message : String(error),
-        topicId,
-      });
-      throw error;
-    } finally {
-      if (temporaryArchivePath) {
-        await fs.rm(temporaryArchivePath, { force: true }).catch(() => undefined);
-      }
-      if (stagingDir) {
-        await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-      }
-    }
-  }
-
-  private async importTopicUnlocked(archivePath: string): Promise<Topic> {
-    this.logger.info("Importing topic", { archivePath });
-    const databaseDir = this.getDatabaseDir();
-    let stagingDir: string | undefined;
-
-    try {
-      if (!this.topicsIndex) {
-        throw new Error("TopicManager not initialized");
-      }
-      await fs.mkdir(databaseDir, { recursive: true });
-      stagingDir = await fs.mkdtemp(path.join(databaseDir, ".rag-import-"));
-      const stagedArchive = await validateAndStageTopicArchive(archivePath, stagingDir);
-      const exportData = stagedArchive.exportData;
-
-      const currentModel = this.embeddingService.getCurrentModel();
-      if (exportData.embeddingModel !== currentModel) {
-        this.logger.warn("Imported topic uses different embedding model", {
-          importedModel: exportData.embeddingModel,
-          currentModel,
-          note: "Switch to the imported model before querying this topic",
-        });
-      }
-
-      let newTopicId = this.generateTopicId();
-      while (this.topicsIndex.topics[newTopicId]) {
-        newTopicId = this.generateTopicId();
-      }
-      const now = Date.now();
-      const newTopic: Topic = {
-        ...exportData.topic,
-        id: newTopicId,
-        createdAt: now,
-        updatedAt: now,
-        source: "local",
-      };
-      const occupiedNames = new Set(Object.values(this.topicsIndex.topics).map((topic) => topic.name.toLowerCase()));
-      const baseName = newTopic.name;
-      let suffix = 0;
-      while (occupiedNames.has(newTopic.name.toLowerCase())) {
-        suffix += 1;
-        newTopic.name = `${baseName} (imported${suffix === 1 ? "" : ` ${suffix}`})`;
-      }
-
-      const newDocuments = exportData.documents.map((document) => ({
-        ...document,
-        topicId: newTopicId,
-      }));
-      const preparedDocumentsPath = path.join(stagingDir, "prepared-documents.json");
-      await atomicWriteJson(preparedDocumentsPath, newDocuments);
-
-      const originalMetadataPath = path.join(stagedArchive.contentDir, `vector-${exportData.topic.id}-metadata.json`);
-      const preparedMetadataPath = path.join(stagingDir, "prepared-vector-metadata.json");
-      if (await this.pathExists(originalMetadataPath)) {
-        const metadata = JSON.parse(await fs.readFile(originalMetadataPath, "utf8"));
-        metadata.topicId = newTopicId;
-        await atomicWriteJson(preparedMetadataPath, metadata);
-      }
-
-      const nextTopicsIndex: TopicsIndex = {
-        ...this.topicsIndex,
-        topics: { ...this.topicsIndex.topics, [newTopicId]: newTopic },
-        lastUpdated: now,
-      };
-      const preparedIndexPath = path.join(stagingDir, "prepared-topics.json");
-      await atomicWriteJson(preparedIndexPath, nextTopicsIndex);
-      // Captured before the lease is taken: this guards the staging window
-      // above, not live cross-process races (the lease already excludes
-      // those once we hold it).
-      const expectedIndexSha256 = await this.hashTopicsIndexOrAbsent();
-      const preparedMetadataFinalPath = (await this.pathExists(preparedMetadataPath))
-        ? preparedMetadataPath
-        : undefined;
-
-      // Only the commit is a storage mutation: staging above needed no lease.
-      await this.runStorageWriteTransaction(async (tx) => {
-        await this.commitStagedTopicImport(
-          {
-            contentDir: stagedArchive.contentDir,
-            originalTopicId: exportData.topic.id,
-            newTopicId,
-            preparedDocumentsPath,
-            preparedMetadataPath: preparedMetadataFinalPath,
-            preparedIndexPath,
-            expectedIndexSha256,
-          },
-          tx.coordinator,
-        );
-
-        const documentsMap = new Map<string, TopicDocument>();
-        for (const document of newDocuments) {
-          documentsMap.set(document.id, document);
-        }
-        this.topicsIndex = nextTopicsIndex;
-        this.topicDocuments.set(newTopicId, documentsMap);
-      });
-
-      // A shared topic whose name the newly imported one now occupies must be
-      // renamed, or it becomes unreachable by name.
-      this.reassignSharedTopicNames();
-
-      this.logger.info("Topic imported successfully", {
-        originalId: exportData.topic.id,
-        newId: newTopicId,
-        name: newTopic.name,
-        documentCount: newDocuments.length,
-      });
-      return newTopic;
-    } catch (error) {
-      this.logger.error("Failed to import topic", {
-        error: error instanceof Error ? error.message : String(error),
-        archivePath,
-      });
-      throw error;
-    } finally {
-      if (stagingDir) {
-        await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-      }
-    }
-  }
-
-  /**
-   * Copy a point-in-time candidate into same-filesystem staging. LanceDB does
-   * not currently expose a transaction snapshot for its directory, so compare
-   * the complete file inventory and identity before/after the streamed copies.
-   * A concurrent mutation causes a bounded retry instead of a mixed archive.
-   */
-  private async createStableExportSnapshot(
-    topicId: string,
-    stagingRoot: string,
-  ): Promise<{ files: ExportSnapshotFile[] }> {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const attemptDir = path.join(stagingRoot, `snapshot-${attempt}`);
-      await fs.mkdir(attemptDir, { recursive: true });
-
-      const topicBefore = this.topicsIndex?.topics[topicId];
-      if (!topicBefore) {
-        throw new Error(`Topic not found: ${topicId}`);
-      }
-      const topicSnapshot = { ...topicBefore };
-      const documentsSnapshot = this.getTopicDocuments(topicId).map((document) => ({
-        ...document,
-        source: document.source ? { ...document.source } : undefined,
-      }));
-      const exportData: ExportedTopicData = {
-        version: TOPIC_ARCHIVE_FORMAT_VERSION,
-        topic: topicSnapshot,
-        documents: documentsSnapshot,
-        embeddingModel: this.topicsIndex!.modelName,
-        exportedAt: Date.now(),
-      };
-      const metadataIdentity = JSON.stringify({
-        topic: topicSnapshot,
-        documents: documentsSnapshot,
-        modelName: this.topicsIndex!.modelName,
-      });
-      let sourcesBefore: ArchiveSourceFile[];
-      try {
-        sourcesBefore = await this.collectArchiveSourceFiles(topicId);
-      } catch (error: any) {
-        if (error?.code === "ENOENT" || error?.code === "ESTALE") {
-          await fs.rm(attemptDir, { recursive: true, force: true });
-          continue;
-        }
-        throw error;
-      }
-      const files: ExportSnapshotFile[] = [];
-
-      const topicBytes = Buffer.from(JSON.stringify(exportData, null, 2));
-      if (topicBytes.byteLength > TOPIC_ARCHIVE_LIMITS.maxEntryBytes) {
-        throw new Error("Topic is too large to export: topic metadata exceeds entry size limit");
-      }
-      if (sourcesBefore.length + 2 > TOPIC_ARCHIVE_LIMITS.maxEntries) {
-        throw new Error("Topic is too large to export: archive entry count exceeds limit");
-      }
-      const snapshotSize = sourcesBefore.reduce((total, source) => total + source.size, topicBytes.byteLength);
-      if (
-        sourcesBefore.some((source) => source.size > TOPIC_ARCHIVE_LIMITS.maxEntryBytes) ||
-        snapshotSize > TOPIC_ARCHIVE_LIMITS.maxTotalBytes
-      ) {
-        throw new Error("Topic is too large to export: archive payload exceeds size limit");
-      }
-      const stagedTopicPath = path.join(attemptDir, "topic.json");
-      await fs.writeFile(stagedTopicPath, topicBytes, { flag: "wx", mode: 0o600 });
-      files.push({
-        stagedPath: stagedTopicPath,
-        manifest: {
-          path: "topic.json",
-          size: topicBytes.byteLength,
-          sha256: createHash("sha256").update(topicBytes).digest("hex"),
-        },
-      });
-
-      let copyFailed = false;
-      for (const source of sourcesBefore) {
-        const stagedPath = path.join(attemptDir, ...source.archivePath.split("/"));
-        try {
-          await fs.mkdir(path.dirname(stagedPath), { recursive: true });
-          await fs.copyFile(source.sourcePath, stagedPath, fsSync.constants.COPYFILE_EXCL);
-          const stagedStat = await fs.stat(stagedPath);
-          files.push({
-            stagedPath,
-            manifest: {
-              path: source.archivePath,
-              size: stagedStat.size,
-              sha256: await this.hashFile(stagedPath),
-            },
-          });
-        } catch (error: any) {
-          if (error?.code === "ENOENT" || error?.code === "ESTALE") {
-            copyFailed = true;
-            break;
-          }
-          throw error;
-        }
-      }
-
-      const topicAfter = this.topicsIndex?.topics[topicId];
-      const metadataAfter = topicAfter
-        ? JSON.stringify({
-            topic: topicAfter,
-            documents: this.getTopicDocuments(topicId),
-            modelName: this.topicsIndex!.modelName,
-          })
-        : "";
-      let sourcesAfter: ArchiveSourceFile[] = [];
-      if (!copyFailed) {
-        try {
-          sourcesAfter = await this.collectArchiveSourceFiles(topicId);
-        } catch (error: any) {
-          if (error?.code === "ENOENT" || error?.code === "ESTALE") {
-            copyFailed = true;
-          } else {
-            throw error;
-          }
-        }
-      }
-      if (
-        !copyFailed &&
-        metadataIdentity === metadataAfter &&
-        this.archiveSourceInventoriesEqual(sourcesBefore, sourcesAfter) &&
-        files.every((file) => {
-          if (file.manifest.path === "topic.json") {
-            return true;
-          }
-          const source = sourcesAfter.find((candidate) => candidate.archivePath === file.manifest.path);
-          return source !== undefined && source.size === file.manifest.size;
-        })
-      ) {
-        files.sort((left, right) => left.manifest.path.localeCompare(right.manifest.path));
-        return { files };
-      }
-      await fs.rm(attemptDir, { recursive: true, force: true });
-    }
-    throw new Error("Topic changed during export; retry after active writes finish");
-  }
-
-  private async collectArchiveSourceFiles(topicId: string): Promise<ArchiveSourceFile[]> {
-    const databaseDir = this.getDatabaseDir();
-    const sources: ArchiveSourceFile[] = [];
-    for (const tableName of [topicId]) {
-      const tableDir = path.join(databaseDir, "lancedb", `${tableName}.lance`);
-      let tableStat: fsSync.Stats;
-      try {
-        tableStat = await fs.lstat(tableDir);
-      } catch (error: any) {
-        if (error?.code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-      if (tableStat.isSymbolicLink() || !tableStat.isDirectory()) {
-        throw new Error(`Refusing to export unsafe LanceDB path: ${tableDir}`);
-      }
-      for (const filePath of await this.listFilesRecursively(tableDir)) {
-        const stat = await fs.lstat(filePath);
-        const relativePath = path.relative(tableDir, filePath).replace(/\\/g, "/");
-        sources.push({
-          sourcePath: filePath,
-          archivePath: `lancedb/${tableName}.lance/${relativePath}`,
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-          ctimeMs: stat.ctimeMs,
-        });
-      }
-    }
-
-    const vectorMetadataPath = path.join(databaseDir, `vector-${topicId}-metadata.json`);
-    try {
-      const stat = await fs.lstat(vectorMetadataPath);
-      if (stat.isSymbolicLink() || !stat.isFile()) {
-        throw new Error(`Refusing to export unsafe vector metadata path: ${vectorMetadataPath}`);
-      }
-      sources.push({
-        sourcePath: vectorMetadataPath,
-        archivePath: `vector-${topicId}-metadata.json`,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-        ctimeMs: stat.ctimeMs,
-      });
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") {
-        throw error;
-      }
-    }
-    return sources.sort((left, right) => left.archivePath.localeCompare(right.archivePath));
-  }
-
-  private archiveSourceInventoriesEqual(left: ArchiveSourceFile[], right: ArchiveSourceFile[]): boolean {
-    return (
-      left.length === right.length &&
-      left.every((source, index) => {
-        const candidate = right[index];
-        return (
-          source.archivePath === candidate.archivePath &&
-          source.size === candidate.size &&
-          source.mtimeMs === candidate.mtimeMs &&
-          source.ctimeMs === candidate.ctimeMs
-        );
-      })
-    );
-  }
-
-  /**
-   * Revision hash of the topics index, or {@link ABSENT_TOPICS_INDEX_HASH}
-   * when the file has not been written yet.
-   *
-   * Import captures this before staging and re-checks it under the write
-   * lease, so both sides must agree on how "no index yet" is spelled:
-   * absent-then-still-absent compares equal and the import proceeds, while
-   * absent-then-present compares unequal — a foreign writer published an
-   * index during the staging window, which is a genuine concurrent change.
-   */
-  private async hashTopicsIndexOrAbsent(): Promise<string> {
-    try {
-      return await this.hashFile(this.getTopicsIndexPath());
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return ABSENT_TOPICS_INDEX_HASH;
-      }
-      throw error;
-    }
-  }
-
-  private async hashFile(filePath: string): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const hash = createHash("sha256");
-      const input = fsSync.createReadStream(filePath);
-      input.on("data", (chunk) => hash.update(chunk));
-      input.once("error", reject);
-      input.once("end", () => resolve(hash.digest("hex")));
-    });
-  }
-
-  /**
-   * Publish a validated import under a fresh topic ID. Every payload is moved
-   * before the topics index; the index rename is the visibility point. Runtime
-   * failures before that point move all payloads back into staging.
-   */
-  private async commitStagedTopicImport(
-    commit: StagedTopicImportCommit,
-    coordinator: StorageTransactionCoordinator,
-  ): Promise<void> {
-    const databaseDir = this.getDatabaseDir();
-    const operations: StorageTransactionOperation[] = [];
-    const tableMappings = [{ oldName: commit.originalTopicId, newName: commit.newTopicId }];
-    for (const mapping of tableMappings) {
-      const source = path.join(commit.contentDir, "lancedb", `${mapping.oldName}.lance`);
-      if (await this.pathExists(source)) {
-        operations.push({
-          type: "replace",
-          source,
-          destination: path.join(databaseDir, "lancedb", `${mapping.newName}.lance`),
-        });
-      }
-    }
-    if (commit.preparedMetadataPath) {
-      operations.push({
-        type: "replace",
-        source: commit.preparedMetadataPath,
-        destination: path.join(databaseDir, `vector-${commit.newTopicId}-metadata.json`),
-      });
-    }
-    operations.push({
-      type: "replace",
-      source: commit.preparedDocumentsPath,
-      destination: this.getTopicDocumentsPath(commit.newTopicId),
-    });
-    // Topics index publication is last and is the visibility point.
-    operations.push({
-      type: "replace",
-      source: commit.preparedIndexPath,
-      destination: this.getTopicsIndexPath(),
-    });
-
-    for (const operation of operations.slice(0, -1)) {
-      if (await this.pathExists(operation.destination)) {
-        throw new Error(`Import destination already exists: ${operation.destination}`);
-      }
-    }
-    if ((await this.hashTopicsIndexOrAbsent()) !== commit.expectedIndexSha256) {
-      throw new Error("Topics index changed during import; retry after active writes finish");
-    }
-    // Retained as a deterministic failure-injection seam for archive tests.
-    await this.publishPreparedTopicsIndex(commit.preparedIndexPath);
-    await this.assertStorageOwnership();
-    await coordinator.commit("import-topic", operations, {
-      originalTopicId: commit.originalTopicId,
-      newTopicId: commit.newTopicId,
-      expectedIndexSha256: commit.expectedIndexSha256,
-    });
-  }
-
-  /** Testable pre-publication seam. Durable publication is owned by the coordinator. */
-  private async publishPreparedTopicsIndex(_preparedIndexPath: string): Promise<void> {
-    // Intentionally empty.
-  }
-
-  private async pathExists(candidatePath: string): Promise<boolean> {
-    try {
-      await fs.lstat(candidatePath);
-      return true;
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
-        return false;
-      }
-      throw error;
-    }
-  }
-
-  private isSameOrNestedPath(parentPath: string, candidatePath: string): boolean {
-    const normalize = (value: string): string =>
-      process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
-    const normalizedParent = normalize(parentPath);
-    const normalizedCandidate = normalize(candidatePath);
-    return normalizedCandidate === normalizedParent || normalizedCandidate.startsWith(`${normalizedParent}${path.sep}`);
+  public importTopic(...args: Parameters<TopicArchiveTransfer["importTopic"]>): Promise<Topic> {
+    return this.archiveTransfer.importTopic(...args);
   }
 
   /**
@@ -2467,33 +1674,21 @@ export class TopicManager {
    * step back. What none of them may do is wait on the share: awaiting the
    * shared-topics mutex here would queue a committed mutation behind a stalled
    * network readdir, which is the hazard D5 exists to prevent.
+   *
+   * @internal
    */
-  private reassignSharedTopicNames(): void {
+  reassignSharedTopicNames(): void {
     const localNames = Object.values(this.topicsIndex?.topics ?? {}).map((topic) => topic.name);
     this.sharedTopics.reassignNames(localNames);
   }
 
   /**
-   * Get the database directory path
-   */
-  private getDatabaseDir(): string {
-    return path.join(this.storageDir, EXTENSION.DATABASE_DIR);
-  }
-
-  /**
    * Where this topic's vector data lives, or undefined for the managed database
-   * directory. One accessor for the five call sites that used to spell out
-   * `isCommonTopic(id) ? commonDatabasePath : <site-specific fallback>`.
+   * directory. Shared topics keep their data in their own store directory.
+   * @internal
    */
-  private getTopicStoreDir(topicId: string): string | undefined {
+  getTopicStoreDir(topicId: string): string | undefined {
     return this.sharedTopics.getStoreDir(topicId);
-  }
-
-  /**
-   * Get the topics index file path
-   */
-  private getTopicsIndexPath(): string {
-    return path.join(this.getDatabaseDir(), EXTENSION.TOPICS_INDEX_FILENAME);
   }
 
   /**
@@ -2501,7 +1696,7 @@ export class TopicManager {
    */
   private async ensureStorageDirectory(): Promise<void> {
     try {
-      await fs.mkdir(this.getDatabaseDir(), { recursive: true });
+      await fs.mkdir(this.paths.databaseDir(), { recursive: true });
     } catch (_error) {
       // Directory might already exist
     }
@@ -2511,12 +1706,12 @@ export class TopicManager {
    * Load topics index from file
    */
   private async loadTopicsIndex(): Promise<void> {
-    const indexPath = this.getTopicsIndexPath();
+    const indexPath = this.paths.topicsIndexPath();
     let data: string;
     try {
       data = await fs.readFile(indexPath, "utf-8");
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") {
         throw error;
       }
 
@@ -2543,7 +1738,7 @@ export class TopicManager {
     const parsedIndex = parseTopicsIndex(data);
     // Load every document file into a temporary map before publishing either
     // the index or documents. A single corrupt topic file therefore cannot
-    // partially replace a manager's previously loaded state during refresh.
+    // partially replace a manager's loaded state during refresh.
     await this.loadAllTopicDocuments(parsedIndex);
     this.topicsIndex = parsedIndex;
 
@@ -2563,144 +1758,49 @@ export class TopicManager {
 
   // ==================== External-change watcher ====================
   //
-  // Watches the database directory (never a specific file: atomicWriteJson
-  // publishes topics.json and each topic-documents file via rename-over, and
-  // an inode-following file watch goes silent after the first replacement).
-  // Events are filtered to topics.json / topic-<id>-documents.json, debounced
-  // 250ms, and skipped while this process's own write transaction is active
-  // -- the trailing debounce covers the release edge for any interleaved
-  // event that slips past that check. A watch failure, or the directory going
-  // missing, is reported as `storage-unavailable` and retried every 2s until
-  // storage returns, at which point the watch is re-established, the caches
-  // reloaded, and `topics-changed` emitted.
+  // External changes: a foreign process editing topics.json or a
+  // topic-documents file reloads the caches and emits `topics-changed`; the
+  // directory disappearing emits `storage-unavailable` and is retried until it
+  // returns. Mechanics live in StorageDirectoryWatcher.
 
-  /** Start (or restart) the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
+  /** Start the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
   private startExternalChangeWatcher(): void {
     if (this.watcherStopped) {
       return;
     }
-    // Idempotent re-entry: a caller re-establishing the watch (recovery,
-    // or any future accidental double-start) must never leak the previous
-    // handle/health-timer pair.
-    this.closeWatcher();
-    let watcher: fsSync.FSWatcher;
-    try {
-      watcher = fsSync.watch(this.getDatabaseDir(), (_eventType, filename) => {
-        this.onRawWatchEvent(filename);
-      });
-    } catch (error) {
-      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-    watcher.on("error", (error) => {
-      this.logger.warn("Storage directory watch reported an error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.handleWatchOutage();
+    this.externalWatcher ??= new StorageDirectoryWatcher({
+      directory: this.paths.databaseDir(),
+      accepts: (name) => name === EXTENSION.TOPICS_INDEX_FILENAME || /^topic-.*-documents\.json$/.test(name),
+      debounceMs: 250,
+      onChange: () => this.handleDebouncedChange(),
+      onError: (error) =>
+        this.logger.warn("Storage directory watch reported an error", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      outage: {
+        pollMs: 2_000,
+        retryMs: 2_000,
+        exists: () => this.databaseDirExists(),
+        onUnavailable: () => void this.announceUnavailability(),
+        onRecovered: () => this.recoverFromOutage(),
+      },
     });
-    this.storageWatcher = watcher;
-    this.startWatcherHealthCheck();
+    if (!this.externalWatcher.start()) {
+      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()");
+    }
   }
 
   private stopExternalChangeWatcher(): void {
     this.watcherStopped = true;
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-      this.watcherDebounceTimer = null;
-    }
-    if (this.watcherRetryTimer) {
-      clearTimeout(this.watcherRetryTimer);
-      this.watcherRetryTimer = null;
-    }
-    this.closeWatcher();
-  }
-
-  private closeWatcher(): void {
-    if (this.storageWatcher) {
-      try {
-        this.storageWatcher.close();
-      } catch {
-        // Already closed or the underlying handle is gone; nothing to do.
-      }
-      this.storageWatcher = null;
-    }
-    if (this.watcherHealthTimer) {
-      clearInterval(this.watcherHealthTimer);
-      this.watcherHealthTimer = null;
-    }
-  }
-
-  /**
-   * Deliberate poll-augmentation, not an incidental helper: fs.watch alone
-   * cannot satisfy the unavailability contract on every platform. Linux's
-   * inotify backend emits an 'error' when the watched directory disappears,
-   * but macOS's FSEvents-backed watch does not -- it simply stops emitting
-   * events, with no signal that the directory is gone. A purely reactive
-   * design (relying only on `watcher.on("error", ...)`) would leave
-   * `storage-unavailable` undetectable on macOS until some unrelated
-   * qualifying file event happened to fire, which may never happen after a
-   * directory removal/rename -- exactly the scenario acceptance criterion 6
-   * exists to cover.
-   *
-   * The cost of closing that gap: one unref'd `fs.lstat` per manager every 2
-   * seconds while the watcher is otherwise healthy. Negligible, and it never
-   * keeps the process alive -- the timer is `unref()`'d here and explicitly
-   * cleared by `closeWatcher()` on outage or dispose.
-   */
-  private startWatcherHealthCheck(): void {
-    if (this.watcherHealthTimer) {
-      clearInterval(this.watcherHealthTimer);
-    }
-    this.watcherHealthTimer = setInterval(() => {
-      void this.checkStorageHealth();
-    }, 2_000);
-    this.watcherHealthTimer.unref?.();
-  }
-
-  private async checkStorageHealth(): Promise<void> {
-    if (this.watcherStopped || this.watcherUnavailable) {
-      return;
-    }
-    if (!(await this.databaseDirExists())) {
-      this.handleWatchOutage();
-    }
+    this.externalWatcher?.stop();
   }
 
   private async databaseDirExists(): Promise<boolean> {
     try {
-      return await this.pathExists(this.getDatabaseDir());
+      return await pathExists(this.paths.databaseDir());
     } catch {
       return false;
     }
-  }
-
-  private onRawWatchEvent(filename: string | Buffer | null): void {
-    if (this.watcherStopped) {
-      return;
-    }
-    const name = filename ? filename.toString() : null;
-    if (name !== null && name !== EXTENSION.TOPICS_INDEX_FILENAME && !/^topic-.*-documents\.json$/.test(name)) {
-      return;
-    }
-    if (this.activeLease !== null) {
-      // Our own transaction is writing; its reload already applies the
-      // change and there is nothing external to report.
-      return;
-    }
-    this.scheduleDebouncedReload();
-  }
-
-  private scheduleDebouncedReload(): void {
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-    }
-    this.watcherDebounceTimer = setTimeout(() => {
-      this.watcherDebounceTimer = null;
-      void this.handleDebouncedChange();
-    }, 250);
-    this.watcherDebounceTimer.unref?.();
   }
 
   /**
@@ -2719,33 +1819,17 @@ export class TopicManager {
       return;
     }
     if (!dirExists) {
-      this.handleWatchOutage();
+      this.externalWatcher?.reportOutage();
       return;
     }
     try {
-      await this.storageMutationMutex.runExclusive(async () => {
-        // Checked again inside the mutex: dispose() may have run while this
-        // call was queued waiting for a concurrent transaction/refresh.
-        if (this.watcherStopped) {
-          return;
-        }
-        await this.reloadCanonicalState();
-      });
+      await this.reloadAfterExternalChange();
+    } catch (error) {
       if (this.watcherStopped) {
         return;
       }
-      // The local names just changed underneath us, so a shared topic may now
-      // collide with one -- the very hole this feature closes for local
-      // mutations, reopened from outside. Names only: a watcher callback is a
-      // hot path, and D5 keeps folder scans out of those.
-      this.reassignSharedTopicNames();
-      this.emitExternalChange({ kind: "topics-changed" });
-    } catch (error: any) {
-      if (this.watcherStopped) {
-        return;
-      }
-      if (error?.code === "ENOENT") {
-        this.handleWatchOutage();
+      if (errnoCode(error) === "ENOENT") {
+        this.externalWatcher?.reportOutage();
         return;
       }
       this.logger.warn("Failed to reload storage state after an external change notification", {
@@ -2754,37 +1838,59 @@ export class TopicManager {
     }
   }
 
-  /** Enter (or stay in) the unavailable state: emit once, tear the watch down, and retry every 2s until storage returns. */
-  private handleWatchOutage(): void {
-    if (this.watcherStopped || this.watcherUnavailable) {
+  /** Reload the caches, then announce the change. Bails silently once the watcher is stopped; callers own error handling. */
+  private async reloadAfterExternalChange(): Promise<void> {
+    await this.storageMutationMutex.runExclusive(async () => {
+      // Checked again inside the mutex: dispose() may have run while this
+      // call was queued waiting for a concurrent transaction/refresh.
+      if (this.watcherStopped) {
+        return;
+      }
+      await this.reloadCanonicalState();
+    });
+    if (this.watcherStopped) {
       return;
     }
-    this.watcherUnavailable = true;
-    // A pending debounced reload targets storage that is (or is about to be)
-    // gone; letting it fire later could race a duplicate topics-changed with
-    // the recovery path's own reload-and-emit.
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-      this.watcherDebounceTimer = null;
+    // The local names just changed underneath us, so a shared topic may now
+    // collide with one -- the very hole this feature closes for local
+    // mutations, reopened from outside. Names only: a watcher callback is a
+    // hot path, and D5 keeps folder scans out of those.
+    this.reassignSharedTopicNames();
+    this.emitExternalChange({ kind: "topics-changed" });
+  }
+
+  /** The directory is back and the watch re-established; a throw re-enters the outage and retries. */
+  private async recoverFromOutage(): Promise<void> {
+    if (this.watcherStopped) {
+      return;
     }
-    this.closeWatcher();
-    void this.announceUnavailability();
-    this.scheduleOutageRetry();
+    try {
+      await this.reloadAfterExternalChange();
+    } catch (error) {
+      if (this.watcherStopped) {
+        return;
+      }
+      this.logger.warn("Storage directory returned but reload failed; retrying", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   /**
-   * Diagnostic only: whether a lock file or reset journal is present does not
-   * change the retry behaviour (either way storage is unavailable and gets
-   * retried), it only distinguishes "a full-exclusion operation elsewhere has
-   * the tree" from "storage is genuinely gone" for the log line.
+   * Diagnostic only: which marker file is present does not change the retry
+   * behaviour (either way storage is unavailable and gets retried), it only
+   * names the likely cause in the log line. A reset journal means a reset is
+   * running in another window; a lock file alone means another process holds
+   * an ordinary write lease; neither means storage is genuinely gone.
    */
   private async announceUnavailability(): Promise<void> {
     let reason = "the storage directory is unreachable";
     try {
-      const lockPath = path.join(this.storageDir, STORAGE_LOCK_FILENAME);
-      const journalPath = path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME);
-      if ((await this.pathExists(lockPath)) || (await this.pathExists(journalPath))) {
-        reason = "a full-exclusion storage operation (migration/reset) appears to be in progress elsewhere";
+      if (await pathExists(path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME))) {
+        reason = "a reset appears to be in progress in another window";
+      } else if (await pathExists(path.join(this.storageDir, STORAGE_LOCK_FILENAME))) {
+        reason = "another process holds the storage write lease";
       }
     } catch {
       // Best-effort diagnostic only; never let this block the notification.
@@ -2793,70 +1899,18 @@ export class TopicManager {
     this.emitExternalChange({ kind: "storage-unavailable" });
   }
 
-  private scheduleOutageRetry(): void {
-    if (this.watcherStopped) {
-      return;
-    }
-    this.watcherRetryTimer = setTimeout(() => {
-      this.watcherRetryTimer = null;
-      void this.attemptWatcherRecovery();
-    }, 2_000);
-    this.watcherRetryTimer.unref?.();
-  }
-
-  /** Same dispose-race discipline as handleDebouncedChange: re-check `watcherStopped` after every await and bail silently. */
-  private async attemptWatcherRecovery(): Promise<void> {
-    if (this.watcherStopped) {
-      return;
-    }
-    const dirExists = await this.databaseDirExists();
-    if (this.watcherStopped) {
-      return;
-    }
-    if (!dirExists) {
-      this.scheduleOutageRetry();
-      return;
-    }
-    this.watcherUnavailable = false;
-    this.startExternalChangeWatcher();
-    try {
-      await this.storageMutationMutex.runExclusive(async () => {
-        if (this.watcherStopped) {
-          return;
-        }
-        await this.reloadCanonicalState();
-      });
-      if (this.watcherStopped) {
-        return;
-      }
-      // The local names just changed underneath us, so a shared topic may now
-      // collide with one -- the very hole this feature closes for local
-      // mutations, reopened from outside. Names only: a watcher callback is a
-      // hot path, and D5 keeps folder scans out of those.
-      this.reassignSharedTopicNames();
-      this.emitExternalChange({ kind: "topics-changed" });
-    } catch (error) {
-      if (this.watcherStopped) {
-        return;
-      }
-      this.logger.warn("Storage directory returned but reload failed; retrying", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.handleWatchOutage();
-    }
-  }
-
   /**
    * Save topics index to file
    */
-  private async saveTopicsIndex(): Promise<void> {
+  /** @internal */
+  async saveTopicsIndex(): Promise<void> {
     if (!this.topicsIndex) {
       return;
     }
 
     try {
       await this.assertStorageOwnership();
-      const indexPath = this.getTopicsIndexPath();
+      const indexPath = this.paths.topicsIndexPath();
       await atomicWriteJson(indexPath, this.topicsIndex);
 
       this.logger.debug("Topics index saved");
@@ -2870,340 +1924,18 @@ export class TopicManager {
 
   /**
    * Generate a unique topic ID
+   *
+   * @internal
    */
-  private generateTopicId(): string {
-    return `topic-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-  }
-
-  /**
-   * Generate a unique document ID
-   */
-  private generateDocumentId(): string {
-    return `doc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-  }
-
-  private documentIdForSource(source: string, sourceType: "file" | "web" | "github" = "file"): string {
-    let normalized: string;
-    try {
-      const url = new URL(source);
-      url.hash = "";
-      normalized = url.toString();
-    } catch {
-      normalized = path.resolve(source).replace(/\\/g, "/");
-    }
-    return `doc-${createHash("sha256")
-      .update(JSON.stringify({ type: sourceType, source: normalized }))
-      .digest("hex")}`;
-  }
-
-  /**
-   * Map file extension to document file type
-   */
-  private mapFileType(extension: string): "pdf" | "markdown" | "html" | "text" | "web" | "github" {
-    switch (extension.toLowerCase()) {
-      case "pdf":
-        return "pdf";
-      case "md":
-      case "markdown":
-        return "markdown";
-      case "html":
-      case "htm":
-        return "html";
-      case "txt":
-        return "text";
-      default:
-        return "text";
-    }
-  }
-
-  /**
-   * Get the file path for storing topic documents metadata
-   */
-  private getTopicDocumentsPath(topicId: string): string {
-    return path.join(this.getDatabaseDir(), `topic-${topicId}-documents.json`);
-  }
-
-  private getIngestionJournalPath(): string {
-    return path.join(this.getDatabaseDir(), "ingestion-journal.json");
-  }
-
-  private getPostCommitCleanupJournalPath(): string {
-    return path.join(this.getDatabaseDir(), "post-commit-cleanup-journal.json");
-  }
-
-  private async readPostCommitCleanupJournal(): Promise<PostCommitCleanupEntry[]> {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(await fs.readFile(this.getPostCommitCleanupJournalPath(), "utf8"));
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
-        return [];
-      }
-      throw new Error("Post-commit cleanup journal is corrupt; refusing to expose potentially orphaned storage");
-    }
-    if (!Array.isArray(parsed)) {
-      throw new Error("Post-commit cleanup journal is invalid; expected an array");
-    }
-    for (const entry of parsed) {
-      if (
-        !isRecord(entry) ||
-        entry.version !== 1 ||
-        typeof entry.id !== "string" ||
-        typeof entry.topicId !== "string" ||
-        !isFiniteNumber(entry.updatedAt) ||
-        entry.kind !== "document"
-      ) {
-        throw new Error("Post-commit cleanup journal contains an invalid entry");
-      }
-      if (!Array.isArray(entry.documents) || typeof entry.legacyContainer !== "boolean") {
-        throw new Error("Post-commit cleanup journal contains invalid cleanup details");
-      }
-    }
-    return parsed as PostCommitCleanupEntry[];
-  }
-
-  private async upsertPostCommitCleanup(entry: PostCommitCleanupEntry): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = await this.readPostCommitCleanupJournal();
-      const index = entries.findIndex((candidate) => candidate.id === entry.id);
-      if (index >= 0) {
-        entries[index] = entry;
-      } else {
-        entries.push(entry);
-      }
-      await atomicWriteJson(this.getPostCommitCleanupJournalPath(), entries);
-    });
-  }
-
-  private async removePostCommitCleanup(id: string): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = (await this.readPostCommitCleanupJournal()).filter((entry) => entry.id !== id);
-      await atomicWriteJson(this.getPostCommitCleanupJournalPath(), entries);
-    });
-  }
-
-  private async completePostCommitCleanup(entry: PostCommitCleanupEntry): Promise<string[]> {
-    if (!this.vectorStoreFactory) {
-      throw new Error("Vector store is not initialized");
-    }
-    const removedChunkIds: string[] = [];
-    for (const document of entry.documents) {
-      removedChunkIds.push(...(await this.removeDocumentStorage(entry.topicId, document.id)));
-    }
-    if (entry.legacyContainer && entry.documents.length === 1 && removedChunkIds.length === 0) {
-      for (const legacyLeafId of await this.legacyLeafIdsForContainer(entry.topicId, entry.documents[0])) {
-        removedChunkIds.push(...(await this.removeDocumentStorage(entry.topicId, legacyLeafId)));
-      }
-    }
-    const stats = await this.vectorStoreFactory.getStoredStats(entry.topicId);
-    const existing = await this.vectorStoreFactory.getStoreMetadata(entry.topicId);
-    await this.vectorStoreFactory.saveStore(entry.topicId, {
-      ...existing,
-      documentCount: stats.documentCount,
-      chunkCount: stats.chunkCount,
-    });
-    return removedChunkIds;
-  }
-
-  private async recoverPostCommitCleanupJournal(): Promise<void> {
-    const entries = await this.readPostCommitCleanupJournal();
-    for (const entry of entries) {
-      const documents = this.topicDocuments.get(entry.topicId);
-      if (!this.topicsIndex?.topics[entry.topicId]) {
-        await this.removePostCommitCleanup(entry.id);
-        continue;
-      }
-      // If any selected document is still advertised, coordinator recovery
-      // rolled metadata publication back. Physical rows remain live.
-      if (entry.documents.some((document) => documents?.has(document.id))) {
-        await this.removePostCommitCleanup(entry.id);
-        continue;
-      }
-      await this.completePostCommitCleanup(entry);
-      await this.removePostCommitCleanup(entry.id);
-    }
-  }
-
-  private async readIngestionJournal(): Promise<IngestionJournalEntry[]> {
-    try {
-      const parsed = JSON.parse(await fs.readFile(this.getIngestionJournalPath(), "utf8"));
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    }
-  }
-
-  private async upsertIngestionJournal(entry: IngestionJournalEntry): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = await this.readIngestionJournal();
-      const index = entries.findIndex((candidate) => candidate.id === entry.id);
-      if (index >= 0) {
-        entries[index] = entry;
-      } else {
-        entries.push(entry);
-      }
-      await atomicWriteJson(this.getIngestionJournalPath(), entries);
-    });
-  }
-
-  private async replaceIngestionTransaction(
-    transactionId: string,
-    replacement: IngestionJournalEntry[],
-  ): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = (await this.readIngestionJournal()).filter(
-        (entry) => (entry.transactionId ?? entry.id) !== transactionId,
-      );
-      entries.push(...replacement);
-      await atomicWriteJson(this.getIngestionJournalPath(), entries);
-    });
-  }
-
-  private async markAndRemoveCommittedIngestion(transactionId: string): Promise<void> {
-    await this.journalMutex.runExclusive(async () => {
-      const entries = await this.readIngestionJournal();
-      const committedAt = Date.now();
-      const marked = entries.map((entry) =>
-        (entry.transactionId ?? entry.id) === transactionId
-          ? { ...entry, stage: "metadataCommitted" as const, updatedAt: committedAt }
-          : entry,
-      );
-      await atomicWriteJson(this.getIngestionJournalPath(), marked);
-      await atomicWriteJson(
-        this.getIngestionJournalPath(),
-        marked.filter((entry) => (entry.transactionId ?? entry.id) !== transactionId),
-      );
-    });
-  }
-
-  private async recoverIngestionJournal(): Promise<void> {
-    if (!this.vectorStoreFactory || !this.topicsIndex) {
-      return;
-    }
-    await this.journalMutex.runExclusive(async () => {
-      const pending = await this.readIngestionJournal();
-      if (pending.length === 0) {
-        return;
-      }
-      const touched = new Set<string>();
-      const rowsByTopic = new Map<string, LangChainDocument[]>();
-      const transactions = new Map<string, IngestionJournalEntry[]>();
-      for (const entry of pending) {
-        const transactionId = entry.transactionId ?? entry.id;
-        const group = transactions.get(transactionId) ?? [];
-        group.push(entry);
-        transactions.set(transactionId, group);
-      }
-
-      for (const [transactionId, originalEntries] of transactions) {
-        const starter = originalEntries.find((entry) => entry.stage === "started") ?? originalEntries[0];
-        const topic = this.topicsIndex!.topics[starter.topicId];
-        if (!topic) {
-          continue;
-        }
-
-        let durableEntries = originalEntries.filter((entry) => entry.stage !== "started");
-        if (durableEntries.length === 0) {
-          let rows = rowsByTopic.get(starter.topicId);
-          if (!rows) {
-            rows = await this.vectorStoreFactory!.getAllDocuments(starter.topicId, 1_000_000);
-            rowsByTopic.set(starter.topicId, rows);
-          }
-          const transactionRows = rows.filter(
-            (row) => String(row.metadata.ingestionTransactionId ?? "") === transactionId,
-          );
-          let sourceDocuments = this.summarizePipelineChunks(transactionRows);
-          if (sourceDocuments.length === 0) {
-            // Backward compatibility for the pre-transaction journal.
-            const legacyCount = await this.vectorStoreFactory!.getDocumentChunkCount(
-              starter.topicId,
-              starter.document.id,
-            );
-            if (legacyCount > 0) {
-              sourceDocuments = [
-                {
-                  documentId: starter.document.id,
-                  canonicalSource: starter.document.filePath,
-                  sourceType: starter.document.fileType === "web" ? "web" : starter.document.fileType,
-                  sourceRevision: starter.document.sourceRevision ?? "",
-                  fileName: starter.document.name,
-                  filePath: starter.document.filePath,
-                  fileType: starter.document.fileType,
-                  chunkCount: legacyCount,
-                },
-              ];
-            }
-          }
-          if (sourceDocuments.length === 0) {
-            // No durable vector row exists for this starter. Recovery rolls it
-            // back by removing the journal record without publishing metadata.
-            continue;
-          }
-          const leaves = this.createLeafTopicDocuments(starter.topicId, starter.document, sourceDocuments);
-          const leafIds = leaves.map((document) => document.id);
-          durableEntries = leaves.map((document) => ({
-            id: `${transactionId}:${document.id}`,
-            transactionId,
-            containerId: starter.containerId ?? starter.document.id,
-            topicId: starter.topicId,
-            stage: "vectorCommitted",
-            document,
-            containerLeafIds: leafIds,
-            updatedAt: Date.now(),
-          }));
-        }
-
-        const documents = this.topicDocuments.get(starter.topicId) ?? new Map<string, TopicDocument>();
-        const durableLeafIds = new Set<string>();
-        for (const entry of durableEntries) {
-          const chunkCount = await this.vectorStoreFactory!.getDocumentChunkCount(entry.topicId, entry.document.id);
-          if (chunkCount === 0) {
-            continue;
-          }
-          durableLeafIds.add(entry.document.id);
-          documents.set(entry.document.id, { ...entry.document, chunkCount });
-        }
-        if (durableLeafIds.size === 0) {
-          continue;
-        }
-        const containerId = starter.containerId ?? starter.document.containerId ?? starter.document.id;
-        const declaredLeafIds = new Set(durableEntries.flatMap((entry) => entry.containerLeafIds ?? []));
-        const desiredLeafIds = declaredLeafIds.size > 0 ? declaredLeafIds : durableLeafIds;
-        const staleDocuments = [...documents.values()].filter(
-          (document) =>
-            (document.containerId === containerId || document.id === containerId) && !desiredLeafIds.has(document.id),
-        );
-        for (const staleDocument of staleDocuments) {
-          await this.removeDocumentStorage(starter.topicId, staleDocument.id);
-          documents.delete(staleDocument.id);
-        }
-
-        this.topicDocuments.set(starter.topicId, documents);
-        topic.documentCount = documents.size;
-        topic.updatedAt = Math.max(topic.updatedAt, ...durableEntries.map((entry) => entry.updatedAt));
-        touched.add(starter.topicId);
-      }
-      for (const topicId of touched) {
-        await this.saveTopicDocuments(topicId);
-      }
-      if (touched.size > 0) {
-        this.topicsIndex!.lastUpdated = Date.now();
-        await this.saveTopicsIndex();
-      }
-      // Every transaction was either completed from proven rows or rolled back
-      // because no durable row existed. The metadata writes above must all
-      // succeed before the journal is cleared.
-      await atomicWriteJson(this.getIngestionJournalPath(), []);
-    });
+  generateTopicId(): string {
+    return generateTopicId();
   }
 
   /**
    * Save document metadata for a topic to disk
    */
-  private async saveTopicDocuments(topicId: string): Promise<void> {
+  /** @internal */
+  async saveTopicDocuments(topicId: string): Promise<void> {
     try {
       await this.assertStorageOwnership();
       const documents = this.topicDocuments.get(topicId);
@@ -3211,7 +1943,7 @@ export class TopicManager {
         return;
       }
 
-      const documentsPath = this.getTopicDocumentsPath(topicId);
+      const documentsPath = this.paths.topicDocumentsPath(topicId);
       const documentsArray = Array.from(documents.values());
 
       await atomicWriteJson(documentsPath, documentsArray);
@@ -3233,12 +1965,12 @@ export class TopicManager {
    * Load document metadata for a topic from disk
    */
   private async loadTopicDocuments(topicId: string): Promise<Map<string, TopicDocument>> {
-    const documentsPath = this.getTopicDocumentsPath(topicId);
+    const documentsPath = this.paths.topicDocumentsPath(topicId);
     let data: string;
     try {
       data = await fs.readFile(documentsPath, "utf-8");
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") {
         throw error;
       }
 
@@ -3285,22 +2017,6 @@ export class TopicManager {
     this.topicDocuments = loadedDocuments;
   }
 
-  private async listFilesRecursively(directory: string): Promise<string[]> {
-    const files: string[] = [];
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isSymbolicLink()) {
-        throw new Error(`Refusing to export symbolic link: ${entryPath}`);
-      }
-      if (entry.isDirectory()) {
-        files.push(...(await this.listFilesRecursively(entryPath)));
-      } else if (entry.isFile()) {
-        files.push(entryPath);
-      }
-    }
-    return files;
-  }
-
   private getTopicMutationMutex(topicId: string): Mutex {
     let mutex = this.topicMutationMutexes.get(topicId);
     if (!mutex) {
@@ -3310,7 +2026,8 @@ export class TopicManager {
     return mutex;
   }
 
-  private async assertStorageOwnership(): Promise<void> {
+  /** @internal */
+  async assertStorageOwnership(): Promise<void> {
     if (this.activeLease) {
       await this.activeLease.assertOwned();
       return;
@@ -3336,8 +2053,10 @@ export class TopicManager {
    * caches from the torn, pre-rollback generation, and the operation would
    * then derive next-state from it and commit that durably, resurrecting a
    * transaction the recovery had just aborted. So: recover first, then read.
+   *
+   * @internal
    */
-  private async runStorageWriteTransaction<T>(
+  async runStorageWriteTransaction<T>(
     operation: (tx: { coordinator: StorageTransactionCoordinator; lease: StorageLockHandle }) => Promise<T>,
     options?: { waitMs?: number },
   ): Promise<T> {
@@ -3347,7 +2066,7 @@ export class TopicManager {
       const previousCoordinator = this.activeCoordinator;
       this.activeLease = lease;
       try {
-        const coordinator = new StorageTransactionCoordinator(this.getDatabaseDir(), lease);
+        const coordinator = new StorageTransactionCoordinator(this.paths.databaseDir(), lease);
         await coordinator.initialize();
         this.activeCoordinator = coordinator;
         // Write-side safety: another process may have written since our caches
@@ -3355,8 +2074,8 @@ export class TopicManager {
         // generation back. Reload the canonical files before deriving
         // next-state from them.
         await this.reloadCanonicalState();
-        await this.recoverPostCommitCleanupJournal();
-        await this.recoverIngestionJournal();
+        await this.journals.recoverPostCommitCleanup();
+        await this.journals.recoverIngestion();
         return await operation({ coordinator, lease });
       } finally {
         // Restore rather than clear: a nested acquisition must never drop an
@@ -3390,7 +2109,7 @@ export class TopicManager {
    * lease rather than try-locking: a first run that silently skipped the stamp
    * would leave the store unversioned. Any other classification is handed to
    * `ensureStorageFormat` unleased purely so it raises its own typed error
-   * (a newer format version, an unreadable marker, an interrupted reset) — it
+   * (a newer format version, an unreadable marker, an interrupted reset, or unsupported pre-0.4 data) — it
    * cannot write on those paths, and taking a lease first would let a
    * StorageBusyError mask the real diagnosis.
    */
@@ -3403,15 +2122,6 @@ export class TopicManager {
       await ensureStorageFormat(this.storageDir);
       return;
     }
-    if (inspection.unmanagedEntriesPresent) {
-      // Pre-v2 content is ignored, not adopted and not deleted. Said out loud
-      // because the directory visibly holds files: someone who later wonders
-      // where their old topics went should find the answer here rather than
-      // conclude the store ate them.
-      this.logger.info("Initializing a new v2 store; pre-v2 content in this directory is ignored and left in place", {
-        storageDir: this.storageDir,
-      });
-    }
     await this.withOperationLease(async () => {
       // Re-check under the lease: another process may have stamped it while
       // we waited.
@@ -3422,33 +2132,35 @@ export class TopicManager {
   /**
    * Read-only probe: has a previous run left anything to recover?
    *
-   * Startup used to roll interrupted work back unconditionally, because it
-   * held a session lock and a session coordinator anyway. Recovery writes, so
-   * it now needs a lease — and a clean open must not take one. Probing keeps
-   * the old guarantee (an interrupted write is repaired when the store is
-   * opened, not deferred to whenever someone happens to write next) while a
-   * healthy store still opens without touching the lock file.
+   * Recovery writes, so it needs a lease — and a clean open must not take one.
+   * Probing means an interrupted write is repaired when the store is opened,
+   * not deferred to whenever someone happens to write next, while a healthy
+   * store still opens without touching the lock file.
    */
   private async hasPendingStorageRecovery(): Promise<boolean> {
-    for (const journalPath of [this.getPostCommitCleanupJournalPath(), this.getIngestionJournalPath()]) {
-      if (await this.pathExists(journalPath)) {
+    for (const journalPath of [
+      this.journals.getPostCommitCleanupJournalPath(),
+      this.journals.getIngestionJournalPath(),
+    ]) {
+      if (await pathExists(journalPath)) {
         return true;
       }
     }
     // A crashed transaction leaves its WAL, or an orphaned staging directory,
     // under the coordinator root.
     try {
-      const staged = await fs.readdir(path.join(this.getDatabaseDir(), ".transactions"));
+      const staged = await fs.readdir(path.join(this.paths.databaseDir(), ".transactions"));
       return staged.length > 0;
-    } catch (error: any) {
-      if (error?.code === "ENOENT") {
+    } catch (error) {
+      if (errnoCode(error) === "ENOENT") {
         return false;
       }
       throw error;
     }
   }
 
-  private async runManagedOperation<T>(operation: () => Promise<T>): Promise<T> {
+  /** @internal */
+  async runManagedOperation<T>(operation: () => Promise<T>): Promise<T> {
     const parentContext = this.managedOperationContext.getStore();
     if (parentContext?.active) {
       return operation();

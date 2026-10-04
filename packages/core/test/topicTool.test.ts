@@ -70,9 +70,9 @@ describe("topic read tool", function () {
   it("keeps an explicit topic source and counts every topic", async function () {
     const payload = (await executeTopicRead(
       { action: "list" },
-      { topicManager: fakeManager({ topics: [{ ...topic, source: "common" }, topic] }) as never },
+      { topicManager: fakeManager({ topics: [{ ...topic, source: "shared" }, topic] }) as never },
     )) as { topics: Array<{ source: string }>; count: number };
-    expect(payload.topics.map((entry) => entry.source)).to.deep.equal(["common", "local"]);
+    expect(payload.topics.map((entry) => entry.source)).to.deep.equal(["shared", "local"]);
     expect(payload.count).to.equal(2);
   });
 

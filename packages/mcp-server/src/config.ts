@@ -59,7 +59,7 @@ export interface McpConfig {
   /** Budget for draining in-flight tool calls on SIGINT/SIGTERM. */
   shutdownDrainMs?: number;
   llmRequestTimeoutMs?: number;
-  /** Ceiling on a serialized tool response, enforced in tools.ts. */
+  /** Ceiling on a serialized tool response, enforced in tools/shared.ts. */
   maxResponseBytes?: number;
   rerankerModel: string;
   rerankerMaxCandidates: number;
@@ -166,7 +166,7 @@ export function loadConfig(): McpConfig {
   const raw: McpConfig = {
     storageDir,
     workingDir: process.env.RAGNAROK_WORKING_DIR || "",
-    // Trim and drop blanks: tools.ts feeds each root to path.resolve(), and
+    // Trim and drop blanks: tools/ingestTools.ts feeds each root to path.resolve(), and
     // path.resolve("") is the process cwd, so a stray empty entry would
     // silently widen the allowlist to the whole cwd.
     allowedPaths: (file.allowedPaths ?? []).map((p) => p.trim()).filter((p) => p.length > 0),
@@ -199,7 +199,7 @@ export function loadConfig(): McpConfig {
     commonDatabasePath: file.commonDatabasePath || "",
     // An empty security.githubHosts is a deliberate "no hosts" rather than an
     // absent setting, and configSchema's .min(1) rejects it loudly. Lower-case
-    // every entry: tools.ts matches against parsed.hostname.toLowerCase(), so a
+    // every entry: tools/ingestTools.ts matches against parsed.hostname.toLowerCase(), so a
     // mixed-case row could never match.
     githubHosts: (file.githubHosts ?? ["github.com"]).map((host) => host.trim().toLowerCase()).filter(Boolean),
     githubToken: process.env.RAGNAROK_GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || "",

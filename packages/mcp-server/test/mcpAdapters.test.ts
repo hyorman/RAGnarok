@@ -567,7 +567,7 @@ describe("MCP Server", () => {
     });
 
     it("normalises githubHosts from the file exactly as it does from the env", () => {
-      // tools.ts matches against parsed.hostname.toLowerCase(), so an entry
+      // tools/ingestTools.ts matches against parsed.hostname.toLowerCase(), so an entry
       // left mixed-case here would be an allowlist row that never matches.
       writeConfig({ security: { githubHosts: ["GHE.Example.COM ", ""] } });
       expect(loadConfig().githubHosts).to.deep.equal(["ghe.example.com"]);
@@ -575,7 +575,7 @@ describe("MCP Server", () => {
 
     it("trims blank entries out of the file's allowedPaths", () => {
       // path.resolve("") is the process cwd, so a blank entry reaching
-      // tools.ts would silently widen the allowlist to the whole cwd.
+      // tools/ingestTools.ts would silently widen the allowlist to the whole cwd.
       writeConfig({ security: { allowedPaths: ["/data ", ""] } });
       expect(loadConfig().allowedPaths).to.deep.equal(["/data"]);
     });

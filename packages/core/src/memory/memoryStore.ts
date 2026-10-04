@@ -10,7 +10,6 @@
  */
 
 import * as crypto from "crypto";
-import * as fsSync from "fs";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { Mutex } from "async-mutex";
@@ -43,6 +42,7 @@ import { cosineSimilarity } from "../utils/vectorMath";
 import { atomicWriteFile, atomicWriteJson, ensureStorageFormat, inspectStorage } from "../utils/storage";
 import { acquireOperationLease, StorageBusyError } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
+import { StorageDirectoryWatcher } from "../utils/storageDirectoryWatcher";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 /** The two storage-dir files whose replacement signals a foreign memory write. */
@@ -100,9 +100,9 @@ export class MemoryStore {
   private graphLoads = new Map<string, Promise<MemoryGraph>>();
   private entryLoads = new Map<string, Promise<MemoryEntry[]>>();
 
-  // Debounced memories.md regeneration: every mutation used to rescan every
-  // scope twice (markdown + stats) and rewrite the file, and concurrent
-  // fire-and-forget writes could land out of order.
+  // Debounced memories.md regeneration: regenerating on every mutation would
+  // rescan every scope twice (markdown + stats) and rewrite the file, and
+  // concurrent fire-and-forget writes could land out of order.
   private markdownDirty = false;
   private markdownFlushing = false;
   private markdownTimer: ReturnType<typeof setTimeout> | null = null;
@@ -131,8 +131,7 @@ export class MemoryStore {
   // the mutation or foreign write that invalidated it.
   private cacheGeneration = 0;
   // Foreign-change watcher over the storage DIRECTORY (never a file).
-  private storageWatcher: fsSync.FSWatcher | null = null;
-  private watcherDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private storageWatcher: StorageDirectoryWatcher | null = null;
   private watcherStopped = false;
   private watcherFailureLogged = false;
   // Depth of this store's own operation leases; a watch event that fires while
@@ -867,17 +866,20 @@ export class MemoryStore {
    * Classification is read-only, so two windows opening the same healthy store
    * never contend — the overwhelmingly common case costs nothing. Any
    * classification other than "current"/"empty" goes to `ensureStorageFormat`
-   * purely so it raises its own typed error: an interrupted migration, a legacy
-   * directory or a future format version must fail closed on reads too.
+   * purely so it raises its own typed error: unsupported pre-0.4 data,
+   * an interrupted reset or a future format version must fail closed on reads too.
    *
    * The empty case is the only one that writes. A mutation stamps it under its
    * own lease. A read stamps it opportunistically, with a TRY-lock — it never
    * waits, never fails, and skips the stamp entirely when someone else holds
-   * the lease. The stamp cannot simply be skipped on reads: reads create the
-   * LanceDB directory as a side effect of loading, which would leave the store
-   * looking like unversioned 0.3 data and fail every subsequent open closed.
-   * Skipping it is safe only against a live foreign writer, because that writer
-   * stamps the marker under its own lease before it writes anything.
+   * the lease.
+   *
+   * Skipping a read's stamp is safe because of one invariant: a read never
+   * creates the LanceDB directory. Every read in the vector store checks that
+   * the directory exists first and answers empty when it does not, so only a
+   * mutation ever connects, and every mutation holds the lease and stamps the
+   * marker before it writes. Data therefore never appears beside a missing
+   * marker, and an unstamped empty directory stays classified as empty.
    */
   private async ensureStorageReady(hasLease: boolean): Promise<void> {
     if (this.storageReady) {
@@ -1126,10 +1128,9 @@ export class MemoryStore {
   }
 
   /**
-   * Every read below is lock-free on purpose: taking the session lease here
-   * is exactly what used to kill a second VS Code window on its first memory
-   * read. Reads validate the storage format (never writing it) and then go
-   * straight to the vector store.
+   * Every read below is lock-free: reads validate the storage format (never
+   * writing it) and then go straight to the vector store, so a second window
+   * never waits on a first one's read.
    */
   private async getGraph(scope: MemoryScope, branch?: string): Promise<MemoryGraph> {
     await this.ensureStorageReady(this.holdsMutationLease);
@@ -1223,84 +1224,32 @@ export class MemoryStore {
    * it succeeds; the failure is logged once and never again.
    */
   private ensureStorageWatcher(): void {
-    if (this.watcherStopped || this.storageWatcher) {
+    if (this.watcherStopped || this.storageWatcher?.watching) {
       return;
     }
-    let watcher: fsSync.FSWatcher;
-    try {
-      watcher = fsSync.watch(this.storageDir, (_eventType, filename) => this.onRawWatchEvent(filename));
-      // Unref'd for the same reason the debounce and markdown timers below are:
-      // a watcher must not be the handle that keeps a host process alive. Hosts
-      // dispose explicitly, so this only changes the fate of an instance nobody
-      // disposed -- which otherwise pins the event loop open forever.
-      watcher.unref?.();
-    } catch (error) {
-      if (!this.watcherFailureLogged) {
-        this.watcherFailureLogged = true;
-        this.logger.debug("Unable to watch the memory storage directory for external changes", {
+    this.storageWatcher ??= new StorageDirectoryWatcher({
+      directory: this.storageDir,
+      accepts: (name) => name === MEMORY_MANIFEST_FILENAME || name === MEMORIES_MARKDOWN_FILENAME,
+      debounceMs: MEMORY_WATCH_DEBOUNCE_MS,
+      // Our own mutation holds optimistic in-memory state it has not persisted
+      // yet: re-arm rather than drop the signal.
+      onChange: () => (this.holdsMutationLease ? "rearm" : this.invalidateAllCaches()),
+      onError: (error) =>
+        this.logger.debug("Memory storage directory watch reported an error", {
           error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      return;
-    }
-    watcher.on("error", (error) => {
-      this.logger.debug("Memory storage directory watch reported an error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.closeStorageWatcher();
+        }),
     });
-    this.storageWatcher = watcher;
-  }
-
-  private onRawWatchEvent(filename: string | Buffer | null): void {
-    if (this.watcherStopped) {
-      return;
-    }
-    const name = filename ? filename.toString() : null;
-    if (name !== null && name !== MEMORY_MANIFEST_FILENAME && name !== MEMORIES_MARKDOWN_FILENAME) {
-      return;
-    }
-    this.scheduleForeignChangeDrop();
-  }
-
-  private scheduleForeignChangeDrop(): void {
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-    }
-    this.watcherDebounceTimer = setTimeout(() => {
-      this.watcherDebounceTimer = null;
-      if (this.watcherStopped) {
-        return;
-      }
-      if (this.holdsMutationLease) {
-        // Our own mutation is mid-flight and holds optimistic in-memory state
-        // it has not persisted yet. Re-arm rather than drop the signal.
-        this.scheduleForeignChangeDrop();
-        return;
-      }
-      this.invalidateAllCaches();
-    }, MEMORY_WATCH_DEBOUNCE_MS);
-    this.watcherDebounceTimer.unref?.();
-  }
-
-  private closeStorageWatcher(): void {
-    if (this.storageWatcher) {
-      try {
-        this.storageWatcher.close();
-      } catch {
-        // Already closed, or the underlying handle is gone.
-      }
-      this.storageWatcher = null;
+    // Retried lazily on the next read when construction fails (e.g. the
+    // directory does not exist yet); logged once.
+    if (!this.storageWatcher.start() && !this.watcherFailureLogged) {
+      this.watcherFailureLogged = true;
+      this.logger.debug("Unable to watch the memory storage directory for external changes");
     }
   }
 
   private stopStorageWatcher(): void {
     this.watcherStopped = true;
-    if (this.watcherDebounceTimer) {
-      clearTimeout(this.watcherDebounceTimer);
-      this.watcherDebounceTimer = null;
-    }
-    this.closeStorageWatcher();
+    this.storageWatcher?.stop();
   }
 
   private async findEntryById(id: string): Promise<(MemoryEntry & { scope: MemoryScope; branch?: string }) | null> {

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -81,6 +81,7 @@ for (const [outputPath, expected] of outputs) {
       throw new Error(`build: ${path.relative(repositoryRoot, outputPath)} is out of date; run graph-ui build`);
     }
   } else {
+    await mkdir(path.dirname(outputPath), { recursive: true });
     await writeFile(outputPath, expected, "utf8");
   }
 }

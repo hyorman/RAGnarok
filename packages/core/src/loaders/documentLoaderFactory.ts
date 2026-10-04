@@ -15,10 +15,20 @@ import { HtmlDocumentLoader } from "./htmlLoader";
 import { PdfDocumentLoader } from "./pdfLoader";
 import { GithubDocumentLoader } from "./githubLoader";
 import { WebDocumentLoader } from "./webLoader";
-import type { DocumentLoader, LoaderOptions, LoadedDocument, SupportedFileType } from "./types";
+import type { DocumentLoader, LoaderOptions, LoadedDocument, LocalFileType, SupportedFileType } from "./types";
 
 // Re-export types for backward compatibility
 export type { SupportedFileType, LoaderOptions, LoadedDocument } from "./types";
+
+/** The loader each local file extension selects: the one list behind detection and the supported extensions. */
+const EXTENSION_FILE_TYPES: ReadonlyMap<string, LocalFileType> = new Map<string, LocalFileType>([
+  [".pdf", "pdf"],
+  [".md", "markdown"],
+  [".markdown", "markdown"],
+  [".html", "html"],
+  [".htm", "html"],
+  [".txt", "text"],
+]);
 
 /**
  * Factory for loading documents — delegates to specialized loader modules.
@@ -242,7 +252,18 @@ export class DocumentLoaderFactory {
    * Get supported file extensions
    */
   public static getSupportedExtensions(): string[] {
-    return [".pdf", ".md", ".markdown", ".html", ".htm", ".txt"];
+    return [...EXTENSION_FILE_TYPES.keys()];
+  }
+
+  /**
+   * Get the supported file extensions grouped by the loader that reads them
+   */
+  public static getSupportedExtensionsByType(): Record<LocalFileType, string[]> {
+    const byType: Record<LocalFileType, string[]> = { pdf: [], markdown: [], html: [], text: [] };
+    for (const [extension, fileType] of EXTENSION_FILE_TYPES) {
+      byType[fileType].push(extension);
+    }
+    return byType;
   }
 
   /**
@@ -295,22 +316,13 @@ export class DocumentLoaderFactory {
 
     const ext = path.extname(filePath).toLowerCase();
 
-    switch (ext) {
-      case ".pdf":
-        return "pdf";
-      case ".md":
-      case ".markdown":
-        return "markdown";
-      case ".html":
-      case ".htm":
-        return "html";
-      case ".txt":
-        return "text";
-      default:
-        // Default to text for unknown extensions
-        this.logger.warn("Unknown file extension, treating as text", { ext });
-        return "text";
+    const fileType = EXTENSION_FILE_TYPES.get(ext);
+    if (fileType) {
+      return fileType;
     }
+    // Default to text for unknown extensions
+    this.logger.warn("Unknown file extension, treating as text", { ext });
+    return "text";
   }
 
   /**

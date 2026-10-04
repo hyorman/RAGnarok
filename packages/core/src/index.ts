@@ -44,7 +44,7 @@ export type { ExtractKeywordsOptions } from "./utils/keywords";
 // Loaders
 export { DocumentLoaderFactory } from "./loaders/documentLoaderFactory";
 export type { SupportedFileType, LoaderOptions, LoadedDocument } from "./loaders/documentLoaderFactory";
-export type { DocumentLoader } from "./loaders/types";
+export type { DocumentLoader, LocalFileType } from "./loaders/types";
 export { TextDocumentLoader, LangChainTextLoader } from "./loaders/textLoader";
 export { MarkdownDocumentLoader } from "./loaders/markdownLoader";
 export { HtmlDocumentLoader } from "./loaders/htmlLoader";
@@ -76,7 +76,6 @@ export type { EmbeddingResolution, EmbeddingServiceRegistryOptions } from "./emb
 // Vector Store
 export {
   VectorStoreFactory,
-  EmbeddingReindexRequiredError,
   VectorStoreMetadataCorruptionError,
   EmbeddingFingerprintMismatchError,
   EmbeddingEndpointMismatchError,
@@ -96,6 +95,8 @@ export type {
   GraphVisualizationOptions,
 } from "./visualization/graphVisualization";
 export { GraphVisualizationService } from "./visualization/graphVisualizationService";
+export { createEmbeddingServices, createMemoryServices, defaultMemoryServiceFactory } from "./hostServices";
+export type { EmbeddingServicesOptions, MemoryServiceFactory, MemoryServices } from "./hostServices";
 export type { GraphVisualizationRequest } from "./visualization/graphVisualizationService";
 
 // Retrievers
@@ -163,6 +164,7 @@ export {
   STORAGE_CONFIG_FILENAME,
   StorageFormatVersionError,
   StorageResetInterruptedError,
+  UnsupportedStorageError,
   atomicWriteFile,
   atomicWriteJson,
   ensureStorageFormat,
@@ -176,14 +178,8 @@ export { SharedArchiveCache, deriveSharedTopicId } from "./sharedTopics/archiveC
 export { SharedTopicReadOnlyError } from "./sharedTopics/types";
 export type { SharedTopicSource, SharedTopicSourceContext, ResolvedSharedTopic } from "./sharedTopics/types";
 export { SHARED_TOPIC_CACHE_DIRNAME } from "./utils/storage";
-export {
-  acquireStorageLock,
-  acquireOperationLease,
-  StorageLockHeldError,
-  StorageBusyError,
-  STORAGE_LOCK_FILENAME,
-} from "./utils/storageLock";
-export type { StorageLockHandle, StorageLockOptions, OperationLeaseOptions, LockFileInfo } from "./utils/storageLock";
+export { acquireOperationLease, StorageBusyError, STORAGE_LOCK_FILENAME } from "./utils/storageLock";
+export type { StorageLockHandle, OperationLeaseOptions, LockFileInfo } from "./utils/storageLock";
 export { StorageTransactionCoordinator } from "./utils/storageTransactionCoordinator";
 export type { StorageTransactionFence, StorageTransactionOperation } from "./utils/storageTransactionCoordinator";
 export type {

@@ -20,9 +20,10 @@ transport to configure and nothing to authenticate.
 
 The variables that once configured a network listener (TLS paths, bind host,
 allowed hosts, CORS origin, bearer tokens, rate limit, trusted proxies,
-transfer limits) are **rejected at startup**. Setting one aborts the process
-with an error naming every offender, so a configuration that promises a
-hardened network service can never quietly become a local pipe.
+transfer limits) are no longer read. Setting one has no effect: the process
+still starts, still speaks stdio, and still listens on nothing, so a
+configuration written for a hardened network service becomes a local pipe
+without any warning.
 
 Do not attempt to re-expose the server by wrapping stdio in a network relay. A
 relay would grant every caller the spawning user's full authority — including
@@ -65,7 +66,7 @@ not HTML interpolation. The tool uses only modern `_meta.ui.resourceUri`, and
 both resource catalog and resource content declare
 `text/html;profile=mcp-app`.
 
-VS Code's **RAGnarok: Show Memory Graph** webview uses separate generated JS/CSS,
+VS Code's **RAG: Show Memory Graph** webview uses separate generated JS/CSS,
 a nonce and restrictive CSP, local resource roots, and the same text-only
 renderer. It reads only VS Code extension memory. The extension contributes no
 reset language-model tool at all: deleting that root is the sidebar's **Reset
@@ -137,38 +138,12 @@ from configuration only and is never accepted as a tool argument.
 
 ## Release audit exceptions
 
-The clean-consumer production audit permits only the following exact,
-time-limited findings. `scripts/audit-policy.mjs` rejects changed advisory IDs,
-dependencies, affected ranges, malformed reports or policy, and expired
-entries. Release maintainers must remove an exception as soon as its
-invalidation condition becomes true.
-
-### Hono serve-static
-
-- Advisory: `GHSA-frvp-7c67-39w9`
-- Dependency: `@hono/node-server`, affected range `<2.0.5`
-- Path: `@modelcontextprotocol/node@2.0.0`
-- Reason: RAGnarok uses MCP request conversion; neither MCP Node nor RAGnarok imports Hono serve-static.
-- Invalidation condition: Any serve-static import/use or an MCP Node release compatible with patched Hono.
-- Owner: `release-maintainers`
-- Expiry: `2026-08-31`
-
-### Sharp image decoding
-
-- Advisory: `GHSA-f88m-g3jw-g9cj`
-- Dependency: `sharp`, affected range `<0.35.0`
-- Path: `@huggingface/transformers@3.8.1`
-- Reason: RAGnarok invokes only text feature-extraction, tokenization, and sequence-classification pipelines; no image input reaches Sharp.
-- Invalidation condition: Any image pipeline/input support or a Transformers release compatible with patched Sharp.
-- Owner: `release-maintainers`
-- Expiry: `2026-08-31`
-
-The Sharp exception is content-addressed by the exact integration paths and
-SHA-256 values in its `sourceGuards` policy entries. Changing a guarded
-integration file or adding a new Transformers source requires security review
-and an explicit `sourceGuards` path/hash update. Release-static rejects direct
-Sharp references, unguarded Transformers references, missing or extra guarded
-files, and any guarded-file content hash mismatch.
+There are none. `node scripts/audit-gate.mjs` fails on any moderate-or-higher
+production advisory. If an exception is ever unavoidable, it is an exact,
+time-limited entry in `release-policy.json`, documented here with its advisory,
+dependency, affected range, introducing package, reason, invalidation
+condition, expiry and owner, and removed as soon as the invalidation condition
+is true.
 
 ## Threat boundaries and non-goals
 

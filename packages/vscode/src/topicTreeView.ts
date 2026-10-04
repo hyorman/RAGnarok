@@ -18,6 +18,7 @@ import {
   RerankerModelRegistry,
   CrossEncoderReranker,
 } from "@ragnarok/core";
+import type { LmEmbeddingsApi } from "./vscodeLmBackend";
 import { COMMANDS, TREE_CONFIG_KEY, CONTEXT, VSCODE_CONFIG } from "./constants";
 
 const logger = new Logger("TopicTreeView");
@@ -68,7 +69,7 @@ export class TopicTreeDataProvider implements vscode.TreeDataProvider<TopicTreeI
         // Update VS Code context so viewsWelcome when-clause works correctly
         vscode.commands.executeCommand(COMMANDS.SET_CONTEXT, CONTEXT.HAS_TOPICS, topics.length > 0);
 
-        return topics.map((topic: any) => new TopicTreeItem(topic, "topic"));
+        return topics.map((topic) => new TopicTreeItem(topic, "topic"));
       } else if (element.type === "topic" && element.topic) {
         // Show statistics and documents for this topic
         const items: TopicTreeItem[] = [];
@@ -82,13 +83,13 @@ export class TopicTreeDataProvider implements vscode.TreeDataProvider<TopicTreeI
         // Add documents
         const documents = topicManager.getTopicDocuments(element.topic.id);
         if (documents.length > 0) {
-          items.push(...documents.map((doc: any) => new TopicTreeItem(doc, "document")));
+          items.push(...documents.map((doc) => new TopicTreeItem(doc, "document")));
         }
 
         return items;
       } else if (element.type === "topic-stats" && element.data) {
         // Show detailed statistics
-        return this.getStatisticsItems(element.data);
+        return this.getStatisticsItems(element.data as TopicStats);
       }
       return [];
     } catch (error) {
@@ -100,7 +101,7 @@ export class TopicTreeDataProvider implements vscode.TreeDataProvider<TopicTreeI
   /**
    * Get detailed statistics items for a topic
    */
-  private getStatisticsItems(stats: any): TopicTreeItem[] {
+  private getStatisticsItems(stats: TopicStats): TopicTreeItem[] {
     const items: TopicTreeItem[] = [];
 
     // Document count
@@ -133,20 +134,20 @@ export class TopicTreeItem extends vscode.TreeItem {
     this.setupTreeItem(data, type);
   }
 
-  private static getLabel(data: any, type: string): string {
+  private static getLabel(data: TreeItemData, type: string): string {
     switch (type) {
       case "topic":
-        return data.name;
+        return (data as Topic).name;
       case "document":
-        return `📄 ${data.name}`;
+        return `📄 ${(data as Document).name}`;
       case "config-status":
         return "⚙️ Configuration";
       case "config-item":
-        return TopicTreeItem.formatConfigLabel(data);
+        return TopicTreeItem.formatConfigLabel(data as ConfigData);
       case "topic-stats":
         return "📊 Statistics";
       case "stat-item":
-        return TopicTreeItem.formatStatLabel(data);
+        return TopicTreeItem.formatStatLabel(data as ConfigData);
       default:
         return "Unknown";
     }
@@ -163,7 +164,7 @@ export class TopicTreeItem extends vscode.TreeItem {
     }
   }
 
-  private static formatConfigLabel(configData: any): string {
+  private static formatConfigLabel(configData: ConfigData): string {
     const { key, value } = configData;
     switch (key) {
       case TREE_CONFIG_KEY.RETRIEVAL_STRATEGY:
@@ -185,7 +186,7 @@ export class TopicTreeItem extends vscode.TreeItem {
       case TREE_CONFIG_KEY.MAX_ITERATIONS:
         return `🔄 Max Iterations: ${value}`;
       case TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD:
-        return `🎯 Confidence: ${(value * 100).toFixed(0)}%`;
+        return `🎯 Confidence: ${((value as number) * 100).toFixed(0)}%`;
       case TREE_CONFIG_KEY.TOP_K:
         return `📊 Top K: ${value}`;
       case TREE_CONFIG_KEY.CHUNK_SIZE:
@@ -201,7 +202,7 @@ export class TopicTreeItem extends vscode.TreeItem {
     }
   }
 
-  private static formatStatLabel(statData: any): string {
+  private static formatStatLabel(statData: ConfigData): string {
     const { key, value } = statData;
     switch (key) {
       case "document-count":
@@ -217,18 +218,18 @@ export class TopicTreeItem extends vscode.TreeItem {
     }
   }
 
-  private setupTreeItem(data: any, type: string): void {
+  private setupTreeItem(data: TreeItemData, type: string): void {
     switch (type) {
       case "topic":
         const topic = data as Topic;
-        const isCommon = topic.source === "common";
+        const isShared = topic.source === "shared";
         this.tooltip = topic.description || topic.name;
-        this.description = isCommon
+        this.description = isShared
           ? `${topic.documentCount} document${topic.documentCount !== 1 ? "s" : ""} (read-only)`
           : `${topic.documentCount} document${topic.documentCount !== 1 ? "s" : ""}`;
-        // Use different contextValue for common topics to hide modify actions in menus
-        this.contextValue = isCommon ? "topic-common" : "topic";
-        this.iconPath = new vscode.ThemeIcon(isCommon ? "folder-library" : "folder");
+        // Use different contextValue for shared topics to hide modify actions in menus
+        this.contextValue = isShared ? "topic-shared" : "topic";
+        this.iconPath = new vscode.ThemeIcon(isShared ? "folder-library" : "folder");
         break;
 
       case "document":
@@ -248,10 +249,11 @@ export class TopicTreeItem extends vscode.TreeItem {
       case "config-item":
         this.tooltip = `Click to change this setting`;
         this.contextValue = "config-item";
+        const configItem = data as ConfigData | undefined;
 
         // Make embedding-model item clickable → opens the HF or VS Code model picker
-        if (data && data.key === TREE_CONFIG_KEY.EMBEDDING_MODEL) {
-          const modelStr = String(data.value ?? "");
+        if (configItem && configItem.key === TREE_CONFIG_KEY.EMBEDDING_MODEL) {
+          const modelStr = String(configItem.value ?? "");
           if (modelStr.startsWith("vscodeLM:")) {
             this.command = {
               command: COMMANDS.SELECT_VSCODE_EMBEDDING_MODEL,
@@ -269,7 +271,7 @@ export class TopicTreeItem extends vscode.TreeItem {
         }
 
         // Make embedding-backend item clickable → opens inline QuickPick
-        if (data && data.key === TREE_CONFIG_KEY.EMBEDDING_BACKEND) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.EMBEDDING_BACKEND) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Change Embedding Backend",
@@ -280,7 +282,7 @@ export class TopicTreeItem extends vscode.TreeItem {
         }
 
         // Make retrieval-strategy item clickable → opens inline QuickPick
-        if (data && data.key === TREE_CONFIG_KEY.RETRIEVAL_STRATEGY) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.RETRIEVAL_STRATEGY) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Change Retrieval Strategy",
@@ -290,84 +292,84 @@ export class TopicTreeItem extends vscode.TreeItem {
           this.tooltip = "Click to change the retrieval strategy";
         }
 
-        if (data && data.key === TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Toggle Workspace Context",
             arguments: [TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT],
           };
           this.contextValue = "config-include-workspace";
-          this.tooltip = `Include Workspace Context: ${data.value ? "Enabled" : "Disabled"} — Click to toggle`;
+          this.tooltip = `Include Workspace Context: ${configItem.value ? "Enabled" : "Disabled"} — Click to toggle`;
         }
 
         // Make llm-model item clickable → opens the LLM model picker
-        if (data && data.key === TREE_CONFIG_KEY.LLM_MODEL) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.LLM_MODEL) {
           this.command = {
             command: COMMANDS.SELECT_LLM_MODEL,
             title: "Select LLM Model",
           };
           this.contextValue = "config-llm-model";
-          this.tooltip = `Current LLM: ${data.value} — Click to change`;
+          this.tooltip = `Current LLM: ${configItem.value} — Click to change`;
         }
 
         // Number inputs
-        if (data && data.key === TREE_CONFIG_KEY.MAX_ITERATIONS) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.MAX_ITERATIONS) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Change Max Iterations",
             arguments: [TREE_CONFIG_KEY.MAX_ITERATIONS],
           };
           this.contextValue = "config-max-iterations";
-          this.tooltip = `Max Iterations: ${data.value} — Click to change`;
+          this.tooltip = `Max Iterations: ${configItem.value} — Click to change`;
         }
 
-        if (data && data.key === TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Change Confidence Threshold",
             arguments: [TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD],
           };
           this.contextValue = "config-confidence-threshold";
-          this.tooltip = `Confidence Threshold: ${data.value} — Click to change`;
+          this.tooltip = `Confidence Threshold: ${configItem.value} — Click to change`;
         }
 
-        if (data && data.key === TREE_CONFIG_KEY.TOP_K) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.TOP_K) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Change Top K",
             arguments: [TREE_CONFIG_KEY.TOP_K],
           };
           this.contextValue = "config-top-k";
-          this.tooltip = `Top K Results: ${data.value} — Click to change`;
+          this.tooltip = `Top K Results: ${configItem.value} — Click to change`;
         }
 
-        if (data && data.key === TREE_CONFIG_KEY.CHUNK_SIZE) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.CHUNK_SIZE) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Change Chunk Size",
             arguments: [TREE_CONFIG_KEY.CHUNK_SIZE],
           };
           this.contextValue = "config-chunk-size";
-          this.tooltip = `Chunk Size: ${data.value} — Click to change`;
+          this.tooltip = `Chunk Size: ${configItem.value} — Click to change`;
         }
 
-        if (data && data.key === TREE_CONFIG_KEY.CHUNK_OVERLAP) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.CHUNK_OVERLAP) {
           this.command = {
             command: COMMANDS.EDIT_CONFIG_ITEM,
             title: "Change Chunk Overlap",
             arguments: [TREE_CONFIG_KEY.CHUNK_OVERLAP],
           };
           this.contextValue = "config-chunk-overlap";
-          this.tooltip = `Chunk Overlap: ${data.value} — Click to change`;
+          this.tooltip = `Chunk Overlap: ${configItem.value} — Click to change`;
         }
 
-        if (data && data.key === TREE_CONFIG_KEY.RERANKER_MODEL) {
+        if (configItem && configItem.key === TREE_CONFIG_KEY.RERANKER_MODEL) {
           this.command = {
             command: COMMANDS.SELECT_RERANKER_MODEL,
             title: "Select Reranker Model",
           };
           this.contextValue = "config-reranker-model";
-          this.tooltip = `Reranker: ${data.value} — Click to change`;
+          this.tooltip = `Reranker: ${configItem.value} — Click to change`;
         }
 
         break;
@@ -379,7 +381,8 @@ export class TopicTreeItem extends vscode.TreeItem {
         break;
 
       case "stat-item":
-        this.tooltip = `${data.key}: ${data.value}`;
+        const stat = data as ConfigData;
+        this.tooltip = `${stat.key}: ${stat.value}`;
         this.contextValue = "stat-item";
         this.iconPath = new vscode.ThemeIcon("symbol-numeric");
         break;
@@ -499,7 +502,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
    */
   async selectVscodeEmbeddingModel(): Promise<void> {
     try {
-      const lm = vscode.lm as any;
+      const lm = vscode.lm as unknown as LmEmbeddingsApi | undefined; // proposed API: absent from the vscode typings
 
       if (!lm || typeof lm.computeEmbeddings !== "function") {
         vscode.window.showWarningMessage(
@@ -762,7 +765,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     try {
       if (!vscode.lm || typeof vscode.lm.selectChatModels !== "function") {
         vscode.window.showWarningMessage(
-          "VS Code Language Model API is not available. Make sure you have GitHub Copilot installed and VS Code 1.90+.",
+          "VS Code Language Model API is not available. Make sure GitHub Copilot is installed and enabled.",
         );
         return;
       }

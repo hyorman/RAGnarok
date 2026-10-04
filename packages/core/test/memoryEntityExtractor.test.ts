@@ -37,6 +37,14 @@ function createFailingLLMProvider(error?: Error): ILLMProvider {
   };
 }
 
+// When released by its own timer (not aborted) the slow provider returns a real,
+// non-empty extraction, so a caller that gets an empty result can only have
+// aborted the request.
+const SLOW_PROVIDER_RELEASED_RESPONSE = JSON.stringify({
+  entities: [{ name: "TypeScript", type: "tool", description: "Programming language" }],
+  relationships: [],
+});
+
 function createSlowLLMProvider(delayMs: number): ILLMProvider {
   return {
     selectModel: async () => ({
@@ -51,7 +59,7 @@ function createSlowLLMProvider(delayMs: number): ILLMProvider {
               reject(new DOMException("The operation was aborted.", "AbortError"));
             });
           });
-          yield "{}";
+          yield SLOW_PROVIDER_RELEASED_RESPONSE;
         }
         return generate();
       },
@@ -186,9 +194,11 @@ describe("MemoryEntityExtractor", function () {
     });
 
     it("should return empty when LLM times out", async function () {
-      this.timeout(20000);
-      // The extractor uses a 15s timeout; use a delay well beyond that
-      const extractor = new MemoryEntityExtractor(createSlowLLMProvider(30000));
+      // Fail fast if the timeout never fires, instead of waiting for the provider's 30s timer.
+      this.timeout(2000);
+      // A 50ms extractor timeout against a provider that, if it were not aborted,
+      // would return a real entity after 30s: an empty result can only come from the abort.
+      const extractor = new MemoryEntityExtractor(createSlowLLMProvider(30_000), 50);
       const result = await extractor.extract("Some memory text");
 
       expect(result.entities).to.have.length(0);

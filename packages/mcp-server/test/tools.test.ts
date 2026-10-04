@@ -149,7 +149,7 @@ describe("common tool response wrapper", () => {
   });
 
   it("serializes and measures a fitting non-graph result once", () => {
-    const input = { content: [{ type: "text", text: JSON.stringify({ message: "ok" }) }] };
+    const input = { content: [{ type: "text" as const, text: JSON.stringify({ message: "ok" }) }] };
     const byteLength = sinon.spy(Buffer, "byteLength");
 
     const measurement = measureToolResultForResponse(input, 1024);
@@ -413,8 +413,8 @@ describe("MCP Tools (registerTools)", () => {
       // this action an updated archive needs a server restart.
       topicManager.refreshSharedTopics.resolves();
       topicManager.getAllTopics.returns([
-        makeTopic({ id: "shared-aaaaaaaaaaaaaaaa", name: "API Docs", source: "common" }),
-        makeTopic({ id: "shared-bbbbbbbbbbbbbbbb", name: "Runbook", source: "common" }),
+        makeTopic({ id: "shared-aaaaaaaaaaaaaaaa", name: "API Docs", source: "shared" }),
+        makeTopic({ id: "shared-bbbbbbbbbbbbbbbb", name: "Runbook", source: "shared" }),
         makeTopic({ id: "topic-1", name: "My Notes", source: "local" }),
       ]);
 
@@ -454,7 +454,7 @@ describe("MCP Tools (registerTools)", () => {
       // concurrent writer cannot block it. A StorageBusyError reaching this
       // handler would mean something upstream started taking a lease.
       topicManager.refreshSharedTopics.resolves();
-      topicManager.getAllTopics.returns([makeTopic({ id: "shared-cccccccccccccccc", source: "common" })]);
+      topicManager.getAllTopics.returns([makeTopic({ id: "shared-cccccccccccccccc", source: "shared" })]);
 
       const result = await handlers.rag_topic({ action: "refresh" });
 

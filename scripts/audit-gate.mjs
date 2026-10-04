@@ -51,7 +51,12 @@ const auditViaPackages = [
   ),
 ];
 
-const installedTree = runJson("npm", ["ls", ...auditViaPackages, "--omit=dev", "--all", "--json"]);
+// With no exceptions there is nothing to resolve; a bare `npm ls` would list the whole tree
+// and fail on unrelated missing optional peers.
+const installedTree =
+  auditViaPackages.length > 0
+    ? runJson("npm", ["ls", ...auditViaPackages, "--omit=dev", "--all", "--json"])
+    : undefined;
 // npm audit exits 1 whenever it reports findings, which is the normal case here.
 const auditReport = runJson("npm", ["audit", "--omit=dev", "--json"], { allowStatus: [0, 1] });
 

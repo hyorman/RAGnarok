@@ -66,9 +66,21 @@ if (!coreTgz || !mcpTgz) fail(`expected two tarballs, got: ${tarballs.join(", ")
 
 // ── 2. Clean consumer install ──────────────────────────────────────────────
 console.log("Installing tarballs into clean consumer...");
+// Every @langchain/community release declares @huggingface/transformers ^3.8.1 as an
+// optional peer while core ships 4.x. Carry the repository root's override so `npm ls`
+// through Transformers is valid here too. The consumer has no direct Transformers
+// dependency, so the override names core's exact version instead of a $ reference.
+const coreManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "packages", "core", "package.json"), "utf8"));
 fs.writeFileSync(
   path.join(consumerDir, "package.json"),
-  JSON.stringify({ name: "pack-smoke-consumer", private: true, version: "1.0.0" }),
+  JSON.stringify({
+    name: "pack-smoke-consumer",
+    private: true,
+    version: "1.0.0",
+    overrides: {
+      "@langchain/community": { "@huggingface/transformers": coreManifest.dependencies["@huggingface/transformers"] },
+    },
+  }),
 );
 execSync(`npm install --no-audit --no-fund "${path.join(packDir, coreTgz)}" "${path.join(packDir, mcpTgz)}"`, {
   cwd: consumerDir,
@@ -77,14 +89,18 @@ execSync(`npm install --no-audit --no-fund "${path.join(packDir, coreTgz)}" "${p
 });
 console.log("Auditing clean-consumer production dependencies...");
 const releasePolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "release-policy.json"), "utf8"));
+// The local roots are always resolved: their installed versions are read below, and a bare
+// `npm ls` (no exceptions) would fail on unrelated missing optional peers.
+const localRoots = ["@ragnarok/core", "@ragnarok/mcp-server"];
 const auditViaPackages = [
-  ...new Set(
-    releasePolicy.auditExceptions.map((exception) => {
+  ...new Set([
+    ...localRoots,
+    ...releasePolicy.auditExceptions.map((exception) => {
       const separator = typeof exception.via === "string" ? exception.via.lastIndexOf("@") : -1;
       if (separator <= 0) fail("release audit policy contains a malformed via package");
       return exception.via.slice(0, separator);
     }),
-  ),
+  ]),
 ];
 const installedTreeRun = spawnSync("npm", ["ls", ...auditViaPackages, "--omit=dev", "--all", "--json"], {
   cwd: consumerDir,
@@ -119,7 +135,7 @@ try {
   fail("npm audit did not return valid JSON");
 }
 const localTarballVersions = Object.fromEntries(
-  ["@ragnarok/core", "@ragnarok/mcp-server"].map((name) => [name, installedTree.dependencies?.[name]?.version]),
+  localRoots.map((name) => [name, installedTree.dependencies?.[name]?.version]),
 );
 // npm emits empty aggregate ranges for local file tarball roots; recover only
 // these known direct roots from the exact versions npm reports as installed.

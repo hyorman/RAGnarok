@@ -12,13 +12,7 @@ import * as crypto from "crypto";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import {
-  acquireStorageLock,
-  acquireOperationLease,
-  StorageLockHeldError,
-  StorageBusyError,
-  STORAGE_LOCK_FILENAME,
-} from "../src/utils/storageLock";
+import { acquireOperationLease, StorageBusyError, STORAGE_LOCK_FILENAME } from "../src/utils/storageLock";
 import { MemoryStore } from "../src/memory/memoryStore";
 import { EmbeddingService } from "../src/embeddings/embeddingService";
 
@@ -56,10 +50,10 @@ async function runLockChild(
   storageDir: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const script = `
-    const { acquireStorageLock } = require(process.argv[1]);
+    const { acquireOperationLease } = require(process.argv[1]);
     (async () => {
       try {
-        const lock = await acquireStorageLock(process.argv[2], { staleMs: 5, heartbeatMs: 20 });
+        const lock = await acquireOperationLease(process.argv[2], { staleMs: 5, heartbeatMs: 20, waitMs: 0 });
         process.stdout.write("ACQUIRED\\n");
         process.exit(0);
       } catch (error) {
@@ -90,7 +84,7 @@ interface LockContender {
 
 function createLockContender(modulePath: string, storageDir: string): LockContender {
   const script = `
-    const { acquireStorageLock } = require(process.argv[1]);
+    const { acquireOperationLease } = require(process.argv[1]);
     let heldLock;
     let started = false;
 
@@ -98,7 +92,7 @@ function createLockContender(modulePath: string, storageDir: string): LockConten
       if (message === "START" && !started) {
         started = true;
         try {
-          heldLock = await acquireStorageLock(process.argv[2], { staleMs: 5, heartbeatMs: 20 });
+          heldLock = await acquireOperationLease(process.argv[2], { staleMs: 5, heartbeatMs: 20, waitMs: 0 });
           process.send("ACQUIRED");
         } catch (error) {
           process.send("HELD", () => process.exit(0));
@@ -167,7 +161,7 @@ function createLockContender(modulePath: string, storageDir: string): LockConten
 /** A pid that cannot belong to a live process on macOS/Linux test hosts. */
 const DEAD_PID = 998877;
 
-describe("acquireStorageLock", function () {
+describe("storage lock try-lock acquisition", function () {
   this.timeout(15000);
 
   let tempDir: string;
@@ -184,7 +178,7 @@ describe("acquireStorageLock", function () {
   });
 
   it("creates the lock file on acquire and unlinks it when the last holder releases", async function () {
-    const lock = await acquireStorageLock(tempDir);
+    const lock = await acquireOperationLease(tempDir, { waitMs: 0 });
     expect(await exists(lockPath)).to.equal(true);
 
     const written = JSON.parse(await fs.readFile(lockPath, "utf8"));
@@ -197,15 +191,15 @@ describe("acquireStorageLock", function () {
     expect(await exists(lockPath)).to.equal(false);
 
     // The next acquirer simply creates a fresh lock file.
-    const next = await acquireStorageLock(tempDir);
+    const next = await acquireOperationLease(tempDir, { waitMs: 0 });
     const replacement = JSON.parse(await fs.readFile(lockPath, "utf8"));
     expect(replacement.ownerId).to.not.equal(written.ownerId);
     await next.release();
   });
 
   it("is refcounted within one process: the file survives until the last holder releases", async function () {
-    const first = await acquireStorageLock(tempDir);
-    const second = await acquireStorageLock(tempDir);
+    const first = await acquireOperationLease(tempDir, { waitMs: 0 });
+    const second = await acquireOperationLease(tempDir, { waitMs: 0 });
 
     await first.release();
     expect(await exists(lockPath), "released too early — second holder still active").to.equal(true);
@@ -216,8 +210,8 @@ describe("acquireStorageLock", function () {
   });
 
   it("release is idempotent per handle", async function () {
-    const first = await acquireStorageLock(tempDir);
-    const second = await acquireStorageLock(tempDir);
+    const first = await acquireOperationLease(tempDir, { waitMs: 0 });
+    const second = await acquireOperationLease(tempDir, { waitMs: 0 });
 
     await first.release();
     await first.release(); // must not decrement the refcount twice
@@ -227,7 +221,7 @@ describe("acquireStorageLock", function () {
     expect(await exists(lockPath)).to.equal(false);
   });
 
-  it("fails fast naming the holder when a live same-host process owns the lock", async function () {
+  it("fails fast with a busy error naming a live same-host holder", async function () {
     await fs.writeFile(
       lockPath,
       JSON.stringify({ pid: LIVE_FOREIGN_PID, hostname: os.hostname(), acquiredAt: Date.now() }),
@@ -236,13 +230,12 @@ describe("acquireStorageLock", function () {
 
     let caught: unknown;
     try {
-      await acquireStorageLock(tempDir);
+      await acquireOperationLease(tempDir, { waitMs: 0 });
     } catch (error) {
       caught = error;
     }
-    expect(caught).to.be.instanceOf(StorageLockHeldError);
+    expect(caught).to.be.instanceOf(StorageBusyError);
     expect((caught as Error).message).to.include(`pid ${LIVE_FOREIGN_PID}`);
-    expect((caught as Error).message).to.include("RAGNAROK_IGNORE_LOCK");
   });
 
   it("reclaims a lock whose same-host holder pid is dead", async function () {
@@ -252,7 +245,7 @@ describe("acquireStorageLock", function () {
       "utf8",
     );
 
-    const lock = await acquireStorageLock(tempDir);
+    const lock = await acquireOperationLease(tempDir, { waitMs: 0 });
     const written = JSON.parse(await fs.readFile(lockPath, "utf8"));
     expect(written.pid).to.equal(process.pid);
     await lock.release();
@@ -275,11 +268,11 @@ describe("acquireStorageLock", function () {
 
     let caught: unknown;
     try {
-      await acquireStorageLock(tempDir, { staleMs: 10 });
+      await acquireOperationLease(tempDir, { staleMs: 10, waitMs: 0 });
     } catch (error) {
       caught = error;
     }
-    expect(caught).to.be.instanceOf(StorageLockHeldError);
+    expect(caught).to.be.instanceOf(StorageBusyError);
     expect(JSON.parse(await fs.readFile(lockPath, "utf8")).ownerId).to.equal("live-owner");
   });
 
@@ -292,7 +285,7 @@ describe("acquireStorageLock", function () {
     const past = new Date(Date.now() - 60_000);
     await fs.utimes(lockPath, past, past);
 
-    const lock = await acquireStorageLock(tempDir, { staleMs: 10_000 });
+    const lock = await acquireOperationLease(tempDir, { staleMs: 10_000, waitMs: 0 });
     const written = JSON.parse(await fs.readFile(lockPath, "utf8"));
     expect(written.pid).to.equal(process.pid);
     await lock.release();
@@ -307,11 +300,11 @@ describe("acquireStorageLock", function () {
 
     let caught: unknown;
     try {
-      await acquireStorageLock(tempDir, { staleMs: 60_000 });
+      await acquireOperationLease(tempDir, { staleMs: 60_000, waitMs: 0 });
     } catch (error) {
       caught = error;
     }
-    expect(caught).to.be.instanceOf(StorageLockHeldError);
+    expect(caught).to.be.instanceOf(StorageBusyError);
     expect((caught as Error).message).to.include("some-other-machine");
   });
 
@@ -320,18 +313,18 @@ describe("acquireStorageLock", function () {
 
     let caught: unknown;
     try {
-      await acquireStorageLock(tempDir, { staleMs: 60_000 });
+      await acquireOperationLease(tempDir, { staleMs: 60_000, waitMs: 0 });
     } catch (error) {
       caught = error;
     }
-    expect(caught).to.be.instanceOf(StorageLockHeldError);
+    expect(caught).to.be.instanceOf(StorageBusyError);
   });
 
   it("RAGNAROK_IGNORE_LOCK bypasses locking entirely", async function () {
     await fs.writeFile(lockPath, JSON.stringify({ pid: 1, hostname: os.hostname(), acquiredAt: Date.now() }), "utf8");
     process.env.RAGNAROK_IGNORE_LOCK = "1";
 
-    const lock = await acquireStorageLock(tempDir);
+    const lock = await acquireOperationLease(tempDir, { waitMs: 0 });
     await lock.release();
     // The foreign lock file is untouched by the bypass.
     const written = JSON.parse(await fs.readFile(lockPath, "utf8"));
@@ -339,7 +332,7 @@ describe("acquireStorageLock", function () {
   });
 
   it("release leaves a lock alone if another process reclaimed it meanwhile", async function () {
-    const lock = await acquireStorageLock(tempDir);
+    const lock = await acquireOperationLease(tempDir, { waitMs: 0 });
     const displacedPath = `${lockPath}.displaced`;
     await fs.rename(lockPath, displacedPath);
     // Use the same pid/host to prove that identity is the random owner token,
@@ -371,7 +364,7 @@ describe("acquireStorageLock", function () {
   });
 
   it("heartbeat never touches a replacement lock pathname", async function () {
-    const lock = await acquireStorageLock(tempDir, { heartbeatMs: 10 });
+    const lock = await acquireOperationLease(tempDir, { heartbeatMs: 10, waitMs: 0 });
     await fs.rename(lockPath, `${lockPath}.displaced`);
     await fs.writeFile(
       lockPath,
@@ -458,7 +451,7 @@ describe("acquireStorageLock", function () {
 
     let caught: unknown;
     try {
-      await acquireStorageLock(tempDir, { staleMs: 5 });
+      await acquireOperationLease(tempDir, { staleMs: 5, waitMs: 0 });
     } catch (error) {
       caught = error;
     }
@@ -469,7 +462,7 @@ describe("acquireStorageLock", function () {
     // Explicit operator recovery of the orphaned generation claim restores
     // acquisition without modifying the stale canonical lease.
     await fs.unlink(claimPath);
-    const recovered = await acquireStorageLock(tempDir, { staleMs: 5 });
+    const recovered = await acquireOperationLease(tempDir, { staleMs: 5, waitMs: 0 });
     expect(JSON.parse(await fs.readFile(lockPath, "utf8")).ownerId).to.not.equal(staleInfo.ownerId);
     await recovered.release();
   });
@@ -484,7 +477,7 @@ describe("acquireStorageLock", function () {
     expect(released.ownerId).to.be.a("string");
     expect(released.releasedAt).to.be.a("number");
 
-    const replacement = await acquireStorageLock(tempDir, { staleMs: 60_000 });
+    const replacement = await acquireOperationLease(tempDir, { staleMs: 60_000, waitMs: 0 });
     const current = JSON.parse(await fs.readFile(lockPath, "utf8"));
     expect(current.ownerId).to.not.equal(released.ownerId);
     await replacement.release();
@@ -529,11 +522,11 @@ describe("operation leases", function () {
     await b.release();
   });
 
-  it("joins a session lease held by the same process", async () => {
-    const session = await acquireStorageLock(dir);
+  it("joins a lease already held by the same process", async () => {
+    const first = await acquireOperationLease(dir, { waitMs: 0 });
     const op = await acquireOperationLease(dir, { waitMs: 0 }); // must NOT throw StorageBusyError
     await op.release();
-    await session.release();
+    await first.release();
   });
 
   it("throws StorageBusyError with holder info after waitMs against a live foreign holder", async () => {
@@ -556,70 +549,30 @@ describe("operation leases", function () {
     }
   });
 
-  it("a session join of a pending operation-lease wait retries under its own (fail-fast) policy on failure", async () => {
-    await fs.writeFile(
-      path.join(dir, STORAGE_LOCK_FILENAME),
-      JSON.stringify({ version: 2, ownerId: "x", pid: 99999, hostname: "other-host", acquiredAt: Date.now() }),
-    );
-
-    // Synchronously start both: the op lease creates the pending entry, and
-    // the session call joins it before either has awaited anything.
-    const opPromise = acquireOperationLease(dir, { waitMs: 300, pollIntervalMs: 50 });
-    const sessionPromise = acquireStorageLock(dir);
-
-    let opError: any;
-    try {
-      await opPromise;
-      expect.fail("op lease should have thrown");
-    } catch (error) {
-      opError = error;
-    }
-    expect(opError.name).to.equal("StorageBusyError");
-
-    let sessionError: any;
-    try {
-      await sessionPromise;
-      expect.fail("session acquire should have thrown");
-    } catch (error) {
-      sessionError = error;
-    }
-    // The session joiner must retry under ITS OWN (fail-fast) policy, not
-    // inherit the operation lease's bounded-wait policy or error type.
-    expect(sessionError).to.be.instanceOf(StorageLockHeldError);
-  });
-
-  it("an operation-lease join of a pending session acquisition retries under its own wait policy on failure", async () => {
+  it("a bounded-wait join of a failing try-lock retries under its own wait budget", async () => {
     await fs.writeFile(
       path.join(dir, STORAGE_LOCK_FILENAME),
       JSON.stringify({ version: 2, ownerId: "x", pid: 99999, hostname: "other-host", acquiredAt: Date.now() }),
     );
 
     const started = Date.now();
-    // Synchronously start both: the session call creates the pending entry
-    // and fails fast, and the op lease joins it before either has awaited
-    // anything.
-    const sessionPromise = acquireStorageLock(dir);
-    const opPromise = acquireOperationLease(dir, { waitMs: 300, pollIntervalMs: 50 });
+    // Started synchronously: the try-lock creates the pending entry and fails
+    // at once; the bounded wait joins it before either has awaited anything.
+    const tryLock = acquireOperationLease(dir, { waitMs: 0 });
+    const bounded = acquireOperationLease(dir, { waitMs: 300, pollIntervalMs: 50 });
 
-    let sessionError: any;
-    try {
-      await sessionPromise;
-      expect.fail("session acquire should have thrown");
-    } catch (error) {
-      sessionError = error;
-    }
-    expect(sessionError).to.be.instanceOf(StorageLockHeldError);
+    const tryLockError = await tryLock.then(
+      () => undefined,
+      (error: Error) => error,
+    );
+    expect(tryLockError?.name).to.equal("StorageBusyError");
 
-    let opError: any;
-    try {
-      await opPromise;
-      expect.fail("op lease should have thrown");
-    } catch (error) {
-      opError = error;
-    }
-    // The op-lease joiner must retry under ITS OWN bounded-wait policy, not
-    // inherit the session's fail-fast policy or error type.
-    expect(opError.name).to.equal("StorageBusyError");
+    const boundedError = await bounded.then(
+      () => undefined,
+      (error: Error) => error,
+    );
+    expect(boundedError?.name).to.equal("StorageBusyError");
+    // Inheriting the try-lock's zero budget would have failed immediately.
     expect(Date.now() - started).to.be.greaterThanOrEqual(250);
   });
 
@@ -650,9 +603,8 @@ describe("MemoryStore storage lock integration", function () {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  // Retyped from the session-lease contract: memory no longer holds a lease
-  // for the life of the store. A mutation takes an operation lease and gives
-  // it straight back, and reads take nothing at all.
+  // Memory holds no lease for the life of the store: a mutation takes an
+  // operation lease and gives it straight back, and reads take nothing at all.
   it("holds an operation lease only for the duration of a mutation", async function () {
     const store = new MemoryStore({
       storageDir: tempDir,
@@ -685,7 +637,7 @@ describe("MemoryStore storage lock integration", function () {
   });
 
   // Retyped: a foreign holder no longer fails a memory mutation fast with
-  // StorageLockHeldError. Mutations wait out the bounded window and then
+  // a hard lock error. Mutations wait out the bounded window and then
   // report the typed busy error.
   it("reports a busy storage dir when another live process holds it", async function () {
     await fs.writeFile(

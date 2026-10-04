@@ -7,6 +7,8 @@ import type { EmbeddingService } from "../src/embeddings/embeddingService";
 import type { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
 
 const LOCK_FILENAME = ".ragnarok.lock";
+const RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
+const RESET_REASON = "a reset appears to be in progress in another window";
 
 const config: IConfigProvider = {
   get<T>(_key: string, defaultValue: T): T {
@@ -221,5 +223,43 @@ describe("TopicManager external-change watcher", function () {
     // watcherStopped check instead of reloading and republishing state.
     expect((created as any).topicsIndex).to.equal(null);
     expect(events).to.have.length(0);
+  });
+
+  describe("storage-unavailable log reason", function () {
+    /** The `reason` the manager logs when it announces that storage became unavailable, given the marker files present. */
+    async function reasonFor(markerFiles: string[]): Promise<unknown> {
+      const created = await createManagerInTmpDir();
+      for (const name of markerFiles) {
+        await fs.writeFile(path.join(storageDir, name), "{}");
+      }
+      const warnings: Array<{ message: string; context?: { reason?: unknown } }> = [];
+      (created as any).logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        error: () => undefined,
+        warn: (message: string, context?: { reason?: unknown }) => warnings.push({ message, context }),
+      };
+
+      await (created as any).announceUnavailability();
+
+      return warnings.find((warning) => warning.message.startsWith("Storage became unavailable"))?.context?.reason;
+    }
+
+    it("blames an unreachable directory when no marker file is present", async function () {
+      expect(await reasonFor([])).to.equal("the storage directory is unreachable");
+    });
+
+    it("blames a foreign write lease, not a reset, when only the lock file is present", async function () {
+      expect(await reasonFor([LOCK_FILENAME])).to.equal("another process holds the storage write lease");
+    });
+
+    it("blames a reset when the reset journal is present", async function () {
+      expect(await reasonFor([RESET_JOURNAL_FILENAME])).to.equal(RESET_REASON);
+    });
+
+    it("blames a reset when the reset journal and the lock file are both present", async function () {
+      // A reset holds the write lease for its whole duration, so this is the common reset case.
+      expect(await reasonFor([RESET_JOURNAL_FILENAME, LOCK_FILENAME])).to.equal(RESET_REASON);
+    });
   });
 });

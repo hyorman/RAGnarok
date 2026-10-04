@@ -3,6 +3,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import AdmZip from "adm-zip";
 import type { Document, ExportedTopicData, Topic } from "./types";
+import { isFiniteNumber, isRecord } from "./typeGuards";
 
 export const TOPIC_ARCHIVE_FORMAT_VERSION = "2.0";
 
@@ -29,14 +30,6 @@ export interface StagedTopicArchive {
   contentDir: string;
   exportData: ExportedTopicData;
   manifest: TopicArchiveManifest;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -219,7 +212,7 @@ function validateDocument(value: unknown, topicId: string): value is Document {
   );
 }
 
-export function validateExportedTopicData(value: unknown): ExportedTopicData {
+function validateExportedTopicData(value: unknown): ExportedTopicData {
   if (
     !isRecord(value) ||
     value.version !== TOPIC_ARCHIVE_FORMAT_VERSION ||

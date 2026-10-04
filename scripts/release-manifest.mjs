@@ -34,7 +34,6 @@ const requiredGates = [
   "docker-smoke",
   "vsix-win32-x64",
   "vsix-win32-arm64",
-  "vsix-darwin-x64",
   "vsix-darwin-arm64",
   "vsix-linux-x64",
   "vsix-linux-arm64",
@@ -90,7 +89,7 @@ export async function verifyReleaseManifest() {
     artifactsByType.vsix?.length !== policyJson.vsixTargets.length ||
     artifactsByType.docker?.length !== 1
   ) {
-    throw new Error("Release manifest must contain exactly two npm, six VSIX, and one Docker artifact");
+    throw new Error("Release manifest must contain exactly two npm, five VSIX, and one Docker artifact");
   }
   const docker = artifactsByType.docker[0];
   if (

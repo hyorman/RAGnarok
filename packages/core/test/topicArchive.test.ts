@@ -307,6 +307,9 @@ describe("topic archive safety", function () {
     const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
     const symlinkZip = new AdmZip();
     const topicEntry = symlinkZip.addFile("topic.json", topicBytes);
+    // adm-zip stamps "version made by" with the host OS (Windows = 10), and only
+    // Unix-made entries carry a file type in their high attribute bits.
+    topicEntry.header.made = (3 << 8) | 20;
     topicEntry.attr = ((0xa000 | 0o777) << 16) >>> 0;
     symlinkZip.addFile(
       "manifest.json",
@@ -333,6 +336,27 @@ describe("topic archive safety", function () {
     expect((await captureError(() => validateAndStageTopicArchive(archivePath, stagingDir))).message).to.include(
       "excessive compression ratio",
     );
+  });
+
+  it("reads no file type from the attribute bits of an archive not made on Unix", async function () {
+    const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
+    const windowsZip = new AdmZip();
+    const topicEntry = windowsZip.addFile("topic.json", topicBytes);
+    // DOS/NTFS archives carry no Unix type, so the same bits that mark a Unix symlink mean nothing here.
+    topicEntry.header.made = (10 << 8) | 20;
+    topicEntry.attr = ((0xa000 | 0o777) << 16) >>> 0;
+    windowsZip.addFile(
+      "manifest.json",
+      Buffer.from(
+        JSON.stringify({
+          formatVersion: TOPIC_ARCHIVE_FORMAT_VERSION,
+          files: [manifestFile("topic.json", topicBytes)],
+        }),
+      ),
+    );
+    windowsZip.writeZip(archivePath);
+
+    await validateAndStageTopicArchive(archivePath, stagingDir);
   });
 
   it("schema-validates topic and vector metadata", async function () {
@@ -377,7 +401,7 @@ describe("topic archive safety", function () {
     (manager as any).topicsIndex = index;
     (manager as any).topicDocuments = new Map();
     (manager as any).generateTopicId = () => "topic-imported";
-    (manager as any).publishPreparedTopicsIndex = async () => {
+    (manager as any).archiveTransfer.publishPreparedTopicsIndex = async () => {
       throw new Error("injected publication failure");
     };
     const treeBefore = await listTree(databaseDir);
@@ -508,8 +532,10 @@ describe("topic archive safety", function () {
 
       const lockPath = path.join(storageDir, STORAGE_LOCK_FILENAME);
       let lockHeldDuringCommit = false;
-      const originalPublish = (manager as any).publishPreparedTopicsIndex.bind(manager);
-      (manager as any).publishPreparedTopicsIndex = async (preparedIndexPath: string) => {
+      const originalPublish = (manager as any).archiveTransfer.publishPreparedTopicsIndex.bind(
+        (manager as any).archiveTransfer,
+      );
+      (manager as any).archiveTransfer.publishPreparedTopicsIndex = async (preparedIndexPath: string) => {
         lockHeldDuringCommit = await fs
           .access(lockPath)
           .then(() => true)
@@ -590,10 +616,12 @@ describe("topic archive safety", function () {
     (manager as any).topicsIndex = index;
     (manager as any).topicDocuments = new Map([["topic-local", new Map()]]);
 
-    const topicsIndexPath = (manager as any).getTopicsIndexPath() as string;
-    const realHashFile = ((manager as any).hashFile as (filePath: string) => Promise<string>).bind(manager);
+    const topicsIndexPath = (manager as any).paths.topicsIndexPath() as string;
+    const realHashFile = ((manager as any).archiveTransfer.hashFile as (filePath: string) => Promise<string>).bind(
+      (manager as any).archiveTransfer,
+    );
     let topicsIndexHashCalls = 0;
-    (manager as any).hashFile = async (filePath: string): Promise<string> => {
+    (manager as any).archiveTransfer.hashFile = async (filePath: string): Promise<string> => {
       if (filePath === topicsIndexPath) {
         topicsIndexHashCalls += 1;
         if (topicsIndexHashCalls === 2) {

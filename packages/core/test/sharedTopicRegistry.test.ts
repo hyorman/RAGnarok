@@ -174,7 +174,7 @@ describe("shared topic registry", function () {
 
     expect(registry.has(topic.id)).to.equal(true);
     expect(registry.has("topic-local")).to.equal(false);
-    expect(topic.source).to.equal("common");
+    expect(topic.source).to.equal("shared");
     expect(registry.getStoreDir(topic.id)).to.equal("/cache/src-a/n1");
     expect(registry.getStoreDir("topic-local")).to.equal(undefined);
     expect(registry.getTopic(topic.id)?.name).to.equal("API Docs");

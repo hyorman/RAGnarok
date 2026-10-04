@@ -1,5 +1,7 @@
 # RAGnarōk Retrieval Benchmarks
 
+> Historical results. These timings are approximate and are not release evidence; the current gates and budgets are in [BENCHMARKS.md](BENCHMARKS.md).
+
 Comprehensive benchmark results for RAGnarōk's retrieval strategies, evaluated
 across multiple standard IR datasets. Default results use the **all-MiniLM-L6-v2**
 embedding model (384-dim); see [Model Comparison](#model-comparison) for
@@ -175,6 +177,8 @@ superiority on this dataset.
   higher-dim embeddings better capture temporal concepts.
 - 92.5% corpus coverage (2,314/2,503 articles). Improved from 72% through
   incremental caching across runs.
+- The 35-article release sample was re-pinned on 2026-10-04 to the live summaries; figures above were measured on the
+  earlier text.
 
 ---
 

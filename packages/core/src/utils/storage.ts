@@ -4,18 +4,13 @@ import { STORAGE_LOCK_FILENAME } from "./storageLock";
 
 export const STORAGE_FORMAT_VERSION = 2 as const;
 export const STORAGE_FORMAT_FILENAME = "storage-format.json";
-/**
- * The optional user-facing settings file (@ragnarok/mcp-server's CONFIG_FILE_NAME).
- * Settings, not corpus data — see isInfrastructureEntry for why that distinction
- * has to be made here, in the storage layer.
- */
+/** The optional user-facing settings file (@ragnarok/mcp-server's CONFIG_FILE_NAME): settings, not corpus data. */
 export const STORAGE_CONFIG_FILENAME = "config.json";
 /** Marks an in-flight `resetStorage` so a crash mid-reset fails closed instead of reading as unversioned data. */
 export const STORAGE_RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
 /**
- * Derived, content-addressed unpacks of shared `.rag` archives. Infrastructure,
- * not corpus data: it must not make an otherwise-empty store read as an
- * unversioned legacy layout, and a reset must not sweep it into a backup.
+ * Derived unpacks of shared `.rag` archives. Infrastructure, not data: it neither makes an
+ * empty store read as unsupported nor gets backed up by a reset.
  */
 export const SHARED_TOPIC_CACHE_DIRNAME = ".ragnarok-shared-cache";
 
@@ -30,12 +25,28 @@ export class StorageFormatVersionError extends Error {
 }
 
 /**
- * A reset (`resetStorage`) started and never finished -- most likely the
- * process died mid-move, between renaming managed entries into the backup
- * directory and re-marking the storage as v2. Data may now be split between
- * the storage dir and a partial backup, so this must never read as plain
- * unversioned 0.3 data: it fails closed until an operator inspects and
- * clears the journal by hand.
+ * The directory holds RAGnarōk data but no format marker: content from an
+ * unversioned pre-0.4 build, refused rather than read because it shares file
+ * paths with v2, so stamping a marker beside it would silently adopt it.
+ */
+export class UnsupportedStorageError extends Error {
+  readonly name = "UnsupportedStorageError";
+  constructor(
+    public readonly storageDir: string,
+    public readonly entries: readonly string[] = [],
+  ) {
+    super(
+      `RAGnarōk storage at ${storageDir} holds data from an unsupported pre-0.4 build` +
+        `${entries.length > 0 ? ` (found: ${entries.join(", ")})` : ""}. ` +
+        `Move or delete that folder to start a new store.`,
+    );
+  }
+}
+
+/**
+ * A reset (`resetStorage`) started and never finished, most likely a crash
+ * mid-move: data may be split between the storage dir and a partial backup, so
+ * this fails closed until an operator inspects and clears the journal.
  */
 export class StorageResetInterruptedError extends Error {
   readonly name = "StorageResetInterruptedError";
@@ -52,13 +63,25 @@ export class StorageResetInterruptedError extends Error {
 }
 
 /**
- * Files that are infrastructure, not managed data — never version-gated, never backed up.
- *
- * config.json earns its place on both counts. The MCP server generates it on
- * first run, before storage format validation, so version-gating it would make
- * every fresh install look like unversioned v0.3 storage and refuse to start.
- * And it holds the operator's settings rather than their corpus, so resetting
- * *data* must leave it exactly where it is instead of sweeping it into a backup.
+ * Names the operating system or a file manager creates in a directory the user
+ * never wrote to. Exact, case-sensitive names: an unknown entry still refuses.
+ * lost+found is present at the root of every fresh ext4 volume (a Docker bind
+ * mount), and fsck owns it, so it is never moved into a reset backup either.
+ */
+const FILESYSTEM_CLUTTER_ENTRIES: ReadonlySet<string> = new Set([
+  ".DS_Store",
+  "Thumbs.db",
+  "desktop.ini",
+  "lost+found",
+]);
+
+/** How many triggering entries the refusal names, so a large legacy tree does not flood the message. */
+const UNSUPPORTED_ENTRIES_REPORTED = 5;
+
+/**
+ * Infrastructure files, never version-gated or backed up. config.json is
+ * generated on first run before format validation (gating it would refuse every
+ * fresh install) and holds settings, not corpus, so a data reset must leave it.
  */
 function isInfrastructureEntry(entry: string): boolean {
   return (
@@ -67,6 +90,7 @@ function isInfrastructureEntry(entry: string): boolean {
     entry === STORAGE_CONFIG_FILENAME ||
     entry === STORAGE_RESET_JOURNAL_FILENAME ||
     entry === SHARED_TOPIC_CACHE_DIRNAME ||
+    FILESYSTEM_CLUTTER_ENTRIES.has(entry) ||
     entry.startsWith("backup-v1-")
   );
 }
@@ -77,27 +101,14 @@ export interface StorageFormatMarker {
 }
 
 export type StorageInspection =
-  // `unmanagedEntriesPresent` is informational only -- the status is still
-  // "empty" and callers must not branch on it. It exists so a host can say in
-  // its log why a directory that visibly holds files is being initialized as
-  // an empty v2 store, rather than leaving that looking like data loss.
-  | { status: "current" | "empty"; unmanagedEntriesPresent?: boolean }
+  | { status: "current" | "empty" | "unsupported" }
   | { status: "future-version"; foundVersion: unknown }
   | { status: "reset-interrupted" };
 
 /**
- * Read-only, lock-free classification of a storage directory.
- *
- * Activation needs to know what it is looking at *before* it opens anything,
- * so that an interrupted migration is resumed rather than rediscovered as an
- * open failure. Nothing here writes, creates the directory, or takes a lock —
- * which also means two windows can inspect the same store concurrently and
- * both decide to migrate; the migration lock, not this function, is what
- * settles that race.
- *
- * Order is by severity, not convenience: an interrupted migration or reset
- * describes the directory more truthfully than whatever files it currently
- * happens to contain.
+ * Read-only, lock-free classification of a storage directory (nothing is
+ * written or locked). An interrupted reset is reported ahead of the files it
+ * left behind.
  */
 export async function inspectStorage(storageDir: string): Promise<StorageInspection> {
   // Existence only. A corrupt journal still proves a reset was interrupted,
@@ -124,51 +135,7 @@ export async function inspectStorage(storageDir: string): Promise<StorageInspect
     }
   }
 
-  return { status: "empty", unmanagedEntriesPresent: await hasManagedData(storageDir) };
-}
-
-/** The six fields the 0.3 release wrote into `vector-<topic>-metadata.json`. */
-export interface LegacyVectorStoreMetadata {
-  topicId: string;
-  documentCount: number;
-  chunkCount: number;
-  embeddingModel: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-/** Structurally a `VectorStoreMetadata`, narrowed to what adoption can promise. */
-export interface AdoptedVectorStoreMetadata extends LegacyVectorStoreMetadata {
-  schemaVersion: typeof STORAGE_FORMAT_VERSION;
-  embeddingBackend: string;
-  migrationRequiresFingerprintOnReindex: true;
-}
-
-/**
- * Lift pre-v2 vector metadata to v2 without touching a single vector.
- *
- * The recorded model is preserved and no fingerprint is invented — the
- * embedding space of these vectors is genuinely unknown, so the topic reads
- * back for recovery while every extension waits for an explicit reindex.
- *
- * Shared deliberately. The whole-storage migrator applies this to the topics it
- * converts, and the vector store applies it to pre-v2 files that appear in a
- * store already marked v2 — an older build writing into it, or a 0.3-era `.rag`
- * archive being imported. Two copies of this rule would drift, and the halves
- * that drifted would disagree about whether a topic may be written to.
- */
-export function adoptLegacyVectorStoreMetadata(fields: LegacyVectorStoreMetadata): AdoptedVectorStoreMetadata {
-  return {
-    schemaVersion: STORAGE_FORMAT_VERSION,
-    topicId: fields.topicId,
-    documentCount: fields.documentCount,
-    chunkCount: fields.chunkCount,
-    embeddingModel: fields.embeddingModel,
-    embeddingBackend: "",
-    createdAt: fields.createdAt,
-    updatedAt: fields.updatedAt,
-    migrationRequiresFingerprintOnReindex: true,
-  };
+  return (await managedEntries(storageDir)).length > 0 ? { status: "unsupported" } : { status: "empty" };
 }
 
 /** Durably replace a UTF-8 file using a same-directory atomic rename. */
@@ -235,17 +202,18 @@ async function checkResetJournal(storageDir: string): Promise<void> {
   throw new StorageResetInterruptedError(storageDir, journal.backupDir ?? null);
 }
 
-async function hasManagedData(storageDir: string): Promise<boolean> {
+/** The sorted top-level entries that make a marker-less directory count as holding data. */
+async function managedEntries(storageDir: string): Promise<string[]> {
   let entries: string[];
   try {
     entries = await fs.readdir(storageDir);
   } catch (error: any) {
     if (error?.code === "ENOENT") {
-      return false;
+      return [];
     }
     throw error;
   }
-  return entries.some((entry) => !isInfrastructureEntry(entry));
+  return entries.filter((entry) => !isInfrastructureEntry(entry)).sort();
 }
 
 /** Validate storage format v2, initializing only a genuinely empty directory. */
@@ -254,11 +222,7 @@ export async function ensureStorageFormat(storageDir: string): Promise<StorageFo
   return ensureStorageFormatUnjournaled(storageDir);
 }
 
-/**
- * The actual v2 validation/initialization, without the reset-journal check.
- * `resetStorage` calls this directly -- it writes the journal itself and
- * must not immediately trip over it via the public entry point above.
- */
+/** Validation without the journal check: resetStorage writes the journal itself and must not trip over it. */
 async function ensureStorageFormatUnjournaled(storageDir: string): Promise<StorageFormatMarker> {
   await fs.mkdir(storageDir, { recursive: true });
   const formatPath = markerPath(storageDir);
@@ -277,10 +241,11 @@ async function ensureStorageFormatUnjournaled(storageDir: string): Promise<Stora
     }
   }
 
-  // Pre-v2 content is ignored rather than refused. v2 is the baseline format;
-  // the unversioned 0.3 layout was never released, so anything here that is not
-  // v2 is left untouched on disk and simply not adopted. Stamping the marker
-  // beside it makes this a healthy, empty v2 store.
+  const unsupported = await managedEntries(storageDir);
+  if (unsupported.length > 0) {
+    throw new UnsupportedStorageError(storageDir, unsupported.slice(0, UNSUPPORTED_ENTRIES_REPORTED));
+  }
+
   const marker: StorageFormatMarker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: Date.now() };
   await atomicWriteJson(formatPath, marker);
   return marker;
@@ -294,11 +259,9 @@ export async function resetStorage(storageDir: string): Promise<string | null> {
   const backupDir =
     entries.length === 0 ? null : path.join(storageDir, `backup-v1-${new Date().toISOString().replace(/[:.]/g, "-")}`);
 
-  // Preserve the current marker (if it is a genuinely valid v2 marker) in the
-  // journal. A rollback that restores every moved entry can then reinstate
-  // this exact marker and clear the journal -- proving the transient failure
-  // never actually left the store unversioned -- instead of leaving a
-  // perfectly healthy store permanently fail-closed.
+  // A valid v2 marker is kept in the journal so a fully rolled-back transient
+  // failure can reinstate it and clear the journal instead of leaving a
+  // healthy store fail-closed.
   let priorMarker: StorageFormatMarker | null = null;
   try {
     const parsed = JSON.parse(await fs.readFile(markerPath(storageDir), "utf8")) as Partial<StorageFormatMarker>;
@@ -344,16 +307,13 @@ export async function resetStorage(storageDir: string): Promise<string | null> {
     }
     await fs.rmdir(backupDir!).catch(() => undefined);
     if (fullyRestored && priorMarker) {
-      // A provably complete rollback with a known-good prior marker means
-      // this was a transient failure, not real data loss: restore the exact
-      // marker and clear the journal rather than leaving the store
-      // permanently misclassified as an interrupted reset.
+      // A complete rollback with a known-good prior marker was a transient
+      // failure, not data loss: reinstate the marker and clear the journal.
       await atomicWriteJson(markerPath(storageDir), priorMarker);
       await fs.unlink(journalPath).catch(() => undefined);
     }
-    // Otherwise -- an incomplete restore, or no valid prior marker was ever
-    // recorded -- the journal (and any leftover partial backup dir) are left
-    // in place on purpose: fail closed until an operator inspects it.
+    // Otherwise the journal and any partial backup are left in place on
+    // purpose: fail closed until an operator inspects it.
     throw error;
   }
 }

@@ -9,7 +9,7 @@ import { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegi
 import { VectorStoreFactory } from "../src/stores/vectorStoreFactory";
 import type { EmbeddingFingerprint } from "../src/embeddings/embeddingBackend";
 import type { ILLMProvider } from "../src/interfaces";
-import { STORAGE_FORMAT_FILENAME } from "../src/utils/storage";
+import { writeV03Layout, snapshotTree } from "./helpers/v03Layout";
 
 // ── Mock Embedding Service ───────────────────────────────────────────
 // Returns a deterministic 32-dim vector derived from a simple text hash.
@@ -882,12 +882,10 @@ describe("MemoryStore reset and cancellation safety", function () {
 describe("MemoryStore standalone format and markdown privacy", function () {
   this.timeout(30000);
 
-  it("writes into a directory holding pre-v2 content without touching it", async function () {
-    // v2 is the baseline, so unversioned content is not adopted and not an
-    // obstacle: the store stamps its marker beside it and proceeds. The old
-    // file stays exactly where the operator left it.
+  it("refuses a directory holding a v0.3 store and leaves it untouched", async function () {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-format-gate-"));
-    await fs.writeFile(path.join(directory, "legacy-memory.json"), "{}", "utf8");
+    await writeV03Layout(directory);
+    const before = await snapshotTree(directory);
     const standalone = new MemoryStore({
       storageDir: directory,
       embeddingService: createMockEmbeddingService(),
@@ -895,10 +893,13 @@ describe("MemoryStore standalone format and markdown privacy", function () {
       markdownPath: null,
     });
 
-    const stored = await standalone.store({ content: "enters the new v2 store" });
-    expect(stored.content).to.equal("enters the new v2 store");
-    expect(await fs.readdir(directory)).to.include.members(["legacy-memory.json", STORAGE_FORMAT_FILENAME]);
-    expect(await fs.readFile(path.join(directory, "legacy-memory.json"), "utf8")).to.equal("{}");
+    const error = await captureError(standalone.store({ content: "must not enter unsupported storage" }));
+
+    expect((error as Error).name).to.equal("UnsupportedStorageError");
+    expect((error as { entries?: string[] }).entries).to.deep.equal(["database"]);
+    expect(await snapshotTree(directory), "no byte added, removed or rewritten, and no marker stamped").to.deep.equal(
+      before,
+    );
     await standalone.dispose();
     await fs.rm(directory, { recursive: true, force: true });
   });
@@ -1389,8 +1390,6 @@ describe("MemoryStore lock-free reads and operation leases", function () {
 
     await writeForeignLease();
 
-    // This is the two-window bug: a second VS Code window used to die on its
-    // very first memory read because reads took the session lease.
     const reader = makeStore();
     expect((await reader.list({ scope: "workspace" })).map((entry) => entry.content)).to.include(
       "second window read memory",
@@ -1504,11 +1503,10 @@ describe("MemoryStore lock-free reads and operation leases", function () {
   it("closes the storage watcher on dispose", async function () {
     const current = makeStore();
     await current.store({ content: "watcher disposal memory" });
-    expect((current as any).storageWatcher, "a live store watches its storage directory").to.not.equal(null);
+    expect((current as any).storageWatcher?.watching, "a live store watches its storage directory").to.equal(true);
 
     await current.dispose();
     forget(current);
-    expect((current as any).storageWatcher).to.equal(null);
-    expect((current as any).watcherDebounceTimer).to.equal(null);
+    expect((current as any).storageWatcher?.watching).to.equal(false);
   });
 });

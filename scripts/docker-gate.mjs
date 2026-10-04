@@ -18,13 +18,16 @@ const policy = JSON.parse(await readFile(path.join(root, "release-policy.json"),
 const image = "ragnarok-mcp:ci";
 const sessionContainer = "ragnarok-release-session";
 const persistenceContainer = "ragnarok-release-persistence";
-const lockContainer = "ragnarok-release-lock-contender";
-const containers = [sessionContainer, persistenceContainer, lockContainer];
+const peerContainer = "ragnarok-release-volume-peer";
+const transformersContainer = "ragnarok-release-transformers";
+const containers = [sessionContainer, persistenceContainer, peerContainer, transformersContainer];
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
 const expectedToolCount = 8;
-// Mirrors REMOVED_ENV_VARS in packages/mcp-server/src/config.ts: the image must
-// neither bake these in nor tolerate an operator supplying one.
+// The HTTP transport's variables, which nothing reads any more. The image must
+// not bake one in: a stdio-only image carrying them would look like a configured
+// network service. The gate only inspects the image's Env; it never starts the
+// server with one set.
 const removedEnvVars = [
   "RAGNAROK_DEPLOYMENT_MODE",
   "RAGNAROK_PORT",
@@ -62,25 +65,20 @@ const containerLogs = (container) => {
   return `${result.stdout}${result.stderr}`.trim();
 };
 
+// The runtime posture every container the gate starts shares.
+const hardeningArgs = [
+  "--init",
+  "--read-only",
+  "--tmpfs",
+  "/tmp:size=256m",
+  "--security-opt",
+  "no-new-privileges",
+  "--cap-drop",
+  "ALL",
+];
+
 function hardenedRunArgs(name) {
-  return [
-    "run",
-    "-i",
-    "--name",
-    name,
-    "--init",
-    "--read-only",
-    "--tmpfs",
-    "/tmp:size=256m",
-    "--security-opt",
-    "no-new-privileges",
-    "--cap-drop",
-    "ALL",
-    "--stop-timeout",
-    "20",
-    "-v",
-    `${volume}:/data/ragnarok`,
-  ];
+  return ["run", "-i", "--name", name, ...hardeningArgs, "--stop-timeout", "20", "-v", `${volume}:/data/ragnarok`];
 }
 
 /**
@@ -257,6 +255,49 @@ async function assertImageContract() {
   return { imageBytes, imageArchitecture };
 }
 
+/**
+ * The image's Dockerfile deletes every @huggingface/transformers/dist file but
+ * transformers.node.{mjs,cjs}, and the stdio conversation below never loads a
+ * model, so an over-pruned image would pass it and fail on the first real
+ * query. Core loads Transformers with import() from /app/packages/core; load it
+ * the same way inside the image (which also loads the onnxruntime-node binding)
+ * and resolve the CJS entry, so both kept files are exercised.
+ */
+function assertTransformersLoads() {
+  const script = [
+    'import { createRequire } from "node:module";',
+    'const transformers = await import("@huggingface/transformers");',
+    'const cjsEntry = createRequire(process.cwd() + "/").resolve("@huggingface/transformers");',
+    'console.log("transformers-ok " + transformers.env.version + " " + cjsEntry);',
+  ].join("\n");
+  const result = spawnSync(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--name",
+      transformersContainer,
+      ...hardeningArgs,
+      "--entrypoint",
+      "node",
+      "-w",
+      "/app/packages/core",
+      image,
+      "--input-type=module",
+      "-e",
+      script,
+    ],
+    { cwd: root, encoding: "utf8", timeout: 60_000 },
+  );
+  const marker = /^transformers-ok (\S+) (\S+\/transformers\.node\.cjs)$/m.exec(result.stdout ?? "");
+  if (result.status !== 0 || !marker) {
+    throw new Error(
+      `The image could not load @huggingface/transformers (exit ${result.status}): ${(result.stderr || result.stdout || "").slice(-1000)}`,
+    );
+  }
+  console.log(marker[0]);
+}
+
 function assertToolSurface(tools) {
   if (!Array.isArray(tools)) {
     throw new Error("tools/list did not return an array");
@@ -364,27 +405,49 @@ function seedConfigFile(contents) {
   }
 }
 
-/** A second container on the same volume must fail fast rather than corrupt it. */
-async function assertStorageLock() {
-  const contender = new ContainerSession(lockContainer);
+/**
+ * A second server on the same volume starts and serves alongside the first:
+ * write leases are taken per write, so only concurrent writes contend (and are
+ * serialised). The peer only reads — the persistence assertions below count the
+ * main session's topics.
+ */
+async function assertSecondServerSharesVolume() {
+  const peer = new ContainerSession(peerContainer);
+  let closing = false;
+  // A peer that exits before the gate closes it is a startup refusal, the very
+  // behaviour per-write leases removed: report it at once instead of waiting out
+  // a request timeout. Never settles while the peer is running or closing.
+  const exitedEarly = new Promise((_, reject) => {
+    void peer.exited.then((exitCode) => {
+      if (!closing) {
+        reject(
+          new Error(
+            `Second server on the shared volume exited (${exitCode}) instead of serving: ${peer.stderrText.trim()}`,
+          ),
+        );
+      }
+    });
+  });
+  exitedEarly.catch(() => undefined);
+  const whileRunning = (work) => Promise.race([work, exitedEarly]);
   try {
-    for (let attempt = 0; attempt < 45; attempt++) {
-      const exitCode = await Promise.race([
-        contender.exited,
-        new Promise((resolve) => setTimeout(() => resolve(undefined), 1_000)),
-      ]);
-      if (exitCode === undefined) {
-        continue;
-      }
-      const logs = contender.stderrText.trim() || containerLogs(lockContainer);
-      if (exitCode === 0 || !/lock|already.*(?:held|use)|another.*process/i.test(logs)) {
-        throw new Error(`Storage-lock contender failed without the expected lock diagnostic (exit ${exitCode})`);
-      }
-      return;
+    await whileRunning(peer.request("server/discover"));
+    const { tools } = await whileRunning(peer.request("tools/list"));
+    if (!Array.isArray(tools) || tools.length !== expectedToolCount) {
+      throw new Error(
+        `Second server exposed ${Array.isArray(tools) ? tools.length : "no"} tools; the stdio surface is exactly ${expectedToolCount}`,
+      );
     }
-    throw new Error("Storage-lock contender remained running instead of failing fast");
+    const listed = await whileRunning(peer.callTool("rag_topic", { action: "list" }));
+    if (!Array.isArray(listed.topics ?? listed)) {
+      throw new Error(`Second server's rag_topic list was not a topic list: ${JSON.stringify(listed)}`);
+    }
+    closing = true;
+    await peer.closeCleanly();
   } finally {
-    contender.process.kill("SIGKILL");
+    if (peer.process.exitCode === null) {
+      peer.process.kill("SIGKILL");
+    }
   }
 }
 
@@ -399,6 +462,7 @@ try {
   spawnSync("docker", ["volume", "rm", volume], { cwd: root, stdio: "ignore" });
 
   const { imageBytes, imageArchitecture } = await assertImageContract();
+  assertTransformersLoads();
 
   run("docker", ["volume", "create", volume]);
 
@@ -411,7 +475,7 @@ try {
   await session.request("server/discover");
   assertToolSurface((await session.request("tools/list")).tools);
   assertRuntimeHardening(sessionContainer);
-  await assertStorageLock();
+  await assertSecondServerSharesVolume();
 
   await session.callTool("rag_topic", {
     action: "create",
@@ -438,7 +502,6 @@ try {
     throw new Error(`Topic did not survive a container replacement; saw ${JSON.stringify(names)}`);
   }
   await restarted.closeCleanly();
-
 
   console.log(
     `Docker stdio release gate passed (${imageBytes} bytes, ${imageArchitecture}, ${expectedToolCount} tools).`,

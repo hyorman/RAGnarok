@@ -1,18 +1,18 @@
 # RAGnarōk architecture
 
-This document describes the v0.7 implementation. Future work is identified as
+This document describes the current implementation. Future work is identified as
 such; passing unit tests is not presented as release evidence.
 
 ## Surfaces
 
 `@ragnarok/core` owns ingestion, embedding, retrieval, reranking, memory,
-archives, migration, and LanceDB persistence.
+archives, and LanceDB persistence.
 `@ragnarok/vscode` adapts the core to VS Code. `@ragnarok/mcp-server` exposes
 the same core through a stdio child process. Both hosts delegate memory behavior
 to core `MemoryService` and graph projection to `GraphVisualizationService`, but
 they intentionally use separate storage roots: VS Code uses its extension
 `globalStorageUri`, while MCP uses configured `RAGNAROK_STORAGE_DIR`. There is
-no cross-host data sharing or automatic migration.
+no cross-host data sharing.
 
 | Surface           | Intended topology      | Authority     |
 | ----------------- | ---------------------- | ------------- |
@@ -31,7 +31,9 @@ The configured storage root has one v2 marker and one lease file:
 ```text
 <storage>/
   storage-format.json
+  config.json              # MCP settings
   .ragnarok.lock
+  .ragnarok-shared-cache/  # derived unpacks of shared archives
   database/
     topics.json
     topic-<id>-documents.json
@@ -41,16 +43,16 @@ The configured storage root has one v2 marker and one lease file:
   exports/
 ```
 
-Some directories are created only when their feature is used. Shared/common
-legacy stores may instead begin with a flat `topics.json`/`lancedb` layout;
-the offline migrator converts that layout. See [MIGRATION.md](MIGRATION.md).
+Some directories are created only when their feature is used. A directory that
+holds data but no `storage-format.json` is from an unsupported pre-0.4 build and
+is refused with `UnsupportedStorageError`; it is never read.
 
 `.ragnarok.lock` is present only while a lease is held; a graceful release
 marks it released and unlinks it.
 
-Reads take no lease at all, so any number of processes — VS Code windows, MCP
-servers, the migration CLI's read-only paths — may open and read one storage
-root concurrently. Coordination is on the write side:
+Reads take no lease at all, so any number of processes — VS Code windows and MCP
+servers — may open and read one storage root concurrently. Coordination is on
+the write side:
 
 - **Operation leases.** Each mutation acquires the lease, runs WAL recovery,
   reloads canonical state from disk, applies its change, and releases. The
@@ -59,12 +61,8 @@ root concurrently. Coordination is on the write side:
   reports it as a retryable "storage is busy" condition rather than a failure
   of the operation itself. An ingestion holds one lease for the whole call,
   kept alive by the heartbeat.
-- **Full exclusion.** Migration and rollback take a session lease for their
-  entire duration. That acquisition fails fast with `StorageLockHeldError`,
-  which is what other processes report as "another window is migrating".
-  Reset holds exclusion for its whole operation too, but through an operation
-  lease: it waits the bounded time and reports `StorageBusyError` rather than
-  failing fast.
+- **Reset.** A reset holds the operation lease for its whole duration: it waits
+  the bounded time and reports `StorageBusyError` like any other write.
 - **Recovery is writer-only.** Journal and WAL rollback happen under a lease,
   so a reader serves the previous consistent snapshot instead of rolling back
   a foreign writer's in-flight transaction. Readers revalidate through a
@@ -73,7 +71,7 @@ root concurrently. Coordination is on the write side:
 The lease itself uses an owner token, PID/host identity, heartbeat, and
 generation-scoped stale reclamation. Same-host live PIDs are never reclaimed
 merely for age. Storage v2 readers fail closed on corrupt or unsupported
-metadata. `RAGNAROK_IGNORE_LOCK=1` bypasses both lease kinds entirely and is
+metadata. `RAGNAROK_IGNORE_LOCK=1` bypasses the lease entirely and is
 unsafe with concurrent writers.
 
 Topic ingestion stages data and metadata under a durable journal. Archive
@@ -128,7 +126,7 @@ Schema contracts in `@ragnarok/core` and drift-checked by
 equivalent to the same contracts by a parity test. Both hosts run one
 implementation per shared action: `executeQueryTool` for query, `executeTopicRead`
 for topic `list` and `stats`, and `normalizeMemoryInput` plus the same
-`MemoryService.execute` for memory. Its **RAGnarok: Show Memory Graph**
+`MemoryService.execute` for memory. Its **RAG: Show Memory Graph**
 command opens a nonce-protected local webview. MCP retains `rag_memory`,
 `rag_reset_memory` — still a tool, confirmed by `confirm: true`, because a
 headless agent has no sidebar to click — and `rag_memory_visualize`, whose graph
@@ -170,7 +168,7 @@ source. Docker uses graph-ui source only while regenerating the MCP bundle and
 does not copy that source or VS webview assets into the runtime image.
 
 The release manifest binds source commit, lockfile, policy, artifacts, gate
-runs, and attestation. Publish commands never rebuild. Docker and six installed
+runs, and attestation. Publish commands never rebuild. Docker and five installed
 VSIX gates remain required even when local development cannot execute them.
 See [docs/RELEASE.md](docs/RELEASE.md) and
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md).

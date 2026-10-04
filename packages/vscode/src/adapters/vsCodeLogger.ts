@@ -7,7 +7,7 @@ import * as vscode from "vscode";
 import { ILogger, ILoggerFactory, LogLevel, CONFIG } from "@ragnarok/core";
 import { VSCODE_CONFIG } from "../constants";
 
-export class VsCodeLogger implements ILogger {
+class VsCodeLogger implements ILogger {
   private static outputChannel: vscode.OutputChannel | null = null;
   private static logLevel: LogLevel = LogLevel.INFO;
 

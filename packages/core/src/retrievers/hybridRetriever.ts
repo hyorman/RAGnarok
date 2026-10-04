@@ -90,9 +90,9 @@ export class HybridRetriever {
       });
 
       // Step 2: Start both searches. They are independent — the BM25 query is
-      // derived from the query string alone — so the keyword pass no longer
-      // waits out the vector search's query-embedding round trip. The vector
-      // arm is still awaited first, which keeps its failure the one that
+      // derived from the query string alone — so the keyword pass does not
+      // wait out the vector search's query-embedding round trip. The vector
+      // arm is awaited first, which keeps its failure the one that
       // propagates when both arms fail.
       const vectorSearch = this.vectorRetriever.search(query, candidateCount);
       const bm25Search = this.keywordRetriever.isInitialized()

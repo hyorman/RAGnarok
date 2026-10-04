@@ -21,10 +21,10 @@ flowchart TB
     url["rag_ingest source=url · source=github"]
   end
 
-  entry --> TM["TopicManager.addDocuments()<br/>topicManager.ts:1019"]
+  entry --> TM["TopicManager.addDocuments()<br/>managers/topicManager.ts"]
 
   TM --> J1["write ingestion journal<br/>stage: started"]
-  J1 --> PROC["DocumentPipeline.processDocument()<br/>topicManager.ts:1102<br/>load → chunk → embed → store"]
+  J1 --> PROC["DocumentPipeline.processDocument()<br/>managers/documentPipeline.ts<br/>load → chunk → embed → store"]
   PROC --> J2["journal: metadataCommitted → vectorCommitted<br/>+ document index update"]
 ```
 
@@ -41,14 +41,14 @@ flowchart LR
   F["file · URL · git repo"] --> L["DocumentLoaderFactory<br/>text · markdown · pdf · html · github · web"]
   L --> C["SemanticChunker<br/>Markdown- · Code- or Recursive-CharacterTextSplitter"]
   C --> M["chunk metadata<br/>chunkIndex · headingPath · sectionTitle · loc"]
-  M --> ID["chunkId = hashId('chunk', docId + index + text)<br/>documentPipeline.ts:294"]
+  M --> ID["chunkId = hashId('chunk', docId + index + text)<br/>DocumentPipeline.processDocuments"]
   ID --> E["embed with the TOPIC'S recorded model<br/>new topic → configured embedding.model<br/>existing topic → its metadata.embeddingModel"]
   E --> V[("LanceDB table &lt;topicId&gt;<br/>vector + text + metadata")]
 ```
 
-Defaults: `chunkSize` 1000 characters, `chunkOverlap` 200 (`semanticChunker.ts:76-77`). The chunk id
-is content-hashed, so **re-chunking changes every id** — which is why altering chunking is a storage
-migration, not a tweak.
+Defaults: `chunkSize` 1000 characters, `chunkOverlap` 200 (`SemanticChunker`'s constructor in
+`splitters/semanticChunker.ts`). The chunk id is content-hashed, so **re-chunking changes every id**
+— which is why changing chunking requires a full reindex.
 
 The default embedding model is `Xenova/all-MiniLM-L6-v2` (384-dim), with VS Code LM and remote
 backends as alternatives. Which one actually runs is decided per topic, not per process — see §2.1.
@@ -89,7 +89,8 @@ never occupy a slot.
 The **endpoint** is deliberately not resolved per topic. A knowledge base built against a remote
 embedding endpoint is readable only by a deployment configured with that same endpoint; a topic
 recorded against a foreign endpoint is refused rather than substituted
-(`vectorStoreFactory.ts:308-320`), because an endpoint carries credentials and a topic must not
+(`VectorStoreFactory.loadStore` in `stores/vectorStoreFactory.ts`, which throws
+`EmbeddingEndpointMismatchError`), because an endpoint carries credentials and a topic must not
 choose one on the server's behalf. Knowledge bases meant to travel should use the bundled local
 model.
 
@@ -104,14 +105,14 @@ flowchart TB
   CHK -->|no| ERR(["TopicEmptyError"])
   CHK -->|yes| AG["get/create RAGAgent<br/>LRU cache, max 10 topics"]
 
-  AG --> PLAN["createHeuristicPlan()<br/>queryPlannerAgent.ts:374<br/>complexity score · comparison + conjunction splitting"]
+  AG --> PLAN["createHeuristicPlan()<br/>QueryPlannerAgent in agents/queryPlannerAgent.ts<br/>complexity score · comparison + conjunction splitting"]
   PLAN --> REF{"LLM available?"}
   REF -->|yes| LLMREF["refinePlanWithLLM()<br/>LLM edits the heuristic plan"]
   REF -->|no| USE
-  LLMREF -->|"?? heuristicPlan (line 378)"| USE["QueryPlan { complexity, subQueries[] }"]
+  LLMREF -->|"?? heuristicPlan"| USE["QueryPlan { complexity, subQueries[] }"]
 
   USE --> LOOP["for each sub-query"]
-  LOOP --> OF["over-fetch when a reranker exists<br/>topK × 4, capped at 40<br/>ragAgent.ts:459-465"]
+  LOOP --> OF["over-fetch when a reranker exists<br/>topK × 4, capped at 40<br/>RAGAgent.executeSubQuery in agents/ragAgent.ts"]
   OF --> STRAT{"retrievalStrategy"}
   STRAT --> R1["vector"] & R2["bm25"] & R3["hybrid"]
 
@@ -122,15 +123,17 @@ flowchart TB
   EV -->|"met or exhausted"| OUT["RAGQueryResult"]
 ```
 
-The planner is **heuristic-first**: `queryPlannerAgent.ts:374` builds a plan and the LLM only _edits_
-it, falling back with `?? heuristicPlan` at line 378. Decomposition therefore works with no LLM at
-all. The only capability genuinely lost without a provider is iterative refinement —
-`generateFollowUpPlanWithLLM()` returns `null` (`ragAgent.ts:839-855`).
+The planner is **heuristic-first**: `QueryPlannerAgent.createPlan` (`agents/queryPlannerAgent.ts`) builds the
+plan with `createHeuristicPlan()` and the LLM only _edits_ it, falling back with `?? heuristicPlan`.
+Decomposition therefore works with no LLM at all. The only capability genuinely lost without a
+provider is iterative refinement — `generateFollowUpPlanWithLLM()` returns `null`
+(`agents/followUpPlanner.ts`).
 
-Strategy dispatch is a three-way branch (`ragAgent.ts:414-434`). Retrievers are constructed lazily by
-`initializeRetrieversForStrategy()`; if the requested one is still absent afterwards, dispatch
-**throws** `Retriever for strategy <s> not initialized` rather than silently substituting another
-strategy. Every result carries the `effectiveStrategy` that actually ran.
+Strategy dispatch is a three-way branch (`RAGAgent.dispatchSearch` in `agents/ragAgent.ts`).
+Retrievers are constructed lazily by `initializeRetrieversForStrategy()`; if the requested one is
+still absent afterwards, dispatch **throws** `Retriever for strategy <s> not initialized` rather
+than silently substituting another strategy. Every result carries the `effectiveStrategy` that
+actually ran.
 
 Reranking overwrites `scoreKind` with `cross_encoder_probability` and preserves the first-stage value
 in `originalScoreKind`.
@@ -139,11 +142,11 @@ in `originalScoreKind`.
 
 ## 4. The three strategies
 
-| Strategy | Mechanism                                                                                                                                                                                                                                                                                                                                                                            |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `vector` | LanceDB ANN over chunk embeddings; squared-L2 converted to the unit-vector cosine score contract                                                                                                                                                                                                                                                                                     |
-| `bm25`   | genuine Okapi BM25. `search()` delegates to LangChain's `BM25Retriever` (`keywordRetriever.ts:10,47`), which scores with IDF `log((N − n + 0.5) / (n + 0.5) + 1)` and the usual saturation term at k1=1.2, b=0.75                                                                                                                                                                    |
-| `hybrid` | weighted blend of semantic + keyword; defaults `vectorWeight` 0.9 / `keywordWeight` 0.1 (`hybridRetriever.ts:29-31`). Candidates come from the real BM25 `search()` (`hybridRetriever.ts:111`), but the lexical score actually blended in is `scoreDocument` — log-TF × length-norm × position boost, **no IDF** (`keywordRetriever.ts:141,144`, called at `hybridRetriever.ts:140`) |
+| Strategy | Mechanism                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vector` | LanceDB ANN over chunk embeddings; squared-L2 converted to the unit-vector cosine score contract                                                                                                                                                                                                                                                                                                        |
+| `bm25`   | genuine Okapi BM25. `search()` delegates to LangChain's `BM25Retriever` (`KeywordRetriever` in `retrievers/keywordRetriever.ts`), which scores with IDF `log((N − n + 0.5) / (n + 0.5) + 1)` and the usual saturation term at k1=1.2, b=0.75                                                                                                                                                            |
+| `hybrid` | weighted blend of semantic + keyword; defaults `vectorWeight` 0.9 / `keywordWeight` 0.1 (the default options in `retrievers/hybridRetriever.ts`). Candidates come from the real BM25 `search()` (`HybridRetriever`), but the lexical score actually blended in is `scoreDocument` — log-TF × length-norm × position boost, **no IDF** (`KeywordRetriever.scoreDocument`, called from `HybridRetriever`) |
 
 Cross-encoder reranking is an orthogonal second stage available to all three.
 
@@ -171,9 +174,7 @@ Measured quality for these strategies across SciFact, NFCorpus, FiQA, and FRAMES
   exports/                   .rag archives
 ```
 
-Feature directories are created lazily. There are no `kg-*` tables and no `checkpoints-lancedb/`
-directory; the offline migrator recognizes legacy `kg-*` tables only so it can drop them without
-treating them as unknown structure (see [MIGRATION.md](../MIGRATION.md)).
+Feature directories are created lazily. There are no `kg-*` tables and no `checkpoints-lancedb/` directory.
 
 ---
 
@@ -220,5 +221,6 @@ most 10,000 edges, and oversized records return `GRAPH_VISUALIZATION_RECORD_TOO_
 ## 7. Known issues
 
 - `hybrid`'s lexical half is TF-only despite the BM25-adjacent naming around it: `scoreDocument`
-  (`keywordRetriever.ts:119-150`) has no IDF and no document-frequency term, so the keyword component
-  of the blend is not Okapi BM25 — even though the standalone `bm25` strategy is.
+  (`KeywordRetriever.scoreDocument` in `retrievers/keywordRetriever.ts`) has no IDF and no
+  document-frequency term, so the keyword component of the blend is not Okapi BM25 — even though the
+  standalone `bm25` strategy is.

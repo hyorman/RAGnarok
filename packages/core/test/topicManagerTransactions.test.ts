@@ -18,6 +18,7 @@ import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
 } from "../src/utils/storageTransactionCoordinator";
+import { snapshotTree, writeV03Layout } from "./helpers/v03Layout";
 
 const LOCK_FILENAME = ".ragnarok.lock";
 
@@ -200,6 +201,46 @@ describe("TopicManager operation-scoped write transactions", function () {
     await fs.rm(storageDir, { recursive: true, force: true });
   });
 
+  it("refuses to open a real v0.3-shaped store and leaves every file in place", async function () {
+    await writeV03Layout(storageDir);
+    const before = await snapshotTree(storageDir);
+
+    let error: Error | undefined;
+    try {
+      await createManagerInTmpDir();
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error?.name).to.equal("UnsupportedStorageError");
+    expect(await snapshotTree(storageDir), "no byte added, removed or rewritten, and no marker stamped").to.deep.equal(
+      before,
+    );
+  });
+
+  it("opens a refused v0.3-shaped store when started with resetStorage, backing the old data up", async function () {
+    const database = path.join(storageDir, "database");
+    await fs.mkdir(database, { recursive: true });
+    await fs.writeFile(path.join(database, "topics.json"), '{"topics":{}}');
+
+    // The path RAGNAROK_RESET_STORAGE=1 / --reset-storage takes: loadTopics
+    // resets before any format check, so the refusal never fires.
+    manager = await TopicManager.create({
+      storageDir,
+      config,
+      notifier,
+      embeddingService: stubEmbeddingService(),
+      embeddingRegistry: stubEmbeddingRegistry(),
+      resetStorage: true,
+    });
+
+    const backups = (await fs.readdir(storageDir)).filter((entry) => entry.startsWith("backup-v1-"));
+    expect(backups).to.have.length(1);
+    expect(await fs.readFile(path.join(storageDir, backups[0], "database", "topics.json"), "utf8")).to.equal(
+      '{"topics":{}}',
+    );
+  });
+
   it("holds no lease once initialization returns: the lock file does not exist", async function () {
     await createManagerInTmpDir();
 
@@ -296,8 +337,8 @@ describe("TopicManager operation-scoped write transactions", function () {
   });
 
   it("still recovers an interrupted transaction when the store is opened", async function () {
-    // Startup no longer builds a session coordinator, so an abandoned staging
-    // directory would otherwise linger until somebody happened to write.
+    // Opening the store probes for pending recovery, so an abandoned staging
+    // directory is repaired rather than lingering until somebody writes.
     await fs.writeFile(
       path.join(storageDir, "storage-format.json"),
       JSON.stringify({ formatVersion: 2, initializedAt: Date.now() }),
@@ -486,7 +527,7 @@ describe("TopicManager operation-scoped write transactions", function () {
       },
       async () => null,
     ];
-    (created as any).loadVectorStoreOnce = async () => {
+    (created as any).vectorStores.loadVectorStoreOnce = async () => {
       const step = scripted[attempts];
       attempts += 1;
       return step();
@@ -494,7 +535,7 @@ describe("TopicManager operation-scoped write transactions", function () {
     // Force the table-absent branch to take the retry path instead of
     // fast-pathing on absent metadata, so the retry-failure behaviour under
     // test actually runs.
-    (created as any).topicHasVectorStoreMetadata = async () => true;
+    (created as any).vectorStores.topicHasVectorStoreMetadata = async () => true;
 
     let resolved: VectorStore | null | undefined;
     let caught: unknown;
@@ -514,10 +555,10 @@ describe("TopicManager operation-scoped write transactions", function () {
     const topic = await created.createTopic({ name: "empty" });
 
     let retryInvoked = false;
-    const originalRetry = ((created as any).retryVectorStoreLoad as (id: string) => Promise<VectorStore | null>).bind(
-      created,
-    );
-    (created as any).retryVectorStoreLoad = async (id: string) => {
+    const originalRetry = (
+      (created as any).vectorStores.retryVectorStoreLoad as (id: string) => Promise<VectorStore | null>
+    ).bind((created as any).vectorStores);
+    (created as any).vectorStores.retryVectorStoreLoad = async (id: string) => {
       retryInvoked = true;
       return originalRetry(id);
     };

@@ -29,18 +29,15 @@ import {
   Logger,
   LogLevel,
   TopicManager,
-  EmbeddingService,
-  EmbeddingServiceRegistry,
   HuggingFaceBackend,
   RemoteEmbeddingBackend,
   ModelRegistry,
   RAGQueryService,
   MemoryStore,
-  MemoryOperationCoordinator,
-  MemoryService,
-  GraphVisualizationService,
   CrossEncoderReranker,
   createSharedTopicSources,
+  createEmbeddingServices,
+  createMemoryServices,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion } from "./config";
@@ -51,6 +48,7 @@ import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner } from "./tools";
 import { createToolRuntime, drainToolRuntimeThenMemory } from "./toolRuntime";
+import { startupFailureHint } from "./startupHint";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -97,36 +95,20 @@ async function main(): Promise<void> {
     };
   }
 
-  // Builds a fully-backed embedding service. Every service needs the same
-  // backends: one with none registered cannot initialize at all, and the
-  // fallback in EmbeddingService.initialize is disabled for an empty list.
-  // The backend instances are constructed per call on purpose — sharing one
-  // HuggingFaceBackend across services would reintroduce the shared-model bug
-  // one level down, since initializeForBackend re-points the backend itself.
   const modelRegistry = ModelRegistry.getInstance();
-  const buildEmbeddingService = () => {
-    const service = new EmbeddingService({ config: configProvider, notifier });
-    // HuggingFace only in MCP mode — no VS Code LM. Registered first so the
-    // remote backend, when present, stays the last-registered fallback.
-    service.registerBackend(new HuggingFaceBackend(modelRegistry, notifier, config.embeddingModel));
-    if (remoteEmbeddingOptions) {
-      service.registerBackend(new RemoteEmbeddingBackend(remoteEmbeddingOptions));
-    }
-    return service;
-  };
-
-  // Initialize core services
-  const embeddingService = buildEmbeddingService();
+  const { embeddingService, embeddingRegistry } = createEmbeddingServices({
+    config: configProvider,
+    notifier,
+    maxResidentLocal: config.maxResidentModels,
+    // HuggingFace first, so the remote backend, when configured, is the fallback.
+    createBackends: () => [
+      new HuggingFaceBackend(modelRegistry, notifier, config.embeddingModel),
+      ...(remoteEmbeddingOptions ? [new RemoteEmbeddingBackend(remoteEmbeddingOptions)] : []),
+    ],
+  });
   if (remoteEmbeddingOptions) {
     logger.info(`Registered remote embedding backend (${config.embeddingProvider}) at ${config.embeddingBaseUrl}`);
   }
-
-  // One registry for the whole process: a registry per consumer would give each
-  // its own resident models and defeat the cap.
-  const embeddingRegistry = new EmbeddingServiceRegistry({
-    createService: buildEmbeddingService,
-    maxResidentLocal: config.maxResidentModels,
-  });
 
   // Create topic manager
   const topicManager = await TopicManager.create({
@@ -171,9 +153,11 @@ async function main(): Promise<void> {
     workingDir,
     markdownPath: path.join(config.storageDir, "memories.md"),
   });
-  const memoryCoordinator = new MemoryOperationCoordinator();
-  const memoryService = new MemoryService(memoryStore, memoryCoordinator);
-  const graphVisualizationService = new GraphVisualizationService(memoryStore, memoryCoordinator);
+  const {
+    coordinator: memoryCoordinator,
+    memoryService,
+    graphService: graphVisualizationService,
+  } = createMemoryServices(memoryStore);
 
   // Reranking is unconditional: the cross-encoder ONNX model ships inside the
   // package, so there is no download to opt out of and no configuration to get
@@ -286,12 +270,10 @@ async function main(): Promise<void> {
 main().catch((error) => {
   console.error("Fatal error starting MCP server:", error);
   // A stdio client shows the operator nothing but this stream, so a startup
-  // refusal that has a concrete next action names it here. Storage written by
-  // a NEWER build is the one that still does: downgrading cannot read it.
-  if ((error as Error)?.name === "StorageFormatVersionError") {
-    console.error(
-      "This storage was written by a newer RAGnarok build. Upgrade, or point --storage at another directory.",
-    );
+  // refusal that has a concrete next action names it here.
+  const hint = startupFailureHint(error);
+  if (hint) {
+    console.error(hint);
   }
   process.exitCode = 1;
 });

@@ -14,7 +14,7 @@ export enum RetrievalStrategy {
 /**
  * Topic source - indicates where the topic originates from
  */
-export type TopicSource = "local" | "common";
+export type TopicSource = "local" | "shared";
 
 export interface Topic {
   id: string;
@@ -23,7 +23,7 @@ export interface Topic {
   createdAt: number;
   updatedAt: number;
   documentCount: number;
-  /** Source of the topic - 'local' (default) or 'common' (read-only shared database) */
+  /** Source of the topic - 'local' (default) or 'shared' (read-only, from a shared-topic source) */
   source?: TopicSource;
 }
 

@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
+import { execFileSync, execSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -54,17 +53,38 @@ try {
       reuseMachineInstall: true,
     });
   }
-  const runArgs = (args) => [...baseArgs, ...args];
-  const version = execFileSync(code, runArgs(["--version"]), { encoding: "utf8" }).split(/\r?\n/)[0];
+  // Node refuses to spawn a .cmd file without a shell (CVE-2024-27980), and the
+  // Windows VS Code CLI is code.cmd. Every argument is a path or flag this script
+  // built, so quoting each one is all cmd.exe needs.
+  const viaShell = process.platform === "win32" && /\.cmd$/i.test(code);
+  // cmd.exe expands %~dp0 to the current directory, not the batch file's own, when a
+  // quoted batch file was found through PATH (code.cmd opens "%~dp0..\Code.exe"), so a
+  // bare name is resolved to its absolute path first. where.exe is an .exe: no shell.
+  if (viaShell && !/[\\/]/.test(code)) {
+    let located;
+    try {
+      located = execFileSync("where.exe", [code], { encoding: "utf8" });
+    } catch (error) {
+      throw new Error(`where.exe could not find ${code} on PATH; set VSCODE_CLI to its full path`, { cause: error });
+    }
+    const resolved = located
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line !== "");
+    if (!resolved) throw new Error(`where.exe printed no path for ${code}; set VSCODE_CLI to its full path`);
+    code = resolved;
+  }
+  const runCli = (args, options) =>
+    viaShell
+      ? execSync([code, ...baseArgs, ...args].map((value) => `"${value}"`).join(" "), options)
+      : execFileSync(code, [...baseArgs, ...args], options);
+  const version = runCli(["--version"], { encoding: "utf8" }).split(/\r?\n/)[0];
   if (!atLeast(version, minimum)) throw new Error(`VS Code ${version} is below declared minimum ${minimum}`);
-  execFileSync(
-    code,
-    runArgs(["--extensions-dir", extensions, "--user-data-dir", userData, "--install-extension", vsix, "--force"]),
-    { stdio: "inherit" },
-  );
-  const installed = execFileSync(
-    code,
-    runArgs(["--extensions-dir", extensions, "--user-data-dir", userData, "--list-extensions", "--show-versions"]),
+  runCli(["--extensions-dir", extensions, "--user-data-dir", userData, "--install-extension", vsix, "--force"], {
+    stdio: "inherit",
+  });
+  const installed = runCli(
+    ["--extensions-dir", extensions, "--user-data-dir", userData, "--list-extensions", "--show-versions"],
     { encoding: "utf8" },
   );
   if (!installed.toLowerCase().includes(`${pkg.publisher}.${pkg.name}@${pkg.version}`.toLowerCase())) {
@@ -75,13 +95,24 @@ try {
   );
   if (extensionMatches.length !== 1) throw new Error("Could not resolve the exact installed extension directory");
   const extensionDir = path.join(extensions, extensionMatches[0]);
-  const extensionRequire = createRequire(path.join(extensionDir, "package.json"));
-  const lance = extensionRequire("@lancedb/lancedb");
-  const transformersRoot = path.dirname(path.dirname(extensionRequire.resolve("@huggingface/transformers")));
-  const transformersRequire = createRequire(path.join(transformersRoot, "package.json"));
-  const sharp = transformersRequire("sharp");
-  if (typeof lance.connect !== "function" || !sharp.versions?.sharp) {
-    throw new Error("Installed VSIX native LanceDB/Sharp modules did not load");
+  // A child process loads the native modules: Windows cannot delete a DLL that a live
+  // process has loaded, and this process must be able to remove the profile at the end.
+  const probeOutput = execFileSync(process.execPath, [path.join(root, "scripts/vsix-native-probe.cjs"), extensionDir], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const probeLine = probeOutput
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== "")
+    .at(-1);
+  if (!probeLine) throw new Error("The native module probe printed no result");
+  const probe = JSON.parse(probeLine);
+  if (!probe.lanceConnect || !probe.sharp || !probe.onnxBackends?.includes("cpu")) {
+    throw new Error("Installed VSIX native LanceDB/Sharp/ONNX Runtime modules did not load");
+  }
+  if (probe.arch !== process.arch) {
+    throw new Error(`The native module probe ran on ${probe.arch}, not on ${process.arch}`);
   }
   const declaredTarget = ["x64", "arm64"].find((arch) => path.basename(vsix).includes(`-${arch}.vsix`));
   if (declaredTarget && process.arch !== declaredTarget) {
@@ -129,5 +160,7 @@ try {
     `Installed, activated, and create/query/delete smoked ${pkg.publisher}.${pkg.name}@${pkg.version} on VS Code ${version}.`,
   );
 } finally {
-  await rm(profile, { recursive: true, force: true });
+  // Node retries EBUSY, EMFILE, ENFILE, ENOTEMPTY and EPERM, which covers a VS Code
+  // process that is slow to exit and still holds files under the profile.
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
 }

@@ -19,36 +19,9 @@ import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
 import { COMMANDS, CONFIG, VSCODE_CONFIG } from "./constants";
 import { GitHubTokenManager } from "./githubTokenManager";
 import { waitForAbortableUi, type ExtensionOperationRunner } from "./extensionLifecycle";
+import { ingestWithProgress, pickWritableTopic, supportedDocumentFilters } from "./ingestionFlow";
 
 const logger = new Logger("CommandHandler");
-
-export class NoDocumentsIngestedError extends Error {
-  constructor() {
-    super("No documents were ingested. Check the selected source and the extension logs for details.");
-    this.name = "NoDocumentsIngestedError";
-  }
-}
-
-/**
- * Bridge extension lifecycle cancellation into the core ingestion pipeline.
- * Once durable ingestion starts, shutdown aborts the supported core operation
- * and waits for it to unwind.
- */
-export async function addDocumentsWithLifecycleSignal(
-  topicManager: Pick<TopicManager, "addDocuments">,
-  topicId: string,
-  sources: string[],
-  signal: AbortSignal | undefined,
-  options: NonNullable<Parameters<TopicManager["addDocuments"]>[2]> = {},
-) {
-  signal?.throwIfAborted();
-  const results = await topicManager.addDocuments(topicId, sources, { ...options, signal });
-  signal?.throwIfAborted();
-  if (results.length === 0) {
-    throw new NoDocumentsIngestedError();
-  }
-  return results;
-}
 
 /**
  * Shared failure reporting for every command handler's catch block. The
@@ -109,16 +82,16 @@ export class CommandHandler {
       vscode.commands.registerCommand(COMMANDS.CREATE_TOPIC, () =>
         run(COMMANDS.CREATE_TOPIC, (signal) => handler.createTopic(signal)),
       ),
-      vscode.commands.registerCommand(COMMANDS.DELETE_TOPIC, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.DELETE_TOPIC, (item?: { topic?: Topic }) =>
         run(COMMANDS.DELETE_TOPIC, () => handler.deleteTopic(item)),
       ),
-      vscode.commands.registerCommand(COMMANDS.ADD_DOCUMENT, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.ADD_DOCUMENT, (item?: { topic?: Topic }) =>
         run(COMMANDS.ADD_DOCUMENT, (signal) => handler.addDocument(item, signal)),
       ),
-      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_REPO, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.ADD_GITHUB_REPO, (item?: { topic?: Topic }) =>
         run(COMMANDS.ADD_GITHUB_REPO, (signal) => handler.addGithubRepo(item, signal)),
       ),
-      vscode.commands.registerCommand(COMMANDS.ADD_WEB_URL, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.ADD_WEB_URL, (item?: { topic?: Topic }) =>
         run(COMMANDS.ADD_WEB_URL, (signal) => handler.addWebUrl(item, signal)),
       ),
       vscode.commands.registerCommand(COMMANDS.REFRESH_TOPICS, () =>
@@ -160,7 +133,7 @@ export class CommandHandler {
         run(COMMANDS.REMOVE_GITHUB_TOKEN, () => handler.removeGithubToken()),
       ),
       // Import/Export commands
-      vscode.commands.registerCommand(COMMANDS.EXPORT_TOPIC, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.EXPORT_TOPIC, (item?: { topic?: Topic }) =>
         run(COMMANDS.EXPORT_TOPIC, () => handler.exportTopic(item)),
       ),
       vscode.commands.registerCommand(COMMANDS.IMPORT_TOPIC, () =>
@@ -169,7 +142,7 @@ export class CommandHandler {
       vscode.commands.registerCommand(COMMANDS.REFRESH_SHARED_TOPICS, () =>
         run(COMMANDS.REFRESH_SHARED_TOPICS, () => handler.refreshSharedTopics()),
       ),
-      vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: any) =>
+      vscode.commands.registerCommand(COMMANDS.RENAME_TOPIC, (item?: { topic?: Topic }) =>
         run(COMMANDS.RENAME_TOPIC, () => handler.renameTopic(item)),
       ),
     ];
@@ -183,7 +156,7 @@ export class CommandHandler {
    */
   public async setEmbeddingModel(model: string): Promise<void> {
     try {
-      if (typeof (this.embeddingService as any).runTransactionalSwitch === "function") {
+      if (typeof this.embeddingService.runTransactionalSwitch === "function") {
         await this.embeddingService.runTransactionalSwitch(
           this.embeddingService.getActiveBackendType() || undefined,
           model,
@@ -208,9 +181,9 @@ export class CommandHandler {
   /**
    * Rename a topic
    */
-  private async renameTopic(item?: any): Promise<void> {
+  private async renameTopic(item?: { topic?: Topic }): Promise<void> {
     try {
-      let topicToRename;
+      let topicToRename: Topic;
 
       // If called from tree view with item
       if (item && item.topic) {
@@ -225,7 +198,7 @@ export class CommandHandler {
         }
 
         const selected = await vscode.window.showQuickPick(
-          topics.map((t: any) => ({
+          topics.map((t) => ({
             label: t.name,
             description: `${t.documentCount} document(s)`,
             detail: t.description,
@@ -243,11 +216,8 @@ export class CommandHandler {
         topicToRename = selected.topic;
       }
 
-      // Check if topic is from common database (read-only)
-      if (this.topicManager.isCommonTopic(topicToRename.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot rename "${topicToRename.name}" - topics from common database are read-only.`,
-        );
+      if (this.topicManager.isSharedTopic(topicToRename.id)) {
+        vscode.window.showWarningMessage(`Cannot rename "${topicToRename.name}": shared topics are read-only.`);
         return;
       }
 
@@ -335,9 +305,9 @@ export class CommandHandler {
   /**
    * Delete a topic
    */
-  private async deleteTopic(item?: any): Promise<void> {
+  private async deleteTopic(item?: { topic?: Topic }): Promise<void> {
     try {
-      let topicToDelete;
+      let topicToDelete: Topic;
 
       // If called from tree view with item
       if (item && item.topic) {
@@ -352,7 +322,7 @@ export class CommandHandler {
         }
 
         const selected = await vscode.window.showQuickPick(
-          topics.map((t: any) => ({
+          topics.map((t) => ({
             label: t.name,
             description: `${t.documentCount} document(s)`,
             detail: t.description,
@@ -370,11 +340,8 @@ export class CommandHandler {
         topicToDelete = selected.topic;
       }
 
-      // Check if topic is from common database (read-only)
-      if (this.topicManager.isCommonTopic(topicToDelete.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot delete "${topicToDelete.name}" - topics from common database are read-only.`,
-        );
+      if (this.topicManager.isSharedTopic(topicToDelete.id)) {
+        vscode.window.showWarningMessage(`Cannot delete "${topicToDelete.name}": shared topics are read-only.`);
         return;
       }
 
@@ -400,57 +367,15 @@ export class CommandHandler {
   /**
    * Add a document to a topic
    */
-  private async addDocument(item?: any, signal?: AbortSignal): Promise<void> {
+  private async addDocument(item?: { topic?: Topic }, signal?: AbortSignal): Promise<void> {
     try {
       signal?.throwIfAborted();
-      let selectedTopic: any;
-
-      // If called from tree view with item
-      if (item && item.topic) {
-        selectedTopic = item.topic;
-      } else {
-        // Called from command palette - show picker
-        const topics = await this.topicManager.getAllTopics();
-
-        if (topics.length === 0) {
-          const create = await waitForAbortableUi(
-            signal,
-            vscode.window.showInformationMessage("No topics available. Would you like to create one?", "Create Topic"),
-          );
-
-          if (create === "Create Topic") {
-            await this.createTopic(signal);
-            return this.addDocument(undefined, signal); // Retry after creating topic
-          }
-          return;
-        }
-
-        const selected = await waitForAbortableUi(
-          signal,
-          vscode.window.showQuickPick(
-            topics.map((t: any) => ({
-              label: t.name,
-              description: `${t.documentCount} document(s)`,
-              topic: t,
-            })),
-            {
-              placeHolder: "Select a topic",
-            },
-          ),
-        );
-
-        if (!selected) {
-          return;
-        }
-
-        selectedTopic = selected.topic;
-      }
-
-      // Check if topic is from common database (read-only)
-      if (this.topicManager.isCommonTopic(selectedTopic.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot add documents to "${selectedTopic.name}" - topics from common database are read-only.`,
-        );
+      const selectedTopic = await pickWritableTopic(
+        { topicManager: this.topicManager, createTopic: (s) => this.createTopic(s) },
+        item,
+        signal,
+      );
+      if (!selectedTopic) {
         return;
       }
 
@@ -482,14 +407,7 @@ export class CommandHandler {
             canSelectFiles: true,
             canSelectFolders: false,
             canSelectMany: true,
-            filters: {
-              "All Files": ["*"],
-              "Supported Documents": ["pdf", "md", "markdown", "html", "htm", "txt"],
-              PDF: ["pdf"],
-              Markdown: ["md", "markdown"],
-              HTML: ["html", "htm"],
-              Text: ["txt"],
-            },
+            filters: supportedDocumentFilters(),
             openLabel: "Add Document(s)",
           }),
         );
@@ -552,47 +470,18 @@ export class CommandHandler {
 
       logger.info(`Adding ${filePaths.length} document(s) to topic: ${selectedTopic.name}`, { recursiveDirectory });
 
-      // Process documents using TopicManager
-      await vscode.window.withProgress(
+      await ingestWithProgress(
+        { topicManager: this.topicManager, refresh: () => this.treeDataProvider.refresh() },
+        selectedTopic,
+        filePaths,
         {
-          location: vscode.ProgressLocation.Notification,
-          title: `Processing documents...`,
-          cancellable: false,
+          title: "Processing documents...",
+          label: "Documents",
+          loaderOptions: { recursiveDirectory },
+          progressShare: 1,
         },
-        async (progress) => {
-          const results = await addDocumentsWithLifecycleSignal(
-            this.topicManager,
-            selectedTopic.id,
-            filePaths,
-            signal,
-            {
-              onProgress: (pipelineProgress) => {
-                progress.report({
-                  message: pipelineProgress.message,
-                  increment: pipelineProgress.progress / 100,
-                });
-              },
-              loaderOptions: {
-                recursiveDirectory,
-              },
-            },
-          );
-
-          progress.report({ message: "Complete!" });
-
-          const totalChunks = results.reduce((sum, r) => sum + r.pipelineResult.metadata.chunksStored, 0);
-          const actualFileCount = results.reduce((sum, r) => sum + r.pipelineResult.metadata.originalDocuments, 0);
-          logger.info(`Documents added: ${actualFileCount} files, ${totalChunks} chunks`);
-        },
+        signal,
       );
-
-      signal?.throwIfAborted();
-      const stats = await this.topicManager.getTopicStats(selectedTopic.id);
-      const actualFileCount = stats?.documentCount || 0;
-      vscode.window.showInformationMessage(
-        `Documents added to "${selectedTopic.name}" successfully! Total: ${actualFileCount} documents, ${stats?.chunkCount} chunks.`,
-      );
-      this.treeDataProvider.refresh();
     } catch (error) {
       if (signal?.aborted) {
         throw signal.reason ?? error;
@@ -605,50 +494,16 @@ export class CommandHandler {
   /**
    * Add a GitHub repository to a topic
    */
-  private async addGithubRepo(item?: any, signal?: AbortSignal): Promise<void> {
+  private async addGithubRepo(item?: { topic?: Topic }, signal?: AbortSignal): Promise<void> {
     try {
       signal?.throwIfAborted();
-      let selectedTopic: any;
-
-      // If called from tree view with item
-      if (item && item.topic) {
-        selectedTopic = item.topic;
-      } else {
-        // Called from command palette - show picker
-        const topics = await this.topicManager.getAllTopics();
-
-        if (topics.length === 0) {
-          const create = await waitForAbortableUi(
-            signal,
-            vscode.window.showInformationMessage("No topics available. Would you like to create one?", "Create Topic"),
-          );
-
-          if (create === "Create Topic") {
-            await this.createTopic(signal);
-            return this.addGithubRepo(undefined, signal); // Retry after creating topic
-          }
-          return;
-        }
-
-        const selected = await waitForAbortableUi(
-          signal,
-          vscode.window.showQuickPick(
-            topics.map((t: any) => ({
-              label: t.name,
-              description: `${t.documentCount} document(s)`,
-              topic: t,
-            })),
-            {
-              placeHolder: "Select a topic",
-            },
-          ),
-        );
-
-        if (!selected) {
-          return;
-        }
-
-        selectedTopic = selected.topic;
+      const selectedTopic = await pickWritableTopic(
+        { topicManager: this.topicManager, createTopic: (s) => this.createTopic(s) },
+        item,
+        signal,
+      );
+      if (!selectedTopic) {
+        return;
       }
 
       // Check for saved GitHub hosts
@@ -832,55 +687,26 @@ export class CommandHandler {
         ignorePaths,
       });
 
-      // Process repository using TopicManager
-      await vscode.window.withProgress(
+      await ingestWithProgress(
+        { topicManager: this.topicManager, refresh: () => this.treeDataProvider.refresh() },
+        selectedTopic,
+        [repoUrl],
         {
-          location: vscode.ProgressLocation.Notification,
-          title: `Processing GitHub repository...`,
-          cancellable: false,
+          title: "Processing GitHub repository...",
+          label: "GitHub repository",
+          loaderOptions: {
+            fileType: "github",
+            branch,
+            recursive: true,
+            ignorePaths,
+            accessToken,
+            maxConcurrency: 10, // Increase concurrency for faster loading
+          },
+          progressShare: 0.9,
+          initialProgress: { message: "Fetching repository structure (this may take a while)...", increment: 10 },
         },
-        async (progress) => {
-          progress.report({
-            message: "Fetching repository structure (this may take a while)...",
-            increment: 10,
-          });
-
-          const results = await addDocumentsWithLifecycleSignal(
-            this.topicManager,
-            selectedTopic.id,
-            [repoUrl],
-            signal,
-            {
-              onProgress: (pipelineProgress) => {
-                progress.report({
-                  message: pipelineProgress.message,
-                  increment: (pipelineProgress.progress / 100) * 90,
-                });
-              },
-              loaderOptions: {
-                fileType: "github",
-                branch,
-                recursive: true,
-                ignorePaths,
-                accessToken,
-                maxConcurrency: 10, // Increase concurrency for faster loading
-              },
-            },
-          );
-
-          progress.report({ message: "Complete!", increment: 100 });
-
-          const totalChunks = results.reduce((sum, r) => sum + r.pipelineResult.metadata.chunksStored, 0);
-          logger.info(`GitHub repository added: ${totalChunks} chunks`);
-        },
+        signal,
       );
-
-      signal?.throwIfAborted();
-      const stats = await this.topicManager.getTopicStats(selectedTopic.id);
-      vscode.window.showInformationMessage(
-        `GitHub repository added to "${selectedTopic.name}" successfully! Total: ${stats?.documentCount} documents, ${stats?.chunkCount} chunks.`,
-      );
-      this.treeDataProvider.refresh();
     } catch (error) {
       if (signal?.aborted) {
         throw signal.reason ?? error;
@@ -894,57 +720,15 @@ export class CommandHandler {
    * Add a web URL to a topic.
    * If the URL points to a GitHub repository, routes to addGithubRepo instead.
    */
-  private async addWebUrl(item?: any, signal?: AbortSignal): Promise<void> {
+  private async addWebUrl(item?: { topic?: Topic }, signal?: AbortSignal): Promise<void> {
     try {
       signal?.throwIfAborted();
-      let selectedTopic: any;
-
-      // If called from tree view with item
-      if (item && item.topic) {
-        selectedTopic = item.topic;
-      } else {
-        // Called from command palette - show picker
-        const topics = await this.topicManager.getAllTopics();
-
-        if (topics.length === 0) {
-          const create = await waitForAbortableUi(
-            signal,
-            vscode.window.showInformationMessage("No topics available. Would you like to create one?", "Create Topic"),
-          );
-
-          if (create === "Create Topic") {
-            await this.createTopic(signal);
-            return this.addWebUrl(undefined, signal); // Retry after creating topic
-          }
-          return;
-        }
-
-        const selected = await waitForAbortableUi(
-          signal,
-          vscode.window.showQuickPick(
-            topics.map((t: any) => ({
-              label: t.name,
-              description: `${t.documentCount} document(s)`,
-              topic: t,
-            })),
-            {
-              placeHolder: "Select a topic",
-            },
-          ),
-        );
-
-        if (!selected) {
-          return;
-        }
-
-        selectedTopic = selected.topic;
-      }
-
-      // Check if topic is from common database (read-only)
-      if (this.topicManager.isCommonTopic(selectedTopic.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot add to "${selectedTopic.name}" - topics from common database are read-only.`,
-        );
+      const selectedTopic = await pickWritableTopic(
+        { topicManager: this.topicManager, createTopic: (s) => this.createTopic(s) },
+        item,
+        signal,
+      );
+      if (!selectedTopic) {
         return;
       }
 
@@ -1000,45 +784,18 @@ export class CommandHandler {
 
       logger.info(`Adding web URL to topic: ${selectedTopic.name}`, { url: trimmedUrl });
 
-      // Process web URL using TopicManager
-      await vscode.window.withProgress(
+      await ingestWithProgress(
+        { topicManager: this.topicManager, refresh: () => this.treeDataProvider.refresh() },
+        selectedTopic,
+        [trimmedUrl],
         {
-          location: vscode.ProgressLocation.Notification,
-          title: `Loading web page...`,
-          cancellable: false,
+          title: "Loading web page...",
+          label: "Web page",
+          loaderOptions: { fileType: "web" },
+          progressShare: 1,
         },
-        async (progress) => {
-          const results = await addDocumentsWithLifecycleSignal(
-            this.topicManager,
-            selectedTopic.id,
-            [trimmedUrl],
-            signal,
-            {
-              onProgress: (pipelineProgress) => {
-                progress.report({
-                  message: pipelineProgress.message,
-                  increment: pipelineProgress.progress / 100,
-                });
-              },
-              loaderOptions: {
-                fileType: "web",
-              },
-            },
-          );
-
-          progress.report({ message: "Complete!" });
-
-          const totalChunks = results.reduce((sum, r) => sum + r.pipelineResult.metadata.chunksStored, 0);
-          logger.info(`Web page added: ${totalChunks} chunks`);
-        },
+        signal,
       );
-
-      signal?.throwIfAborted();
-      const stats = await this.topicManager.getTopicStats(selectedTopic.id);
-      vscode.window.showInformationMessage(
-        `Web page added to "${selectedTopic.name}" successfully! Total: ${stats?.documentCount} documents, ${stats?.chunkCount} chunks.`,
-      );
-      this.treeDataProvider.refresh();
     } catch (error) {
       if (signal?.aborted) {
         throw signal.reason ?? error;
@@ -1260,9 +1017,9 @@ export class CommandHandler {
   /**
    * Export a topic to a .rag file
    */
-  private async exportTopic(item?: any): Promise<void> {
+  private async exportTopic(item?: { topic?: Topic }): Promise<void> {
     try {
-      let topicToExport;
+      let topicToExport: Topic;
 
       // If called from tree view with item
       if (item && item.topic) {
@@ -1270,7 +1027,7 @@ export class CommandHandler {
       } else {
         // Called from command palette - show picker
         const topics = (await this.topicManager.getAllTopics()).filter(
-          (t) => t.source !== "common", // Only show local topics for export
+          (t) => t.source !== "shared", // Only show local topics for export
         );
 
         if (topics.length === 0) {
@@ -1297,11 +1054,8 @@ export class CommandHandler {
         topicToExport = selected.topic;
       }
 
-      // Check if topic is from common database
-      if (this.topicManager.isCommonTopic(topicToExport.id)) {
-        vscode.window.showWarningMessage(
-          `Cannot export "${topicToExport.name}" - topics from common database cannot be exported.`,
-        );
+      if (this.topicManager.isSharedTopic(topicToExport.id)) {
+        vscode.window.showWarningMessage(`Cannot export "${topicToExport.name}": shared topics cannot be exported.`);
         return;
       }
 

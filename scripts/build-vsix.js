@@ -8,18 +8,21 @@
  *
  *   1. Clean and rebuild all extension output
  *   2. Create a unique staging directory with the exact workspace manifests and lockfile
- *   2. Copy extension bundle, assets, and metadata
- *   3. npm ci --omit=dev for the target OS/CPU
- *   4. Install target-platform native binaries
- *   5. Prune bloat (maps, unused pdf.js versions, onnxruntime-node platforms, langchain nested)
- *   6. vsce package from the staging directory
- *   7. Copy VSIX back, clean up staging
+ *   3. Copy extension bundle, assets, and metadata
+ *   4. npm ci --omit=dev for the target OS/CPU
+ *   5. Install target-platform native binaries
+ *   6. Prune bloat (maps, unused pdf.js versions, onnxruntime-node platforms, langchain nested)
+ *   7. vsce package from the staging directory
+ *   8. Copy VSIX back, clean up staging
  *
  * Benefits:
  *   - Development node_modules never mutated
- *   - No gutting hacks (npm list not needed since no stubs)
  *   - Reproducible builds
  *   - Every dependency resolution is bound to package-lock.json
+ *
+ * Pruning guts some packages to their package.json rather than deleting them:
+ * vsce lists the files to ship with `npm list --production`, which fails on a
+ * dependency whose directory is missing.
  */
 
 const fs = require("fs");
@@ -47,7 +50,7 @@ const VSIX_GRAPH_ASSETS = ["memoryGraph.js", "memoryGraph.css"];
  * the program path through cmd.exe — where a space in the repository path, or
  * in the Windows temp directory, becomes a quoting bug. These are Node programs,
  * so the portable answer is to run them the way Node runs anything: hand the
- * script to the current interpreter. Same call on all six targets, no shell, no
+ * script to the current interpreter. Same call on all five targets, no shell, no
  * quoting, and the exact Node already in use.
  */
 function runNodeScript(scriptPath, args, options = {}) {
@@ -108,14 +111,15 @@ function getTargetPlatform() {
     process.exit(1);
   }
 
-  const [platform, arch] = target.split("-");
-  const validPlatforms = ["darwin", "linux", "win32"];
-  const validArchs = ["arm64", "x64"];
-
-  if (!validPlatforms.includes(platform) || !validArchs.includes(arch)) {
-    console.error(`Invalid target: ${target}. Expected {platform}-{arch}`);
+  // release-policy.json is the one list of shipped targets. darwin-x64 is not on
+  // it: ONNX Runtime no longer ships macOS x64 binaries, so that VSIX could not
+  // load local embeddings.
+  const { vsixTargets } = JSON.parse(fs.readFileSync(path.join(ROOT, "release-policy.json"), "utf8"));
+  if (!vsixTargets.includes(target)) {
+    console.error(`Invalid target: ${target}. Expected one of: ${vsixTargets.join(", ")}`);
     process.exit(1);
   }
+  const [platform, arch] = target.split("-");
 
   // LanceDB uses variants like linux-x64-gnu, win32-x64-msvc
   const patterns = [target];
@@ -179,7 +183,7 @@ function copyToStaging(stagingDir) {
   }
 
   // Copy directories
-  const dirsToCopy = ["dist", "assets", "stubs"];
+  const dirsToCopy = ["dist", "assets"];
   for (const dir of dirsToCopy) {
     const src = path.join(ROOT, dir);
     if (fs.existsSync(src)) {
@@ -301,8 +305,23 @@ function targetNpmPlatform(platform) {
 const PLATFORM_PACKAGE_CONFIGS = [
   { scope: "@lancedb", prefix: "lancedb-", description: "LanceDB", expectedCount: 1 },
   { scope: "@img", prefix: "sharp-", description: "Sharp", expectedCount: 1 },
-  { scope: "@img", prefix: "sharp-libvips-", description: "Sharp libvips", expectedCount: 1 },
+  // The Windows Sharp packages carry libvips-42.dll themselves and Sharp
+  // declares no Windows libvips package, so a Windows VSIX ships none.
+  {
+    scope: "@img",
+    prefix: "sharp-libvips-",
+    description: "Sharp libvips",
+    expectedCount: 1,
+    platforms: ["darwin", "linux"],
+  },
 ];
+
+/** The native package configs that ship in this target's VSIX. */
+function nativePackageConfigsFor(targetPlatform) {
+  return PLATFORM_PACKAGE_CONFIGS.filter(
+    (config) => !config.platforms || config.platforms.includes(targetPlatform.platform),
+  );
+}
 
 function getNativePackageConfig(packageName) {
   const [scope, name, ...extra] = packageName.split("/");
@@ -341,7 +360,7 @@ async function installNativeDeps(stagingDir, targetPlatform) {
     ...(rootPkg.dependencies || {}),
     ...(rootPkg.optionalDependencies || {}),
   };
-  const platformDeps = PLATFORM_PACKAGE_CONFIGS.map((config) => {
+  const platformDeps = nativePackageConfigsFor(targetPlatform).map((config) => {
     const name = expectedNativePackageName(config, targetPlatform);
     const version = declaredDependencies[name];
     if (!version) {
@@ -371,6 +390,7 @@ async function installNativeDeps(stagingDir, targetPlatform) {
     console.log(`  ✓ ${name} installed from verified lockfile artifact`);
   }
   verifyNativePackages(nodeModules, targetPlatform, platformDeps);
+  verifySharpNativesMatchTransformers(nodeModules, targetPlatform);
 }
 
 function removePlatformRestrictions(packageDir) {
@@ -466,18 +486,72 @@ function assertSafeArchiveMember(member) {
 }
 
 function verifyNativePackages(nodeModules, targetPlatform, expected) {
-  if (expected.length !== PLATFORM_PACKAGE_CONFIGS.length) {
-    throw new Error(`Expected ${PLATFORM_PACKAGE_CONFIGS.length} target native packages, resolved ${expected.length}`);
+  const shipped = nativePackageConfigsFor(targetPlatform);
+  if (expected.length !== shipped.length) {
+    throw new Error(`Expected ${shipped.length} target native packages, resolved ${expected.length}`);
   }
+  // Count copies at every depth: a nested copy beside a root copy ships twice,
+  // and only one of them is the binary its consumer actually loads. A config
+  // that does not ship for this target must have no copy left at all.
+  const nodeModulesDirectories = fs.existsSync(nodeModules) ? findNodeModulesDirectories(nodeModules) : [];
   for (const config of PLATFORM_PACKAGE_CONFIGS) {
-    const scopeDir = path.join(nodeModules, config.scope);
+    const expectedCount = shipped.includes(config) ? config.expectedCount : 0;
     const expectedBasename = expectedNativePackageName(config, targetPlatform).split("/")[1];
-    const matches = fs.existsSync(scopeDir) ? fs.readdirSync(scopeDir).filter((name) => name === expectedBasename) : [];
-    if (matches.length !== config.expectedCount) {
+    const matches = nodeModulesDirectories.filter((directory) =>
+      fs.existsSync(path.join(directory, config.scope, expectedBasename, "package.json")),
+    );
+    if (matches.length !== expectedCount) {
       throw new Error(
-        `${config.description}: expected ${config.expectedCount} ${targetPlatform.target} package, found ${matches.length}`,
+        `${config.description}: expected ${expectedCount} ${targetPlatform.target} package, found ${matches.length}`,
       );
     }
+  }
+}
+
+/** Node's lookup for `name` from inside `fromDir`: the nearest ancestor node_modules that has it. */
+function resolvePackageDir(fromDir, name) {
+  for (let directory = fromDir; ; directory = path.dirname(directory)) {
+    const candidate = path.join(directory, "node_modules", ...name.split("/"));
+    if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
+    if (path.dirname(directory) === directory) return null;
+  }
+}
+
+function readPackageJson(packageDir) {
+  return JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
+}
+
+function resolveTransformersDependency(nodeModules, name) {
+  const transformersDir = path.join(nodeModules, "@huggingface", "transformers");
+  if (!fs.existsSync(path.join(transformersDir, "package.json"))) {
+    throw new Error("@huggingface/transformers is missing from the staged node_modules");
+  }
+  const packageDir = resolvePackageDir(transformersDir, name);
+  if (!packageDir) throw new Error(`${name} does not resolve from @huggingface/transformers`);
+  return packageDir;
+}
+
+/**
+ * The Sharp binaries must be the ones Transformers' own Sharp resolves, at the
+ * exact versions that Sharp (and its platform package) declare. Every package
+ * checked here is declared by the one before it: Sharp declares its platform
+ * package, and the darwin and linux platform packages declare their libvips.
+ */
+function verifySharpNativesMatchTransformers(nodeModules, targetPlatform) {
+  const sharpDir = resolveTransformersDependency(nodeModules, "sharp");
+  let resolverDir = sharpDir;
+  for (const config of nativePackageConfigsFor(targetPlatform).filter((item) => item.scope === "@img")) {
+    const name = expectedNativePackageName(config, targetPlatform);
+    const declared = readPackageJson(resolverDir).optionalDependencies?.[name];
+    if (!declared) throw new Error(`${path.relative(nodeModules, resolverDir)} does not declare ${name}`);
+    const nativeDir = resolvePackageDir(resolverDir, name);
+    if (!nativeDir) throw new Error(`${name} does not resolve from ${path.relative(nodeModules, resolverDir)}`);
+    const installed = readPackageJson(nativeDir).version;
+    if (installed !== declared) {
+      throw new Error(`${name}@${installed} does not match the ${declared} that the loaded Sharp declares`);
+    }
+    console.log(`  ✓ ${name}@${installed} is the copy Transformers' Sharp loads`);
+    resolverDir = nativeDir;
   }
 }
 
@@ -509,6 +583,7 @@ function pruneBloat(stagingDir, targetPlatform) {
 
   // Remove non-target onnxruntime-node platform binaries
   pruneOnnxruntimeNode(nm, targetPlatform);
+  pruneOnnxruntimeWeb(nm);
   prunePlatformNativePackages(nm, targetPlatform);
   removeMcpWorkspace(stagingDir);
   removeGraphUiWorkspace(stagingDir);
@@ -553,12 +628,7 @@ function pruneBloat(stagingDir, targetPlatform) {
     "apache-arrow",
     "pdf-parse",
     "cheerio",
-    "archiver",
     "zod",
-    "glob",
-    "sharp",
-    "lodash",
-    "semver",
   ];
   for (const scope of topLevelScopes) {
     const dir = path.join(nm, scope);
@@ -603,14 +673,16 @@ function prunePlatformNativePackages(rootNodeModules, targetPlatform) {
     for (const config of PLATFORM_PACKAGE_CONFIGS) {
       const scopeDir = path.join(nodeModules, config.scope);
       if (!fs.existsSync(scopeDir)) continue;
-      const expectedBasename = expectedNativePackageName(config, targetPlatform).split("/")[1];
+      const keep = nativePackageConfigsFor(targetPlatform).includes(config)
+        ? expectedNativePackageName(config, targetPlatform).split("/")[1]
+        : null;
       for (const name of fs.readdirSync(scopeDir)) {
         if (getNativePackageConfig(`${config.scope}/${name}`) !== config) continue;
-        // Retain target copies at every dependency depth. Packages such as the
-        // Sharp instance nested under Transformers resolve their optional
-        // @img binary relative to that package; VSCE does not reliably retain
-        // an unrelated root optional package as a substitute.
-        if (name === expectedBasename) continue;
+        // Keep the target package wherever npm placed it: Transformers' nested
+        // Sharp finds its platform package by walking up from its own
+        // directory. verifyNativePackages fails the build if a second copy is
+        // left at any depth.
+        if (name === keep) continue;
         fs.rmSync(path.join(scopeDir, name), { recursive: true, force: true });
         removed++;
       }
@@ -636,33 +708,60 @@ function findNodeModulesDirectories(rootNodeModules) {
 }
 
 function pruneOnnxruntimeNode(nm, targetPlatform) {
-  const napiDir = path.join(nm, "@huggingface", "transformers", "node_modules", "onnxruntime-node", "bin", "napi-v3");
-  if (!fs.existsSync(napiDir)) return;
+  const binDir = path.join(resolveTransformersDependency(nm, "onnxruntime-node"), "bin");
+  const napiDirs = fs.existsSync(binDir)
+    ? fs
+        .readdirSync(binDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^napi-v\d+$/.test(entry.name))
+        .map((entry) => path.join(binDir, entry.name))
+    : [];
 
-  for (const platformDir of fs.readdirSync(napiDir)) {
-    const platformPath = path.join(napiDir, platformDir);
-    if (!fs.statSync(platformPath).isDirectory()) continue;
+  for (const napiDir of napiDirs) {
+    for (const platformDir of fs.readdirSync(napiDir)) {
+      const platformPath = path.join(napiDir, platformDir);
+      if (!fs.statSync(platformPath).isDirectory()) continue;
 
-    for (const archDir of fs.readdirSync(platformPath)) {
-      const archPath = path.join(platformPath, archDir);
-      if (!fs.statSync(archPath).isDirectory()) continue;
+      for (const archDir of fs.readdirSync(platformPath)) {
+        const archPath = path.join(platformPath, archDir);
+        if (!fs.statSync(archPath).isDirectory()) continue;
 
-      if (platformDir === targetPlatform.platform && archDir === targetPlatform.arch) {
-        console.log(`  Keeping onnxruntime-node ${platformDir}/${archDir}`);
-        continue;
+        if (platformDir === targetPlatform.platform && archDir === targetPlatform.arch) {
+          console.log(`  Keeping onnxruntime-node ${path.basename(napiDir)}/${platformDir}/${archDir}`);
+          continue;
+        }
+        fs.rmSync(archPath, { recursive: true, force: true });
       }
-      fs.rmSync(archPath, { recursive: true, force: true });
-    }
 
-    // Remove empty platform dir
-    try {
-      if (fs.readdirSync(platformPath).length === 0) {
-        fs.rmSync(platformPath, { recursive: true, force: true });
+      // Remove empty platform dir
+      try {
+        if (fs.readdirSync(platformPath).length === 0) {
+          fs.rmSync(platformPath, { recursive: true, force: true });
+        }
+      } catch (_) {
+        /* ignore */
       }
-    } catch (_) {
-      /* ignore */
     }
   }
+
+  // onnxruntime-node loads bin/napi-v*/<platform>/<arch>/onnxruntime_binding.node
+  // with no fallback. A target it does not ship must fail the build, not ship a
+  // VSIX whose local embeddings cannot start.
+  const bindings = napiDirs.filter((napiDir) =>
+    fs.existsSync(path.join(napiDir, targetPlatform.platform, targetPlatform.arch, "onnxruntime_binding.node")),
+  );
+  if (bindings.length !== 1) {
+    throw new Error(`onnxruntime-node: expected 1 ${targetPlatform.target} binding, found ${bindings.length}`);
+  }
+}
+
+/**
+ * Transformers 4 bundles the onnxruntime-web build it needs into its own dist
+ * and never resolves the onnxruntime-web package in Node. Keep the manifest so
+ * vsce's `npm list` stays satisfied, drop the unused WASM/WebGPU payload.
+ */
+function pruneOnnxruntimeWeb(nm) {
+  const onnxruntimeWebDir = resolveTransformersDependency(nm, "onnxruntime-web");
+  if (gutPackage(onnxruntimeWebDir) > 0) console.log("  ✓ Gutted unused onnxruntime-web (bundled into Transformers)");
 }
 
 function findFiles(dir, ext) {
@@ -684,13 +783,13 @@ function findFiles(dir, ext) {
  * The extension and the MCP server are independent products that share only
  * `@ragnarok/core`. Staging installs every workspace because `npm ci` validates
  * them all against the lockfile — which drags in the MCP server's dependency
- * tree (`@modelcontextprotocol/*`, `@hono/node-server`, `@anthropic-ai/sdk`,
- * `openai`) under `packages/mcp-server/node_modules/`.
+ * tree (`@modelcontextprotocol/*`, `@anthropic-ai/sdk`, `openai`) under
+ * `packages/mcp-server/node_modules/`.
  *
- * `.vscodeignore` already excludes `packages/**`, so none of it shipped. But it
- * still sat in the tree `npm list` walks, and `@hono/node-server`'s unmet `hono`
- * peer failed the whole build — the extension unable to package because of a
- * dependency belonging to a product it does not include.
+ * `.vscodeignore` already excludes `packages/**`, so none of it ships. But it
+ * still sits in the tree `npm list` walks, where an unmet peer in any MCP
+ * dependency fails the whole build — the extension unable to package because
+ * of a dependency belonging to a product it does not include.
  *
  * The workspace is removed from the staged manifest *after* `npm ci` (before it,
  * the lockfile would not validate) and its directory deleted, so nothing
@@ -707,6 +806,7 @@ function removeMcpWorkspace(stagingDir) {
 
   const dir = path.join(stagingDir, workspacePath);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  removeWorkspaceLink(stagingDir, "@ragnarok/mcp-server");
 
   // npm hoists what it can, so the MCP-only packages may also sit at the root.
   // The extension loads none of them.
@@ -728,38 +828,23 @@ function removeGraphUiWorkspace(stagingDir) {
 
   const dir = path.join(stagingDir, workspacePath);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  removeWorkspaceLink(stagingDir, "@ragnarok/graph-ui");
   console.log("  ✓ Removed the private graph UI workspace from VSIX staging");
 }
 
 /**
- * Mark peer dependencies that were never installed as optional, in the staged
- * tree only.
- *
- * vsce derives the packaged file list by shelling out to
- * `npm list --production`, and npm exits non-zero when a *non-optional* peer is
- * absent. Two packages in this tree declare peers they cannot expect anyone to
- * install and forget to mark them optional:
- *
- *   - @langchain/community (deprecated) requires @browserbasehq/stagehand,
- *     @ibm-cloud/watsonx-ai and ibm-cloud-sdk-core — vendor integrations for
- *     services this extension does not touch.
- *   - @hono/node-server requires hono. It reaches the tree only because staging
- *     installs every workspace, including the MCP server, which the extension
- *     does not ship.
- *
- * npm is right and the manifests are wrong, so the repair belongs here: the
- * staging directory is disposable, and "a peer we deliberately did not install
- * is optional" is exactly what these manifests should have said. Nothing in the
- * source tree is touched, and no package contents change — only the metadata
- * npm reads while enumerating.
- *
- * Deriving this from the tree rather than a hand-written list means a future
- * dependency with the same defect is handled without another fix here.
+ * npm ci links every workspace into node_modules. Once a workspace directory is
+ * gone its link dangles, and vsce's `npm list --production` fails on it as an
+ * extraneous package. rmSync removes the link itself, never a target.
  */
-function relaxUnmetPeerDependencies(nodeModulesDir) {
-  if (!fs.existsSync(nodeModulesDir)) return;
+function removeWorkspaceLink(stagingDir, packageName) {
+  fs.rmSync(path.join(stagingDir, "node_modules", ...packageName.split("/")), { recursive: true, force: true });
+}
 
+/** The package.json path of every package directly under node_modules (scoped ones included). */
+function listTopLevelManifests(nodeModulesDir) {
   const manifests = [];
+  if (!fs.existsSync(nodeModulesDir)) return manifests;
   for (const entry of fs.readdirSync(nodeModulesDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name === ".bin") continue;
     if (entry.name.startsWith("@")) {
@@ -771,9 +856,33 @@ function relaxUnmetPeerDependencies(nodeModulesDir) {
       manifests.push(path.join(nodeModulesDir, entry.name, "package.json"));
     }
   }
+  return manifests;
+}
+
+/**
+ * Mark peer dependencies that were never installed as optional, in the staged
+ * tree only.
+ *
+ * vsce derives the packaged file list by shelling out to
+ * `npm list --production`, and npm exits non-zero when a *non-optional* peer is
+ * absent. @langchain/community (deprecated) requires @browserbasehq/stagehand,
+ * @ibm-cloud/watsonx-ai and ibm-cloud-sdk-core — vendor integrations for
+ * services this extension does not touch — and forgets to mark them optional.
+ *
+ * npm is right and the manifest is wrong, so the repair belongs here: the
+ * staging directory is disposable, and "a peer we deliberately did not install
+ * is optional" is exactly what the manifest should have said. Nothing in the
+ * source tree is touched, and no package contents change — only the metadata
+ * npm reads while enumerating.
+ *
+ * Deriving this from the tree rather than a hand-written list means a future
+ * dependency with the same defect is handled without another fix here.
+ */
+function relaxUnmetPeerDependencies(nodeModulesDir) {
+  if (!fs.existsSync(nodeModulesDir)) return;
 
   let relaxed = 0;
-  for (const manifestPath of manifests) {
+  for (const manifestPath of listTopLevelManifests(nodeModulesDir)) {
     if (!fs.existsSync(manifestPath)) continue;
     let pkg;
     try {
@@ -903,7 +1012,7 @@ function assertNoMcpDependencies(stagingDir) {
   // Checked against the staging tree, not the finished archive: vsce can only
   // package what is here, so a directory that is absent cannot be shipped.
   // Reading the .vsix would need a zip reader — `unzip` is not a Windows
-  // command, and this build has to work on all six targets.
+  // command, and this build has to work on all five targets.
   //
   // Only markers unique to the MCP server. `openai` and `@anthropic-ai` are
   // deliberately absent: the MCP server uses them, but so does
@@ -925,24 +1034,41 @@ function assertNoMcpDependencies(stagingDir) {
   console.log("  ✓ No MCP dependencies staged for the VSIX");
 }
 
+/**
+ * The VSIX file name is a contract: the release workflow, vsix-smoke, the
+ * release manifest and the asset check each find a file by its `-<target>.vsix`
+ * suffix. vsce's default name is `<name>-<target>-<version>.vsix`, which none
+ * of them accepts, so the name is fixed here and passed to vsce with `--out`.
+ */
+function vsixFileName(manifest, target) {
+  return `${manifest.name}-${manifest.version}-${target}.vsix`;
+}
+
 function packageVsix(stagingDir, targetPlatform) {
   console.log("\nPackaging VSIX...");
 
   assertNoMcpDependencies(stagingDir);
 
-  // Use the root project's vsce binary
-  runNodeScript(resolveDependencyBin("@vscode/vsce", "vsce"), ["package", "--target", targetPlatform.target], {
-    cwd: stagingDir,
-    stdio: "inherit",
-  });
+  // vsce reads the staged manifest, so the file name is derived from it too.
+  const manifest = JSON.parse(fs.readFileSync(path.join(stagingDir, "package.json"), "utf8"));
+  const vsixName = vsixFileName(manifest, targetPlatform.target);
 
-  // Find the generated VSIX and move it to root
-  const vsix = fs.readdirSync(stagingDir).find((f) => f.endsWith(".vsix"));
-  if (!vsix) {
-    throw new Error("No .vsix file produced");
+  // Use the root project's vsce binary
+  runNodeScript(
+    resolveDependencyBin("@vscode/vsce", "vsce"),
+    ["package", "--target", targetPlatform.target, "--out", vsixName],
+    {
+      cwd: stagingDir,
+      stdio: "inherit",
+    },
+  );
+
+  // Copy the file that was asked for, and only that one, to the repository root
+  const src = path.join(stagingDir, vsixName);
+  if (!fs.existsSync(src)) {
+    throw new Error(`vsce did not produce ${vsixName} in ${stagingDir}`);
   }
-  const src = path.join(stagingDir, vsix);
-  const dest = path.join(ROOT, vsix);
+  const dest = path.join(ROOT, vsixName);
   fs.copyFileSync(src, dest);
   console.log(`\n✓ VSIX: ${dest}`);
   return dest;
@@ -1016,9 +1142,13 @@ if (require.main === module) {
     expectedNativePackageName,
     getNativePackageConfig,
     matchesTargetPlatform,
+    nativePackageConfigsFor,
+    pruneOnnxruntimeNode,
     prunePlatformNativePackages,
     removeGraphUiWorkspace,
     verifyIntegrity,
     verifyNativePackages,
+    verifySharpNativesMatchTransformers,
+    vsixFileName,
   };
 }

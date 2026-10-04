@@ -3,8 +3,7 @@
 The MCP server is a stdio child process spawned by one MCP client on one
 machine. It opens no socket, so this guide has no listener, certificate, token,
 or endpoint sections — operating it means operating its storage directory and
-its model configuration. Read [SECURITY.md](SECURITY.md) for the trust boundary
-and [MIGRATION.md](../MIGRATION.md) before opening a pre-v0.4 store.
+its model configuration. Read [SECURITY.md](SECURITY.md) for the trust boundary.
 
 The VS Code extension uses its own `globalStorageUri`; it does not use
 `RAGNAROK_STORAGE_DIR`. The hosts share core implementation but there is no
@@ -53,17 +52,15 @@ fails with `Storage is busy: a write is in progress by pid <n>`. Each host
 rewords that as a retryable busy message — the MCP tools report "Storage is
 busy: another RAGnarōk process is writing. Retry shortly.", the VS Code
 extension shows "Storage is busy — another window is writing (pid <n>). Retry
-in a moment." Nothing is written and the operation can simply be retried. A crashed holder's lease goes stale after roughly five minutes and is
-then reclaimable, but a live same-host PID is never reclaimed merely for age.
+in a moment." Nothing is written and the operation can simply be retried. A
+crashed holder's lease goes stale after roughly five minutes and is then
+reclaimable, but a live same-host PID is never reclaimed merely for age.
 
-Migration, reset, and rollback are the exception: they hold the store
-exclusively for their entire duration, and any other process that tries to open
-or write it during that window is told a migration or reset is in progress.
-Never run two migration CLI processes, or a migration and a server, against the
-same root.
+A reset holds the store's write lease for its whole duration, so other processes
+see the same retryable busy error until it finishes.
 
 Do not set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested mechanism
-serializes writes across the entire root: it bypasses both lease kinds, so
+serializes writes across the entire root: it bypasses the lease entirely, so
 concurrent writers can then corrupt the store.
 
 ## Shared topic archives
@@ -103,9 +100,10 @@ complete service. `rag_topic` (`export`) writes a checksummed `.rag` archive int
 reads an archive from a canonical `security.allowedPaths` root and validates
 archive paths, limits, schemas, and checksums before publication.
 
-For a legacy store, first run the dry-run migration and retain its immutable
-backup. The exact commands, rollback behavior, and exit codes are in
-[MIGRATION.md](../MIGRATION.md).
+A storage directory from a pre-0.4 build is refused at startup. To keep using
+that path, start the server once with `RAGNAROK_RESET_STORAGE=1`: it moves the
+old content into a `backup-v1-<timestamp>` folder inside the storage directory
+and starts a new store.
 
 ## Model configuration
 
@@ -137,7 +135,7 @@ The complete key table is in
   VS Code extension the equivalent action is **Reset Memory** in the RAG
   sidebar's Memory section, which confirms modally before deleting; the
   extension contributes no reset language-model tool. It
-  migrates nothing already indexed; changing a topic's model is a
+  changes nothing already indexed; changing a topic's model is a
   delete-and-recreate. A
   dimension mismatch or a missing fingerprint is still a hard reindex error
   rather than a silently degraded result.
@@ -198,7 +196,7 @@ The inline MCP App visibly transitions through loading, ready, empty, and access
 states. Keyboard operators can traverse graph items with arrows, open details
 with Enter/Space, close with Escape, and reset the fitted viewport. A missing
 or malformed result must show an alert rather than stale graph content. The VS
-Code instead provides **RAGnarok: Show Memory Graph**, a local command webview
+Code instead provides **RAG: Show Memory Graph**, a local command webview
 over the extension's separate memory root. Neither UI reads the other host's
 data.
 
@@ -240,5 +238,5 @@ Monitor process restarts, storage free space, and stderr for busy-storage
 retries and provider errors. Occasional busy errors are normal when several
 processes share a root; a sustained stream of them means one writer is holding
 the lease far longer than a mutation should. Treat corruption, unsupported storage markers, fingerprint
-mismatches, and failed migration validation as hard operator incidents; do not
+mismatches as hard operator incidents; do not
 reset storage until its backup and recovery path have been reviewed.

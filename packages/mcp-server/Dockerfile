@@ -38,6 +38,9 @@ COPY packages/graph-ui/package.json packages/graph-ui/
 COPY packages/mcp-server/package.json packages/mcp-server/
 COPY packages/vscode/package.json packages/vscode/
 
+# Core loads Transformers with import() (dist/transformers.node.mjs), and
+# dist/transformers.node.cjs is the package's require/main entry. Every other
+# dist file is a browser, minified or WASM-loader variant the server never loads.
 RUN npm ci --omit=dev --omit=peer --ignore-scripts --libc=glibc \
       --workspace=@ragnarok/core \
       --workspace=@ragnarok/mcp-server \
@@ -48,21 +51,19 @@ RUN npm ci --omit=dev --omit=peer --ignore-scripts --libc=glibc \
       arm64) onnx_arch=arm64 ;; \
       *) echo "Unsupported MCP image architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac && \
-    onnx_bin=node_modules/@huggingface/transformers/node_modules/onnxruntime-node/bin/napi-v3 && \
+    onnx_bin=node_modules/@huggingface/transformers/node_modules/onnxruntime-node/bin/napi-v6 && \
     rm -rf "${onnx_bin}/darwin" "${onnx_bin}/win32" && \
     find "${onnx_bin}/linux" -mindepth 1 -maxdepth 1 -type d ! -name "${onnx_arch}" -exec rm -rf {} + && \
+    test -f "${onnx_bin}/linux/${onnx_arch}/onnxruntime_binding.node" && \
     rm -rf \
       node_modules/@huggingface/transformers/node_modules/onnxruntime-web \
       node_modules/@huggingface/transformers/src \
       node_modules/@huggingface/transformers/types \
-      node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.mjs \
-      node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.wasm \
-      node_modules/@huggingface/transformers/dist/transformers.js \
-      node_modules/@huggingface/transformers/dist/transformers.min.js \
-      node_modules/@huggingface/transformers/dist/transformers.web.js \
-      node_modules/@huggingface/transformers/dist/transformers.web.min.js \
       node_modules/@lancedb/lancedb/node_modules/@lancedb/*-musl \
       node_modules/@lancedb/*-musl && \
+    find node_modules/@huggingface/transformers/dist -type f \
+      ! -name transformers.node.mjs ! -name transformers.node.cjs -delete && \
+    test -f node_modules/@huggingface/transformers/dist/transformers.node.mjs && \
     find node_modules packages/core/node_modules packages/mcp-server/node_modules \
       -type f \( -name '*.map' -o -name '*.d.ts' \) -delete
 

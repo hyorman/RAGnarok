@@ -98,9 +98,18 @@ jobs:
       - run: npm ci
       - run: npm run compile
       - run: npm run compile:tests:all
+      # The suite takes about 3 minutes on Windows. A run that has not exited by 15
+      # has hung, and the report names the handles that kept it alive.
       - run: npm run test:core:compiled
+        timeout-minutes: 15
+        env:
+          RAGNAROK_REPORT_ACTIVE_RESOURCES: "1"
       - run: npm run test:mcp:compiled
+        timeout-minutes: 15
+        env:
+          RAGNAROK_REPORT_ACTIVE_RESOURCES: "1"
       - run: npm run test:shutdown-soak
+        timeout-minutes: 15
 
   vscode-tests:
     timeout-minutes: 20
@@ -182,7 +191,9 @@ jobs:
       - run: node scripts/pack-smoke.mjs --artifacts=.
       - run: npm run package
       - run: npm run release:assets
-      - run: docker buildx build --tag ragnarok-mcp:ci --file packages/mcp-server/Dockerfile --output type=oci,dest=ragnarok-mcp.oci.tar .
+      # The classic image store cannot export, load or push the OCI archive faithfully; the containerd store can.
+      - run: node scripts/use-containerd-image-store.mjs
+      - run: docker buildx build --provenance=false --sbom=false --tag ragnarok-mcp:ci --file packages/mcp-server/Dockerfile --output type=oci,dest=ragnarok-mcp.oci.tar .
       - run: sha256sum *.tgz *.vsix ragnarok-mcp.oci.tar > artifact-sha256.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -206,26 +217,19 @@ jobs:
         include:
           - target: linux-x64
             os: ubuntu-24.04
-            cli: code
+            display: xvfb-run -a
           - target: linux-arm64
             os: ubuntu-24.04-arm
-            cli: code
-          # macos-13 was the last Intel runner and is retired. Running the
-          # x64 VSIX here means an arm64 VS Code process, and Rosetta cannot
-          # mix architectures inside one process -- so a failure on this leg
-          # is an architecture mismatch, not a RAGnarok regression.
-          - target: darwin-x64
-            os: macos-14
-            cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
+            display: xvfb-run -a
           - target: darwin-arm64
             os: macos-14
-            cli: /Applications/Visual Studio Code.app/Contents/Resources/app/bin/code
+            display: ""
           - target: win32-x64
             os: windows-2025
-            cli: code.cmd
+            display: ""
           - target: win32-arm64
             os: windows-11-arm
-            cli: code.cmd
+            display: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -241,9 +245,13 @@ jobs:
           path: artifacts
       - run: npm ci
       - run: node scripts/verify-artifact-digests.mjs artifacts/artifact-sha256.txt artifacts
-      - run: node scripts/vsix-smoke.mjs artifacts/*-${{ matrix.target }}.vsix
+      # The runner images ship no VS Code and no display: the smoke downloads VS Code itself, and the
+      # Linux legs run it under a virtual display (the arm image may not ship xvfb).
+      - if: runner.os == 'Linux'
+        run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
+      - run: ${{ matrix.display }} node scripts/vsix-smoke.mjs artifacts/*-${{ matrix.target }}.vsix
         env:
-          VSCODE_CLI: ${{ matrix.cli }}
+          VSCODE_VERSION: stable
 
   vscode-minimum:
     timeout-minutes: 20
@@ -262,7 +270,8 @@ jobs:
           name: release-candidate-${{ github.sha }}
           path: artifacts
       - run: npm ci
-      - run: node scripts/vsix-smoke.mjs artifacts/*-linux-x64.vsix
+      # The runner has no display, so the downloaded VS Code runs under a virtual one.
+      - run: xvfb-run -a node scripts/vsix-smoke.mjs artifacts/*-linux-x64.vsix
         env:
           VSCODE_VERSION: 1.105.0
 
@@ -284,6 +293,7 @@ jobs:
           path: artifacts
       - run: npm ci
       - run: node scripts/verify-artifact-digests.mjs artifacts/artifact-sha256.txt artifacts
+      - run: node scripts/use-containerd-image-store.mjs
       - run: docker load --input artifacts/ragnarok-mcp.oci.tar
       - run: node scripts/docker-gate.mjs
 
@@ -406,6 +416,7 @@ jobs:
       - run: npm run release:verify
         env:
           GH_TOKEN: ${{ github.token }}
+      - run: node scripts/use-containerd-image-store.mjs
       - run: docker login ghcr.io --username "${{ github.actor }}" --password-stdin <<< "$DOCKER_PASSWORD"
         env:
           DOCKER_PASSWORD: ${{ github.token }}

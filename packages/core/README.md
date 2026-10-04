@@ -90,15 +90,25 @@ src/
 ├── interfaces.ts              # Portable interfaces (IConfigProvider, ILogger, …)
 ├── constants.ts               # Shared constants & config keys
 ├── logger.ts                  # Pluggable logger (setLoggerFactory)
+├── hostServices.ts            # createEmbeddingServices / createMemoryServices: the wiring a host shares
 │
 ├── agents/
 │   ├── ragAgent.ts            # Orchestrates retrieval, iterative refinement, gap analysis
 │   ├── ragQueryService.ts     # Query execution facade over RAGAgent
-│   └── queryPlannerAgent.ts   # LLM-powered query decomposition with heuristic fallback
+│   ├── queryPlannerAgent.ts   # LLM-powered query decomposition with heuristic fallback
+│   ├── followUpPlanner.ts     # Gap analysis and follow-up sub-queries for the refinement loop
+│   ├── llmJson.ts             # Prompt an LLM and validate its JSON reply against a schema
+│   └── topicEmptyError.ts     # TopicEmptyError, a leaf module so tools can catch it by type
 │
 ├── managers/
 │   ├── topicManager.ts        # Topic CRUD, metadata persistence, lifecycle
-│   └── documentPipeline.ts    # End-to-end: load → chunk → embed → store
+│   ├── documentPipeline.ts    # End-to-end: load → chunk → embed → store
+│   └── topic/                 # Pieces TopicManager delegates to
+│       ├── topicArchiveTransfer.ts # Topic archive export and import
+│       ├── topicJournals.ts        # Ingestion and post-commit cleanup journals, and their repair
+│       ├── topicStorePaths.ts      # Where the topic index and per-topic document files live
+│       ├── topicIds.ts             # Topic and document id helpers, file-type mapping
+│       └── topicVectorStores.ts    # Vector-store loading and its cache
 │
 ├── retrievers/
 │   ├── vectorRetriever.ts     # Squared-L2 to unit-cosine score contract
@@ -111,8 +121,9 @@ src/
 │
 ├── embeddings/
 │   ├── embeddingService.ts        # Pluggable backend router — selects active embedding backend
+│   ├── embeddingServiceRegistry.ts # One EmbeddingService per embedding space, capping resident models
 │   ├── embeddingBackend.ts        # Backend interface (EmbeddingBackend)
-│   ├── huggingFaceBackend.ts      # Local ONNX inference via @xenova/transformers
+│   ├── huggingFaceBackend.ts      # Local ONNX inference via @huggingface/transformers
 │   ├── remoteEmbeddingBackend.ts  # Remote HTTP backends (OpenAI / Ollama formats)
 │   └── langchainEmbeddings.ts     # TransformersEmbeddings LangChain adapter
 │
@@ -132,11 +143,24 @@ src/
 ├── stores/
 │   └── vectorStoreFactory.ts  # LanceDB store creation, per-topic tables, caching
 │
+├── sharedTopics/              # Read-only shared topic sources: registry, folder source, archive unpack cache
+├── tools/                     # Host-neutral tool contracts, results and errors (query, topic, memory)
 ├── memory/                    # MemoryService, scoped vector recall, entity graph, decay/export
 ├── models/                    # Embedding and reranker model registries
 ├── visualization/             # Deterministic memory-graph visualization documents
 │
-└── utils/                     # Storage v2, lease, migration, archive, shared helpers
+└── utils/
+    ├── storage.ts                       # Storage format marker, UnsupportedStorageError, reset-to-backup
+    ├── storageLock.ts                   # Cross-process storage lock and write lease
+    ├── storageTransactionCoordinator.ts # Same-filesystem staging for publication boundaries
+    ├── storageDirectoryWatcher.ts       # Debounced watch of a storage directory with outage recovery
+    ├── fsPaths.ts                       # errnoCode, pathExists, listFilesRecursively
+    ├── typeGuards.ts                    # isRecord and isFiniteNumber, for validating parsed JSON
+    ├── topicArchive.ts                  # Topic archive format, path validation, staging
+    ├── types.ts                         # Topic, Document, RetrievalStrategy and related types
+    ├── keywords.ts                      # Stop words and shared keyword extraction
+    ├── retrievalIdentity.ts             # Stable chunk identity used by every fusion path
+    └── vectorMath.ts                    # Cosine similarity and LanceDB distance conversion
 ```
 
 ---
@@ -198,10 +222,11 @@ different model under the same name.
 
 ## Storage compatibility
 
-Core owns the v2 marker, lease, topic and vector stores, standalone memory,
-archive validation, and the offline legacy migrator. One storage root has one
-writer. See the repository [architecture](../../ARCHITECTURE.md),
-[migration guide](../../MIGRATION.md), and
+Core owns the v2 marker, the write lease, topic and vector stores, standalone
+memory, and archive validation. One storage root has one writer at a time. A
+directory holding data from a pre-0.4 build is refused with
+`UnsupportedStorageError`. See the repository
+[architecture](../../ARCHITECTURE.md) and
 [operations guide](../../docs/OPERATIONS.md).
 
 ---

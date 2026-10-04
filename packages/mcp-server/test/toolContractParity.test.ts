@@ -24,8 +24,8 @@
  * protocol-layer difference, not a contract violation.
  *
  * Every bound below is read off the contract at runtime and then driven through
- * the Zod validator, so a bound that drifts in tools.ts turns a probe red even
- * though both files import TOOL_LIMITS.
+ * the Zod validator, so a bound that drifts in a src/tools/ module turns a probe
+ * red even where MCP_LIMITS and TOOL_LIMITS are meant to agree.
  */
 
 import { expect } from "chai";
@@ -572,7 +572,7 @@ describe("runtime payload parity", function () {
   });
 
   it("returns the shared empty-topic payload through MCP's registered rag_query handler", async function () {
-    // The empty-topic case is no longer handled in tools.ts; the shared
+    // The empty-topic case is no longer handled in tools/queryTools.ts; the shared
     // executor owns it, so the MCP client must see exactly the core payload.
     const executeQuery = sinon.stub().rejects(new TopicEmptyError("Docs"));
 

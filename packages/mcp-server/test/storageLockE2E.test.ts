@@ -1,14 +1,11 @@
 /**
  * Cross-process storage E2E: lock-free reads + operation-scoped write leases.
  *
- * TopicManager.create no longer takes a session lease, so two real server
- * processes can share one storage directory from startup through reads.
- * Only a MUTATION takes a bounded, operation-scoped lease: when a foreign
- * process already holds a live one, the waiting mutation reports
- * StorageBusyError as a tool error instead of failing the server or hanging
- * forever. (StorageLockHeldError — a hard startup refusal — is reserved for
- * a full-exclusion migration/reset/rollback in another process; that is not
- * what this suite exercises.)
+ * TopicManager.create takes no lease, so two real server processes can share
+ * one storage directory from startup through reads. Only a MUTATION takes a
+ * bounded, operation-scoped lease: when a foreign process already holds a live
+ * one, the waiting mutation reports StorageBusyError as a tool error instead of
+ * failing the server or hanging forever.
  */
 import { expect } from "chai";
 import * as fs from "fs";
@@ -55,7 +52,7 @@ describe("cross-process storage E2E (lock-free reads / busy-error mutations)", f
     expect((await first.discover()).error, "first process failed to start").to.equal(undefined);
 
     // The second process on the SAME storage dir must ALSO start: reads are
-    // lock-free everywhere, and TopicManager.create takes no session lease.
+    // lock-free everywhere, and TopicManager.create takes no lease.
     const second = new StdioHarness(storageDir, workDir);
     running.push(second);
     expect((await second.discover()).error, "second process failed to start").to.equal(undefined);

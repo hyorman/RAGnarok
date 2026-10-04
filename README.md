@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./assets/icon.png" alt="RAGnarok icon" title="RAGnarok" width="120" height="120" />
-  <h1>RAGnarōk <br/>Local, Agentic Knowledge RAG for VS Code</h2>
+  <h1>RAGnarōk <br/>Local, Agentic Knowledge RAG for VS Code</h1>
   <p><strong>Find precise answers from your files and repos using local embeddings, smart query planning, and embedded vector search.</strong></p>
 </div>
 
@@ -16,8 +16,8 @@ Why install?
 - Embedded LanceDB vector store — no external servers required
 - Works offline with local Transformers.js embedding models
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
-[![LangChain](https://img.shields.io/badge/LangChain.js-0.2-green.svg)](https://js.langchain.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/)
+[![LangChain](https://img.shields.io/badge/LangChain.js-1.x-green.svg)](https://js.langchain.com/)
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.105+-purple.svg)](https://code.visualstudio.com/)
 
 ---
@@ -77,7 +77,7 @@ Notes:
 ### 🧠 **Agentic RAG with Query Planning**
 
 - **Intelligent Query Decomposition**: Automatically breaks complex queries into sub-queries
-  -- **LLM-Powered Planning**: Uses Copilot (VS Code LM API) models such as `gpt-4o` for advanced reasoning (Copilot required; no external API key). LLM usage is optional
+- **LLM-Powered Planning**: Uses Copilot (VS Code LM API) models such as `gpt-4o` for advanced reasoning (Copilot required; no external API key). LLM usage is optional
 - **Heuristic Fallback**: Works without LLM using rule-based planning
 - **Iterative Refinement**: Confidence-based iteration for high-quality results
 - **Parallel/Sequential Execution**: Smart execution strategy based on query complexity
@@ -103,10 +103,8 @@ Notes:
 ### 💾 **Vector Storage**
 
 - **LanceDB**: Embedded vector database with file-based persistence (no server needed)
-- **Cross-Platform**: Works on Windows, macOS, Linux, and ARM
+- **Cross-Platform**: Works on Windows and Linux (x64 and arm64) and on Apple Silicon Macs
 - **Per-Topic Stores**: Efficient isolation and management
-- **Serverless**: Truly embedded, like SQLite for vectors
-- **Caching**: Optimized loading and reuse
 
 ### 🎨 **Enhanced UI**
 
@@ -114,20 +112,11 @@ Notes:
 - **Embedding Model Picker**: Tree view lists curated + local models (from `ragnarok.localModelPath`) with download status; click to switch
 - **Statistics Display**: Documents, chunks, store type, model info
 - **Progress Tracking**: Real-time updates during processing
-- **Rich Icons**: Visual hierarchy with emojis and theme icons
-
-### 🛠️ **Developer Experience**
-
-- **Comprehensive Logging**: Debug output at every step
-- **Type-Safe**: Full TypeScript with strict mode
-- **Error Handling**: Robust error recovery throughout
-- **Async-Safe**: Mutex locks prevent race conditions
-- **Configurable**: 15+ settings for customization
 
 ### 🧠 **Standalone Memory Module**
 
-- **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing or automatic migration.
-- **Native VS Code Tools**: the extension contributes exactly three language-model tools — `ragQuery` to search a topic, `ragTopic` to list topics or inspect one topic's statistics and documents, and `ragMemory` for scoped memory operations. `ragQuery` and `ragTopic` are read-only. `ragMemory` stores, recalls, and forgets individual memories, but it has no reset action: wiping memory outright is **Reset Memory** in the RAG sidebar's **Memory** section, behind a modal confirmation, just as creating, renaming, exporting, importing, and deleting topics are sidebar actions. The three tools' input schemas are generated from the canonical JSON Schema contracts in `@ragnarok/core` by `npm run tools:manifest` and drift-checked by `npm run tools:manifest:check`.
+- **Shared Core, Separate Data**: VS Code and MCP delegate memory operations to the same core `MemoryService`, but use separate storage roots. VS Code uses its extension `globalStorageUri`; MCP uses `RAGNAROK_STORAGE_DIR`. There is no cross-host data sharing.
+- **Native VS Code Tools**: three language-model tools — `ragQuery` (search a topic) and `ragTopic` (list topics or inspect one), both read-only, and `ragMemory` (store, recall and forget memories). Topic management and **Reset Memory** stay in the sidebar, behind confirmations.
 - **Persistent Project Memory**: Store and recall facts, preferences, conventions, and context across sessions — scoped to workspace or git branch
 - **Automatic Git Branch Detection**: Memories can be scoped per branch via `GitBranchDetector`, auto-detecting the current branch from the working directory
 - **Vector-Based Recall + Entity Graph**: Memories are embedded and stored in a dedicated LanceDB instance; an entity graph (graphology) tracks relationships between extracted concepts
@@ -137,29 +126,7 @@ Notes:
 
 #### Memory graph visualization
 
-Graphs exist only in the memory subsystem. There is no document knowledge
-graph, no entity extraction over ingested documents, and no `graph` or
-`graph_hybrid` retrieval strategy.
-
-The `rag_memory_visualize` tool exports the local user's own memory graph. It
-accepts exactly
-`{ source: "memory", memoryScope: "workspace", maxNodes? }` or
-`{ source: "memory", memoryScope: "branch", branch, maxNodes? }` and returns the
-deterministic `ragnarok.graph.visualization.v1` document. The default is 500
-nodes, the accepted range is 1 through 2,000, and output is capped at 10,000
-edges and the MCP response-byte limit. Failures surface as
-`GRAPH_VISUALIZATION_RECORD_TOO_LARGE` or `GRAPH_VISUALIZATION_FAILED`; an empty
-or unknown scope returns an empty document rather than fabricated data.
-
-Documents include full persisted node/edge descriptions, provenance,
-confidence, scope/branch fields, and arbitrary metadata, but never embedding
-vectors. In VS Code, run **RAGnarok: Show Memory Graph** to choose workspace or
-current-branch memory and open the interactive command webview. MCP Apps hosts
-instead load the self-contained `ui://ragnarok/graph` resource as
-`text/html;profile=mcp-app` via modern `_meta.ui.resourceUri`. Both surfaces use
-the shared renderer and deterministic graph document, but each reads its own
-host's storage. There is no cross-host data sharing. See the
-[MCP server graph contract](packages/mcp-server/README.md#memory-graph-visualization).
+Graphs exist only in the memory subsystem. In VS Code, run **RAG: Show Memory Graph** to view workspace or current-branch memory. MCP clients get the same graph from `rag_memory_visualize`, rendered as an inline app where the client supports MCP Apps. The input contract and limits are in the [MCP server guide](packages/mcp-server/README.md#memory-graph-visualization).
 
 ---
 
@@ -180,8 +147,12 @@ npm run compile
 #### From VSIX
 
 ```bash
-code --install-extension ragnarok-0.1.6.vsix
+code --install-extension ragnarok-<version>-<target>.vsix
 ```
+
+Release VSIX files are built for five targets: linux-x64, linux-arm64,
+darwin-arm64, win32-x64, and win32-arm64. Intel Macs (darwin-x64) are not
+supported: ONNX Runtime no longer ships macOS x64 binaries.
 
 ### Basic Usage
 
@@ -228,13 +199,21 @@ Or right-click a topic in the tree view and select the GitHub icon. You can:
   - GitHub Enterprise: `https://github.company.com/team/project`
 - Specify branch (defaults to `main`)
 - Configure ignore patterns (e.g., `*.test.js, docs/*`)
-- Add access token for private repositories (see [Token Management](#github-token-management) below)
+- Add access token for private repositories (see [Token Management](#2d-github-token-management) below)
 
 The extension will recursively load all files from the repository and process them just like local documents.
 
 **Note**: Supports GitHub.com and GitHub Enterprise Server only. The repository must be accessible from your network. For other Git hosting services (GitLab, Bitbucket, etc.), clone the repository locally and add it as local files.
 
-#### 2c. GitHub Token Management
+#### 2c. Add a Web Page
+
+```
+Cmd/Ctrl+Shift+P → RAG: Add Web URL to Topic
+```
+
+Enter a public `http(s)` URL. The page is fetched once, converted to text, chunked and embedded like any other document.
+
+#### 2d. GitHub Token Management
 
 For accessing private repositories, RAGnarōk securely stores GitHub access tokens per host using VS Code's Secret Storage API.
 
@@ -264,7 +243,40 @@ Cmd/Ctrl+Shift+P → RAG: Remove GitHub Token
 
 Select a host to remove its stored token.
 
-#### 2d. Export and Import Topics
+**How to Create a GitHub PAT:**
+
+1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Click "Generate new token (classic)"
+3. Select the `repo` scope
+4. Generate and copy the token
+5. Use the "RAG: Add GitHub Token" command to save it
+
+**Benefits:**
+
+- ✅ Tokens stored securely in VS Code's Secret Storage (not in settings.json)
+- ✅ Support for multiple GitHub hosts (GitHub.com + multiple Enterprise servers)
+- ✅ Automatic token selection based on repository URL
+- ✅ No need to enter token every time you add a repository
+
+#### Manage Topics
+
+**Rename a Topic:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Rename Topic
+```
+
+Or select a topic in the tree view and click the edit icon.
+
+**Delete a Topic:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Delete Topic
+```
+
+Or click the trash icon on a topic. Asks for confirmation.
+
+#### 2e. Export and Import Topics
 
 **Export a Topic:**
 
@@ -288,30 +300,7 @@ Cmd/Ctrl+Shift+P → RAG: Import Topic
 
 Or click the import icon in the tree view title bar. Select an exported topic archive to restore it into your workspace.
 
-**Rename a Topic:**
-
-```
-Cmd/Ctrl+Shift+P → RAG: Rename Topic
-```
-
-Or select a topic in the tree view and click the edit icon.
-
-**How to Create a GitHub PAT:**
-
-1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Click "Generate new token (classic)"
-3. Select the `repo` scope
-4. Generate and copy the token
-5. Use the "RAG: Add GitHub Token" command to save it
-
-**Benefits:**
-
-- ✅ Tokens stored securely in VS Code's Secret Storage (not in settings.json)
-- ✅ Support for multiple GitHub hosts (GitHub.com + multiple Enterprise servers)
-- ✅ Automatic token selection based on repository URL
-- ✅ No need to enter token every time you add a repository
-
-#### 2e. Using Shared Topic Folders
+#### 2f. Using Shared Topic Folders
 
 RAGnarōk reads read-only topics from a folder of exported `.rag` archives via the
 `ragnarok.commonDatabasePath` setting.
@@ -359,7 +348,7 @@ Type: @workspace #ragQuery What is [your question]?
 The RAG tool will:
 
 1. Match your topic semantically
-2. Decompose complex queries (if agentic mode enabled)
+2. Decompose complex queries (an LLM plans when a Copilot model is available; heuristics otherwise)
 3. Perform hybrid retrieval
 4. Return ranked results with context
 
@@ -389,6 +378,46 @@ Cmd/Ctrl+Shift+P → RAG: Refresh Topics
 
 Reloads the topic tree view. Useful after importing topics or external changes.
 
+**Refresh Memory:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Refresh Memory
+```
+
+Reloads the Memory view.
+
+**Reset Memory:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Reset Memory
+```
+
+Deletes all stored memories. A modal confirmation is required, and the action cannot be undone.
+
+**Select Reranker Model:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Select Reranker Model
+```
+
+Chooses the cross-encoder model used for second-stage reranking.
+
+**Select LLM Model:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Select LLM Model
+```
+
+Chooses the Copilot model family used for query planning and evaluation.
+
+**Show Memory Graph:**
+
+```
+Cmd/Ctrl+Shift+P → RAG: Show Memory Graph
+```
+
+Opens the interactive memory graph for workspace or current-branch memory.
+
 ---
 
 ## ⚙️ Configuration
@@ -404,20 +433,23 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   "ragnarok.topK": 5,
 
   // Chunk size for splitting documents
-  "ragnarok.chunkSize": 512,
+  "ragnarok.chunkSize": 1000,
 
   // Chunk overlap for context preservation
-  "ragnarok.chunkOverlap": 50,
+  "ragnarok.chunkOverlap": 200,
 
   // Retrieval strategy: vector, hybrid, bm25
   "ragnarok.retrievalStrategy": "hybrid",
 
   // Folder of exported .rag archives providing read-only topics
-  "ragnarok.commonDatabasePath": ""
+  "ragnarok.commonDatabasePath": "",
+
+  // Log verbosity: debug, info, warn, error
+  "ragnarok.logLevel": "info"
 }
 ```
 
-**Note**: GitHub access tokens are now managed via secure Secret Storage, not settings.json. See [GitHub Token Management](#github-token-management) section.
+**Note**: GitHub access tokens are now managed via secure Secret Storage, not settings.json. See [GitHub Token Management](#2d-github-token-management) section.
 
 ### Query Settings
 
@@ -429,15 +461,33 @@ Reloads the topic tree view. Useful after importing topics or external changes.
   // Confidence threshold (0-1) for stopping iteration
   "ragnarok.confidenceThreshold": 0.7,
 
-  // LLM model: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
-  "ragnarok.llmModel": "gpt-4o",
+  // LLM model family; run "RAG: Select LLM Model" to pick from available models
+  "ragnarok.llmModel": "gpt-4o-mini",
 
   // Include workspace context (selected code, active file, imports, symbols)
-  "ragnarok.includeWorkspaceContext": true
+  "ragnarok.includeWorkspaceContext": true,
+
+  // Show reserved auto-generated memories in listings
+  "ragnarok.memoryIncludeAuto": false
 }
 ```
 
-Set `ragnarok.localModelPath` to point at a folder that already contains compatible Transformers.js models (one subfolder per model—e.g., an ONNX export downloaded ahead of time). Entries found here appear in the tree view and can be selected directly, and this local path takes precedence over `ragnarok.embeddingModel`.
+### Reranker Settings
+
+```json
+{
+  // HuggingFace cross-encoder used for second-stage reranking
+  "ragnarok.rerankerModel": "Xenova/ms-marco-MiniLM-L-6-v2",
+
+  // Over-fetch multiplier for first-stage retrieval (1-10)
+  "ragnarok.rerankerCandidateMultiplier": 4,
+
+  // Maximum candidates passed to the cross-encoder (5-100)
+  "ragnarok.rerankerMaxCandidates": 40
+}
+```
+
+Set `ragnarok.localModelPath` to point at a folder that already contains compatible Transformers.js models (one subfolder per model—e.g., an ONNX export downloaded ahead of time). Entries found here appear in the tree view and can be selected directly.
 
 **Available Embedding Models to Download** (local, no API needed):
 
@@ -450,11 +500,7 @@ _The extension ships with `Xenova/all-MiniLM-L6-v2` by default; to use other loc
 
 Any models you place under `ragnarok.localModelPath` show up in the tree view alongside these curated options (with download indicators) and can be loaded with one click.
 
-**LLM Models** (when agentic planning is enabled): models are available via VS Code Copilot / LM API (no external API key required).
-
-- `gpt-4o` (default) - Most intelligent
-- `gpt-4o-mini` - Faster, still capable
-- `gpt-3.5-turbo` - Fastest, most economical
+**LLM Models**: Any Copilot model family available to your account works; run **RAG: Select LLM Model** to choose one. The default is `gpt-4o-mini`. Models are available via VS Code Copilot / LM API (no external API key required).
 
 ---
 
@@ -463,13 +509,12 @@ Any models you place under `ragnarok.localModelPath` show up in the tree view al
 RAGnarōk is organized as an **npm workspaces monorepo** with four packages:
 
 ```
-copilot-rag/
+RAGnarok/
 ├── packages/
 │   ├── core/          # @ragnarok/core — portable RAG engine (no VS Code dependency)
 │   ├── graph-ui/      # @ragnarok/graph-ui — private shared graph renderer/build
 │   ├── vscode/        # @ragnarok/vscode — VS Code extension adapters and UI
 │   └── mcp-server/    # @ragnarok/mcp-server — MCP server for CLI/TUI/GUI agents
-├── test/              # VS Code extension test infrastructure and fixtures
 ├── assets/            # Extension icon and bundled embedding models
 └── scripts/           # Build and packaging helpers
 ```
@@ -481,30 +526,9 @@ copilot-rag/
 | **`@ragnarok/vscode`**     | VS Code adapters (`IConfigProvider`, `ILogger`, `INotifier`, `ILLMProvider`), commands, tree view, and extension entry point                                |
 | **`@ragnarok/mcp-server`** | Exposes RAG and memory tools via the [Model Context Protocol](https://modelcontextprotocol.io) — works with any MCP-compatible agent (stdio transport only) |
 
-### MCP 0.4.0 protocol
+### MCP server
 
-RAGnarok 0.4.0 serves MCP protocol `2026-07-28` only. Clients must use
-`server/discover` or modern version negotiation; legacy `initialize` is
-rejected. There is no compatibility mode and no `Mcp-Session-Id`.
-
-**Stdio is the only transport.** The HTTP transport, shared deployment mode,
-bearer roles, and upload/download handles were removed; the server is a child
-process of one MCP client, running as the user who spawned it. Environment
-variables belonging to the removed transport are rejected at startup, with an
-error naming every one that was set. Cacheable discovery,
-list, and resource-read results advertise `ttlMs=0` and `cacheScope=private`.
-See the [MCP server guide](packages/mcp-server/README.md) for the complete tool
-surface and configuration.
-
-MCP server settings live in `config.json` in the storage directory, which the
-server generates on first run. That file is the only place they are set — a key
-present in it pins your value, a key absent uses the current built-in default,
-and there is no environment variable for any of them. The environment carries
-only credentials, the two bootstrap paths, and the two one-shot switches. The
-[key table](packages/mcp-server/README.md#configuration) lists both sets.
-
-_(These are the MCP server's settings. The VS Code extension is configured
-separately through the `ragnarok.*` settings above.)_
+The MCP server speaks MCP `2026-07-28` over stdio only, and is configured through `config.json` in its storage directory. The [MCP server guide](packages/mcp-server/README.md) covers the protocol, every tool, and every setting.
 
 ### Build & Test Commands
 
@@ -521,6 +545,12 @@ npm run test:docs        # Validate canonical documentation links/contracts
 npm run lint             # Lint all packages
 npm run format           # Format all source and test files
 npm run clean            # Clean all build artifacts
+
+# contributes.languageModelTools in package.json is generated, not hand-edited.
+# Edit the input contracts (packages/core/src/tools/toolContracts.ts) or the
+# descriptions (scripts/generate-tool-manifest.mjs), build core, then regenerate:
+npm run tools:manifest         # Rewrite contributes.languageModelTools
+npm run tools:manifest:check   # Exit 1 if package.json has drifted from them
 ```
 
 ### MCP Tools
@@ -547,7 +577,7 @@ contracts are in the [MCP server guide](packages/mcp-server/README.md).
 
 ### Storage compatibility
 
-Version 0.4.0 uses storage format v2 and `.rag` archive format 2.0. New empty installations initialize automatically. Non-empty 0.3/unversioned storage must be converted before it opens. VS Code converts a supported `v0.3-local` layout automatically on activation and reports where the immutable backup was kept; every other host and layout fails closed and must be converted with the supported offline migrator. Migration never resets or discards a store — a reset is a separate, explicitly consented action. See [MIGRATION.md](MIGRATION.md). Embedding fingerprints are persisted per topic and memory store so incompatible semantic spaces are rejected even when dimensions happen to match.
+Version 0.4 uses storage format v2 and `.rag` archive format 2.0. A new, empty storage directory initializes automatically. A directory that holds data but no `storage-format.json` comes from an unsupported pre-0.4 build and is refused rather than read: move or delete it to start a new store (the MCP server can instead move it into a backup folder and start fresh with `RAGNAROK_RESET_STORAGE=1`). Embedding fingerprints are persisted per topic and memory store, so incompatible semantic spaces are rejected even when dimensions happen to match.
 
 **Concurrent access:** Reads are lock-free across processes. Any number of
 VS Code windows and MCP server instances may open and read the same storage
@@ -556,74 +586,23 @@ Writes are what serialize: every mutation takes an exclusive per-operation
 lease on the storage directory, waits about five seconds for a foreign writer,
 and then fails with a typed busy error saying another RAGnarōk process is
 writing and to retry, instead of corrupting data. An ingestion holds its lease
-for the whole call. Migration, reset, and rollback still take the store
-exclusively for their entire duration, and other processes are told that
-another window is migrating or resetting. See
+for the whole call. A reset holds the write lease for its whole duration; other processes see the same retryable busy error until it finishes. See
 [the architecture](ARCHITECTURE.md#storage) for the complete concurrency and
 lease model.
 
 ### Delivery and operations
 
 - [Architecture](ARCHITECTURE.md)
-- [Storage migration](MIGRATION.md)
 - [Operations and recovery](docs/OPERATIONS.md)
 - [Security](docs/SECURITY.md)
 - [Benchmark gates](docs/BENCHMARKS.md)
 - [Release evidence and publication](docs/RELEASE.md)
 
-Release evidence is truthful by construction: required jobs are recorded as
-passed, failed, or unrun. Docker runtime and all six installed VSIX platform
-combinations are release blockers until their designated CI environments
-execute them; a local compile or package build does not imply those gates
-passed. The release benchmark also exits nonzero with `status: "blocked"` when
-child-process peak RSS, isolated index time, or exact package-size
-measurements are absent; deterministic smoke tests do not stand in for those
-declared measurements.
-
 ---
 
 ## 🏗️ Architecture
 
-### Component Overview
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   VS Code Extension                 │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│  ┌─────────────┐  ┌──────────────┐   ┌────────────┐ │
-│  │ Commands    │  │ Tree View    │   │ RAG Tool   │ │
-│  │ (UI)        │  │ (UI)         │   │ (Copilot)  │ │
-│  └─────┬───────┘  └──────┬───────┘   └─────┬──────┘ │
-│        │                 │                 │        │
-│  ┌─────┴─────────────────┴─────────────────┴──────┐ │
-│  │              Topic Manager                     │ │
-│  │  (Topic lifecycle, caching, coordination)      │ │
-│  └─────┬──────────────────────────────────┬───────┘ │
-│        │                                  │         │
-│  ┌─────┴─────────┐                 ┌──────┴───────┐ │
-│  │ Document      │                 │ RAG Agent    │ │
-│  │ Pipeline      │                 │ (Orchestr.)  │ │
-│  └┬─────────┬────┘                 └┬─────────┬───┘ │
-│   │         │                       │         │     │
-│ ┌─┴────┐ ┌──┴────┐           ┌──────┴──┐ ┌────┴───┐ │
-│ │Loader│ │Chunker│           │ Planner │ │Retriev.│ │
-│ │      │ │       │           │         │ │        │ │
-│ └──┬───┘ └───┬───┘           └────┬────┘ └───┬────┘ │
-│    │         │                    │          │      │
-│  ┌─┴─────────┴────┐          ┌────┴──────────┴────┐ │
-│  │ Embedding      │          │ Vector Store       │ │
-│  │ Service        │          │ (LanceDB)          │ │
-│  │ (Local Models) │          │ (Embedded DB)      │ │
-│  └────────────────┘          └────────────────────┘ │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-                          │
-                   ┌──────┴───────┐
-                   │ LangChain.js │
-                   │ (Foundation) │
-                   └──────────────┘
-```
+`@ragnarok/core` holds ingestion, embeddings, retrieval, reranking, memory and storage with no VS Code dependency. The extension and the MCP server are two thin hosts over it, each with its own storage directory. [ARCHITECTURE.md](ARCHITECTURE.md) describes the storage layout, the write-lease model and the retrieval semantics.
 
 ---
 
@@ -650,8 +629,8 @@ User Query: "Compare React hooks vs class components"
     ↓
 ┌───┴────────────────────────────────────────┐
 │ 3. Hybrid Retrieval (for each sub-query)   │
-│    Vector search: 70% weight               │
-│    Keyword search: 30% weight              │
+│    Vector search: 90% weight               │
+│    Keyword search: 10% weight              │
 │    → Returns ranked results                │
 └───┬────────────────────────────────────────┘
     ↓
@@ -697,7 +676,7 @@ User uploads: document1.pdf, document2.md
 ┌───┴────────────────────────────────────────┐
 │ 3. Embedding Generation (Batched)          │
 │    Model: Xenova/all-MiniLM-L6-v2 (local)  │
-│    Batch size: 32 chunks                   │
+│    Batch size: 1,000 local, 100 remote     │
 │    → Generates 384-dim vectors             │
 └───┬────────────────────────────────────────┘
     ↓
@@ -725,11 +704,9 @@ as release evidence.
 ### Optimization Tips
 
 1. **Use local embeddings** for privacy and no API costs
-2. **Enable agent caching** (automatic per topic)
-3. **Adjust chunk size** based on document type
-4. **Use simple mode** for fast queries
-5. **Batch document uploads** for efficiency
-6. **Measure your corpus** — capacity and latency are bounded by local storage,
+2. **Adjust chunk size** based on document type
+3. **Batch document uploads** for efficiency
+4. **Measure your corpus** — capacity and latency are bounded by local storage,
    memory, native dependencies, and workload shape
 
 ---
@@ -741,7 +718,7 @@ as release evidence.
 | Problem                                     | Solution                                                                                                                                                                           |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **"No embeddings provider registered"**     | Ensure a provider (e.g., GitHub Copilot) is installed and active. Set `ragnarok.embeddingBackend` to `huggingface` as a workaround.                                                |
-| **"Proposed API not enabled"**              | The `vscode.lm.computeEmbeddings` API requires `"enabledApiProposals": ["embeddings"]` in the extension manifest. Use VS Code Insiders for full support.                           |
+| **"Proposed API not enabled"**              | Start VS Code with `--enable-proposed-api hyorman.ragnarok`, or add it to `argv.json` as shown under **Enable VS Code LM embeddings** above.                                       |
 | **VS Code LM embedding dimension mismatch** | Switching backends may change the embedding dimension. Existing vector stores need re-indexing after backend changes. Delete the topic and re-add documents.                       |
 | **Fallback warnings appearing frequently**  | If you see repeated "falling back to HuggingFace" messages, either set `ragnarok.embeddingBackend` to `huggingface` explicitly, or check that your VS Code LM provider is running. |
 | **Model not found in VS Code LM**           | Verify the model ID in `ragnarok.embeddingVscodeModelId` matches one listed in `vscode.lm.embeddingModels`. Leave blank to auto-select.                                            |
@@ -753,7 +730,9 @@ as release evidence.
 ### Run Tests
 
 ```bash
-npm test
+npm run test:fast     # core, graph-ui and MCP suites (what CI's quality job runs)
+npm run test:all      # everything, including the VS Code extension-host tests
+npm test              # VS Code extension-host tests only
 ```
 
 ---
@@ -761,7 +740,7 @@ npm test
 ## 🤝 Contributing
 
 Open an issue before large changes and include the relevant compile, lint,
-test, benchmark, migration, or packaging evidence with the pull request.
+test, benchmark, or packaging evidence with the pull request.
 
 ### Development Setup
 
@@ -791,6 +770,6 @@ Built with:
 ---
 
 <div align="center">
-  <p>Made with ❤️ by the hyorman</p>
+  <p>Made with ❤️ by hyorman</p>
   <p>⭐ Star us on GitHub if you find this useful!</p>
 </div>

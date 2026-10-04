@@ -10,12 +10,11 @@ rejected and there is no compatibility mode.
 **Stdio is the only transport.** There is no HTTP mode, no listener, no
 endpoint, and no bearer token. The server is a child process of one MCP client
 on one machine, running as the user who spawned it. Environment variables that
-configured the removed HTTP transport are rejected at startup, with an error
-naming every one that was set.
+configured the removed HTTP transport are not read.
 
 MCP and VS Code share core memory behavior, not storage. This process constructs
 the core service over `RAGNAROK_STORAGE_DIR`; VS Code constructs it over extension
-global storage. There is no cross-host data sharing or implicit migration.
+global storage. There is no cross-host data sharing.
 
 ---
 
@@ -26,7 +25,7 @@ flowchart LR
   client["MCP Client</br>(Claude, Cursor, …)"]
   stdio["serveStdio</br>connection-pinned"]
   server["McpServer factory</br>one server per stdio connection"]
-  tools["Tool handlers\n(tools.ts)"]
+  tools["Tool handlers\n(tools.ts, tools/)"]
   ui["MCP App resource\n(uiResource.ts)"]
   adapters["Adapters\n(EnvConfigProvider,\nConsoleLoggerFactory,\nConsoleNotifier)"]
   llm["LLM Providers\n(OpenAI, Anthropic, Ollama)"]
@@ -65,16 +64,16 @@ file where the server can read it.
 
 ## MCP Tools
 
-| Tool                         | Description                                                                                                                               | Parameters                                                                                                                                                      |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rag_query`                  | Query a topic with RAG (supports agentic multi-step planning)                                                                             | `topic` (string), `query` (string), `topK?` (number), `retrievalStrategy?` (`"vector"` \| `"hybrid"` \| `"bm25"`)                                               |
-| `rag_ingest`                 | Add content to a topic from one discriminated source                                                                                      | `source: "files"` with `topic`, `filePaths` (inside `security.allowedPaths`); `source: "url"` with `topic`, `url`; `source: "github"` with `topic`, `url`, `branch?` |
-| `rag_topic`                  | Manage topics through one discriminated action                                                                                            | `action: "list"`; `"refresh"` (re-reads the folder named by `storage.commonDatabasePath` and reports how many shared topics are loaded — they are otherwise only read at server start); `"stats"` with `topic` (returns statistics plus the topic's documents); `"create"` with `name`, `description?`; `"rename"` with `topic`, `newName`; `"export"` with `topic`; `"import"` with `archivePath`, `confirm` (`true`) |
-| `rag_delete_topic`           | Delete a topic and all managed data                                                                                                       | `topic` (string), `confirm` (`true`)                                                                                                                            |
-| `rag_remove_document`        | Remove one document and its chunks                                                                                                        | `topic` (string), `documentId` (string), `confirm` (`true`)                                                                                                     |
-| `rag_memory`                 | Project memory: store, recall, forget (incl. `expired`), stats, list, decay, history, promote, links, communities (needs an LLM provider) | `action` (string) plus action-specific fields (`content`, `query`, `id`, `scope`, `branch`, `tags`, `topK`, `olderThan`, `expired`, `limit`, `includeEntities`) |
-| `rag_reset_memory`           | Delete standalone memory after explicit confirmation                                                                                      | `confirm` (`true`)                                                                                                                                              |
-| `rag_memory_visualize`       | Return a deterministic memory graph and associate the MCP App                                                                             | One exact input shape from [Memory graph visualization](#memory-graph-visualization)                                                                            |
+| Tool                   | Description                                                                                                                               | Parameters                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rag_query`            | Query a topic with RAG (supports agentic multi-step planning)                                                                             | `topic` (string), `query` (string), `topK?` (number), `retrievalStrategy?` (`"vector"` \| `"hybrid"` \| `"bm25"`)                                                                                                                                                                                                                                                                                                      |
+| `rag_ingest`           | Add content to a topic from one discriminated source                                                                                      | `source: "files"` with `topic`, `filePaths` (inside `security.allowedPaths`); `source: "url"` with `topic`, `url`; `source: "github"` with `topic`, `url`, `branch?`                                                                                                                                                                                                                                                   |
+| `rag_topic`            | Manage topics through one discriminated action                                                                                            | `action: "list"`; `"refresh"` (re-reads the folder named by `storage.commonDatabasePath` and reports how many shared topics are loaded — they are otherwise only read at server start); `"stats"` with `topic` (returns statistics plus the topic's documents); `"create"` with `name`, `description?`; `"rename"` with `topic`, `newName`; `"export"` with `topic`; `"import"` with `archivePath`, `confirm` (`true`) |
+| `rag_delete_topic`     | Delete a topic and all managed data                                                                                                       | `topic` (string), `confirm` (`true`)                                                                                                                                                                                                                                                                                                                                                                                   |
+| `rag_remove_document`  | Remove one document and its chunks                                                                                                        | `topic` (string), `documentId` (string), `confirm` (`true`)                                                                                                                                                                                                                                                                                                                                                            |
+| `rag_memory`           | Project memory: store, recall, forget (incl. `expired`), stats, list, decay, history, promote, links, communities (needs an LLM provider) | `action` (string) plus action-specific fields (`content`, `query`, `id`, `scope`, `branch`, `tags`, `topK`, `olderThan`, `expired`, `limit`, `includeEntities`)                                                                                                                                                                                                                                                        |
+| `rag_reset_memory`     | Delete standalone memory after explicit confirmation                                                                                      | `confirm` (`true`)                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `rag_memory_visualize` | Return a deterministic memory graph and associate the MCP App                                                                             | One exact input shape from [Memory graph visualization](#memory-graph-visualization)                                                                                                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -104,21 +103,6 @@ configured LLM provider. Without one, memories are still stored and recalled by
 vector similarity, the graph stays empty, and every visualization is a
 successful empty document.
 
-The first published output schema is
-`ragnarok.graph.visualization.v1`. The unpublished
-`ragnarok.graph.layout.v1` schema was removed and is not accepted or emitted.
-The deterministic document includes source identity, positioned nodes, edges,
-groups, viewport bounds, original/retained counts, empty/truncated status, and
-ordered truncation reasons. Clients without MCP Apps can consume the same
-document from text or `structuredContent` as machine-readable JSON.
-
-Results contain complete persisted non-vector details. Memory node attributes
-include `description`, `scope`, optional `branch`, `confidence`, `strength`,
-`createdAt`, `updatedAt`, `sourceMemoryIds`, and `metadata`. Edge attributes
-include the corresponding persisted description, provenance, confidence,
-scope/branch, and metadata fields. Arbitrary metadata can contain sensitive
-memory content. Embedding vectors are always excluded.
-
 A record too large to fit the response limit returns
 `GRAPH_VISUALIZATION_RECORD_TOO_LARGE`; any other failure returns
 `GRAPH_VISUALIZATION_FAILED`. Both are stable tool errors in text and structured
@@ -133,14 +117,9 @@ the graph as an inline MCP App:
 
 `resources/list` and `resources/read` use the exact MIME type
 `text/html;profile=mcp-app`. The returned HTML is one self-contained,
-network-free app with no external scripts. The app starts in a loading state,
-renders explicit ready/empty/error states, and clears stale selection and panel
-state for every result. Its SVG has an accessible name; graph items use roving
-keyboard focus; arrow keys move focus; Enter or Space opens text-only details;
-Escape or Close restores focus. Status and error regions are announced,
-controls are touch-sized, and reset refits the viewport. A VS Code extension
-uses a separate command webview built from the shared renderer; it does not read
-this server's storage.
+network-free app with no external scripts. A VS Code extension uses a separate
+command webview built from the shared renderer; it does not read this server's
+storage.
 
 ---
 
@@ -148,13 +127,24 @@ this server's storage.
 
 ```
 src/
-├── index.ts         # Entry point — bootstraps adapters, MCP server, stdio transport
-├── config.ts        # McpConfig type, loadConfig(), removed-variable rejection
-├── configFile.ts    # <storageDir>/config.json — key table, schema, generation
-├── adapters.ts      # Console / env adapters for @ragnarok/core interfaces
-├── llmProviders.ts  # OpenAI, Anthropic, Ollama LLM provider implementations
-├── uiResource.ts    # ui://ragnarok/graph MCP App resource
-└── tools.ts         # Tool definitions & handlers (registerTools)
+├── index.ts                      # Entry point — adapters, core services, stdio transport
+├── startupHint.ts                # Next-action hint printed after a refused storage startup
+├── config.ts                     # McpConfig type and loadConfig()
+├── configFile.ts                 # <storageDir>/config.json — key table, schema, generation
+├── adapters.ts                   # Console / env adapters for @ragnarok/core interfaces
+├── llmProviders.ts               # OpenAI, Anthropic, Ollama LLM providers
+├── memoryToolAdapter.ts          # rag_memory / rag_reset_memory input and result shaping
+├── graphVisualizationAdapter.ts  # rag_memory_visualize projection and limits
+├── toolRuntime.ts                # Tool admission and drain runtime
+├── tools.ts                      # registerTools — builds the ToolContext, composes the tool groups
+├── tools/
+│   ├── shared.ts                 # ToolContext, tool registrar, annotations, JSON/error helpers, MCP_LIMITS, response sizing
+│   ├── queryTools.ts             # rag_query
+│   ├── ingestTools.ts            # rag_ingest (files, url, github) and the allowed-path guard
+│   ├── topicTools.ts             # rag_topic, rag_delete_topic, rag_remove_document
+│   └── memoryTools.ts            # rag_memory, rag_reset_memory, rag_memory_visualize and the rag_memory input schema
+├── uiResource.ts                 # ui://ragnarok/graph MCP App resource
+└── ui/                           # Generated MCP App HTML bundle
 ```
 
 ---
@@ -165,10 +155,10 @@ A setting is resolved from two places, in this order:
 
 **`config.json` → built-in default**
 
-`config.json` is the only way to set the 23 operational settings. Seven more —
+`config.json` is the only way to set the 24 operational settings. Seven more —
 three secrets, two bootstrap paths, two one-shot switches — are environment-only,
 because a file inside the storage directory structurally cannot serve them. There
-is no third path and no overlap: an environment variable named after one of the 23
+is no third path and no overlap: an environment variable named after one of the 24
 is not read, so setting it does nothing.
 
 Precedence is one-directional and there is no write-back: the file beats the
@@ -269,7 +259,7 @@ environment variable for any of them.
 
 | `config.json` key               | Default                         | Description                                                                                                                       |
 | ------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `security.allowedPaths`         | _(the working dir)_             | Roots `rag_ingest` (files) may read, as a JSON array of strings                                                                    |
+| `security.allowedPaths`         | _(the working dir)_             | Roots `rag_ingest` (files) may read, as a JSON array of strings                                                                   |
 | `embedding.model`               | `Xenova/all-MiniLM-L6-v2`       | Default embedding model for newly created topics (HuggingFace or remote)                                                          |
 | `embedding.provider`            | `huggingface`                   | Embedding provider: `huggingface`, `openai`, `ollama`                                                                             |
 | `embedding.baseUrl`             | _(empty)_                       | Remote embedding API base URL (required for openai/ollama)                                                                        |
@@ -355,7 +345,7 @@ with the load cost paid on each query.
 #### The GitHub host allowlist
 
 `security.githubHosts` must resolve to at least one
-host. An explicitly empty array is rejected at startup rather than quietly
+host. An explicitly empty array is rejected when the configuration loads rather than quietly
 falling back to `github.com`: emptying a security allowlist is a deliberate
 instruction, and silently restoring the default would grant back access that had
 just been revoked.
@@ -367,14 +357,14 @@ startup error that tells you which variable to set instead, which is a better
 failure than an unexplained "unknown key". The same list appears in the
 generated file's `$envOnly` block.
 
-| Variable                     | Why it stays in the environment                                          |
-| ---------------------------- | ------------------------------------------------------------------------ |
-| `RAGNAROK_STORAGE_DIR`       | bootstrap — this file's location derives from it                         |
-| `RAGNAROK_WORKING_DIR`       | bootstrap                                                                |
-| `RAGNAROK_LLM_API_KEY`       | secret                                                                   |
-| `RAGNAROK_EMBEDDING_API_KEY` | secret                                                                   |
-| `RAGNAROK_GITHUB_TOKEN`      | secret                                                                   |
-| `RAGNAROK_RESET_STORAGE`     | one-shot; persisting it would reset storage on every launch              |
+| Variable                     | Why it stays in the environment                                           |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `RAGNAROK_STORAGE_DIR`       | bootstrap — this file's location derives from it                          |
+| `RAGNAROK_WORKING_DIR`       | bootstrap                                                                 |
+| `RAGNAROK_LLM_API_KEY`       | secret                                                                    |
+| `RAGNAROK_EMBEDDING_API_KEY` | secret                                                                    |
+| `RAGNAROK_GITHUB_TOKEN`      | secret                                                                    |
+| `RAGNAROK_RESET_STORAGE`     | one-shot; persisting it would reset storage on every launch               |
 | `RAGNAROK_IGNORE_LOCK`       | one-shot; persisting it would disable the storage write lease permanently |
 
 The three secrets are the point of the split: `config.json` sits in the storage
@@ -382,29 +372,32 @@ directory, gets copied with backups, and is readable by anything that can read
 the store. Credentials belong in the process environment, where the MCP client
 that spawns the server owns them.
 
-Between them the two tables are the complete surface: 23 keys in the file, 7
-variables in the environment, nothing else. A variable named after one of the 23
+Between them the two tables are the complete surface: 24 keys in the file, 7
+variables in the environment, nothing else. A variable named after one of the 24
 is simply not read.
 
-Variables belonging to the **removed HTTP transport** are the one exception, and
-they are not merely ignored: `assertNoRemovedEnvVars()` aborts startup and names
-every offender it finds, so a stale shared-service configuration fails loudly
-instead of quietly becoming a local pipe. They are deliberately not listed here —
-naming them in a configuration guide would read as documentation of a supported
-setting, and the startup error already tells you which one you set.
+Variables that belonged to the **removed HTTP transport** are not read. They are
+deliberately not listed here, so this guide is never mistaken for documentation
+of a supported setting.
 
-The difference in treatment is deliberate: those variables implied a capability
-the server no longer has — a listening port, TLS termination, bearer auth — and
-believing you have a hardened network service when nothing is listening is
-dangerous. The 24 imply a value, which simply moved into the file.
+Those variables implied a capability the server no longer has (a listening port,
+TLS termination, bearer auth), so nothing is documented for them. The
+operational keys above imply a value, which moved into `config.json`.
 
 ---
 
 ## Concurrent Access
 
-Several servers may point at one storage directory, and a server may share it with VS Code windows. Reads take no lock, so concurrent readers never contend and a second server starting against an already-open store is supported.
+Several servers may point at one storage directory, and a server may share it
+with VS Code windows. Reads take no lock, so concurrent readers never contend
+and a second server starting against an already-open store is supported.
 
-Writes serialize through a cross-process lease (`<storageDir>/.ragnarok.lock`, present only while a lease is held). Each mutation acquires the lease exclusively for the duration of that one operation — `rag_ingest` holds it for the whole call — recovers and reloads canonical state under it, applies its change, and releases. A mutation that finds a live foreign writer waits about five seconds and then returns a busy error rather than corrupting data:
+Writes serialize through a cross-process lease (`<storageDir>/.ragnarok.lock`,
+present only while a lease is held). Each mutation acquires the lease
+exclusively for the duration of that one operation — `rag_ingest` holds it for
+the whole call — recovers and reloads canonical state under it, applies its
+change, and releases. A mutation that finds a live foreign writer waits about
+five seconds and then returns a busy error rather than corrupting data:
 
 ```json
 {
@@ -412,11 +405,19 @@ Writes serialize through a cross-process lease (`<storageDir>/.ragnarok.lock`, p
 }
 ```
 
-`rag_memory` and `rag_reset_memory` report that code; the other mutating tools report the same message in their own error body. Nothing was written, so the call can simply be retried. If a holder crashes, the lease self-heals via heartbeat staleness detection (default 5 minutes) so a new process can acquire it.
+`rag_memory` and `rag_reset_memory` report that code; the other mutating tools
+report the same message in their own error body. Nothing was written, so the
+call can simply be retried. If a holder crashes, the lease self-heals via
+heartbeat staleness detection (default 5 minutes) so a new process can acquire
+it.
 
-Migration, reset, and rollback are the exception: they hold the directory exclusively for their entire duration, and other processes are told a migration or reset is in progress until it completes.
+A reset holds the directory's write lease for its whole duration; other
+processes get the same retryable busy error until it completes.
 
-For advanced setups that serialize writes externally and need to bypass the lease, set `RAGNAROK_IGNORE_LOCK=1`. This bypasses both lease kinds, is unsafe with concurrent writers, and should only be used when you have your own synchronization mechanism.
+For advanced setups that serialize writes externally and need to bypass the
+lease, set `RAGNAROK_IGNORE_LOCK=1`. This bypasses the lease entirely, is unsafe
+with concurrent writers, and should only be used when you have your own
+synchronization mechanism.
 
 See [the architecture](../../ARCHITECTURE.md#storage) for the complete
 concurrency and storage model.
@@ -463,12 +464,11 @@ within `limits.shutdownDrainMs` and the storage lease is released.
 ### Storage format v2
 
 Fresh storage initializes `storage-format.json` automatically. A non-empty
-directory without the v2 marker fails closed; it is never interpreted
-optimistically. Migrate supported v0.3 local and flat shared/common stores
-offline using the dry-run/apply workflow in [MIGRATION.md](../../MIGRATION.md).
-Use `--reset-storage` or `RAGNAROK_RESET_STORAGE=1` only when intentionally
-backing up and replacing unsupported/unwanted managed data. Pre-v2 archives
-remain unsupported.
+directory without the v2 marker comes from an unsupported pre-0.4 build and
+fails closed with `UnsupportedStorageError`; it is never read. Start once with
+`--reset-storage` or `RAGNAROK_RESET_STORAGE=1` to move that content into a
+`backup-v1-<timestamp>` folder and begin a new store. Archives other than format
+2.0 are unsupported.
 
 **Testing the connection:**
 

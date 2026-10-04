@@ -25,12 +25,7 @@ import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { hasRemoteEndpoint, type EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
 import { Logger } from "../logger";
-import {
-  adoptLegacyVectorStoreMetadata,
-  atomicWriteJson,
-  STORAGE_FORMAT_VERSION,
-  type LegacyVectorStoreMetadata,
-} from "../utils/storage";
+import { atomicWriteJson, STORAGE_FORMAT_VERSION } from "../utils/storage";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 export interface VectorStoreConfig {
@@ -44,27 +39,11 @@ export interface VectorStoreMetadata {
   documentCount: number;
   chunkCount: number;
   embeddingModel: string;
-  /** Backend type used to create these embeddings (may be absent for legacy data). */
+  /** Backend type used to create these embeddings. */
   embeddingBackend?: string;
-  embeddingFingerprint?: EmbeddingFingerprint;
-  /**
-   * Legacy vectors whose complete semantic-space identity could not be
-   * reconstructed during migration. Reads remain available for recovery, but
-   * every vector mutation must be refused until the topic is fully reindexed.
-   */
-  migrationRequiresFingerprintOnReindex?: boolean;
+  embeddingFingerprint: EmbeddingFingerprint;
   createdAt: number;
   updatedAt: number;
-}
-
-export class EmbeddingReindexRequiredError extends Error {
-  constructor(public readonly topicId: string) {
-    super(
-      `Topic ${topicId} contains migrated vectors without a verifiable embedding fingerprint. ` +
-        "Reindex the complete topic (or delete and recreate it) before adding or replacing documents.",
-    );
-    this.name = "EmbeddingReindexRequiredError";
-  }
 }
 
 export class VectorStoreMetadataCorruptionError extends Error {
@@ -259,7 +238,6 @@ export class VectorStoreFactory {
         embeddingModel: this.embeddingModel,
         embeddingBackend: fingerprint.backendKind,
         embeddingFingerprint: fingerprint,
-        migrationRequiresFingerprintOnReindex: false,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -392,7 +370,7 @@ export class VectorStoreFactory {
         stack: error instanceof Error ? error.stack : undefined,
       });
       // A table that exists but cannot be loaded must surface as a failure:
-      // returning null here is what used to let ingestion drop the table.
+      // returning null here would let ingestion drop the table.
       throw new VectorStoreLoadError(topicId, error);
     }
   }
@@ -404,14 +382,6 @@ export class VectorStoreFactory {
       const metadata = JSON.parse(metadataJson) as unknown;
       if (this.isVectorStoreMetadata(metadata, topicId)) {
         return metadata;
-      }
-      // A pre-v2 file is old, not damaged. Adopting it in memory recovers the
-      // topic for reading without re-embedding anything; the adoption marks the
-      // embedding space unverifiable, so extension still fails closed below.
-      const adopted = this.adoptIfLegacyMetadata(metadata, topicId);
-      if (adopted) {
-        this.logger.info("Adopted pre-v2 vector store metadata", { topicId, embeddingModel: adopted.embeddingModel });
-        return adopted;
       }
       throw new VectorStoreMetadataCorruptionError(topicId, "malformed or incomplete");
     } catch (error) {
@@ -433,42 +403,22 @@ export class VectorStoreFactory {
   /**
    * Refuses a mutation whose target vectors cannot be safely extended.
    *
-   * A differing model NAME is no longer a refusal. The topic is now read AND
-   * written with the model its own metadata records, so "the configured model
-   * is called something else" is ordinary configuration drift rather than
+   * A differing model NAME is not a refusal. The topic is read AND written
+   * with the model its own metadata records, so "the configured model is
+   * called something else" is ordinary configuration drift rather than
    * corruption — refusing it would forbid a perfectly consistent topic.
    *
-   * What survives are the two conditions no per-topic routing can reconcile:
-   *  - the topic's own model no longer produces the DIMENSION its table holds,
-   *    which no amount of correct routing can make compatible;
-   *  - migrated vectors carrying no verifiable fingerprint, whose embedding
-   *    space is simply unknown.
+   * The one condition no per-topic routing can reconcile is refused: the
+   * topic's own model does not produce the DIMENSION its table holds.
    */
   public async validateEmbeddingModel(topicId: string): Promise<void> {
     const metadata = await this.getStoreMetadata(topicId);
     if (!metadata) {
       return;
     }
-    let verified = metadata;
-    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
-      const migrationBackend = metadata.embeddingBackend ?? "";
-      if (hasRemoteEndpoint(migrationBackend)) {
-        const recordedHash = metadata.embeddingFingerprint?.endpointHash;
-        if (recordedHash && recordedHash !== (await this.configuredEndpointHash())) {
-          return; // foreign endpoint: loadStore's refusal handles it; never resolve here
-        }
-      }
-      verified = await this.adoptFingerprintForMigratedTopic(topicId, metadata);
-    }
-    const recorded = verified.embeddingFingerprint;
-    if (!recorded) {
-      // Unreachable — adoptFingerprintForMigratedTopic always returns
-      // metadata carrying a fingerprint, or throws — but the space stays
-      // unverifiable either way.
-      throw new EmbeddingReindexRequiredError(topicId);
-    }
+    const recorded = metadata.embeddingFingerprint;
 
-    const backend = verified.embeddingBackend ?? "";
+    const backend = metadata.embeddingBackend ?? "";
     if (hasRemoteEndpoint(backend) && recorded.endpointHash !== (await this.configuredEndpointHash())) {
       // A foreign endpoint is loadStore's refusal to raise, one step later.
       // Resolving the topic's service here would first register it — and open a
@@ -476,7 +426,7 @@ export class VectorStoreFactory {
       return;
     }
 
-    const model = verified.embeddingModel || this.embeddingModel;
+    const model = metadata.embeddingModel || this.embeddingModel;
     const current = await (await this.resolveEmbeddingService(model, backend)).getFingerprint();
     if (recorded.dimension !== current.dimension) {
       this.logger.error("Embedding dimension mismatch detected", {
@@ -506,26 +456,25 @@ export class VectorStoreFactory {
       if (!previousMetadata && (await this.hasTable(topicId))) {
         throw new VectorStoreMetadataCorruptionError(topicId, "missing");
       }
-      const migrationRequiresFingerprintOnReindex =
-        metadata.migrationRequiresFingerprintOnReindex ??
-        previousMetadata?.migrationRequiresFingerprintOnReindex ??
-        false;
-      const embeddingFingerprint = migrationRequiresFingerprintOnReindex
-        ? metadata.embeddingFingerprint
-        : (metadata.embeddingFingerprint ?? (await this.embeddingService.getFingerprint()));
+      // The topic's recorded fingerprint outranks the configured service's,
+      // for the same reason as the model below: a count refresh must not
+      // re-attribute a topic's embedding space.
+      const embeddingFingerprint =
+        metadata.embeddingFingerprint ??
+        previousMetadata?.embeddingFingerprint ??
+        (await this.embeddingService.getFingerprint());
       const fullMetadata: VectorStoreMetadata = {
         schemaVersion: STORAGE_FORMAT_VERSION,
         topicId,
         documentCount: metadata.documentCount || 0,
         chunkCount: metadata.chunkCount || 0,
-        // The topic's own recorded model outranks this factory's default: a
-        // caller that omits the field is refreshing counts, not re-labelling
-        // the embedding space. Falling straight through to the default would
-        // silently re-attribute adopted and migrated vectors.
+        // The topic's own recorded model and backend outrank this factory's
+        // default: a caller that omits the field is refreshing counts, not
+        // re-labelling the embedding space. Falling straight through to the
+        // default would silently re-attribute the topic's vectors.
         embeddingModel: metadata.embeddingModel || previousMetadata?.embeddingModel || this.embeddingModel,
-        embeddingBackend: metadata.embeddingBackend || "",
+        embeddingBackend: metadata.embeddingBackend || previousMetadata?.embeddingBackend || "",
         embeddingFingerprint,
-        migrationRequiresFingerprintOnReindex,
         createdAt: metadata.createdAt || Date.now(),
         updatedAt: Date.now(),
       };
@@ -714,70 +663,7 @@ export class VectorStoreFactory {
       }
       throw new Error(`Vector store table not found for topic ${topicId}`);
     }
-    if (metadata.migrationRequiresFingerprintOnReindex || !metadata.embeddingFingerprint) {
-      return this.adoptFingerprintForMigratedTopic(topicId, metadata);
-    }
     return metadata;
-  }
-
-  /**
-   * A migrated or adopted topic reaches its first write here. The topic's own
-   * recorded model is resolved and its produced dimension checked against the
-   * live table; only a verified match may stamp the fingerprint the migrator
-   * refused to invent. A mismatch is the genuine reindex case.
-   */
-  private async adoptFingerprintForMigratedTopic(
-    topicId: string,
-    metadata: VectorStoreMetadata,
-  ): Promise<VectorStoreMetadata> {
-    let fingerprint: EmbeddingFingerprint;
-    try {
-      const service = await this.resolveEmbeddingService(
-        metadata.embeddingModel || this.embeddingModel,
-        metadata.embeddingBackend ?? "",
-      );
-      fingerprint = await service.getFingerprint();
-    } catch (error) {
-      this.logger.error("Cannot resolve recorded model for migrated topic", {
-        topicId,
-        model: metadata.embeddingModel,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw new EmbeddingReindexRequiredError(topicId);
-    }
-    const tableDimension = await this.getTableDimension(topicId);
-    if (tableDimension !== null && tableDimension !== fingerprint.dimension) {
-      throw new EmbeddingReindexRequiredError(topicId);
-    }
-    await this.saveStore(topicId, {
-      ...metadata,
-      embeddingFingerprint: fingerprint,
-      embeddingBackend: fingerprint.backendKind,
-      migrationRequiresFingerprintOnReindex: false,
-    });
-    const healed = await this.getStoreMetadata(topicId);
-    if (!healed || healed.migrationRequiresFingerprintOnReindex || !healed.embeddingFingerprint) {
-      throw new EmbeddingReindexRequiredError(topicId);
-    }
-    return healed;
-  }
-
-  /** Vector dimension of the live table, or null when the table is empty/absent. */
-  private async getTableDimension(topicId: string): Promise<number | null> {
-    const db = await this.getConnection(this.lanceDbUri);
-    if (!(await db.tableNames()).includes(topicId)) {
-      return null;
-    }
-    const table = await db.openTable(topicId);
-    const schema = await table.schema();
-    const vectorField = schema.fields.find((field: { name: string }) => field.name === "vector");
-    const listSize = (vectorField?.type as { listSize?: number } | undefined)?.listSize;
-    if (typeof listSize === "number" && listSize > 0) {
-      return listSize;
-    }
-    const rows = await table.query().limit(1).toArray();
-    const vector = rows[0]?.vector;
-    return vector ? Array.from(vector as ArrayLike<number>).length : null;
   }
 
   private async hasTable(topicId: string): Promise<boolean> {
@@ -791,39 +677,6 @@ export class VectorStoreFactory {
     await atomicWriteJson(metadataPath, metadata);
   }
 
-  /**
-   * Recognizes metadata written before the schema was versioned, and only that.
-   *
-   * `schemaVersion` must be absent rather than merely unequal: a file claiming a
-   * version this build does not know is a forward-compatibility problem, not a
-   * legacy one, and guessing at it would be exactly the silent reinterpretation
-   * the corruption refusal exists to prevent.
-   */
-  private adoptIfLegacyMetadata(value: unknown, topicId: string): VectorStoreMetadata | null {
-    if (!value || typeof value !== "object" || "schemaVersion" in value) {
-      return null;
-    }
-    const legacy = value as Partial<LegacyVectorStoreMetadata>;
-    if (
-      legacy.topicId !== topicId ||
-      !Number.isFinite(legacy.documentCount) ||
-      !Number.isFinite(legacy.chunkCount) ||
-      typeof legacy.embeddingModel !== "string" ||
-      !Number.isFinite(legacy.createdAt) ||
-      !Number.isFinite(legacy.updatedAt)
-    ) {
-      return null;
-    }
-    return adoptLegacyVectorStoreMetadata({
-      topicId,
-      documentCount: legacy.documentCount as number,
-      chunkCount: legacy.chunkCount as number,
-      embeddingModel: legacy.embeddingModel,
-      createdAt: legacy.createdAt as number,
-      updatedAt: legacy.updatedAt as number,
-    });
-  }
-
   private isVectorStoreMetadata(value: unknown, topicId: string): value is VectorStoreMetadata {
     if (!value || typeof value !== "object") {
       return false;
@@ -831,14 +684,14 @@ export class VectorStoreFactory {
     const metadata = value as Partial<VectorStoreMetadata>;
     const fingerprint = metadata.embeddingFingerprint;
     const fingerprintValid =
-      fingerprint === undefined ||
-      (typeof fingerprint.backendKind === "string" &&
-        typeof fingerprint.providerFormat === "string" &&
-        typeof fingerprint.model === "string" &&
-        typeof fingerprint.revision === "string" &&
-        Number.isInteger(fingerprint.dimension) &&
-        fingerprint.dimension > 0 &&
-        typeof fingerprint.endpointHash === "string");
+      fingerprint !== undefined &&
+      typeof fingerprint.backendKind === "string" &&
+      typeof fingerprint.providerFormat === "string" &&
+      typeof fingerprint.model === "string" &&
+      typeof fingerprint.revision === "string" &&
+      Number.isInteger(fingerprint.dimension) &&
+      fingerprint.dimension > 0 &&
+      typeof fingerprint.endpointHash === "string";
     return (
       metadata.schemaVersion === STORAGE_FORMAT_VERSION &&
       metadata.topicId === topicId &&
@@ -846,8 +699,6 @@ export class VectorStoreFactory {
       Number.isFinite(metadata.chunkCount) &&
       typeof metadata.embeddingModel === "string" &&
       (metadata.embeddingBackend === undefined || typeof metadata.embeddingBackend === "string") &&
-      (metadata.migrationRequiresFingerprintOnReindex === undefined ||
-        typeof metadata.migrationRequiresFingerprintOnReindex === "boolean") &&
       Number.isFinite(metadata.createdAt) &&
       Number.isFinite(metadata.updatedAt) &&
       fingerprintValid
@@ -948,9 +799,8 @@ export class VectorStoreFactory {
   private normalizeDocumentMetadata(documents: LangChainDocument[]): LangChainDocument[] {
     return documents.map((doc) => {
       // Keep only essential, consistent metadata fields.
-      // chunkId is required for graph retrieval to hydrate chunks (entities
-      // reference chunks by chunkId), and the position/heading fields drive
-      // source attribution in query results.
+      // chunkId identifies a chunk across re-ingestion, and the position/heading
+      // fields drive source attribution in query results.
       const allowedFields = [
         "source",
         "sourceType",
@@ -1153,10 +1003,9 @@ export class VectorStoreFactory {
   /**
    * Resolves the embedding service for one topic's embedding space.
    *
-   * Every store used to share this factory's single EmbeddingService, which the
-   * most recently loaded topic re-pointed via initialize(model). The registry
-   * hands out one immutable service per (backend, endpoint, model) instead, so
-   * a topic keeps embedding with the model its vectors were built from.
+   * The registry hands out one immutable service per (backend, endpoint,
+   * model), so a topic keeps embedding with the model its vectors were built
+   * from instead of following whichever topic loaded last.
    */
   private async createEmbeddings(modelName: string, backendType?: string): Promise<TransformersEmbeddings> {
     const service = await this.resolveEmbeddingService(modelName, backendType);

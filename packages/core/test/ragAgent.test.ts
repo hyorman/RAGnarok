@@ -5,7 +5,7 @@
 
 import { expect } from "chai";
 import { RAGAgent, RetrievalStrategy } from "../src/index";
-import type { RetrievalResult, QueryPlan } from "../src/index";
+import type { RetrievalResult, QueryPlan, ILLMProvider, ILLMModel } from "../src/index";
 import { defaultQueryOptions, mockLLMProvider } from "./helpers/testDefaults";
 import { mockConfig } from "./helpers/realVectorStore";
 import { VectorStore } from "@langchain/core/vectorstores";
@@ -1032,6 +1032,66 @@ describe("RAGAgent", function () {
       expect(analysis.gaps).to.have.lengthOf(0);
       expect(analysis.coverageRatio).to.equal(1);
       expect(analysis.hasSufficientCoverage).to.be.true;
+    });
+  });
+
+  describe("Follow-up planning (generateFollowUpPlan)", function () {
+    const replyingProvider = (reply: string): ILLMProvider => ({
+      isAvailable: async () => true,
+      selectModel: async () =>
+        ({
+          id: "fake",
+          family: "fake",
+          async sendRequest() {
+            return (async function* () {
+              yield reply;
+            })();
+          },
+        }) as unknown as ILLMModel,
+    });
+
+    it("keeps only the valid entries when the LLM reply mixes valid and invalid sub-queries", async function () {
+      const reply = JSON.stringify({
+        subQueries: [
+          { query: "  python decorators  ", reasoning: "r1", topK: 4 },
+          "not an object",
+          null,
+          { query: "   ", reasoning: "blank query" },
+          { query: "python generators" },
+        ],
+      });
+      const llmAgent = new RAGAgent(mockConfig, replyingProvider(reply));
+      const plan: QueryPlan = {
+        originalQuery: "Python features",
+        complexity: "moderate",
+        subQueries: [{ query: "Python basics", reasoning: "r", topK: 5 }],
+        explanation: "test",
+      };
+      const gapAnalysis = llmAgent.analyzeGaps(plan, []);
+      expect(gapAnalysis.gaps).to.have.lengthOf(1);
+
+      const followUp = await llmAgent.generateFollowUpPlan(plan, gapAnalysis, [], defaultQueryOptions());
+
+      expect(followUp).to.not.equal(null);
+      expect(followUp!.subQueries.map((sq) => sq.query)).to.deep.equal(["python decorators", "python generators"]);
+      expect(followUp!._heuristicFallback).to.not.equal(true);
+    });
+
+    it("accepts a reply the LLM wrapped in a one-element array", async function () {
+      const reply = JSON.stringify([{ subQueries: [{ query: "python decorators", reasoning: "r1", topK: 4 }] }]);
+      const llmAgent = new RAGAgent(mockConfig, replyingProvider(reply));
+      const plan: QueryPlan = {
+        originalQuery: "Python features",
+        complexity: "moderate",
+        subQueries: [{ query: "Python basics", reasoning: "r", topK: 5 }],
+        explanation: "test",
+      };
+      const gapAnalysis = llmAgent.analyzeGaps(plan, []);
+
+      const followUp = await llmAgent.generateFollowUpPlan(plan, gapAnalysis, [], defaultQueryOptions());
+
+      // The heuristic fallback would broaden "Python basics" instead.
+      expect(followUp!.subQueries.map((sq) => sq.query)).to.deep.equal(["python decorators"]);
     });
   });
 

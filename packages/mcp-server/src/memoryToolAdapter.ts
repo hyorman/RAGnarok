@@ -31,7 +31,7 @@ function toolError(error: unknown): MemoryToolResult {
  * StorageBusyError after its bounded wait. That is a retryable contention
  * signal, not a memory-operation failure, so it gets its own stable code
  * instead of being flattened into MEMORY_OPERATION_FAILED. Typed on
- * `error.name` (never message matching), matching the routing in tools.ts.
+ * `error.name` (never message matching), matching the routing in tools/shared.ts.
  */
 const STORAGE_BUSY_CODE = "STORAGE_BUSY";
 const STORAGE_BUSY_MESSAGE = "Storage is busy: another RAGnarōk process is writing. Retry shortly.";

@@ -14,9 +14,11 @@ The extension creates memory storage under `context.globalStorageUri` and uses
 core `MemoryService`; it does not open the MCP server's configured storage root.
 There is no cross-host data sharing with MCP.
 
-Release VSIX files are built for Linux, macOS, and Windows on x64 and arm64.
-Each exact VSIX must pass install/activation/native-load smoke testing on its
-target; see the repository [release procedure](../../docs/RELEASE.md).
+Release VSIX files are built for five targets: linux-x64, linux-arm64,
+darwin-arm64, win32-x64, and win32-arm64. Intel Macs (darwin-x64) are not
+supported: ONNX Runtime no longer ships macOS x64 binaries. Each exact VSIX
+must pass install/activation/native-load smoke testing on its target; see the
+repository [release procedure](../../docs/RELEASE.md).
 
 ---
 
@@ -77,6 +79,9 @@ src/
 ├── ragTool.ts              # Copilot LM tool (ragQuery), per-topic RAGAgent cache
 ├── topicTool.ts            # Read-only Copilot LM tool (ragTopic): list and stats
 ├── commands.ts             # 20+ VS Code commands
+├── ingestionFlow.ts        # Topic picker and ingestion tail shared by the add-document, add-GitHub and add-URL commands
+├── embeddingConfigHandler.ts # Reacts to settings changes: transactional embedding switches, shared folder, tree view
+├── installedSmoke.ts       # Installed-VSIX smoke: temporary topic, ingest, query, delete
 ├── topicTreeView.ts        # Topics & config sidebar tree view providers
 ├── vscodeLmBackend.ts      # Proposed vscode.lm.computeEmbeddings backend
 ├── githubTokenManager.ts   # GitHub PAT management via SecretStorage
@@ -84,13 +89,12 @@ src/
 ├── memoryTreeView.ts       # Memory sidebar section: stats, refresh, confirmed reset
 ├── memoryHostContext.ts    # Resolves the workspace/branch context memory runs against
 ├── toolRegistrationHost.ts # Injectable vscode.lm seam every LM tool registers through
-├── memoryGraphCommand.ts   # RAGnarok: Show Memory Graph command
+├── memoryGraphCommand.ts   # RAG: Show Memory Graph command
 ├── memoryGraphPanel.ts     # CSP-restricted local graph webview
 ├── extensionLifecycle.ts   # Startup/shutdown gating and cancellable operation runner
 ├── workspaceContext.ts      # Workspace file discovery for context enrichment
 │
 └── adapters/
-    ├── index.ts
     ├── vsCodeConfigProvider.ts   # IConfigProvider → vscode.workspace.getConfiguration
     ├── vsCodeLogger.ts           # ILoggerFactory → vscode.window.createOutputChannel
     ├── vsCodeNotifier.ts         # INotifier → vscode.window.show*Message / withProgress
@@ -159,7 +163,7 @@ no reset tool: an irreversible wipe of every memory in the extension location is
 confirmation from the user. A model-generated boolean cannot stand in for
 approval, so the model has no path to it at all.
 
-Run **RAGnarok: Show Memory Graph** from the Command Palette, or from the Memory
+Run **RAG: Show Memory Graph** from the Command Palette, or from the Memory
 view's title bar, to choose workspace or current-branch memory and open the
 interactive webview. The webview receives validated graph documents over
 `postMessage`, announces readiness before the host sends data, uses only packaged

@@ -5,7 +5,6 @@ import * as path from "path";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import {
   EmbeddingFingerprintMismatchError,
-  EmbeddingReindexRequiredError,
   TopicManager,
   VectorStoreMetadataCorruptionError,
   type IConfigProvider,
@@ -288,7 +287,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
     expect(pending[0].stage).to.equal("graphCommitted");
 
     const restarted = createManager(storageDir, vectorStore);
-    await (restarted as any).recoverIngestionJournal();
+    await (restarted as any).journals.recoverIngestion();
     expect(restarted.listDocuments(topicId)).to.have.length(1);
     expect(restarted.listDocuments(topicId)[0]).to.include({
       id: "durable-leaf",
@@ -297,13 +296,12 @@ describe("TopicManager durable expanded-source ingestion", function () {
     });
     expect(await readJournal(storageDir)).to.deep.equal([]);
 
-    await (restarted as any).recoverIngestionJournal();
+    await (restarted as any).journals.recoverIngestion();
     expect(restarted.listDocuments(topicId)).to.have.length(1);
   });
 
   it("rethrows typed safety failures instead of converting them into per-file success outcomes", async function () {
     const safetyFailures = [
-      new EmbeddingReindexRequiredError(topicId),
       new VectorStoreMetadataCorruptionError(topicId, "missing"),
       new EmbeddingFingerprintMismatchError(topicId, "fingerprint mismatch"),
     ];
@@ -359,7 +357,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
     expect((await readJournal(storageDir))[0].stage).to.equal("started");
 
     const restarted = createManager(storageDir, vectorStore);
-    await (restarted as any).recoverIngestionJournal();
+    await (restarted as any).journals.recoverIngestion();
     expect(restarted.listDocuments(topicId).map((document) => document.id)).to.deep.equal(["cancelled-leaf"]);
     expect(await readJournal(storageDir)).to.deep.equal([]);
   });
@@ -378,7 +376,7 @@ describe("TopicManager durable expanded-source ingestion", function () {
       chunkCount: 0,
       containerId: "container-undurable",
     };
-    await (manager as any).upsertIngestionJournal({
+    await (manager as any).journals.upsertIngestion({
       id: `${transactionId}:container`,
       transactionId,
       containerId: planned.id,
@@ -388,48 +386,51 @@ describe("TopicManager durable expanded-source ingestion", function () {
       updatedAt: 1,
     });
 
-    await (manager as any).recoverIngestionJournal();
+    await (manager as any).journals.recoverIngestion();
     expect(manager.listDocuments(topicId)).to.deep.equal([]);
     expect(await readJournal(storageDir)).to.deep.equal([]);
   });
 
-  it("expands legacy directory metadata on removal to avoid vector orphans", async function () {
+  it("removing a URL document that owns no chunks never touches documents nested under its URL", async function () {
     const manager = createManager(storageDir, vectorStore);
-    const directory = path.join(storageDir, "legacy");
-    const legacy: TopicDocument = {
-      id: "legacy-container",
+    const parent: TopicDocument = {
+      id: "docs-root",
       topicId,
-      name: "legacy",
-      filePath: directory,
+      name: "docs",
+      filePath: "https://example.com/docs",
       fileType: "text",
-      source: { type: "file", path: directory },
+      source: { type: "url", url: "https://example.com/docs" },
       addedAt: 1,
-      chunkCount: 2,
+      chunkCount: 0,
     };
-    (manager as any).topicDocuments.set(topicId, new Map([[legacy.id, legacy]]));
+    const child: TopicDocument = {
+      id: "docs-page",
+      topicId,
+      name: "page",
+      filePath: "https://example.com/docs/page",
+      fileType: "text",
+      source: { type: "url", url: "https://example.com/docs/page" },
+      addedAt: 2,
+      chunkCount: 1,
+    };
+    (manager as any).topicDocuments.set(
+      topicId,
+      new Map([
+        [parent.id, parent],
+        [child.id, child],
+      ]),
+    );
     vectorStore.rows = [
       new LangChainDocument({
-        pageContent: "a",
-        metadata: {
-          documentId: "legacy-a",
-          chunkId: "legacy-a-1",
-          source: path.join(directory, "a.txt"),
-        },
-      }),
-      new LangChainDocument({
-        pageContent: "outside",
-        metadata: {
-          documentId: "outside",
-          chunkId: "outside-1",
-          source: path.join(storageDir, "outside.txt"),
-        },
+        pageContent: "page",
+        metadata: { documentId: "docs-page", chunkId: "docs-page-1", source: "https://example.com/docs/page" },
       }),
     ];
 
-    const removed = await manager.removeDocument(topicId, legacy.id);
-    expect(removed.chunksRemoved).to.equal(1);
-    expect(vectorStore.removedDocumentIds).to.include("legacy-a");
-    expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["outside"]);
+    const removed = await manager.removeDocument(topicId, parent.id);
+
+    expect(removed.chunksRemoved).to.equal(0);
+    expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["docs-page"]);
   });
 
   it("journals a committed document removal and recovers idempotently after cleanup failure", async function () {
@@ -460,10 +461,51 @@ describe("TopicManager durable expanded-source ingestion", function () {
     const journalPath = path.join(storageDir, "database", "post-commit-cleanup-journal.json");
     expect(JSON.parse(await fs.readFile(journalPath, "utf8"))).to.have.length(1);
 
-    await (manager as any).recoverPostCommitCleanupJournal();
+    await (manager as any).journals.recoverPostCommitCleanup();
     expect(vectorStore.rows).to.deep.equal([]);
     expect(JSON.parse(await fs.readFile(journalPath, "utf8"))).to.deep.equal([]);
-    await (manager as any).recoverPostCommitCleanupJournal();
+    await (manager as any).journals.recoverPostCommitCleanup();
+  });
+
+  it("reads a cleanup-journal entry an older build wrote and ignores its legacyContainer flag", async function () {
+    const manager = createManager(storageDir, vectorStore);
+    const parent: TopicDocument = {
+      id: "docs-root",
+      topicId,
+      name: "docs",
+      filePath: "https://example.com/docs",
+      fileType: "text",
+      source: { type: "url", url: "https://example.com/docs" },
+      addedAt: 1,
+      chunkCount: 0,
+    };
+    vectorStore.rows = [
+      new LangChainDocument({
+        pageContent: "page",
+        metadata: { documentId: "docs-page", chunkId: "docs-page-1", source: "https://example.com/docs/page" },
+      }),
+    ];
+    const journalPath = path.join(storageDir, "database", "post-commit-cleanup-journal.json");
+    await fs.writeFile(
+      journalPath,
+      JSON.stringify([
+        {
+          version: 1,
+          id: "older-build-entry",
+          kind: "document",
+          topicId,
+          legacyContainer: true,
+          documents: [parent],
+          updatedAt: 1,
+        },
+      ]),
+    );
+
+    await (manager as any).journals.recoverPostCommitCleanup();
+
+    // The flag once made a chunkless removal sweep every document nested under the URL.
+    expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["docs-page"]);
+    expect(JSON.parse(await fs.readFile(journalPath, "utf8"))).to.deep.equal([]);
   });
 
   it("stops mutation admission and awaits an admitted mutation before async disposal", async function () {

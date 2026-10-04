@@ -33,7 +33,7 @@
     "node": ">=22 <25"
   },
   "dependencies": {
-    "@huggingface/transformers": "3.8.1",
+    "@huggingface/transformers": "4.3.0",
     "@lancedb/lancedb": "0.19.1",
     "@langchain/community": "1.1.29",
     "@langchain/core": "1.2.2",
