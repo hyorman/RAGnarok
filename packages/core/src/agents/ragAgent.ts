@@ -7,10 +7,12 @@
  */
 
 import { createHash } from "crypto";
+import { z } from "zod";
 import { VectorStore } from "@langchain/core/vectorstores";
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { IConfigProvider, ILLMProvider } from "../interfaces";
 import { QueryPlannerAgent, QueryPlan, SubQuery } from "./queryPlannerAgent";
+import { requestLlmJson } from "./llmJson";
 import { VectorRetriever } from "../retrievers/vectorRetriever";
 import { KeywordRetriever, KeywordSearchResult } from "../retrievers/keywordRetriever";
 import { HybridRetriever, HybridSearchResult, DEFAULT_HYBRID_OPTIONS } from "../retrievers/hybridRetriever";
@@ -32,6 +34,12 @@ const STRATEGY_GAP_THRESHOLDS: Partial<Record<RetrievalStrategy, number>> = {
 
 /** Default timeout for LLM gap-analysis requests */
 const GAP_LLM_TIMEOUT_MS = 10_000;
+
+/**
+ * The follow-up reply is validated leniently on purpose: entries without a
+ * usable query are filtered below rather than failing the whole reply.
+ */
+const FollowUpReplySchema = z.object({ subQueries: z.array(z.unknown()) });
 
 /** Maximum combined query length (chars) for heuristic follow-ups */
 const MAX_FOLLOW_UP_QUERY_LENGTH = 200;
@@ -908,39 +916,11 @@ Respond with JSON:
   "explanation": "Follow-up queries to fill retrieval gaps"
 }`;
 
-      const messages = [{ role: "user" as const, content: prompt }];
-
-      const controller = new AbortController();
-      // #6: Chain user signal so user cancellation also cancels LLM request
-      const onAbort = () => controller.abort();
-      options.signal?.addEventListener("abort", onAbort);
-      const timeout = setTimeout(() => controller.abort(), GAP_LLM_TIMEOUT_MS);
-
-      let responseText = "";
-      try {
-        const response = await model.sendRequest(messages, controller.signal);
-        // Collect response
-        for await (const chunk of response) {
-          responseText += chunk;
-        }
-      } finally {
-        clearTimeout(timeout);
-        options.signal?.removeEventListener("abort", onAbort);
-      }
-
-      // Parse JSON response
-      const jsonMatch = responseText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-      const jsonText = jsonMatch ? jsonMatch[1] : responseText;
-      const cleanedJson = jsonText
-        .trim()
-        .replace(/^[^{]*/, "")
-        .replace(/[^}]*$/, "");
-      const parsed = JSON.parse(cleanedJson);
-
-      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.subQueries)) {
-        this.logger.debug("Invalid LLM follow-up response structure");
-        return null;
-      }
+      const parsed = await requestLlmJson(model, prompt, {
+        timeoutMs: GAP_LLM_TIMEOUT_MS,
+        signal: options.signal,
+        schema: FollowUpReplySchema,
+      });
 
       // Validate basic structure
       if (parsed.subQueries.length === 0) {
@@ -949,10 +929,16 @@ Respond with JSON:
 
       // P1: Filter out empty/null queries before constructing plan
       const validSubQueries = parsed.subQueries
-        .filter((sq: Record<string, unknown>) => typeof sq.query === "string" && sq.query.trim().length > 0)
+        .filter(
+          (sq): sq is Record<string, unknown> & { query: string } =>
+            typeof sq === "object" &&
+            sq !== null &&
+            typeof (sq as Record<string, unknown>).query === "string" &&
+            ((sq as Record<string, unknown>).query as string).trim().length > 0,
+        )
         .slice(0, 3)
-        .map((sq: Record<string, unknown>) => ({
-          query: String(sq.query).trim(),
+        .map((sq) => ({
+          query: sq.query.trim(),
           reasoning: String(sq.reasoning || "LLM-generated follow-up"),
           topK: typeof sq.topK === "number" ? sq.topK : options.topK || 10,
         }));

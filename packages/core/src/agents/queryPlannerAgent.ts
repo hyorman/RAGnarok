@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { ILLMProvider } from "../interfaces";
+import { requestLlmJson } from "./llmJson";
 import { Logger } from "../logger";
 import { RetrievalStrategy } from "../utils/types";
 import { extractKeywords, QUERY_INTENT_WORDS } from "../utils/keywords";
@@ -416,57 +417,11 @@ Provide your improved plan as valid JSON:`;
         options.retrievalStrategy,
       );
 
-      // Send request to LLM with timeout and proper cancellation
-      const messages = [{ role: "user" as const, content: prompt }];
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
-
-      // Forward caller's abort signal if provided
-      const onAbort = () => controller.abort();
-      options.signal?.addEventListener("abort", onAbort);
-
-      let responseText = "";
-      try {
-        const response = await model.sendRequest(messages, controller.signal);
-        // Collect response
-        for await (const chunk of response) {
-          responseText += chunk;
-        }
-      } finally {
-        clearTimeout(timeout);
-        options.signal?.removeEventListener("abort", onAbort);
-      }
-
-      this.logger.debug("LLM refinement response received", {
-        responseLength: responseText.length,
-        modelId: model.id,
-        modelFamily: options.modelFamily,
-      });
-
-      // Parse JSON response
-      // Extract JSON from markdown code blocks if present (handles varied whitespace/CRLF)
-      const jsonMatch = responseText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-      const jsonText = jsonMatch ? jsonMatch[1] : responseText;
-      let cleanedJson = jsonText.trim();
-      try {
-        JSON.parse(cleanedJson);
-      } catch {
-        const match = cleanedJson.match(/\{[\s\S]*\}/);
-        if (!match) {
-          throw new Error("No valid JSON object found in LLM response");
-        }
-        cleanedJson = match[0];
-      }
-
-      const parsedJSON = JSON.parse(cleanedJson);
-
-      if (typeof parsedJSON !== "object" || parsedJSON === null) {
-        this.logger.warn("LLM returned non-object JSON");
-        return null;
-      }
-
-      const plan = QueryPlanSchema.parse(parsedJSON) as QueryPlan;
+      const plan = (await requestLlmJson(model, prompt, {
+        timeoutMs: LLM_TIMEOUT_MS,
+        signal: options.signal,
+        schema: QueryPlanSchema,
+      })) as QueryPlan;
       // Strip _heuristicFallback — only internal code may set this
       plan._heuristicFallback = false;
 
