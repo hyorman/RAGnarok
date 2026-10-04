@@ -1878,18 +1878,19 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
   }
 
   /**
-   * Diagnostic only: whether a lock file or reset journal is present does not
-   * change the retry behaviour (either way storage is unavailable and gets
-   * retried), it only distinguishes "a reset is in progress in another window"
-   * from "storage is genuinely gone" for the log line.
+   * Diagnostic only: which marker file is present does not change the retry
+   * behaviour (either way storage is unavailable and gets retried), it only
+   * names the likely cause in the log line. A reset journal means a reset is
+   * running in another window; a lock file alone means another process holds
+   * an ordinary write lease; neither means storage is genuinely gone.
    */
   private async announceUnavailability(): Promise<void> {
     let reason = "the storage directory is unreachable";
     try {
-      const lockPath = path.join(this.storageDir, STORAGE_LOCK_FILENAME);
-      const journalPath = path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME);
-      if ((await pathExists(lockPath)) || (await pathExists(journalPath))) {
+      if (await pathExists(path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME))) {
         reason = "a reset appears to be in progress in another window";
+      } else if (await pathExists(path.join(this.storageDir, STORAGE_LOCK_FILENAME))) {
+        reason = "another process holds the storage write lease";
       }
     } catch {
       // Best-effort diagnostic only; never let this block the notification.
