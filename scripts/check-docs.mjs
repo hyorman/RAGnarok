@@ -390,11 +390,12 @@ assert.doesNotMatch(architecture, /v0\.7 implementation/, "ARCHITECTURE.md must 
 // does not exist (the MCP guide used to list one, and SECURITY.md promised one).
 // The removed names are the ones the Docker gate checks the image bakes none of;
 // that list is read, not copied. A sentence is about them when it names one, says
-// "removed ... variable/transport", pairs "network listener" with a variable, or
-// (as "Setting one ...") points back at them; "They are rejected" is about them
-// when the sentence before it was. A rejection verb that is negated ("does not
-// reject", "so they are not rejected", "nothing rejects them") is the true claim
-// and is allowed.
+// "removed ... variable/transport", or pairs "network listener" with a variable.
+// A sentence that opens with a pointer ("They are rejected", "Setting one aborts
+// ...") is about them when the sentence before it was; "Setting one of the keys"
+// or "Setting one key" is about configuration keys, not a pointer. A rejection
+// verb that is negated ("does not reject", "so they are not rejected", "nothing
+// rejects them", "ignored rather than rejected") is the true claim and is allowed.
 const dockerGate = await readFile(path.join(root, "scripts/docker-gate.mjs"), "utf8");
 const removedList = /const removedEnvVars = \[([^\]]*)\]/.exec(dockerGate)?.[1] ?? "";
 const removedVariables = [...removedList.matchAll(/"(RAGNAROK_[A-Z0-9_]+)"/g)].map((match) => match[1]);
@@ -405,13 +406,11 @@ assert.ok(
 const namesRemovedVariable = new RegExp(`\\b(?:${removedVariables.join("|")})\\b`);
 const aboutRemovedVariables = (sentence) =>
   namesRemovedVariable.test(sentence) ||
-  /\bremoved[- ](?:(?:HTTP|transport|environment|network)[- ])*(?:transport|variables?|listener)|\bsetting (?:one|any one|any of them)\b/i.test(
-    sentence,
-  ) ||
+  /\bremoved[- ](?:(?:HTTP|transport|environment|network)[- ])*(?:transport|variables?|listener)/i.test(sentence) ||
   (/\bnetwork listener\b/i.test(sentence) && /\b(?:variables?|settings?|removed|transport)\b/i.test(sentence));
 const rejectionVerbs =
   /\b(?:reject|refus|abort|error|invalid|terminat|crash)\w*|\bfail(?:s|ed|ing|ure)?\b|\bexit(?:s|ed|ing)?\b/gi;
-const negation = /\b(?:no|not|never|nothing|neither|nor|cannot|without)\b|n't\b/i;
+const negation = /\b(?:no|not|never|nothing|neither|nor|cannot|without|rather than|instead of|as opposed to)\b|n't\b/i;
 const claimsRejection = (sentence) =>
   [...sentence.matchAll(rejectionVerbs)].some(
     (verb) =>
@@ -426,8 +425,9 @@ for (const relative of canonical) {
   const sentences = (await readFile(path.join(root, relative), "utf8")).replace(/\s+/g, " ").split(/(?<=[.!?])\s/);
   sentences.forEach((sentence, index) => {
     const continuesPrevious =
-      /^(?:they|these|those|such|each|this|doing so)\b/i.test(sentence) &&
-      aboutRemovedVariables(sentences[index - 1] ?? "");
+      /^(?:they|these|those|such|each|this|doing so|setting (?:one|any one|any of them))\b(?!\s+(?:of the\b.*?\bkeys?\b|keys?\b))/i.test(
+        sentence,
+      ) && aboutRemovedVariables(sentences[index - 1] ?? "");
     assert.ok(
       !((aboutRemovedVariables(sentence) || continuesPrevious) && claimsRejection(sentence)),
       `${relative} says removed HTTP-transport variables are rejected or cause an error, but nothing reads or rejects them: "${sentence.slice(0, 80)}"`,
