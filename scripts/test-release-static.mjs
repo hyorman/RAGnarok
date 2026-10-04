@@ -1690,6 +1690,17 @@ assert.ok(
   "the native leg's shutdown soak step needs a timeout of 15 minutes or less",
 );
 assert.match(await read("packages/mcp-server/test/setup.ts"), /export const mochaHooks/);
+// On Windows the core suite finishes but a native addon thread keeps the process alive, so both
+// suites end themselves after a 10 s grace there. The exit carries Mocha's own code (no argument,
+// never 0), and the timer is unref'd so a suite that exits on its own never reaches it.
+for (const setupFile of ["packages/core/test/setup.ts", "packages/mcp-server/test/setup.ts"]) {
+  const setupSource = await read(setupFile);
+  assert.match(setupSource, /process\.platform === "win32"/, `${setupFile} applies the grace exit on Windows`);
+  assert.match(setupSource, /RAGNAROK_TEST_FORCE_EXIT_GRACE/, `${setupFile} has the test-only grace-exit switch`);
+  assert.match(setupSource, /\.unref\(\)/, `${setupFile} unrefs its timers`);
+  assert.match(setupSource, /process\.exit\(\)/, `${setupFile} exits with Mocha's own code`);
+  assert.doesNotMatch(setupSource, /process\.exit\(0\)/, `${setupFile} must not hard-code a passing exit code`);
+}
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
