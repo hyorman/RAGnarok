@@ -18,19 +18,22 @@
     },
     "coreTarball": {
       "measured": true,
-      "bytes": 100188789,
+      "bytes": 99695250,
+      "transformers": "4.3.0",
       "command": "npm pack --workspace=@ragnarok/core --pack-destination <evidence-directory>"
     },
     "mcpTarball": {
       "measured": true,
-      "bytes": 207781,
+      "bytes": 395056,
+      "transformers": "4.3.0",
       "command": "npm pack --workspace=@ragnarok/mcp-server --pack-destination <evidence-directory>"
     },
     "vsix": {
       "measured": true,
-      "maximumCompressedBytes": 235308763,
-      "maximumUnpackedBytes": 524176440,
+      "maximumCompressedBytes": 230447975,
+      "maximumUnpackedBytes": 466059233,
       "maximumTarget": "win32-x64",
+      "transformers": "4.3.0",
       "command": "node scripts/build-vsix.js <target> && node scripts/check-release-assets.mjs"
     },
     "dockerImage": {
