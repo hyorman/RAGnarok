@@ -377,7 +377,7 @@ describe("topic archive safety", function () {
     (manager as any).topicsIndex = index;
     (manager as any).topicDocuments = new Map();
     (manager as any).generateTopicId = () => "topic-imported";
-    (manager as any).publishPreparedTopicsIndex = async () => {
+    (manager as any).archiveTransfer.publishPreparedTopicsIndex = async () => {
       throw new Error("injected publication failure");
     };
     const treeBefore = await listTree(databaseDir);
@@ -508,8 +508,10 @@ describe("topic archive safety", function () {
 
       const lockPath = path.join(storageDir, STORAGE_LOCK_FILENAME);
       let lockHeldDuringCommit = false;
-      const originalPublish = (manager as any).publishPreparedTopicsIndex.bind(manager);
-      (manager as any).publishPreparedTopicsIndex = async (preparedIndexPath: string) => {
+      const originalPublish = (manager as any).archiveTransfer.publishPreparedTopicsIndex.bind(
+        (manager as any).archiveTransfer,
+      );
+      (manager as any).archiveTransfer.publishPreparedTopicsIndex = async (preparedIndexPath: string) => {
         lockHeldDuringCommit = await fs
           .access(lockPath)
           .then(() => true)
@@ -591,9 +593,11 @@ describe("topic archive safety", function () {
     (manager as any).topicDocuments = new Map([["topic-local", new Map()]]);
 
     const topicsIndexPath = (manager as any).getTopicsIndexPath() as string;
-    const realHashFile = ((manager as any).hashFile as (filePath: string) => Promise<string>).bind(manager);
+    const realHashFile = ((manager as any).archiveTransfer.hashFile as (filePath: string) => Promise<string>).bind(
+      (manager as any).archiveTransfer,
+    );
     let topicsIndexHashCalls = 0;
-    (manager as any).hashFile = async (filePath: string): Promise<string> => {
+    (manager as any).archiveTransfer.hashFile = async (filePath: string): Promise<string> => {
       if (filePath === topicsIndexPath) {
         topicsIndexHashCalls += 1;
         if (topicsIndexHashCalls === 2) {
