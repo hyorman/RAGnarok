@@ -105,7 +105,11 @@ jobs:
         env:
           RAGNAROK_REPORT_ACTIVE_RESOURCES: "1"
       - run: npm run test:mcp:compiled
+        timeout-minutes: 15
+        env:
+          RAGNAROK_REPORT_ACTIVE_RESOURCES: "1"
       - run: npm run test:shutdown-soak
+        timeout-minutes: 15
 
   vscode-tests:
     timeout-minutes: 20

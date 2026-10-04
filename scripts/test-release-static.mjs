@@ -1672,6 +1672,20 @@ const coreSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run
 assert.equal(coreSuiteStep?.["timeout-minutes"], 15);
 assert.equal(coreSuiteStep?.env?.RAGNAROK_REPORT_ACTIVE_RESOURCES, "1");
 assert.match(await read("packages/core/test/setup.ts"), /export const mochaHooks/);
+// The MCP and soak steps follow the core step on the same leg and have never run on Windows CI, so
+// a hang there must also fail at 15 minutes and, for the MCP suite, name its handles.
+const mcpSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:mcp:compiled");
+assert.ok(
+  mcpSuiteStep?.["timeout-minutes"] <= 15,
+  "the native leg's MCP suite step needs a timeout of 15 minutes or less",
+);
+assert.equal(mcpSuiteStep?.env?.RAGNAROK_REPORT_ACTIVE_RESOURCES, "1");
+const soakStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:shutdown-soak");
+assert.ok(
+  soakStep?.["timeout-minutes"] <= 15,
+  "the native leg's shutdown soak step needs a timeout of 15 minutes or less",
+);
+assert.match(await read("packages/mcp-server/test/setup.ts"), /export const mochaHooks/);
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
