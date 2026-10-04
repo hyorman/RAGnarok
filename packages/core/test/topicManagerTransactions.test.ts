@@ -529,7 +529,7 @@ describe("TopicManager operation-scoped write transactions", function () {
       },
       async () => null,
     ];
-    (created as any).loadVectorStoreOnce = async () => {
+    (created as any).vectorStores.loadVectorStoreOnce = async () => {
       const step = scripted[attempts];
       attempts += 1;
       return step();
@@ -537,7 +537,7 @@ describe("TopicManager operation-scoped write transactions", function () {
     // Force the table-absent branch to take the retry path instead of
     // fast-pathing on absent metadata, so the retry-failure behaviour under
     // test actually runs.
-    (created as any).topicHasVectorStoreMetadata = async () => true;
+    (created as any).vectorStores.topicHasVectorStoreMetadata = async () => true;
 
     let resolved: VectorStore | null | undefined;
     let caught: unknown;
@@ -557,10 +557,10 @@ describe("TopicManager operation-scoped write transactions", function () {
     const topic = await created.createTopic({ name: "empty" });
 
     let retryInvoked = false;
-    const originalRetry = ((created as any).retryVectorStoreLoad as (id: string) => Promise<VectorStore | null>).bind(
-      created,
-    );
-    (created as any).retryVectorStoreLoad = async (id: string) => {
+    const originalRetry = (
+      (created as any).vectorStores.retryVectorStoreLoad as (id: string) => Promise<VectorStore | null>
+    ).bind((created as any).vectorStores);
+    (created as any).vectorStores.retryVectorStoreLoad = async (id: string) => {
       retryInvoked = true;
       return originalRetry(id);
     };

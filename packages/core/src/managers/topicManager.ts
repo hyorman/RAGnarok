@@ -17,7 +17,6 @@ import { DocumentPipeline, PipelineOptions, PipelineResult, type PipelineSourceD
 import {
   EmbeddingFingerprintMismatchError,
   VectorStoreFactory,
-  VectorStoreLoadError,
   VectorStoreMetadataCorruptionError,
 } from "../stores/vectorStoreFactory";
 import { EventEmitter } from "events";
@@ -50,6 +49,7 @@ import { TopicArchiveTransfer, type TopicArchiveHost } from "./topic/topicArchiv
 import { documentIdForSource, generateTopicId, mapFileType } from "./topic/topicIds";
 import { TopicJournals, type PostCommitCleanupEntry, type TopicJournalHost } from "./topic/topicJournals";
 import { TopicStorePaths } from "./topic/topicStorePaths";
+import { TopicVectorStores, type TopicVectorStoreHost } from "./topic/topicVectorStores";
 
 export interface TopicManagerOptions {
   storageDir: string;
@@ -208,7 +208,7 @@ function parseTopicDocuments(data: string, topicId: string): TopicDocument[] {
 /**
  * Manages all topic operations and vector stores
  */
-export class TopicManager implements TopicArchiveHost, TopicJournalHost {
+export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVectorStoreHost {
   // Event emitter for agent cache cleanup notifications
   // Allows multiple external components (RAGTool, MCP server) to subscribe without overwriting each other
   private static readonly _onAgentCacheCleanup = new EventEmitter();
@@ -251,9 +251,6 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   vectorStoreFactory: VectorStoreFactory | null = null;
   private isInitialized: boolean = false;
 
-  // Cache for loaded vector stores
-  private vectorStoreCache: Map<string, VectorStore> = new Map();
-
   // Cache for topic documents
   /** @internal */
   topicDocuments: Map<string, Map<string, TopicDocument>> = new Map();
@@ -272,6 +269,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   archiveMutex = new Mutex();
   private readonly archiveTransfer = new TopicArchiveTransfer(this);
   private readonly journals = new TopicJournals(this);
+  private readonly vectorStores = new TopicVectorStores(this);
   private storageMutationMutex = new Mutex();
   private topicMutationMutexes = new Map<string, Mutex>();
   // Set only for the duration of a write transaction. Reads never take a
@@ -591,15 +589,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
    * @param topicId - If provided, invalidates only that topic's cache. Otherwise clears all.
    */
   public invalidateVectorStoreCache(topicId?: string): void {
-    if (topicId) {
-      for (const key of this.vectorStoreCache.keys()) {
-        if (key.endsWith(`::${topicId}`)) {
-          this.vectorStoreCache.delete(key);
-        }
-      }
-    } else {
-      this.vectorStoreCache.clear();
-    }
+    this.vectorStores.invalidate(topicId);
   }
 
   /**
@@ -1284,132 +1274,11 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   }
 
   /**
-   * Get vector store for a topic.
-   *
-   * Reads never take the storage lease, so a concurrent writer's
-   * drop-and-recreate (cross-process table swap) can make the table — or its
-   * metadata file — vanish mid-read. A first attempt landing on "absent"
-   * (table-absent, or a load failure) is ambiguous between a genuinely empty
-   * or corrupt topic and that brief window, so it gets exactly one retry
-   * after a short wait before either outcome is committed to.
-   *
-   * Exactly one retry is authorized per call: the two branches below each
-   * call `retryVectorStoreLoad` at most once, and neither call sits inside a
-   * `catch` that the other could re-enter — a retry that itself throws
-   * `VectorStoreLoadError` propagates immediately rather than triggering a
-   * second, unauthorized retry that could resolve `null` over a real failure.
+   * Get vector store for a topic. Loading, the one-shot retry and the cache
+   * live in `TopicVectorStores`.
    */
   public async getVectorStore(topicId: string): Promise<VectorStore | null> {
-    this.logger.debug("Getting vector store", { topicId });
-
-    let store: VectorStore | null;
-    try {
-      store = await this.loadVectorStoreOnce(topicId);
-    } catch (error) {
-      if (error instanceof VectorStoreLoadError) {
-        return await this.retryVectorStoreLoad(topicId);
-      }
-      this.logger.error("Failed to get vector store", {
-        error: error instanceof Error ? error.message : String(error),
-        topicId,
-      });
-      throw error;
-    }
-    if (store) {
-      return store;
-    }
-
-    // table-absent on the first attempt. A genuinely empty topic has no
-    // vector metadata file either — createStore always writes it at table
-    // creation, and a drop-and-recreate's table-absent window still leaves
-    // the pre-existing metadata on disk — so skip the retry's wait entirely
-    // when there is no metadata to be racing against.
-    if (!(await this.topicHasVectorStoreMetadata(topicId))) {
-      return null;
-    }
-    return await this.retryVectorStoreLoad(topicId);
-  }
-
-  /** The retry point shared by both "table-absent" and "load failed". Called at most once per `getVectorStore` call. */
-  private async retryVectorStoreLoad(topicId: string): Promise<VectorStore | null> {
-    this.invalidateVectorStoreCache(topicId);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    try {
-      // table-absent here is accepted as empty-topic semantics; a second
-      // VectorStoreLoadError is a real failure and must surface, never be
-      // swallowed into a fabricated "empty topic" result.
-      return await this.loadVectorStoreOnce(topicId);
-    } catch (error) {
-      this.logger.error("Failed to get vector store after retry", {
-        error: error instanceof Error ? error.message : String(error),
-        topicId,
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Whether a vector-store metadata file exists for this topic, tolerating
-   * corruption as "exists" rather than propagating it: a present-but-torn
-   * metadata file is itself evidence of an in-flight write, which the caller
-   * should retry rather than fast-path to empty-topic semantics for.
-   */
-  private async topicHasVectorStoreMetadata(topicId: string): Promise<boolean> {
-    if (!this.vectorStoreFactory) {
-      return false;
-    }
-    const customStorageDir = this.getTopicStoreDir(topicId);
-    try {
-      return (await this.vectorStoreFactory.getStoreMetadata(topicId, customStorageDir)) !== null;
-    } catch {
-      return true;
-    }
-  }
-
-  /**
-   * One disk-touching attempt to resolve a topic's vector store: compat
-   * check, cache lookup, then load. A corrupt-metadata refusal from the
-   * compat check is classified the same way `loadStore` classifies its own
-   * metadata-read failure — as `VectorStoreLoadError` — so `getVectorStore`'s
-   * single retry point covers both read paths uniformly.
-   */
-  private async loadVectorStoreOnce(topicId: string): Promise<VectorStore | null> {
-    if (!this.vectorStoreFactory) {
-      throw new Error("TopicManager not initialized");
-    }
-
-    try {
-      await this.ensureEmbeddingModelCompatibility(topicId);
-    } catch (error) {
-      if (error instanceof VectorStoreMetadataCorruptionError) {
-        // Distinguish this from a table-open failure: no table was touched,
-        // the topic's stored embedding metadata itself couldn't be read.
-        throw new VectorStoreLoadError(
-          topicId,
-          new Error(`embedding compatibility check failed before the vector table was opened: ${error.message}`),
-        );
-      }
-      throw error;
-    }
-
-    const location = this.getTopicStoreDir(topicId) ?? this.paths.databaseDir();
-    const cacheKey = `${location}::${topicId}`;
-    // Check cache first
-    const cachedStore = this.vectorStoreCache.get(cacheKey);
-    if (cachedStore) {
-      this.logger.debug("Returning cached vector store", { topicId });
-      return cachedStore;
-    }
-
-    // Load from disk. `undefined` already means "the managed database directory".
-    const store = await this.vectorStoreFactory.loadStore(topicId, this.getTopicStoreDir(topicId));
-
-    if (store) {
-      this.vectorStoreCache.set(cacheKey, store);
-      this.logger.debug("Vector store loaded and cached", { topicId });
-    }
-
-    return store;
+    return this.vectorStores.get(topicId);
   }
 
   /**
@@ -1428,8 +1297,9 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
    * Does NOT block queries when the backend is available but differs from the
    * current global setting — loadStore() handles routing via scoped embeddings.
    * Throws only when the required backend is truly unavailable.
+   * @internal
    */
-  private async ensureEmbeddingModelCompatibility(topicId: string): Promise<void> {
+  async ensureEmbeddingModelCompatibility(topicId: string): Promise<void> {
     if (!this.vectorStoreFactory) {
       return;
     }
@@ -1633,7 +1503,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       const previousFactory = this.vectorStoreFactory;
       this.documentPipeline = replacementPipeline;
       this.vectorStoreFactory = replacementFactory;
-      this.vectorStoreCache.clear();
+      this.vectorStores.invalidate();
       previousPipeline.dispose();
       previousFactory?.dispose();
       for (const topicId of topicIds) {
@@ -1682,7 +1552,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
       await close(() => factory.dispose());
     }
 
-    this.vectorStoreCache.clear();
+    this.vectorStores.invalidate();
     this.topicDocuments.clear();
     this.topicNameVectorCache.clear();
     this.topicNameVectorModel = null;
@@ -1822,8 +1692,9 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost {
   /**
    * Where this topic's vector data lives, or undefined for the managed database
    * directory. Shared topics keep their data in their own store directory.
+   * @internal
    */
-  private getTopicStoreDir(topicId: string): string | undefined {
+  getTopicStoreDir(topicId: string): string | undefined {
     return this.sharedTopics.getStoreDir(topicId);
   }
 
