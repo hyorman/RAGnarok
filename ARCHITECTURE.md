@@ -43,14 +43,16 @@ The configured storage root has one v2 marker and one lease file:
   exports/
 ```
 
-Some directories are created only when their feature is used. A directory that holds data but no `storage-format.json` is from an unsupported pre-0.4 build and is refused with `UnsupportedStorageError`; it is never read.
+Some directories are created only when their feature is used. A directory that
+holds data but no `storage-format.json` is from an unsupported pre-0.4 build and
+is refused with `UnsupportedStorageError`; it is never read.
 
 `.ragnarok.lock` is present only while a lease is held; a graceful release
 marks it released and unlinks it.
 
 Reads take no lease at all, so any number of processes — VS Code windows and MCP
-servers — may open and read one storage
-root concurrently. Coordination is on the write side:
+servers — may open and read one storage root concurrently. Coordination is on
+the write side:
 
 - **Operation leases.** Each mutation acquires the lease, runs WAL recovery,
   reloads canonical state from disk, applies its change, and releases. The
@@ -59,7 +61,8 @@ root concurrently. Coordination is on the write side:
   reports it as a retryable "storage is busy" condition rather than a failure
   of the operation itself. An ingestion holds one lease for the whole call,
   kept alive by the heartbeat.
-- **Reset.** A reset holds the operation lease for its whole duration: it waits the bounded time and reports `StorageBusyError` like any other write.
+- **Reset.** A reset holds the operation lease for its whole duration: it waits
+  the bounded time and reports `StorageBusyError` like any other write.
 - **Recovery is writer-only.** Journal and WAL rollback happen under a lease,
   so a reader serves the previous consistent snapshot instead of rolling back
   a foreign writer's in-flight transaction. Readers revalidate through a

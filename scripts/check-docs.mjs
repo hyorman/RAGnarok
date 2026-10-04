@@ -68,6 +68,26 @@ for (const relative of canonical) {
   assert.doesNotMatch(contents, /migrat/i, `${relative} still describes the removed storage migration`);
   assert.doesNotMatch(contents, /storage conversion/i, `${relative} still describes storage conversion`);
 }
+// Every guide except the root README (a user guide whose paragraphs are single
+// lines) is hard-wrapped near 80 columns. Prettier's default `proseWrap:
+// "preserve"` never rewraps, so a paragraph pasted in as one long line stays
+// one and nothing else flags it. Hold the wrapped guides to the repo's print
+// width; tables, headings and fenced blocks cannot wrap and are exempt.
+const { printWidth } = JSON.parse(await readFile(path.join(root, ".prettierrc.json"), "utf8"));
+for (const relative of canonical.filter((file) => file !== "README.md")) {
+  let fenced = false;
+  for (const [index, line] of (await readFile(path.join(root, relative), "utf8")).split("\n").entries()) {
+    if (/^\s*```/.test(line)) {
+      fenced = !fenced;
+    } else if (!fenced && !/^(?:#|\s*\|)/.test(line)) {
+      const width = [...line].length;
+      assert.ok(
+        width <= printWidth,
+        `${relative}:${index + 1} is ${width} characters, past the ${printWidth}-column print width; wrap prose near 80`,
+      );
+    }
+  }
+}
 
 // A `file.ts:N` citation rots the first time the file is split, so each one
 // must name a source file that exists and a line the file still has. Prefer

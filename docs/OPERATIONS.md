@@ -52,10 +52,12 @@ fails with `Storage is busy: a write is in progress by pid <n>`. Each host
 rewords that as a retryable busy message — the MCP tools report "Storage is
 busy: another RAGnarōk process is writing. Retry shortly.", the VS Code
 extension shows "Storage is busy — another window is writing (pid <n>). Retry
-in a moment." Nothing is written and the operation can simply be retried. A crashed holder's lease goes stale after roughly five minutes and is
-then reclaimable, but a live same-host PID is never reclaimed merely for age.
+in a moment." Nothing is written and the operation can simply be retried. A
+crashed holder's lease goes stale after roughly five minutes and is then
+reclaimable, but a live same-host PID is never reclaimed merely for age.
 
-A reset holds the store's write lease for its whole duration, so other processes see the same retryable busy error until it finishes.
+A reset holds the store's write lease for its whole duration, so other processes
+see the same retryable busy error until it finishes.
 
 Do not set `RAGNAROK_IGNORE_LOCK=1` unless a separate, tested mechanism
 serializes writes across the entire root: it bypasses the lease entirely, so
@@ -98,7 +100,10 @@ complete service. `rag_topic` (`export`) writes a checksummed `.rag` archive int
 reads an archive from a canonical `security.allowedPaths` root and validates
 archive paths, limits, schemas, and checksums before publication.
 
-A storage directory from a pre-0.4 build is refused at startup. To keep using that path, start the server once with `RAGNAROK_RESET_STORAGE=1`: it moves the old content into a `backup-v1-<timestamp>` folder inside the storage directory and starts a new store.
+A storage directory from a pre-0.4 build is refused at startup. To keep using
+that path, start the server once with `RAGNAROK_RESET_STORAGE=1`: it moves the
+old content into a `backup-v1-<timestamp>` folder inside the storage directory
+and starts a new store.
 
 ## Model configuration
 

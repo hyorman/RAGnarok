@@ -376,17 +376,28 @@ Between them the two tables are the complete surface: 24 keys in the file, 7
 variables in the environment, nothing else. A variable named after one of the 24
 is simply not read.
 
-Variables that belonged to the **removed HTTP transport** are not read. They are deliberately not listed here, so this guide is never mistaken for documentation of a supported setting.
+Variables that belonged to the **removed HTTP transport** are not read. They are
+deliberately not listed here, so this guide is never mistaken for documentation
+of a supported setting.
 
-Those variables implied a capability the server no longer has (a listening port, TLS termination, bearer auth), so nothing is documented for them. The operational keys above imply a value, which moved into `config.json`.
+Those variables implied a capability the server no longer has (a listening port,
+TLS termination, bearer auth), so nothing is documented for them. The
+operational keys above imply a value, which moved into `config.json`.
 
 ---
 
 ## Concurrent Access
 
-Several servers may point at one storage directory, and a server may share it with VS Code windows. Reads take no lock, so concurrent readers never contend and a second server starting against an already-open store is supported.
+Several servers may point at one storage directory, and a server may share it
+with VS Code windows. Reads take no lock, so concurrent readers never contend
+and a second server starting against an already-open store is supported.
 
-Writes serialize through a cross-process lease (`<storageDir>/.ragnarok.lock`, present only while a lease is held). Each mutation acquires the lease exclusively for the duration of that one operation — `rag_ingest` holds it for the whole call — recovers and reloads canonical state under it, applies its change, and releases. A mutation that finds a live foreign writer waits about five seconds and then returns a busy error rather than corrupting data:
+Writes serialize through a cross-process lease (`<storageDir>/.ragnarok.lock`,
+present only while a lease is held). Each mutation acquires the lease
+exclusively for the duration of that one operation — `rag_ingest` holds it for
+the whole call — recovers and reloads canonical state under it, applies its
+change, and releases. A mutation that finds a live foreign writer waits about
+five seconds and then returns a busy error rather than corrupting data:
 
 ```json
 {
@@ -394,11 +405,19 @@ Writes serialize through a cross-process lease (`<storageDir>/.ragnarok.lock`, p
 }
 ```
 
-`rag_memory` and `rag_reset_memory` report that code; the other mutating tools report the same message in their own error body. Nothing was written, so the call can simply be retried. If a holder crashes, the lease self-heals via heartbeat staleness detection (default 5 minutes) so a new process can acquire it.
+`rag_memory` and `rag_reset_memory` report that code; the other mutating tools
+report the same message in their own error body. Nothing was written, so the
+call can simply be retried. If a holder crashes, the lease self-heals via
+heartbeat staleness detection (default 5 minutes) so a new process can acquire
+it.
 
-A reset holds the directory's write lease for its whole duration; other processes get the same retryable busy error until it completes.
+A reset holds the directory's write lease for its whole duration; other
+processes get the same retryable busy error until it completes.
 
-For advanced setups that serialize writes externally and need to bypass the lease, set `RAGNAROK_IGNORE_LOCK=1`. This bypasses the lease entirely, is unsafe with concurrent writers, and should only be used when you have your own synchronization mechanism.
+For advanced setups that serialize writes externally and need to bypass the
+lease, set `RAGNAROK_IGNORE_LOCK=1`. This bypasses the lease entirely, is unsafe
+with concurrent writers, and should only be used when you have your own
+synchronization mechanism.
 
 See [the architecture](../../ARCHITECTURE.md#storage) for the complete
 concurrency and storage model.
@@ -444,7 +463,12 @@ within `limits.shutdownDrainMs` and the storage lease is released.
 
 ### Storage format v2
 
-Fresh storage initializes `storage-format.json` automatically. A non-empty directory without the v2 marker comes from an unsupported pre-0.4 build and fails closed with `UnsupportedStorageError`; it is never read. Start once with `--reset-storage` or `RAGNAROK_RESET_STORAGE=1` to move that content into a `backup-v1-<timestamp>` folder and begin a new store. Archives other than format 2.0 are unsupported.
+Fresh storage initializes `storage-format.json` automatically. A non-empty
+directory without the v2 marker comes from an unsupported pre-0.4 build and
+fails closed with `UnsupportedStorageError`; it is never read. Start once with
+`--reset-storage` or `RAGNAROK_RESET_STORAGE=1` to move that content into a
+`backup-v1-<timestamp>` folder and begin a new store. Archives other than format
+2.0 are unsupported.
 
 **Testing the connection:**
 

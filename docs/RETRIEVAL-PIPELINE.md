@@ -46,9 +46,9 @@ flowchart LR
   E --> V[("LanceDB table &lt;topicId&gt;<br/>vector + text + metadata")]
 ```
 
-Defaults: `chunkSize` 1000 characters, `chunkOverlap` 200 (`SemanticChunker`'s constructor in `splitters/semanticChunker.ts`). The chunk id
-is content-hashed, so **re-chunking changes every id** — which is why changing chunking
-requires a full reindex.
+Defaults: `chunkSize` 1000 characters, `chunkOverlap` 200 (`SemanticChunker`'s constructor in
+`splitters/semanticChunker.ts`). The chunk id is content-hashed, so **re-chunking changes every id**
+— which is why changing chunking requires a full reindex.
 
 The default embedding model is `Xenova/all-MiniLM-L6-v2` (384-dim), with VS Code LM and remote
 backends as alternatives. Which one actually runs is decided per topic, not per process — see §2.1.
@@ -89,7 +89,8 @@ never occupy a slot.
 The **endpoint** is deliberately not resolved per topic. A knowledge base built against a remote
 embedding endpoint is readable only by a deployment configured with that same endpoint; a topic
 recorded against a foreign endpoint is refused rather than substituted
-(`VectorStoreFactory.loadStore` in `stores/vectorStoreFactory.ts`, which throws `EmbeddingEndpointMismatchError`), because an endpoint carries credentials and a topic must not
+(`VectorStoreFactory.loadStore` in `stores/vectorStoreFactory.ts`, which throws
+`EmbeddingEndpointMismatchError`), because an endpoint carries credentials and a topic must not
 choose one on the server's behalf. Knowledge bases meant to travel should use the bundled local
 model.
 
@@ -123,14 +124,16 @@ flowchart TB
 ```
 
 The planner is **heuristic-first**: `QueryPlannerAgent.createPlan` (`agents/queryPlannerAgent.ts`) builds the
-plan with `createHeuristicPlan()` and the LLM only _edits_ it, falling back with `?? heuristicPlan`. Decomposition therefore works with no LLM at
-all. The only capability genuinely lost without a provider is iterative refinement —
-`generateFollowUpPlanWithLLM()` returns `null` (`agents/followUpPlanner.ts`).
+plan with `createHeuristicPlan()` and the LLM only _edits_ it, falling back with `?? heuristicPlan`.
+Decomposition therefore works with no LLM at all. The only capability genuinely lost without a
+provider is iterative refinement — `generateFollowUpPlanWithLLM()` returns `null`
+(`agents/followUpPlanner.ts`).
 
-Strategy dispatch is a three-way branch (`RAGAgent.dispatchSearch` in `agents/ragAgent.ts`). Retrievers are constructed lazily by
-`initializeRetrieversForStrategy()`; if the requested one is still absent afterwards, dispatch
-**throws** `Retriever for strategy <s> not initialized` rather than silently substituting another
-strategy. Every result carries the `effectiveStrategy` that actually ran.
+Strategy dispatch is a three-way branch (`RAGAgent.dispatchSearch` in `agents/ragAgent.ts`).
+Retrievers are constructed lazily by `initializeRetrieversForStrategy()`; if the requested one is
+still absent afterwards, dispatch **throws** `Retriever for strategy <s> not initialized` rather
+than silently substituting another strategy. Every result carries the `effectiveStrategy` that
+actually ran.
 
 Reranking overwrites `scoreKind` with `cross_encoder_probability` and preserves the first-stage value
 in `originalScoreKind`.
@@ -218,5 +221,6 @@ most 10,000 edges, and oversized records return `GRAPH_VISUALIZATION_RECORD_TOO_
 ## 7. Known issues
 
 - `hybrid`'s lexical half is TF-only despite the BM25-adjacent naming around it: `scoreDocument`
-  (`KeywordRetriever.scoreDocument` in `retrievers/keywordRetriever.ts`) has no IDF and no document-frequency term, so the keyword component
-  of the blend is not Okapi BM25 — even though the standalone `bm25` strategy is.
+  (`KeywordRetriever.scoreDocument` in `retrievers/keywordRetriever.ts`) has no IDF and no
+  document-frequency term, so the keyword component of the blend is not Okapi BM25 — even though the
+  standalone `bm25` strategy is.

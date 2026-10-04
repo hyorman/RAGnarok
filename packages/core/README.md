@@ -222,7 +222,12 @@ different model under the same name.
 
 ## Storage compatibility
 
-Core owns the v2 marker, the write lease, topic and vector stores, standalone memory, and archive validation. One storage root has one writer at a time. A directory holding data from a pre-0.4 build is refused with `UnsupportedStorageError`. See the repository [architecture](../../ARCHITECTURE.md) and [operations guide](../../docs/OPERATIONS.md).
+Core owns the v2 marker, the write lease, topic and vector stores, standalone
+memory, and archive validation. One storage root has one writer at a time. A
+directory holding data from a pre-0.4 build is refused with
+`UnsupportedStorageError`. See the repository
+[architecture](../../ARCHITECTURE.md) and
+[operations guide](../../docs/OPERATIONS.md).
 
 ---
 
