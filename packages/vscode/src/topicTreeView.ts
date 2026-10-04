@@ -765,7 +765,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     try {
       if (!vscode.lm || typeof vscode.lm.selectChatModels !== "function") {
         vscode.window.showWarningMessage(
-          "VS Code Language Model API is not available. Make sure you have GitHub Copilot installed and VS Code 1.90+.",
+          "VS Code Language Model API is not available. Make sure GitHub Copilot is installed and enabled.",
         );
         return;
       }

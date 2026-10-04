@@ -42,4 +42,3 @@ export {
   type ActivationServiceFactory,
   type RagnarokExtensionApi,
 } from "./extension";
-export { createMemoryServices } from "@ragnarok/core";

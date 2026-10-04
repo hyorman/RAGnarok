@@ -34,7 +34,11 @@ interface EmbeddingResult {
  * `vscode` typings, so the shape this backend relies on is declared here.
  */
 export interface LmEmbeddingsApi {
-  /** Resolves to one result for a string input and an array of results for an array input. */
+  /**
+   * Resolves to one result for a string input and an array of results for an array input. The proposal declares
+   * that as two overloads; this is one signature so a test double can implement it with a single function, which
+   * leaves callers to narrow the union by the shape of the input they passed.
+   */
   computeEmbeddings(modelId: string, input: string | string[]): Promise<EmbeddingResult | EmbeddingResult[]>;
   embeddingModels?: string[];
 }
@@ -65,8 +69,8 @@ export class VscodeLmBackend implements EmbeddingBackend {
   } | null = null;
   private readonly modelIdResolver?: () => string | undefined | null;
 
-  /** The LM API surface — defaults to `vscode.lm`, injectable for testing. */
-  private readonly lmApi: LmEmbeddingsApi;
+  /** The LM API surface — defaults to `vscode.lm`, injectable for testing; undefined outside the extension host. */
+  private readonly lmApi: LmEmbeddingsApi | undefined;
 
   constructor(
     modelId?: string,
@@ -75,7 +79,9 @@ export class VscodeLmBackend implements EmbeddingBackend {
     this.configuredModelId = modelId ?? "";
     this.resolvedModelId = modelId ?? "";
     this.modelIdResolver = options?.modelIdResolver;
-    this.lmApi = options?.lmApi ?? (vscodeApi?.lm as unknown as LmEmbeddingsApi); // may be undefined outside the extension host; callers guard
+    // `vscode.lm` is only typed as the public API (the proposed embeddings surface is not), and `vscodeApi` is
+    // undefined when the module cannot be required, so the result may be undefined: the availability probe guards.
+    this.lmApi = options?.lmApi ?? (vscodeApi?.lm as unknown as LmEmbeddingsApi | undefined);
     this.logger = new Logger("VscodeLmBackend");
   }
 
@@ -201,7 +207,8 @@ export class VscodeLmBackend implements EmbeddingBackend {
     }
 
     try {
-      const result = (await this.lmApi.computeEmbeddings(this.getResolvedModelId(), text)) as EmbeddingResult;
+      // A string input resolves to a single result, which the declared union cannot express.
+      const result = (await this.requireLmApi().computeEmbeddings(this.getResolvedModelId(), text)) as EmbeddingResult;
       signal?.throwIfAborted();
 
       const values = result.values;
@@ -328,7 +335,8 @@ export class VscodeLmBackend implements EmbeddingBackend {
     for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
       signal?.throwIfAborted();
       try {
-        const results = (await this.lmApi.computeEmbeddings(
+        // An array input resolves to an array of results, which the declared union cannot express.
+        const results = (await this.requireLmApi().computeEmbeddings(
           this.getResolvedModelId(),
           batchTexts,
         )) as EmbeddingResult[];
@@ -433,6 +441,14 @@ export class VscodeLmBackend implements EmbeddingBackend {
     }
 
     return this.configuredModelId;
+  }
+
+  /** The LM API, for calls that only run once `initialize()` has proven it present. */
+  private requireLmApi(): LmEmbeddingsApi {
+    if (!this.lmApi) {
+      throw new Error("The VS Code LM embeddings API is not available");
+    }
+    return this.lmApi;
   }
 
   private getResolvedModelId(): string {

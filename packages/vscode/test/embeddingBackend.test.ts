@@ -94,6 +94,19 @@ describe("EmbeddingBackend Abstraction", function () {
       expect(await backend.isAvailable()).to.be.false;
     });
 
+    it("should report unavailable and refuse to embed when there is no LM API at all", async () => {
+      const backend = createBackend("test-model-001");
+      // Passing `lmApi: undefined` falls through to the real `vscode.lm` inside the extension host, so clear it directly.
+      (backend as unknown as { lmApi: undefined }).lmApi = undefined;
+
+      expect(await backend.isAvailable()).to.be.false;
+      const error = await backend.embed("text").then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect((error as Error).message).to.include("not available");
+    });
+
     it("should return false when no models are registered", async () => {
       const backend = createBackend(undefined, { models: [] });
       expect(await backend.isAvailable()).to.be.false;
