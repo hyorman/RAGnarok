@@ -1066,13 +1066,18 @@ describe("VectorStoreFactory embedding-model guard", function () {
     expect(error?.message).to.match(/dimension/i);
   });
 
-  it("keeps a topic's own fingerprint when a count refresh omits it", async function () {
+  it("keeps a topic's own embedding identity when a count refresh omits it", async function () {
     const factory = await makeFactoryWithTopics({ t: "model-x" });
     await factory.saveStore("t", { documentCount: 3, chunkCount: 9 });
 
     const metadata = await factory.getStoreMetadata("t");
 
+    expect(metadata?.documentCount).to.equal(3);
+    expect(metadata?.chunkCount).to.equal(9);
     expect(metadata?.embeddingFingerprint).to.deep.equal(fingerprintOf("model-x", 4));
+    // The configured model is model-y and the topic is model-x: the refresh must not re-label it.
+    expect(metadata?.embeddingModel).to.equal("model-x");
+    expect(metadata?.embeddingBackend).to.equal("huggingface");
   });
 });
 

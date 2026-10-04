@@ -468,12 +468,12 @@ export class VectorStoreFactory {
         topicId,
         documentCount: metadata.documentCount || 0,
         chunkCount: metadata.chunkCount || 0,
-        // The topic's own recorded model outranks this factory's default: a
-        // caller that omits the field is refreshing counts, not re-labelling
-        // the embedding space. Falling straight through to the default would
-        // silently re-attribute the topic's vectors.
+        // The topic's own recorded model and backend outrank this factory's
+        // default: a caller that omits the field is refreshing counts, not
+        // re-labelling the embedding space. Falling straight through to the
+        // default would silently re-attribute the topic's vectors.
         embeddingModel: metadata.embeddingModel || previousMetadata?.embeddingModel || this.embeddingModel,
-        embeddingBackend: metadata.embeddingBackend || "",
+        embeddingBackend: metadata.embeddingBackend || previousMetadata?.embeddingBackend || "",
         embeddingFingerprint,
         createdAt: metadata.createdAt || Date.now(),
         updatedAt: Date.now(),
