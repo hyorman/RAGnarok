@@ -80,8 +80,16 @@ try {
   const transformersRoot = path.dirname(path.dirname(extensionRequire.resolve("@huggingface/transformers")));
   const transformersRequire = createRequire(path.join(transformersRoot, "package.json"));
   const sharp = transformersRequire("sharp");
-  if (typeof lance.connect !== "function" || !sharp.versions?.sharp) {
-    throw new Error("Installed VSIX native LanceDB/Sharp modules did not load");
+  // Requiring onnxruntime-node loads its native binding for this platform/arch
+  // and asks it for the backends it was built with.
+  const onnxruntime = transformersRequire("onnxruntime-node");
+  const onnxBackends = onnxruntime.listSupportedBackends?.() ?? [];
+  if (
+    typeof lance.connect !== "function" ||
+    !sharp.versions?.sharp ||
+    !onnxBackends.some((backend) => backend.name === "cpu")
+  ) {
+    throw new Error("Installed VSIX native LanceDB/Sharp/ONNX Runtime modules did not load");
   }
   const declaredTarget = ["x64", "arm64"].find((arch) => path.basename(vsix).includes(`-${arch}.vsix`));
   if (declaredTarget && process.arch !== declaredTarget) {

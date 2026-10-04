@@ -48,9 +48,10 @@ RUN npm ci --omit=dev --omit=peer --ignore-scripts --libc=glibc \
       arm64) onnx_arch=arm64 ;; \
       *) echo "Unsupported MCP image architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac && \
-    onnx_bin=node_modules/@huggingface/transformers/node_modules/onnxruntime-node/bin/napi-v3 && \
+    onnx_bin=node_modules/@huggingface/transformers/node_modules/onnxruntime-node/bin/napi-v6 && \
     rm -rf "${onnx_bin}/darwin" "${onnx_bin}/win32" && \
     find "${onnx_bin}/linux" -mindepth 1 -maxdepth 1 -type d ! -name "${onnx_arch}" -exec rm -rf {} + && \
+    test -f "${onnx_bin}/linux/${onnx_arch}/onnxruntime_binding.node" && \
     rm -rf \
       node_modules/@huggingface/transformers/node_modules/onnxruntime-web \
       node_modules/@huggingface/transformers/src \

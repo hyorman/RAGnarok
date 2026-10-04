@@ -1129,6 +1129,10 @@ assert.doesNotMatch(builder, /execFileSync\(\s*["']npm(\.cmd)?["']/);
 assert.match(builder, /verifyIntegrity\(archive, integrity/);
 assert.match(builder, /assertSafeArchiveMember/);
 assert.match(builder, /verifyNativePackages/);
+assert.match(builder, /verifySharpNativesMatchTransformers\(nodeModules, targetPlatform\)/);
+assert.match(builder, /onnxruntime-node: expected 1 \$\{targetPlatform\.target\} binding/);
+assert.match(builder, /resolveTransformersDependency\(nm, "onnxruntime-node"\)/);
+assert.doesNotMatch(builder, /napi-v3/);
 assert.match(builder, /Cleaning and rebuilding extension output from source/);
 assert.match(builder, /delete rootPkg\.scripts\?\.\["vscode:prepublish"\]/);
 assert.doesNotMatch(builder, /\.vsce-staging-\$\{target\}/);
@@ -1141,6 +1145,9 @@ assert.match(vsixSmoke, /vsix-extension-host-smoke\.cjs/);
 assert.match(vsixSmoke, /RAGNAROK_EXPECTED_EXTENSION_PATH: extensionDir/);
 assert.match(vsixSmoke, /launchArgs: \[\s*workspace,/);
 assert.match(vsixSmoke, /delete process\.env\.ELECTRON_RUN_AS_NODE/);
+assert.match(vsixSmoke, /transformersRequire\("sharp"\)/);
+assert.match(vsixSmoke, /transformersRequire\("onnxruntime-node"\)/);
+assert.match(vsixSmoke, /listSupportedBackends/);
 assert.match(extensionHostSmoke, /ragnarok\._runInstalledSmoke/);
 assert.match(extensionHostSmoke, /extension\.extensionPath !== expectedExtensionPath/);
 assert.match(extensionHostSmoke, /topicCreated: true, queryExecuted: true, topicDeleted: true/);
@@ -1229,7 +1236,8 @@ assert.match(dockerfile, /FROM node:22-slim AS production-deps/);
 assert.match(dockerfile, /--include-workspace-root=false/);
 assert.match(dockerfile, /--omit=peer/);
 assert.match(dockerfile, /--libc=glibc/);
-assert.match(dockerfile, /onnxruntime-node\/bin\/napi-v3/);
+assert.match(dockerfile, /onnxruntime-node\/bin\/napi-v6/);
+assert.match(dockerfile, /test -f "\$\{onnx_bin\}\/linux\/\$\{onnx_arch\}\/onnxruntime_binding\.node"/);
 assert.match(dockerfile, /onnxruntime-web/);
 assert.match(dockerfile, /find node_modules packages\/core\/node_modules/);
 assert.match(dockerfile, /--from=production-deps \/app\/node_modules\//);
@@ -1702,7 +1710,13 @@ const spdx = JSON.parse(await read("bom.spdx.json"));
 assert.equal(cdx.bomFormat, "CycloneDX");
 assert.equal(cdx.specVersion, "1.6");
 assert.equal(spdx.spdxVersion, "SPDX-2.3");
-assert.ok(cdx.components.length > 1_000);
+// Every locked package and every bundled model, exactly: a fixed floor would
+// either miss a truncated SBOM or fail when the dependency tree shrinks.
+const lockedPackageCount = Object.entries(JSON.parse(await read("package-lock.json")).packages).filter(
+  ([location, entry]) => location.includes("node_modules/") && entry.version,
+).length;
+assert.equal(cdx.components.length, lockedPackageCount + models.models.length);
+assert.equal(spdx.packages.length, lockedPackageCount + models.models.length);
 const componentRefs = cdx.components.map((component) => component["bom-ref"]);
 assert.equal(new Set(componentRefs).size, componentRefs.length, "CycloneDX component bom-ref values must be unique");
 const componentRefSet = new Set(componentRefs);

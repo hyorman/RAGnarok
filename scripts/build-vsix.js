@@ -180,7 +180,7 @@ function copyToStaging(stagingDir) {
   }
 
   // Copy directories
-  const dirsToCopy = ["dist", "assets", "stubs"];
+  const dirsToCopy = ["dist", "assets"];
   for (const dir of dirsToCopy) {
     const src = path.join(ROOT, dir);
     if (fs.existsSync(src)) {
@@ -372,6 +372,7 @@ async function installNativeDeps(stagingDir, targetPlatform) {
     console.log(`  ✓ ${name} installed from verified lockfile artifact`);
   }
   verifyNativePackages(nodeModules, targetPlatform, platformDeps);
+  verifySharpNativesMatchTransformers(nodeModules, targetPlatform);
 }
 
 function removePlatformRestrictions(packageDir) {
@@ -470,15 +471,65 @@ function verifyNativePackages(nodeModules, targetPlatform, expected) {
   if (expected.length !== PLATFORM_PACKAGE_CONFIGS.length) {
     throw new Error(`Expected ${PLATFORM_PACKAGE_CONFIGS.length} target native packages, resolved ${expected.length}`);
   }
+  // Count copies at every depth: a nested copy beside a root copy ships twice,
+  // and only one of them is the binary its consumer actually loads.
+  const nodeModulesDirectories = fs.existsSync(nodeModules) ? findNodeModulesDirectories(nodeModules) : [];
   for (const config of PLATFORM_PACKAGE_CONFIGS) {
-    const scopeDir = path.join(nodeModules, config.scope);
     const expectedBasename = expectedNativePackageName(config, targetPlatform).split("/")[1];
-    const matches = fs.existsSync(scopeDir) ? fs.readdirSync(scopeDir).filter((name) => name === expectedBasename) : [];
+    const matches = nodeModulesDirectories.filter((directory) =>
+      fs.existsSync(path.join(directory, config.scope, expectedBasename, "package.json")),
+    );
     if (matches.length !== config.expectedCount) {
       throw new Error(
         `${config.description}: expected ${config.expectedCount} ${targetPlatform.target} package, found ${matches.length}`,
       );
     }
+  }
+}
+
+/** Node's lookup for `name` from inside `fromDir`: the nearest ancestor node_modules that has it. */
+function resolvePackageDir(fromDir, name) {
+  for (let directory = fromDir; ; directory = path.dirname(directory)) {
+    const candidate = path.join(directory, "node_modules", ...name.split("/"));
+    if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
+    if (path.dirname(directory) === directory) return null;
+  }
+}
+
+function readPackageJson(packageDir) {
+  return JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
+}
+
+function resolveTransformersDependency(nodeModules, name) {
+  const transformersDir = path.join(nodeModules, "@huggingface", "transformers");
+  if (!fs.existsSync(path.join(transformersDir, "package.json"))) {
+    throw new Error("@huggingface/transformers is missing from the staged node_modules");
+  }
+  const packageDir = resolvePackageDir(transformersDir, name);
+  if (!packageDir) throw new Error(`${name} does not resolve from @huggingface/transformers`);
+  return packageDir;
+}
+
+/**
+ * The Sharp binaries must be the ones Transformers' own Sharp resolves, at the
+ * exact versions that Sharp (and its platform package) declare. Windows Sharp
+ * packages carry libvips inside themselves, so nothing declares the Windows
+ * libvips package and only its presence is checked.
+ */
+function verifySharpNativesMatchTransformers(nodeModules, targetPlatform) {
+  const sharpDir = resolveTransformersDependency(nodeModules, "sharp");
+  let resolverDir = sharpDir;
+  for (const config of PLATFORM_PACKAGE_CONFIGS.filter((item) => item.scope === "@img")) {
+    const name = expectedNativePackageName(config, targetPlatform);
+    const declared = readPackageJson(resolverDir).optionalDependencies?.[name];
+    const nativeDir = resolvePackageDir(resolverDir, name);
+    if (!nativeDir) throw new Error(`${name} does not resolve from ${path.relative(nodeModules, resolverDir)}`);
+    const installed = readPackageJson(nativeDir).version;
+    if (declared && installed !== declared) {
+      throw new Error(`${name}@${installed} does not match the ${declared} that the loaded Sharp declares`);
+    }
+    console.log(`  ✓ ${name}@${installed} is the copy Transformers' Sharp loads`);
+    resolverDir = nativeDir;
   }
 }
 
@@ -510,10 +561,12 @@ function pruneBloat(stagingDir, targetPlatform) {
 
   // Remove non-target onnxruntime-node platform binaries
   pruneOnnxruntimeNode(nm, targetPlatform);
+  pruneOnnxruntimeWeb(nm);
   prunePlatformNativePackages(nm, targetPlatform);
   removeMcpWorkspace(stagingDir);
   removeGraphUiWorkspace(stagingDir);
   relaxUnmetPeerDependencies(nm);
+  dropOptionalPeersOnRootDependencies(stagingDir);
 
   // Remove HuggingFace model cache (shouldn't exist in clean install, but just in case)
   const hfCache = path.join(nm, "@huggingface", "transformers", ".cache");
@@ -637,33 +690,60 @@ function findNodeModulesDirectories(rootNodeModules) {
 }
 
 function pruneOnnxruntimeNode(nm, targetPlatform) {
-  const napiDir = path.join(nm, "@huggingface", "transformers", "node_modules", "onnxruntime-node", "bin", "napi-v3");
-  if (!fs.existsSync(napiDir)) return;
+  const binDir = path.join(resolveTransformersDependency(nm, "onnxruntime-node"), "bin");
+  const napiDirs = fs.existsSync(binDir)
+    ? fs
+        .readdirSync(binDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^napi-v\d+$/.test(entry.name))
+        .map((entry) => path.join(binDir, entry.name))
+    : [];
 
-  for (const platformDir of fs.readdirSync(napiDir)) {
-    const platformPath = path.join(napiDir, platformDir);
-    if (!fs.statSync(platformPath).isDirectory()) continue;
+  for (const napiDir of napiDirs) {
+    for (const platformDir of fs.readdirSync(napiDir)) {
+      const platformPath = path.join(napiDir, platformDir);
+      if (!fs.statSync(platformPath).isDirectory()) continue;
 
-    for (const archDir of fs.readdirSync(platformPath)) {
-      const archPath = path.join(platformPath, archDir);
-      if (!fs.statSync(archPath).isDirectory()) continue;
+      for (const archDir of fs.readdirSync(platformPath)) {
+        const archPath = path.join(platformPath, archDir);
+        if (!fs.statSync(archPath).isDirectory()) continue;
 
-      if (platformDir === targetPlatform.platform && archDir === targetPlatform.arch) {
-        console.log(`  Keeping onnxruntime-node ${platformDir}/${archDir}`);
-        continue;
+        if (platformDir === targetPlatform.platform && archDir === targetPlatform.arch) {
+          console.log(`  Keeping onnxruntime-node ${path.basename(napiDir)}/${platformDir}/${archDir}`);
+          continue;
+        }
+        fs.rmSync(archPath, { recursive: true, force: true });
       }
-      fs.rmSync(archPath, { recursive: true, force: true });
-    }
 
-    // Remove empty platform dir
-    try {
-      if (fs.readdirSync(platformPath).length === 0) {
-        fs.rmSync(platformPath, { recursive: true, force: true });
+      // Remove empty platform dir
+      try {
+        if (fs.readdirSync(platformPath).length === 0) {
+          fs.rmSync(platformPath, { recursive: true, force: true });
+        }
+      } catch (_) {
+        /* ignore */
       }
-    } catch (_) {
-      /* ignore */
     }
   }
+
+  // onnxruntime-node loads bin/napi-v*/<platform>/<arch>/onnxruntime_binding.node
+  // with no fallback. A target it does not ship must fail the build, not ship a
+  // VSIX whose local embeddings cannot start.
+  const bindings = napiDirs.filter((napiDir) =>
+    fs.existsSync(path.join(napiDir, targetPlatform.platform, targetPlatform.arch, "onnxruntime_binding.node")),
+  );
+  if (bindings.length !== 1) {
+    throw new Error(`onnxruntime-node: expected 1 ${targetPlatform.target} binding, found ${bindings.length}`);
+  }
+}
+
+/**
+ * Transformers 4 bundles the onnxruntime-web build it needs into its own dist
+ * and never resolves the onnxruntime-web package in Node. Keep the manifest so
+ * vsce's `npm list` stays satisfied, drop the unused WASM/WebGPU payload.
+ */
+function pruneOnnxruntimeWeb(nm) {
+  const onnxruntimeWebDir = resolveTransformersDependency(nm, "onnxruntime-web");
+  if (gutPackage(onnxruntimeWebDir) > 0) console.log("  ✓ Gutted unused onnxruntime-web (bundled into Transformers)");
 }
 
 function findFiles(dir, ext) {
@@ -708,6 +788,7 @@ function removeMcpWorkspace(stagingDir) {
 
   const dir = path.join(stagingDir, workspacePath);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  removeWorkspaceLink(stagingDir, "@ragnarok/mcp-server");
 
   // npm hoists what it can, so the MCP-only packages may also sit at the root.
   // The extension loads none of them.
@@ -729,7 +810,55 @@ function removeGraphUiWorkspace(stagingDir) {
 
   const dir = path.join(stagingDir, workspacePath);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  removeWorkspaceLink(stagingDir, "@ragnarok/graph-ui");
   console.log("  ✓ Removed the private graph UI workspace from VSIX staging");
+}
+
+/**
+ * npm ci links every workspace into node_modules. Once a workspace directory is
+ * gone its link dangles, and vsce's `npm list --production` fails on it as an
+ * extraneous package. rmSync removes the link itself, never a target.
+ */
+function removeWorkspaceLink(stagingDir, packageName) {
+  fs.rmSync(path.join(stagingDir, "node_modules", ...packageName.split("/")), { recursive: true, force: true });
+}
+
+/**
+ * Drop optional peer declarations on packages the extension itself depends on
+ * directly, in the staged tree only.
+ *
+ * The root manifest decides which version of its own direct dependencies
+ * ships. A third party's optional peer range on the same package cannot change
+ * what is installed; it can only make vsce's `npm list --production` fail.
+ * @langchain/community declares `@huggingface/transformers ^3.8.1` as an
+ * optional peer for its Transformers.js embeddings, which this extension does
+ * not ship (pruneLangchainCommunityPackage keeps only the loaders, BM25 and
+ * LanceDB entrypoints), while the extension's own embeddings use 4.x.
+ */
+function dropOptionalPeersOnRootDependencies(stagingDir) {
+  const nodeModulesDir = path.join(stagingDir, "node_modules");
+  const rootDependencies = new Set(Object.keys(readPackageJson(stagingDir).dependencies ?? {}));
+  let dropped = 0;
+  for (const manifestPath of listTopLevelManifests(nodeModulesDir)) {
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    } catch {
+      continue; // A manifest we cannot read is not one we can repair.
+    }
+    let changed = false;
+    for (const peer of Object.keys(pkg.peerDependencies ?? {})) {
+      if (!pkg.peerDependenciesMeta?.[peer]?.optional || !rootDependencies.has(peer)) continue;
+      delete pkg.peerDependencies[peer];
+      delete pkg.peerDependenciesMeta[peer];
+      changed = true;
+      dropped += 1;
+    }
+    if (changed) fs.writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + "\n");
+  }
+  if (dropped > 0) {
+    console.log(`  ✓ Dropped ${dropped} optional peer declarations on the extension's own dependencies`);
+  }
 }
 
 /**
@@ -757,10 +886,9 @@ function removeGraphUiWorkspace(stagingDir) {
  * Deriving this from the tree rather than a hand-written list means a future
  * dependency with the same defect is handled without another fix here.
  */
-function relaxUnmetPeerDependencies(nodeModulesDir) {
-  if (!fs.existsSync(nodeModulesDir)) return;
-
+function listTopLevelManifests(nodeModulesDir) {
   const manifests = [];
+  if (!fs.existsSync(nodeModulesDir)) return manifests;
   for (const entry of fs.readdirSync(nodeModulesDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name === ".bin") continue;
     if (entry.name.startsWith("@")) {
@@ -772,9 +900,14 @@ function relaxUnmetPeerDependencies(nodeModulesDir) {
       manifests.push(path.join(nodeModulesDir, entry.name, "package.json"));
     }
   }
+  return manifests;
+}
+
+function relaxUnmetPeerDependencies(nodeModulesDir) {
+  if (!fs.existsSync(nodeModulesDir)) return;
 
   let relaxed = 0;
-  for (const manifestPath of manifests) {
+  for (const manifestPath of listTopLevelManifests(nodeModulesDir)) {
     if (!fs.existsSync(manifestPath)) continue;
     let pkg;
     try {

@@ -26,7 +26,6 @@ tsconfig*.json
 eslint.config.mjs
 .env
 .npmrc
-stubs/**
 
 # Dependencies - exclude all node_modules by default
 node_modules/**
