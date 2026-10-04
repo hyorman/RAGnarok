@@ -98,7 +98,12 @@ jobs:
       - run: npm ci
       - run: npm run compile
       - run: npm run compile:tests:all
+      # The suite takes about 3 minutes on Windows. A run that has not exited by 15
+      # has hung, and the report names the handles that kept it alive.
       - run: npm run test:core:compiled
+        timeout-minutes: 15
+        env:
+          RAGNAROK_REPORT_ACTIVE_RESOURCES: "1"
       - run: npm run test:mcp:compiled
       - run: npm run test:shutdown-soak
 

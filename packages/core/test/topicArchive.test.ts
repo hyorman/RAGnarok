@@ -307,6 +307,9 @@ describe("topic archive safety", function () {
     const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
     const symlinkZip = new AdmZip();
     const topicEntry = symlinkZip.addFile("topic.json", topicBytes);
+    // adm-zip stamps "version made by" with the host OS (Windows = 10), and only
+    // Unix-made entries carry a file type in their high attribute bits.
+    topicEntry.header.made = (3 << 8) | 20;
     topicEntry.attr = ((0xa000 | 0o777) << 16) >>> 0;
     symlinkZip.addFile(
       "manifest.json",
@@ -333,6 +336,27 @@ describe("topic archive safety", function () {
     expect((await captureError(() => validateAndStageTopicArchive(archivePath, stagingDir))).message).to.include(
       "excessive compression ratio",
     );
+  });
+
+  it("reads no file type from the attribute bits of an archive not made on Unix", async function () {
+    const topicBytes = Buffer.from(JSON.stringify(exportedTopic()));
+    const windowsZip = new AdmZip();
+    const topicEntry = windowsZip.addFile("topic.json", topicBytes);
+    // DOS/NTFS archives carry no Unix type, so the same bits that mark a Unix symlink mean nothing here.
+    topicEntry.header.made = (10 << 8) | 20;
+    topicEntry.attr = ((0xa000 | 0o777) << 16) >>> 0;
+    windowsZip.addFile(
+      "manifest.json",
+      Buffer.from(
+        JSON.stringify({
+          formatVersion: TOPIC_ARCHIVE_FORMAT_VERSION,
+          files: [manifestFile("topic.json", topicBytes)],
+        }),
+      ),
+    );
+    windowsZip.writeZip(archivePath);
+
+    await validateAndStageTopicArchive(archivePath, stagingDir);
   });
 
   it("schema-validates topic and vector metadata", async function () {

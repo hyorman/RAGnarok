@@ -1666,6 +1666,12 @@ assert.deepEqual(
   workflowDocument.jobs["vsix-installed"].strategy.matrix.include.map((entry) => entry.target).sort(),
   supportedVsixTargets,
 );
+// A core suite that never exits (the Windows hang) must fail in minutes, not at the 45-minute job
+// limit, and must name what kept it alive.
+const coreSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:core:compiled");
+assert.equal(coreSuiteStep?.["timeout-minutes"], 15);
+assert.equal(coreSuiteStep?.env?.RAGNAROK_REPORT_ACTIVE_RESOURCES, "1");
+assert.match(await read("packages/core/test/setup.ts"), /export const mochaHooks/);
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
