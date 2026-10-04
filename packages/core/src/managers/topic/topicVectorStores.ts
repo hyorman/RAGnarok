@@ -11,7 +11,7 @@ import type { TopicStorePaths } from "./topicStorePaths";
 export interface TopicVectorStoreHost {
   vectorStoreFactory: VectorStoreFactory | null;
   logger: Logger;
-  paths: TopicStorePaths;
+  paths: Pick<TopicStorePaths, "databaseDir">;
   getTopicStoreDir(topicId: string): string | undefined;
   ensureEmbeddingModelCompatibility(topicId: string): Promise<void>;
 }

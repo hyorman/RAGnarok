@@ -8,7 +8,10 @@ export const STORAGE_FORMAT_FILENAME = "storage-format.json";
 export const STORAGE_CONFIG_FILENAME = "config.json";
 /** Marks an in-flight `resetStorage` so a crash mid-reset fails closed instead of reading as unversioned data. */
 export const STORAGE_RESET_JOURNAL_FILENAME = ".ragnarok-reset.journal";
-/** Derived unpacks of shared `.rag` archives: infrastructure, so it neither makes an empty store read as unsupported nor gets backed up by a reset. */
+/**
+ * Derived unpacks of shared `.rag` archives. Infrastructure, not data: it neither makes an
+ * empty store read as unsupported nor gets backed up by a reset.
+ */
 export const SHARED_TOPIC_CACHE_DIRNAME = ".ragnarok-shared-cache";
 
 export class StorageFormatVersionError extends Error {

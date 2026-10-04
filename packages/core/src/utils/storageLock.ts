@@ -405,7 +405,10 @@ type AcquireAttemptResult =
   | { status: "retry" } // vanished/raced with a reclaimer — retry immediately, counts toward the churn budget
   | { status: "busy"; holder: LockFileInfo | null }; // a live foreign holder currently owns the lease
 
-/** One attempt at acquiring `lockPath`: create it, reclaim an abandoned or released holder, or report a live one as busy. Never waits. */
+/**
+ * One attempt at acquiring `lockPath`: create it, reclaim an abandoned or released holder,
+ * or report a live one as busy. Never waits.
+ */
 async function tryAcquireOnce(lockPath: string, staleMs: number, heartbeatMs: number): Promise<AcquireAttemptResult> {
   try {
     const handle = await fs.open(lockPath, "wx", 0o600);
@@ -473,8 +476,8 @@ async function acquireFileLock(
   options: OperationLeaseOptions,
   wait: WaitPolicy,
 ): Promise<InternalLock> {
-  const staleMs = options?.staleMs ?? DEFAULT_STALE_MS;
-  const heartbeatMs = options?.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const staleMs = options.staleMs ?? DEFAULT_STALE_MS;
+  const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const lockPath = path.join(storageDir, STORAGE_LOCK_FILENAME);
   await fs.mkdir(storageDir, { recursive: true });
 

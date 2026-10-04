@@ -1570,14 +1570,14 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
   /**
    * Export a topic to a .rag archive file (ZIP format with DEFLATE compression)
    */
-  public exportTopic(...args: Parameters<TopicArchiveTransfer["exportTopic"]>) {
+  public exportTopic(...args: Parameters<TopicArchiveTransfer["exportTopic"]>): Promise<void> {
     return this.archiveTransfer.exportTopic(...args);
   }
 
   /**
    * Import a topic from a .rag archive file
    */
-  public importTopic(...args: Parameters<TopicArchiveTransfer["importTopic"]>) {
+  public importTopic(...args: Parameters<TopicArchiveTransfer["importTopic"]>): Promise<Topic> {
     return this.archiveTransfer.importTopic(...args);
   }
 
