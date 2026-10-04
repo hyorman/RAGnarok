@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,6 +50,46 @@ for (const relative of canonical) {
   const contents = await readFile(path.join(root, relative), "utf8");
   assert.doesNotMatch(contents, /migrat/i, `${relative} still describes the removed storage migration`);
   assert.doesNotMatch(contents, /storage conversion/i, `${relative} still describes storage conversion`);
+}
+
+// A `file.ts:N` citation rots the first time the file is split, so each one
+// must name a source file that exists and a line the file still has. Prefer
+// citing the symbol; this only catches the references that remain.
+async function sourceFilesByBasename() {
+  const byName = new Map();
+  const walk = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolute);
+      } else if (entry.name.endsWith(".ts")) {
+        byName.set(entry.name, [...(byName.get(entry.name) ?? []), absolute]);
+      }
+    }
+  };
+  for (const pkg of await readdir(path.join(root, "packages"), { withFileTypes: true })) {
+    if (!pkg.isDirectory()) continue;
+    await walk(path.join(root, "packages", pkg.name, "src")).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
+  return byName;
+}
+const sourceFiles = await sourceFilesByBasename();
+for (const relative of canonical) {
+  const contents = await readFile(path.join(root, relative), "utf8");
+  for (const match of contents.matchAll(/\b([A-Za-z0-9_-]+\.ts):(\d+)(?:-(\d+))?/g)) {
+    const [reference, basename, first, last] = match;
+    const candidates = sourceFiles.get(basename) ?? [];
+    assert.ok(candidates.length > 0, `${relative}: ${reference} names no source file under packages/*/src`);
+    const highest = Math.max(Number(first), Number(last ?? first));
+    let fits = false;
+    for (const candidate of candidates) {
+      const lineCount = (await readFile(candidate, "utf8")).split("\n").length;
+      fits ||= highest <= lineCount;
+    }
+    assert.ok(fits, `${relative}: ${reference} is past the end of ${basename}; cite the symbol instead`);
+  }
 }
 
 const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "utf8");
@@ -161,8 +201,14 @@ for (const [pattern, why] of [
 // The root README is a user guide. Contract detail lives in the package guides
 // and ARCHITECTURE.md; these phrases only appeared in duplicated detail.
 for (const [pattern, why] of [
-  [/Type-Safe|Comprehensive Logging|Rich Icons|like SQLite for vectors/, "feature list items that describe nothing a user can do"],
-  [/GRAPH_VISUALIZATION_RECORD_TOO_LARGE|text\/html;profile=mcp-app/, "memory-graph contract detail belongs in the MCP guide"],
+  [
+    /Type-Safe|Comprehensive Logging|Rich Icons|like SQLite for vectors/,
+    "feature list items that describe nothing a user can do",
+  ],
+  [
+    /GRAPH_VISUALIZATION_RECORD_TOO_LARGE|text\/html;profile=mcp-app/,
+    "memory-graph contract detail belongs in the MCP guide",
+  ],
   [/truthful by construction/, "release-evidence policy belongs in docs/RELEASE.md"],
   [/Cacheable discovery,\s+list, and resource-read results/, "MCP protocol detail belongs in the MCP guide"],
 ]) {
@@ -183,7 +229,11 @@ for (const [name, contents] of [
 assert.match(release, /media\/memoryGraph\.js/);
 assert.match(release, /media\/memoryGraph\.css/);
 const copilotInstructions = await readFile(path.join(root, ".github/copilot-instructions.md"), "utf8");
-assert.doesNotMatch(copilotInstructions, /\brtk\b/, "Copilot instructions must describe this project, not a personal CLI wrapper");
+assert.doesNotMatch(
+  copilotInstructions,
+  /\brtk\b/,
+  "Copilot instructions must describe this project, not a personal CLI wrapper",
+);
 assert.match(copilotInstructions, /npm run test:fast/, "Copilot instructions must name the project's test command");
 assert.doesNotMatch(architecture, /v0\.7 implementation/, "ARCHITECTURE.md must not claim a version");
 assert.doesNotMatch(mcp, /removed-variable rejection/, "MCP guide lists a function that does not exist");
