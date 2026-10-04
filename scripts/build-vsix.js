@@ -302,8 +302,23 @@ function targetNpmPlatform(platform) {
 const PLATFORM_PACKAGE_CONFIGS = [
   { scope: "@lancedb", prefix: "lancedb-", description: "LanceDB", expectedCount: 1 },
   { scope: "@img", prefix: "sharp-", description: "Sharp", expectedCount: 1 },
-  { scope: "@img", prefix: "sharp-libvips-", description: "Sharp libvips", expectedCount: 1 },
+  // The Windows Sharp packages carry libvips-42.dll themselves and Sharp
+  // declares no Windows libvips package, so a Windows VSIX ships none.
+  {
+    scope: "@img",
+    prefix: "sharp-libvips-",
+    description: "Sharp libvips",
+    expectedCount: 1,
+    platforms: ["darwin", "linux"],
+  },
 ];
+
+/** The native package configs that ship in this target's VSIX. */
+function nativePackageConfigsFor(targetPlatform) {
+  return PLATFORM_PACKAGE_CONFIGS.filter(
+    (config) => !config.platforms || config.platforms.includes(targetPlatform.platform),
+  );
+}
 
 function getNativePackageConfig(packageName) {
   const [scope, name, ...extra] = packageName.split("/");
@@ -342,7 +357,7 @@ async function installNativeDeps(stagingDir, targetPlatform) {
     ...(rootPkg.dependencies || {}),
     ...(rootPkg.optionalDependencies || {}),
   };
-  const platformDeps = PLATFORM_PACKAGE_CONFIGS.map((config) => {
+  const platformDeps = nativePackageConfigsFor(targetPlatform).map((config) => {
     const name = expectedNativePackageName(config, targetPlatform);
     const version = declaredDependencies[name];
     if (!version) {
@@ -468,20 +483,23 @@ function assertSafeArchiveMember(member) {
 }
 
 function verifyNativePackages(nodeModules, targetPlatform, expected) {
-  if (expected.length !== PLATFORM_PACKAGE_CONFIGS.length) {
-    throw new Error(`Expected ${PLATFORM_PACKAGE_CONFIGS.length} target native packages, resolved ${expected.length}`);
+  const shipped = nativePackageConfigsFor(targetPlatform);
+  if (expected.length !== shipped.length) {
+    throw new Error(`Expected ${shipped.length} target native packages, resolved ${expected.length}`);
   }
   // Count copies at every depth: a nested copy beside a root copy ships twice,
-  // and only one of them is the binary its consumer actually loads.
+  // and only one of them is the binary its consumer actually loads. A config
+  // that does not ship for this target must have no copy left at all.
   const nodeModulesDirectories = fs.existsSync(nodeModules) ? findNodeModulesDirectories(nodeModules) : [];
   for (const config of PLATFORM_PACKAGE_CONFIGS) {
+    const expectedCount = shipped.includes(config) ? config.expectedCount : 0;
     const expectedBasename = expectedNativePackageName(config, targetPlatform).split("/")[1];
     const matches = nodeModulesDirectories.filter((directory) =>
       fs.existsSync(path.join(directory, config.scope, expectedBasename, "package.json")),
     );
-    if (matches.length !== config.expectedCount) {
+    if (matches.length !== expectedCount) {
       throw new Error(
-        `${config.description}: expected ${config.expectedCount} ${targetPlatform.target} package, found ${matches.length}`,
+        `${config.description}: expected ${expectedCount} ${targetPlatform.target} package, found ${matches.length}`,
       );
     }
   }
@@ -512,20 +530,21 @@ function resolveTransformersDependency(nodeModules, name) {
 
 /**
  * The Sharp binaries must be the ones Transformers' own Sharp resolves, at the
- * exact versions that Sharp (and its platform package) declare. Windows Sharp
- * packages carry libvips inside themselves, so nothing declares the Windows
- * libvips package and only its presence is checked.
+ * exact versions that Sharp (and its platform package) declare. Every package
+ * checked here is declared by the one before it: Sharp declares its platform
+ * package, and the darwin and linux platform packages declare their libvips.
  */
 function verifySharpNativesMatchTransformers(nodeModules, targetPlatform) {
   const sharpDir = resolveTransformersDependency(nodeModules, "sharp");
   let resolverDir = sharpDir;
-  for (const config of PLATFORM_PACKAGE_CONFIGS.filter((item) => item.scope === "@img")) {
+  for (const config of nativePackageConfigsFor(targetPlatform).filter((item) => item.scope === "@img")) {
     const name = expectedNativePackageName(config, targetPlatform);
     const declared = readPackageJson(resolverDir).optionalDependencies?.[name];
+    if (!declared) throw new Error(`${path.relative(nodeModules, resolverDir)} does not declare ${name}`);
     const nativeDir = resolvePackageDir(resolverDir, name);
     if (!nativeDir) throw new Error(`${name} does not resolve from ${path.relative(nodeModules, resolverDir)}`);
     const installed = readPackageJson(nativeDir).version;
-    if (declared && installed !== declared) {
+    if (installed !== declared) {
       throw new Error(`${name}@${installed} does not match the ${declared} that the loaded Sharp declares`);
     }
     console.log(`  ✓ ${name}@${installed} is the copy Transformers' Sharp loads`);
@@ -657,14 +676,16 @@ function prunePlatformNativePackages(rootNodeModules, targetPlatform) {
     for (const config of PLATFORM_PACKAGE_CONFIGS) {
       const scopeDir = path.join(nodeModules, config.scope);
       if (!fs.existsSync(scopeDir)) continue;
-      const expectedBasename = expectedNativePackageName(config, targetPlatform).split("/")[1];
+      const keep = nativePackageConfigsFor(targetPlatform).includes(config)
+        ? expectedNativePackageName(config, targetPlatform).split("/")[1]
+        : null;
       for (const name of fs.readdirSync(scopeDir)) {
         if (getNativePackageConfig(`${config.scope}/${name}`) !== config) continue;
         // Retain target copies at every dependency depth. Packages such as the
         // Sharp instance nested under Transformers resolve their optional
         // @img binary relative to that package; VSCE does not reliably retain
         // an unrelated root optional package as a substitute.
-        if (name === expectedBasename) continue;
+        if (name === keep) continue;
         fs.rmSync(path.join(scopeDir, name), { recursive: true, force: true });
         removed++;
       }
@@ -1150,9 +1171,11 @@ if (require.main === module) {
     expectedNativePackageName,
     getNativePackageConfig,
     matchesTargetPlatform,
+    nativePackageConfigsFor,
     prunePlatformNativePackages,
     removeGraphUiWorkspace,
     verifyIntegrity,
     verifyNativePackages,
+    verifySharpNativesMatchTransformers,
   };
 }

@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:40996165-938b-48de-a186-5ab917e92b52",
+  "serialNumber": "urn:uuid:c90529ac-cdec-44ae-ab57-7a987ec6d190",
   "version": 1,
   "metadata": {
     "component": { "type": "application", "name": "ragnarok", "version": "0.4.1" },
@@ -2439,50 +2439,6 @@
           "value": "node_modules/@huggingface/transformers/node_modules/@img/sharp-libvips-linuxmusl-x64"
         }
       ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40img%2Fsharp-libvips-win32-arm64",
-      "name": "@img/sharp-libvips-win32-arm64",
-      "version": "1.3.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-win32-arm64@1.3.4",
-      "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "8d3292be00ab60063dfc34e3e15aa2c7c1f0ca9548a02770ef3f6439118c4955b1586d0b6a842830841a1ced1df38b3900b8ca4b88b71520e275c44029f8161d"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-win32-arm64/-/sharp-libvips-win32-arm64-1.3.4.tgz"
-        }
-      ],
-      "properties": [
-        { "name": "ragnarok:package-lock:location", "value": "node_modules/@img/sharp-libvips-win32-arm64" }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "urn:ragnarok:package-lock:node_modules%2F%40img%2Fsharp-libvips-win32-x64",
-      "name": "@img/sharp-libvips-win32-x64",
-      "version": "1.3.4",
-      "purl": "pkg:npm/%40img/sharp-libvips-win32-x64@1.3.4",
-      "licenses": [{ "license": { "id": "LGPL-3.0-or-later" } }],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "eeaea543a3b6e981cf2c97c5ee4329b84e59074621b7cf7c1579581140422e07347df98bbc9a59fe362ad45ca34d10839a073fb7b1984324847c6821efe6fc54"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@img/sharp-libvips-win32-x64/-/sharp-libvips-win32-x64-1.3.4.tgz"
-        }
-      ],
-      "properties": [{ "name": "ragnarok:package-lock:location", "value": "node_modules/@img/sharp-libvips-win32-x64" }]
     },
     {
       "type": "library",

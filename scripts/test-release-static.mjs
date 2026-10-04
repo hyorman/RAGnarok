@@ -1230,12 +1230,90 @@ assert.throws(
   () =>
     packaging.verifyNativePackages(
       emptyNodeModules,
-      { target: "linux-x64", patterns: ["linux-x64", "linux-x64-gnu"] },
+      { platform: "linux", target: "linux-x64", patterns: ["linux-x64", "linux-x64-gnu"] },
       [{}, {}, {}],
     ),
   /expected 1/,
 );
 await rm(emptyNodeModules, { recursive: true, force: true });
+// Fixture helpers for the native-package guards. A staged tree is <staging>/node_modules:
+// Transformers' own Sharp sits nested under it and the target platform packages at its root.
+async function writePackage(nodeModules, name, manifest = {}) {
+  const directory = path.join(nodeModules, ...name.split("/"));
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "package.json"), JSON.stringify({ name, ...manifest }));
+  return directory;
+}
+async function sharpFixture({ platformVersion = "0.35.5", libvipsVersion = "1.3.4", declareLibvips = true } = {}) {
+  const nodeModules = path.join(await mkdtemp(path.join(os.tmpdir(), "ragnarok-sharp-natives-")), "node_modules");
+  await writePackage(nodeModules, "@huggingface/transformers", { version: "4.3.0" });
+  await writePackage(path.join(nodeModules, "@huggingface", "transformers", "node_modules"), "sharp", {
+    version: "0.35.5",
+    optionalDependencies: { "@img/sharp-linux-x64": "0.35.5", "@img/sharp-win32-x64": "0.35.5" },
+  });
+  await writePackage(nodeModules, "@img/sharp-linux-x64", {
+    version: platformVersion,
+    ...(declareLibvips ? { optionalDependencies: { "@img/sharp-libvips-linux-x64": "1.3.4" } } : {}),
+  });
+  await writePackage(nodeModules, "@img/sharp-libvips-linux-x64", { version: libvipsVersion });
+  return nodeModules;
+}
+const linuxX64Target = { platform: "linux", arch: "x64", target: "linux-x64" };
+const win32X64Target = { platform: "win32", arch: "x64", target: "win32-x64" };
+
+// The Windows Sharp packages carry libvips-42.dll themselves and Sharp declares no Windows
+// libvips package, so a Windows VSIX ships none and the root manifest installs none.
+assert.deepEqual(
+  packaging.nativePackageConfigsFor(win32X64Target).map((config) => config.description),
+  ["LanceDB", "Sharp"],
+);
+assert.deepEqual(
+  packaging.nativePackageConfigsFor(linuxX64Target).map((config) => config.description),
+  ["LanceDB", "Sharp", "Sharp libvips"],
+);
+assert.deepEqual(
+  Object.keys(pkg.optionalDependencies).filter((name) => name.startsWith("@img/sharp-libvips-win32-")),
+  [],
+  "No Windows libvips package may be installed for a VSIX",
+);
+assert.deepEqual(
+  Object.keys(JSON.parse(await read("package-lock.json")).packages).filter((location) =>
+    location.includes("@img/sharp-libvips-win32-"),
+  ),
+  [],
+);
+const win32NativeTree = await mkdtemp(path.join(os.tmpdir(), "ragnarok-native-win32-"));
+for (const name of [
+  "@lancedb/lancedb-win32-x64-msvc",
+  "@img/sharp-win32-x64",
+  "@img/sharp-libvips-win32-x64",
+  "@img/sharp-libvips-win32-arm64",
+]) {
+  await writePackage(win32NativeTree, name);
+}
+assert.throws(
+  () => packaging.verifyNativePackages(win32NativeTree, win32X64Target, [{}, {}]),
+  /Sharp libvips: expected 0 win32-x64 package, found 1/,
+);
+packaging.prunePlatformNativePackages(win32NativeTree, win32X64Target);
+await readFile(path.join(win32NativeTree, "@img", "sharp-win32-x64", "package.json"));
+await assert.rejects(readFile(path.join(win32NativeTree, "@img", "sharp-libvips-win32-x64", "package.json")));
+await assert.rejects(readFile(path.join(win32NativeTree, "@img", "sharp-libvips-win32-arm64", "package.json")));
+packaging.verifyNativePackages(win32NativeTree, win32X64Target, [{}, {}]);
+await rm(win32NativeTree, { recursive: true, force: true });
+// Transformers' Sharp declares the Windows platform package and nothing past it.
+const windowsSharpTree = await sharpFixture();
+await writePackage(windowsSharpTree, "@img/sharp-win32-x64", { version: "0.35.5" });
+packaging.verifySharpNativesMatchTransformers(windowsSharpTree, win32X64Target);
+await rm(path.dirname(windowsSharpTree), { recursive: true, force: true });
+// Every Sharp native that ships is declared by the package before it in the chain; an
+// undeclared one is not what Sharp loads, so the build must not accept it on presence alone.
+const undeclaredLibvipsTree = await sharpFixture({ declareLibvips: false });
+assert.throws(
+  () => packaging.verifySharpNativesMatchTransformers(undeclaredLibvipsTree, linuxX64Target),
+  /@img[\\/]sharp-linux-x64 does not declare @img\/sharp-libvips-linux-x64/,
+);
+await rm(path.dirname(undeclaredLibvipsTree), { recursive: true, force: true });
 
 const dockerfile = await read("packages/mcp-server/Dockerfile");
 const dockerignore = await read(".dockerignore");
