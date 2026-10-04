@@ -901,7 +901,7 @@ for (const [name, evidence] of Object.entries(policy.budgetEvidence)) {
 }
 // Artifact sizes move with Transformers (its natives, ONNX Runtime and Sharp ship inside them):
 // evidence measured on another Transformers version is stale.
-for (const name of ["coreTarball", "mcpTarball", "vsix"]) {
+for (const name of ["coreTarball", "mcpTarball", "vsix", "dockerImage"]) {
   assert.equal(
     policy.budgetEvidence[name].transformers,
     pkg.dependencies["@huggingface/transformers"],
@@ -913,6 +913,9 @@ assert.ok(policy.budgetEvidence.mcpTarball.bytes <= policy.budgets.mcpTarballCom
 assert.ok(policy.budgetEvidence.vsix.maximumCompressedBytes <= policy.budgets.vsixCompressedBytes);
 assert.ok(policy.budgetEvidence.vsix.maximumUnpackedBytes <= policy.budgets.vsixUnpackedBytes);
 assert.ok(policy.vsixTargets.includes(policy.budgetEvidence.vsix.maximumTarget));
+assert.ok(policy.budgetEvidence.dockerImage.bytes <= policy.budgets.dockerImageBytes);
+// The release image is built and published from the amd64 CI runner.
+assert.equal(policy.budgetEvidence.dockerImage.architecture, "amd64");
 for (const [name, command] of Object.entries(pkg.scripts).filter(([name]) => name.startsWith("publish:"))) {
   assert.doesNotMatch(command, /build-vsix|npm pack|docker build/, `${name} must publish prebuilt manifest artifacts`);
 }

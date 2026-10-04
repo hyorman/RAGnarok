@@ -38,9 +38,10 @@
     },
     "dockerImage": {
       "measured": true,
-      "bytes": 324193033,
-      "architecture": "arm64",
-      "manifestDigest": "sha256:5c0cdb8cda9a54566fcff3c88133d19de624723fe3d45fc395d8e20780bde9b6",
+      "bytes": 320948101,
+      "architecture": "amd64",
+      "manifestDigest": "sha256:de512c6d38167935141d85795b3865167ed285b0e7c71fab202f3df658d17538",
+      "transformers": "4.3.0",
       "command": "docker image inspect ragnarok-mcp:ci --format '{{.Size}}'"
     }
   },
