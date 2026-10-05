@@ -5,6 +5,7 @@
 
 import { expect } from "chai";
 import { QueryPlannerAgent } from "../src/index";
+import type { ILLMModel, ILLMProvider } from "../src/index";
 import { mockLLMProvider, defaultPlannerOptions } from "./helpers/testDefaults";
 
 describe("QueryPlannerAgent", function () {
@@ -170,6 +171,40 @@ describe("QueryPlannerAgent", function () {
       expect(plan.complexity).to.be.oneOf(["simple", "moderate", "complex"]);
       expect(plan.subQueries).to.be.an("array");
       expect(plan.subQueries.length).to.be.greaterThan(0);
+    });
+
+    it("uses an LLM plan the model wrapped in a one-element array", async function () {
+      const reply = JSON.stringify([
+        {
+          originalQuery: "What is machine learning?",
+          complexity: "moderate",
+          subQueries: [{ query: "machine learning definition", reasoning: "core concept" }],
+          explanation: "llm plan",
+        },
+      ]);
+      const provider: ILLMProvider = {
+        isAvailable: async () => true,
+        selectModel: async () =>
+          ({
+            id: "fake",
+            family: "fake",
+            async sendRequest() {
+              return (async function* () {
+                yield reply;
+              })();
+            },
+          }) as unknown as ILLMModel,
+      };
+      const plan = await new QueryPlannerAgent(provider).createPlan(
+        "What is machine learning?",
+        defaultPlannerOptions(),
+      );
+
+      // The heuristic plan would search the original query and explain itself differently.
+      expect(plan.explanation).to.equal("llm plan");
+      expect(plan.subQueries.map((subQuery) => subQuery.query)).to.deep.equal(["machine learning definition"]);
+      expect(plan.subQueries[0].topK).to.equal(5);
+      expect(plan._heuristicFallback).to.equal(false);
     });
   });
 

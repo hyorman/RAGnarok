@@ -1092,6 +1092,7 @@ describe("RAGAgent", function () {
 
       // The heuristic fallback would broaden "Python basics" instead.
       expect(followUp!.subQueries.map((sq) => sq.query)).to.deep.equal(["python decorators"]);
+      expect(followUp!._heuristicFallback).to.not.equal(true);
     });
   });
 
