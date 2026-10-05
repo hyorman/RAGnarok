@@ -239,6 +239,17 @@ const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "ut
 assert.doesNotMatch(mcp, /Existing branch-era storage .* intentionally not migrated/);
 // The stdio server has no roles, so the guide must not resurrect a role matrix.
 assert.doesNotMatch(mcp, /Shared reader|Shared curator|Shared admin/);
+
+// retrieval.topK refuses startup above core's TOP_K_MAX, so the guide states that bound.
+const topKMax = /export const TOP_K_MAX = (\d+);/.exec(
+  await readFile(path.join(root, "packages/core/src/constants.ts"), "utf8"),
+)?.[1];
+assert.ok(topKMax, "core constants must define TOP_K_MAX");
+assert.match(
+  mcp,
+  new RegExp(`\\| \`retrieval\\.topK\` +\\|[^|]*\\|[^|]*\\(1–${topKMax}\\)`),
+  `the retrieval.topK row must state its 1–${topKMax} range`,
+);
 // The settings that moved into config.json must be documented by their key.
 // Asserting on the old variable names would pin the guide to a configuration
 // mechanism the server no longer has.

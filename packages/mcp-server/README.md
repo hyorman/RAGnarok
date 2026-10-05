@@ -267,7 +267,7 @@ environment variable for any of them.
 | `embedding.maxResidentModels`   | `2`                             | Maximum embedding models held in memory at once (minimum `1`)                                                                     |
 | `ingestion.chunkSize`           | `1000`                          | Document chunk size (characters)                                                                                                  |
 | `ingestion.chunkOverlap`        | `200`                           | Overlap between chunks                                                                                                            |
-| `retrieval.topK`                | `10`                            | Default number of results per query                                                                                               |
+| `retrieval.topK`                | `10`                            | Default number of results per query (1–20)                                                                                        |
 | `retrieval.strategy`            | `hybrid`                        | Default retrieval strategy                                                                                                        |
 | `retrieval.maxIterations`       | `3`                             | Max agentic refinement iterations                                                                                                 |
 | `retrieval.confidenceThreshold` | `0.7`                           | Confidence threshold for early stopping                                                                                           |
