@@ -503,7 +503,9 @@ describe("TopicManager durable expanded-source ingestion", function () {
 
     await (manager as any).journals.recoverPostCommitCleanup();
 
-    // The flag once made a chunkless removal sweep every document nested under the URL.
+    // The entry's own cleanup ran, for its one document and nothing else: the flag once made a chunkless
+    // removal sweep every document nested under the URL.
+    expect(vectorStore.removedDocumentIds).to.deep.equal(["docs-root"]);
     expect(vectorStore.rows.map((row) => row.metadata.documentId)).to.deep.equal(["docs-page"]);
     expect(JSON.parse(await fs.readFile(journalPath, "utf8"))).to.deep.equal([]);
   });

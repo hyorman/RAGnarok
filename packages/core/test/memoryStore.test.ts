@@ -7,6 +7,7 @@ import { MemoryStore, MemoryStoreOptions } from "../src/memory/memoryStore";
 import { EmbeddingService } from "../src/embeddings/embeddingService";
 import { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
 import { VectorStoreFactory } from "../src/stores/vectorStoreFactory";
+import { UnsupportedStorageError } from "../src/utils/storage";
 import type { EmbeddingFingerprint } from "../src/embeddings/embeddingBackend";
 import type { ILLMProvider } from "../src/interfaces";
 import { writeV03Layout, snapshotTree } from "./helpers/v03Layout";
@@ -884,24 +885,29 @@ describe("MemoryStore standalone format and markdown privacy", function () {
 
   it("refuses a directory holding a v0.3 store and leaves it untouched", async function () {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-format-gate-"));
-    await writeV03Layout(directory);
-    const before = await snapshotTree(directory);
-    const standalone = new MemoryStore({
-      storageDir: directory,
-      embeddingService: createMockEmbeddingService(),
-      workingDir: directory,
-      markdownPath: null,
-    });
+    let standalone: MemoryStore | undefined;
+    try {
+      await writeV03Layout(directory);
+      const before = await snapshotTree(directory);
+      standalone = new MemoryStore({
+        storageDir: directory,
+        embeddingService: createMockEmbeddingService(),
+        workingDir: directory,
+        markdownPath: null,
+      });
 
-    const error = await captureError(standalone.store({ content: "must not enter unsupported storage" }));
+      const error = await captureError(standalone.store({ content: "must not enter unsupported storage" }));
 
-    expect((error as Error).name).to.equal("UnsupportedStorageError");
-    expect((error as { entries?: string[] }).entries).to.deep.equal(["database"]);
-    expect(await snapshotTree(directory), "no byte added, removed or rewritten, and no marker stamped").to.deep.equal(
-      before,
-    );
-    await standalone.dispose();
-    await fs.rm(directory, { recursive: true, force: true });
+      expect(error).to.be.instanceOf(UnsupportedStorageError);
+      expect((error as UnsupportedStorageError).entries).to.deep.equal(["database"]);
+      expect(await snapshotTree(directory), "no byte added, removed or rewritten, and no marker stamped").to.deep.equal(
+        before,
+      );
+    } finally {
+      // Cleanup runs whether or not an assertion failed, so a failure leaves no temp tree behind.
+      await standalone?.dispose();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("atomically exports only current, non-auto, non-expired memories", async function () {

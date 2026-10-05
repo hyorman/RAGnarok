@@ -896,6 +896,26 @@ describe("VectorStoreFactory foreign remote endpoint", function () {
     expect(mismatch.message).to.contain(CONFIGURED_ENDPOINT);
   });
 
+  it("keeps a remote topic's backend through a count refresh, so the endpoint refusal still applies", async function () {
+    // saveStore carries the recorded backend forward. A refresh that dropped it to "" would turn off
+    // hasRemoteEndpoint for this topic, and with it the refusal above.
+    await factory.saveStore("foreign-endpoint", { documentCount: 2, chunkCount: 5 });
+    const metadata = await factory.getStoreMetadata("foreign-endpoint");
+    expect(metadata?.embeddingBackend).to.equal("remote");
+    expect(metadata?.embeddingFingerprint.endpointHash).to.equal(FOREIGN_ENDPOINT);
+
+    (factory as any).storeCache.clear();
+    let error: unknown;
+    try {
+      await factory.loadStore("foreign-endpoint");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error, "the count refresh must not lift the endpoint refusal").to.be.instanceOf(
+      EmbeddingEndpointMismatchError,
+    );
+  });
+
   it("loads a topic recorded against the same remote endpoint", async function () {
     expect(await factory.loadStore("same-endpoint"), "a matching endpoint must not be refused").to.not.equal(null);
   });
