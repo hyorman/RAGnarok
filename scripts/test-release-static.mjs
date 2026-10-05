@@ -225,12 +225,26 @@ const historicAllowed = historicExceptionsPolicy.auditExceptions.map(({ advisory
 assert.deepEqual(
   evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, productionInstalledTree),
   { allowed: historicAllowed, rejected: [] },
+  "with each approved via version installed, both historic exceptions apply",
 );
-const upgradedViaTree = structuredClone(productionInstalledTree);
-upgradedViaTree.dependencies["@ragnarok/mcp-server"].dependencies["@ragnarok/core"].dependencies[
-  "@huggingface/transformers"
-].version = "3.8.2";
-assert.deepEqual(evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, upgradedViaTree), {
+/** A copy of `tree` with every installed `name`, wherever it sits, at `version`. */
+function withInstalledVersion(tree, name, version) {
+  const copy = structuredClone(tree);
+  let found = 0;
+  const visit = (node) => {
+    for (const [dependencyName, dependency] of Object.entries(node.dependencies ?? {})) {
+      if (dependencyName === name) {
+        dependency.version = version;
+        found += 1;
+      }
+      visit(dependency);
+    }
+  };
+  visit(copy);
+  assert.ok(found > 0, `${name} is not in the fixture tree`);
+  return copy;
+}
+const sharpExceptionVoided = {
   allowed: [historicAllowed[0]],
   rejected: [
     {
@@ -240,7 +254,35 @@ assert.deepEqual(evaluateAuditReport(productionAuditReport, historicExceptionsPo
       reason: "Approved via version is not installed",
     },
   ],
-});
+};
+const upgradedViaTree = withInstalledVersion(productionInstalledTree, "@huggingface/transformers", "3.8.2");
+assert.deepEqual(
+  evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, upgradedViaTree),
+  sharpExceptionVoided,
+  "an upgraded via package voids the exception approved for its old version",
+);
+// The approved version must be installed as the via package itself: another package at that version proves nothing.
+const viaVersionElsewhereTree = structuredClone(upgradedViaTree);
+viaVersionElsewhereTree.dependencies["unrelated-package"] = { version: "3.8.1" };
+assert.deepEqual(
+  evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, viaVersionElsewhereTree),
+  sharpExceptionVoided,
+  "a via version installed under another package's name does not satisfy the exception",
+);
+// Without an installed tree no approved via version can be confirmed, so no exception applies.
+assert.deepEqual(
+  evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, undefined),
+  {
+    allowed: [],
+    rejected: historicExceptionsPolicy.auditExceptions.map(({ advisory, dependency, range }) => ({
+      advisory,
+      dependency,
+      range,
+      reason: "Approved via version is not installed",
+    })),
+  },
+  "an evaluation without an installed tree confirms no exception",
+);
 
 const localTarballAuditReport = structuredClone(productionAuditReport);
 localTarballAuditReport.vulnerabilities["@ragnarok/core"].range = "";
@@ -941,12 +983,32 @@ for (const name of ["coreTarball", "mcpTarball", "vsix", "dockerImage"]) {
     `${name} size evidence must be re-measured when @huggingface/transformers changes`,
   );
 }
-assert.ok(policy.budgetEvidence.coreTarball.bytes <= policy.budgets.coreTarballCompressedBytes);
-assert.ok(policy.budgetEvidence.mcpTarball.bytes <= policy.budgets.mcpTarballCompressedBytes);
-assert.ok(policy.budgetEvidence.vsix.maximumCompressedBytes <= policy.budgets.vsixCompressedBytes);
-assert.ok(policy.budgetEvidence.vsix.maximumUnpackedBytes <= policy.budgets.vsixUnpackedBytes);
-assert.ok(policy.vsixTargets.includes(policy.budgetEvidence.vsix.maximumTarget));
-assert.ok(policy.budgetEvidence.dockerImage.bytes <= policy.budgets.dockerImageBytes);
+const overBudget = (what, measured, budgetName) =>
+  `${what} evidence (${measured} bytes) exceeds ${budgetName} (${policy.budgets[budgetName]} bytes)`;
+assert.ok(
+  policy.budgetEvidence.coreTarball.bytes <= policy.budgets.coreTarballCompressedBytes,
+  overBudget("core tarball", policy.budgetEvidence.coreTarball.bytes, "coreTarballCompressedBytes"),
+);
+assert.ok(
+  policy.budgetEvidence.mcpTarball.bytes <= policy.budgets.mcpTarballCompressedBytes,
+  overBudget("MCP tarball", policy.budgetEvidence.mcpTarball.bytes, "mcpTarballCompressedBytes"),
+);
+assert.ok(
+  policy.budgetEvidence.vsix.maximumCompressedBytes <= policy.budgets.vsixCompressedBytes,
+  overBudget("largest packed VSIX", policy.budgetEvidence.vsix.maximumCompressedBytes, "vsixCompressedBytes"),
+);
+assert.ok(
+  policy.budgetEvidence.vsix.maximumUnpackedBytes <= policy.budgets.vsixUnpackedBytes,
+  overBudget("largest unpacked VSIX", policy.budgetEvidence.vsix.maximumUnpackedBytes, "vsixUnpackedBytes"),
+);
+assert.ok(
+  policy.vsixTargets.includes(policy.budgetEvidence.vsix.maximumTarget),
+  `the largest VSIX's target ${policy.budgetEvidence.vsix.maximumTarget} is not one of vsixTargets`,
+);
+assert.ok(
+  policy.budgetEvidence.dockerImage.bytes <= policy.budgets.dockerImageBytes,
+  overBudget("Docker image", policy.budgetEvidence.dockerImage.bytes, "dockerImageBytes"),
+);
 // The release image is built and published from the amd64 CI runner.
 assert.equal(policy.budgetEvidence.dockerImage.architecture, "amd64");
 for (const [name, command] of Object.entries(pkg.scripts).filter(([name]) => name.startsWith("publish:"))) {
