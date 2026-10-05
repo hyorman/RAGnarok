@@ -58,14 +58,14 @@ export class StorageDirectoryWatcher {
     } catch (error) {
       if (!this.startFailureReported) {
         this.startFailureReported = true;
-        this.options.onError?.(error);
+        this.reportError(error);
       }
       return false;
     }
     this.startFailureReported = false;
     handle.unref?.();
     handle.on("error", (error) => {
-      this.options.onError?.(error);
+      this.reportError(error);
       if (this.options.outage) {
         this.reportOutage();
       } else {
@@ -102,6 +102,15 @@ export class StorageDirectoryWatcher {
       this.retryTimer = null;
     }
     this.closeHandle();
+  }
+
+  /** Hand an error to the host. A throwing callback is swallowed: it must not skip the outage path or the retry. */
+  private reportError(error: unknown): void {
+    try {
+      this.options.onError?.(error);
+    } catch {
+      // The host's reporting failed; recovery does not depend on it.
+    }
   }
 
   private onRawEvent(filename: string | Buffer | null): void {

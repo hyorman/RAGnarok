@@ -207,6 +207,93 @@ describe("StorageDirectoryWatcher", function () {
     expect(errors, "a failure after a success is a new run").to.deep.equal([emfile, enospc]);
   });
 
+  it("reports one construction failure per outage streak and keeps exactly one retry timer pending", async () => {
+    const clock = sinon.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const watches = instrumentWatch();
+    const errors: unknown[] = [];
+    const events: string[] = [];
+    let present = true;
+    watcher = new StorageDirectoryWatcher({
+      directory: dir,
+      accepts: () => true,
+      debounceMs: 50,
+      onChange: () => undefined,
+      onError: (error) => errors.push(error),
+      outage: {
+        pollMs: 1000,
+        retryMs: 50,
+        exists: async () => present,
+        onUnavailable: () => events.push("unavailable"),
+        onRecovered: async () => void events.push("recovered"),
+      },
+    });
+    expect(watcher.start()).to.equal(true);
+    expect(clock.countTimers(), "only the outage poll is armed while watching").to.equal(1);
+
+    present = false;
+    watcher.reportOutage();
+    watcher.reportOutage(); // a second report while unavailable must not arm a second retry
+    expect(clock.countTimers(), "one retry timer, no poll").to.equal(1);
+    for (let retry = 0; retry < 3; retry++) {
+      await clock.tickAsync(50);
+      expect(clock.countTimers(), `one retry timer while the directory is gone (retry ${retry + 1})`).to.equal(1);
+    }
+
+    const enospc = systemError("ENOSPC");
+    watches.failWith(enospc);
+    present = true;
+    for (let retry = 0; retry < 4; retry++) {
+      await clock.tickAsync(50);
+      expect(clock.countTimers(), `one retry timer while fs.watch fails (retry ${retry + 1})`).to.equal(1);
+    }
+    expect(errors, "a streak of failed retries is reported once").to.deep.equal([enospc]);
+
+    watches.failWith(null);
+    await clock.tickAsync(50);
+    expect(events).to.deep.equal(["unavailable", "recovered"]);
+    expect(clock.countTimers(), "recovered: the poll is armed again and no retry is left").to.equal(1);
+    expect(watches.open()).to.equal(1);
+  });
+
+  it("keeps recovering when the host's onError throws", async () => {
+    const clock = sinon.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const watches = instrumentWatch();
+    const events: string[] = [];
+    let present = true;
+    let reported = 0;
+    watcher = new StorageDirectoryWatcher({
+      directory: dir,
+      accepts: () => true,
+      debounceMs: 50,
+      onChange: () => undefined,
+      onError: () => {
+        reported += 1;
+        throw new Error("host logger is closed");
+      },
+      outage: {
+        pollMs: 1000,
+        retryMs: 50,
+        exists: async () => present,
+        onUnavailable: () => events.push("unavailable"),
+        onRecovered: async () => void events.push("recovered"),
+      },
+    });
+    watcher.start();
+    present = false;
+    watcher.reportOutage();
+
+    watches.failWith(systemError("EMFILE"));
+    present = true;
+    await clock.tickAsync(50); // retry 1: fs.watch fails and the host callback throws
+    await clock.tickAsync(50); // retry 2: still failing; reported once per streak
+    watches.failWith(null);
+    await clock.tickAsync(50); // retry 3: the watch is armed again
+
+    expect(reported).to.equal(1);
+    expect(events, "a throwing host callback must not strand the watcher").to.deep.equal(["unavailable", "recovered"]);
+    expect(watcher.watching).to.equal(true);
+  });
+
   it("re-arms exactly one handle when start() follows a watch error", async () => {
     const watches = instrumentWatch();
     const errors: unknown[] = [];
