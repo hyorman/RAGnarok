@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Generates contributes.languageModelTools in the root package.json from the
- * canonical input contracts in @ragnarok/core. Run with --check in CI to fail
- * on drift.
+ * canonical input contracts in @ragnarok/core. With --check it fails on drift
+ * instead of writing; CI's static-checks job runs it that way after compiling
+ * core (`npm run tools:manifest:check`).
  *
  * Presentation metadata (display names, icons, tags, the prose the model reads)
  * lives here rather than in core, so core stays host-neutral: the MCP server

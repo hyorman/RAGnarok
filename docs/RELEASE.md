@@ -104,6 +104,13 @@ immutable SHA tag or version tag is changed. Every completed channel is written
 atomically to `release-publication-journal.json`, which CI preserves even when a
 later channel fails.
 
+Publishing the Docker image needs Docker's containerd image store. The classic
+store cannot load the OCI archive and re-encodes manifests on push, so the
+registry digest would not match the release manifest. CI switches its runners
+with `scripts/use-containerd-image-store.mjs`; a local publish must run on a
+Docker daemon that already uses the containerd store, as Docker Desktop and
+Colima do.
+
 GHCR, npm, and the VS Code Marketplace do not provide a cross-registry
 transaction, so publication cannot be globally atomic. A later channel failure
 can leave an earlier channel public. Resume only with the same signed manifest

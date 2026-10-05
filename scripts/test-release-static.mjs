@@ -1874,6 +1874,13 @@ for (const use of workflow.matchAll(/uses:\s*([^\s]+)/g)) {
   assert.match(use[1], /@[a-f0-9]{40}$/i, `Unpinned action: ${use[1]}`);
 }
 assert.match(workflow, /cancel-in-progress: true/);
+// The tool-manifest drift check runs in CI, after compile builds the core dist the generator imports.
+const staticCheckRuns = workflowDocument.jobs["static-checks"].steps.map((step) => step.run);
+assert.ok(
+  staticCheckRuns.includes("npm run compile") &&
+    staticCheckRuns.indexOf("npm run tools:manifest:check") > staticCheckRuns.indexOf("npm run compile"),
+  "static-checks must run npm run tools:manifest:check after npm run compile",
+);
 assert.match(workflow, /permissions:\s*\n\s*contents: read/);
 assert.match(workflow, /npm run bench:acquire[\s\S]*npm run bench:release/);
 assert.match(workflow, /vscode-tests:[\s\S]*xvfb-run -a npm test/);

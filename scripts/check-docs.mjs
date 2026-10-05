@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   RELEASE_TOOLING_VARIABLES,
+  fencedBlockUnder,
   isSourceFile,
   overWidthLines,
   removedVariableGuard,
@@ -355,12 +356,15 @@ assert.match(
 );
 // contributes.languageModelTools is generated, so a contributor who hand-edits
 // package.json meets the drift check's failure before its cause. The command
-// list that sends contributors to `npm run` must name both scripts, and each
-// must exist.
+// list that sends contributors to `npm run` must name both scripts inside the
+// Build & Test Commands block itself (a mention elsewhere in the README is not
+// the list they copy from), and each script must exist.
+const buildCommands = fencedBlockUnder(readme, "### Build & Test Commands");
+assert.ok(buildCommands, 'README.md must keep a fenced block under "### Build & Test Commands"');
 for (const script of ["tools:manifest", "tools:manifest:check"]) {
   assert.ok(manifest.scripts[script], `package.json must define the ${script} script`);
   assert.match(
-    readme,
+    buildCommands,
     new RegExp(`npm run ${escapeRegExp(script)}(?![\\w:])`),
     `README.md Build & Test Commands must name npm run ${script}`,
   );
@@ -406,6 +410,11 @@ for (const [name, contents] of [
   assert.match(contents, /no\s+cross-host data sharing/i, `${name} must document host storage isolation`);
 }
 assert.match(release, /media\/memoryGraph\.js/);
+assert.match(
+  release,
+  phrase("containerd image store"),
+  "docs/RELEASE.md must say that publishing the Docker image needs the containerd image store",
+);
 assert.match(release, /media\/memoryGraph\.css/);
 const copilotInstructions = await readFile(path.join(root, ".github/copilot-instructions.md"), "utf8");
 assert.doesNotMatch(

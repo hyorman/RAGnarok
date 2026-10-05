@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   claimsRejection,
   displayWidth,
+  fencedBlockUnder,
   isSourceFile,
   overWidthLines,
   removedVariableGuard,
@@ -170,5 +171,15 @@ assert.equal(
 );
 for (const name of ["a.ts", "view.tsx", "a.mts", "a.cts"]) assert.equal(isSourceFile(name), true, name);
 for (const name of ["a.d.ts", "a.js", "a.json"]) assert.equal(isSourceFile(name), false, name);
+
+// The fenced block under a heading, and only that section's.
+const guide = "### Build & Test Commands\n\n```bash\nnpm run compile\n```\n\n### Other\n\nnpm run tools:manifest\n";
+assert.equal(fencedBlockUnder(guide, "### Build & Test Commands"), "npm run compile\n");
+assert.equal(fencedBlockUnder(guide, "### Missing"), undefined);
+assert.equal(
+  fencedBlockUnder("### Build & Test Commands\n\nprose\n\n### Next\n\n```\nx\n```\n", "### Build & Test Commands"),
+  undefined,
+  "a block under the next heading is not this section's",
+);
 
 console.log("Docs-gate guard fixtures passed.");

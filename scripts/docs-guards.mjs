@@ -147,3 +147,25 @@ export function removedVariableGuard(removedVariables) {
 
 /** A release-tooling variable no shipped source reads, and the one canonical doc allowed to name it. */
 export const RELEASE_TOOLING_VARIABLES = new Map([["RAGNAROK_RELEASE_ARTIFACT_DIR", "docs/BENCHMARKS.md"]]);
+
+/** The body of the first fenced block in the section under `heading` (an exact line), or undefined if none. */
+export function fencedBlockUnder(markdown, heading) {
+  const lines = linesOf(markdown);
+  const start = lines.indexOf(heading);
+  if (start < 0) return undefined;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (/^#{1,6}\s/.test(lines[index])) return undefined;
+    const open = /^\s{0,3}(`{3,}|~{3,})/.exec(lines[index]);
+    if (!open) continue;
+    const body = [];
+    for (let inner = index + 1; inner < lines.length; inner++) {
+      const close = /^\s{0,3}(`{3,}|~{3,})\s*$/.exec(lines[inner]);
+      if (close && close[1][0] === open[1][0] && close[1].length >= open[1].length) {
+        return body.map((line) => `${line}\n`).join("");
+      }
+      body.push(lines[inner]);
+    }
+    return undefined;
+  }
+  return undefined;
+}
