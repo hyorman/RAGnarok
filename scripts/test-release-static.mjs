@@ -790,19 +790,52 @@ assert.doesNotMatch(packSmoke, /npm audit --omit=dev --audit-level=moderate/);
 // so `npm ls` through Transformers (which both audit gates run for an exception approved via
 // Transformers, and vsce runs in VSIX staging) does not exit 1.
 assert.equal(pkg.overrides["@langchain/community"]["@huggingface/transformers"], "$@huggingface/transformers");
-const transformersLs = spawnSync("npm", ["ls", "@huggingface/transformers", "--omit=dev", "--all", "--json"], {
-  cwd: root,
-  encoding: "utf8",
-});
+/** npm's result, run from the repository root. npm that cannot start, or is killed, fails here with the reason. */
+function npmSync(args, options = {}) {
+  const run = spawnSync("npm", args, { cwd: root, encoding: "utf8", ...options });
+  if (run.error) throw new Error(`npm ${args.join(" ")} could not start: ${run.error.message}`, { cause: run.error });
+  if (run.signal) throw new Error(`npm ${args.join(" ")} was killed by ${run.signal}`);
+  return run;
+}
+// npm that cannot start (no npm on PATH) must fail with that reason, not a TypeError on a missing stderr.
+const pathWithoutNpm = await mkdtemp(path.join(os.tmpdir(), "ragnarok-no-npm-"));
+try {
+  assert.throws(
+    () => npmSync(["--version"], { env: { ...process.env, PATH: pathWithoutNpm } }),
+    /npm --version could not start: spawnSync npm ENOENT/,
+  );
+} finally {
+  await rm(pathWithoutNpm, { recursive: true, force: true });
+}
+// vsce's `npm list` in VSIX staging fails on any invalid optional peer of @langchain/community the tree
+// installs, not only Transformers, so `npm ls` covers each of them.
+const lockForPeers = JSON.parse(await read("package-lock.json"));
+const communityPeerMeta = lockForPeers.packages["node_modules/@langchain/community"].peerDependenciesMeta ?? {};
+const installedCommunityOptionalPeers = Object.entries(communityPeerMeta)
+  .filter(([name, meta]) => meta.optional && lockForPeers.packages[`node_modules/${name}`])
+  .map(([name]) => name)
+  .sort();
+assert.deepEqual(
+  installedCommunityOptionalPeers,
+  ["@huggingface/transformers", "@lancedb/lancedb", "cheerio", "ignore", "pdf-parse"],
+  "the installed optional peers of @langchain/community changed: confirm npm ls still covers each",
+);
+const optionalPeersLs = npmSync(["ls", ...installedCommunityOptionalPeers, "--omit=dev", "--all", "--json"]);
 assert.equal(
-  transformersLs.status,
+  optionalPeersLs.status,
   0,
-  `npm ls @huggingface/transformers must be valid: ${transformersLs.stderr.trim()}`,
+  `npm ls of @langchain/community's installed optional peers must be valid: ${optionalPeersLs.stderr.trim()}`,
 );
 assert.match(
   packSmoke,
-  /overrides: \{\s*"@langchain\/community": \{ "@huggingface\/transformers": coreManifest\.dependencies\["@huggingface\/transformers"\] \}/,
+  /overrides: \{\s*"@langchain\/community": \{ "@huggingface\/transformers": coreTransformers \}/,
   "the pack-smoke consumer must carry the root's Transformers peer override",
+);
+// JSON.stringify drops an undefined value, so a missing core dependency would silently become `{}`.
+assert.match(
+  packSmoke,
+  /const coreTransformers = coreManifest\.dependencies\?\.\["@huggingface\/transformers"\];\s*if \(!coreTransformers\) \{\s*fail\(/,
+  "pack-smoke must refuse a core manifest without its Transformers dependency",
 );
 assert.match(packSmoke, /proc\.stdin\.end\(\)/, "packed stdio smoke must request graceful EOF shutdown");
 assert.match(
@@ -1176,6 +1209,13 @@ for (const file of executableMcpFiles) {
 const builder = await read("scripts/build-vsix.js");
 const vscodeIgnore = await read(".vscodeignore");
 assert.match(vscodeIgnore, /!node_modules\/binary-extensions\/\*\*/);
+// pdf-parse depends on pdfjs-dist. npm nests it under pdf-parse today (that package's allowlist line
+// covers it), but a dedupe would hoist it to the root, so the root line stays while the dependency does.
+assert.ok(
+  JSON.parse(await read("package-lock.json")).packages["node_modules/pdf-parse"]?.dependencies?.["pdfjs-dist"],
+  "pdf-parse no longer depends on pdfjs-dist: drop the !node_modules/pdfjs-dist/** line from .vscodeignore",
+);
+assert.match(vscodeIgnore, /^!node_modules\/pdfjs-dist\/\*\*$/m, "the VSIX must allowlist a hoisted pdfjs-dist");
 for (const archiveDependency of ["adm-zip", "yazl", "buffer-crc32"]) {
   assert.match(
     vscodeIgnore,
