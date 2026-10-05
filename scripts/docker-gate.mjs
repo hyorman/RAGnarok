@@ -12,6 +12,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnOutcome } from "./spawn-outcome.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const policy = JSON.parse(await readFile(path.join(root, "release-policy.json"), "utf8"));
@@ -24,6 +25,7 @@ const containers = [sessionContainer, persistenceContainer, peerContainer, trans
 const volume = "ragnarok-release-smoke-data";
 const topicName = "Docker Persistence Smoke";
 const expectedToolCount = 8;
+const TRANSFORMERS_CHECK_TIMEOUT_MS = 60_000;
 // The HTTP transport's variables, which nothing reads any more. The image must
 // not bake one in: a stdio-only image carrying them would look like a configured
 // network service. The gate only inspects the image's Env; it never starts the
@@ -57,13 +59,6 @@ const envelope = {
 
 const run = (command, args, options = {}) => execFileSync(command, args, { cwd: root, stdio: "inherit", ...options });
 const capture = (command, args) => execFileSync(command, args, { cwd: root, encoding: "utf8" }).trim();
-const containerLogs = (container) => {
-  const result = spawnSync("docker", ["logs", container], { cwd: root, encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(`Could not read ${container} logs: ${result.stderr || result.stdout}`);
-  }
-  return `${result.stdout}${result.stderr}`.trim();
-};
 
 // The runtime posture every container the gate starts shares.
 const hardeningArgs = [
@@ -287,28 +282,29 @@ function assertTransformersLoads() {
       "-e",
       script,
     ],
-    { cwd: root, encoding: "utf8", timeout: 60_000 },
+    { cwd: root, encoding: "utf8", timeout: TRANSFORMERS_CHECK_TIMEOUT_MS },
   );
   const marker = /^transformers-ok (\S+) (\S+\/transformers\.node\.cjs)$/m.exec(result.stdout ?? "");
   if (result.status !== 0 || !marker) {
     throw new Error(
-      `The image could not load @huggingface/transformers (exit ${result.status}): ${(result.stderr || result.stdout || "").slice(-1000)}`,
+      `The image could not load @huggingface/transformers (${spawnOutcome(result, TRANSFORMERS_CHECK_TIMEOUT_MS)}): ` +
+        (result.stderr || result.stdout || "").slice(-1000),
     );
   }
   console.log(marker[0]);
 }
 
-function assertToolSurface(tools) {
+function assertToolSurface(tools, label = "Container") {
   if (!Array.isArray(tools)) {
-    throw new Error("tools/list did not return an array");
+    throw new Error(`${label}'s tools/list did not return an array`);
   }
   if (tools.length !== expectedToolCount) {
-    throw new Error(`Container exposed ${tools.length} tools; the stdio surface is exactly ${expectedToolCount}`);
+    throw new Error(`${label} exposed ${tools.length} tools; the stdio surface is exactly ${expectedToolCount}`);
   }
   const names = new Set(tools.map((tool) => tool.name));
   for (const required of ["rag_query", "rag_ingest", "rag_topic", "rag_memory"]) {
     if (!names.has(required)) {
-      throw new Error(`Container tool surface is missing ${required}`);
+      throw new Error(`${label} tool surface is missing ${required}`);
     }
   }
   for (const removed of [
@@ -336,7 +332,7 @@ function assertToolSurface(tools) {
     "rag_switch_embedding_model",
   ]) {
     if (names.has(removed)) {
-      throw new Error(`Container still exposes the deleted tool ${removed}`);
+      throw new Error(`${label} still exposes the deleted tool ${removed}`);
     }
   }
 }
@@ -433,11 +429,7 @@ async function assertSecondServerSharesVolume() {
   try {
     await whileRunning(peer.request("server/discover"));
     const { tools } = await whileRunning(peer.request("tools/list"));
-    if (!Array.isArray(tools) || tools.length !== expectedToolCount) {
-      throw new Error(
-        `Second server exposed ${Array.isArray(tools) ? tools.length : "no"} tools; the stdio surface is exactly ${expectedToolCount}`,
-      );
-    }
+    assertToolSurface(tools, "Second server");
     const listed = await whileRunning(peer.callTool("rag_topic", { action: "list" }));
     if (!Array.isArray(listed.topics ?? listed)) {
       throw new Error(`Second server's rag_topic list was not a topic list: ${JSON.stringify(listed)}`);

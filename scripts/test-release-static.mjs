@@ -1682,11 +1682,37 @@ assert.match(dockerfile, /onnxruntime-web/);
 // Core loads Transformers with import() (dist/transformers.node.mjs); dist/transformers.node.cjs
 // is the package's require/main entry. The image keeps exactly those two dist files.
 assert.doesNotMatch(dockerfile, /jsep\.wasm/, "Transformers 4 ships no jsep.wasm; a prune line for it is dead");
-assert.match(
-  dockerfile,
-  /find node_modules\/@huggingface\/transformers\/dist -type f \\\n\s+! -name transformers\.node\.mjs ! -name transformers\.node\.cjs -delete/,
+// The pin reads a CRLF checkout (core.autocrlf on Windows) as well as an LF one.
+const transformersPrune =
+  /find node_modules\/@huggingface\/transformers\/dist -type f \\\r?\n\s+! -name transformers\.node\.mjs ! -name transformers\.node\.cjs -delete/;
+for (const [endings, text] of [
+  ["LF", dockerfile],
+  ["CRLF", dockerfile.replaceAll("\n", "\r\n")],
+]) {
+  assert.match(text, transformersPrune, `the Transformers dist prune pin must read a ${endings} Dockerfile`);
+}
+// Both kept entries are checked after the prune, so an over-prune fails the image build itself.
+for (const entry of ["transformers.node.mjs", "transformers.node.cjs"]) {
+  assert.match(
+    dockerfile,
+    new RegExp(`test -f node_modules/@huggingface/transformers/dist/${entry.replaceAll(".", "\\.")}`),
+    `the image build must check that ${entry} survived the prune`,
+  );
+}
+const { spawnOutcome } = await import("./spawn-outcome.mjs");
+assert.equal(spawnOutcome(spawnSync(process.execPath, ["-e", "process.exitCode = 3"]), 1000), "exit 3");
+assert.equal(
+  spawnOutcome(spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], { timeout: 100 }), 100),
+  "timed out after 100 ms",
 );
-assert.match(dockerfile, /test -f node_modules\/@huggingface\/transformers\/dist\/transformers\.node\.mjs/);
+assert.equal(
+  spawnOutcome(spawnSync(process.execPath, ["-e", "process.kill(process.pid, 'SIGKILL')"]), 1000),
+  "killed by SIGKILL",
+);
+assert.equal(
+  spawnOutcome(spawnSync("ragnarok-no-such-command"), 1000),
+  "could not start: spawnSync ragnarok-no-such-command ENOENT",
+);
 const transformersManifest = JSON.parse(await read("node_modules/@huggingface/transformers/package.json"));
 assert.equal(transformersManifest.exports.node.import.default, "./dist/transformers.node.mjs");
 assert.equal(transformersManifest.exports.node.require.default, "./dist/transformers.node.cjs");
@@ -1745,6 +1771,10 @@ for (const contract of [
   // The gate calls it right after the image contract, so an over-pruned Transformers fails first.
   /await assertImageContract\(\);\s*\n\s*assertTransformersLoads\(\);/,
   /transformers-ok/,
+  // A timed-out or killed Transformers check names what happened instead of "(exit null)".
+  /spawnOutcome\(result, TRANSFORMERS_CHECK_TIMEOUT_MS\)/,
+  // The second server's tools get the same surface check as the first's, not only a count.
+  /assertToolSurface\(tools, "Second server"\)/,
   /assertRuntimeHardening/,
   /closeCleanly/,
   /ExposedPorts/,
@@ -1752,6 +1782,7 @@ for (const contract of [
 ]) {
   assert.match(dockerGate, contract, `Docker stdio gate must assert ${contract}`);
 }
+assert.doesNotMatch(dockerGate, /containerLogs/, "docker-gate must not keep the unused containerLogs helper");
 assert.doesNotMatch(
   dockerGate,
   /remained running instead of failing fast/,
