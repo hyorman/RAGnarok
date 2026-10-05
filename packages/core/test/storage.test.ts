@@ -86,6 +86,37 @@ describe("storage format v2", () => {
     expect(unsupported.entries).to.not.include(".DS_Store");
   });
 
+  it("names at most five entries and says how many more it left out", async () => {
+    for (const name of ["a", "b", "c", "d", "e", "f", "g"]) {
+      await fs.writeFile(path.join(directory, name), "");
+    }
+
+    const error = await ensureStorageFormat(directory).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).to.be.instanceOf(UnsupportedStorageError);
+    const unsupported = error as UnsupportedStorageError;
+    expect(unsupported.entries).to.deep.equal(["a", "b", "c", "d", "e"]);
+    expect(unsupported.omittedEntries).to.equal(2);
+    expect(unsupported.message).to.include("(found: a, b, c, d, e and 2 more).");
+  });
+
+  it("adds nothing to the list when exactly five entries triggered the refusal", async () => {
+    for (const name of ["a", "b", "c", "d", "e"]) {
+      await fs.writeFile(path.join(directory, name), "");
+    }
+
+    const error = (await ensureStorageFormat(directory).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    )) as UnsupportedStorageError;
+
+    expect(error.omittedEntries).to.equal(0);
+    expect(error.message).to.include("(found: a, b, c, d, e).");
+  });
+
   it("ignores the storage lock file when judging whether a directory holds data", async () => {
     // The cross-process lock is acquired BEFORE format validation, so a
     // fresh directory containing only .ragnarok.lock must initialize cleanly.

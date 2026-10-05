@@ -128,7 +128,7 @@ storage.
 ```
 src/
 ├── index.ts                      # Entry point — adapters, core services, stdio transport
-├── startupHint.ts                # Next-action hint printed after a refused storage startup
+├── startupHint.ts                # Fatal startup report; next-action hint for a refused storage
 ├── config.ts                     # McpConfig type and loadConfig()
 ├── configFile.ts                 # <storageDir>/config.json — key table, schema, generation
 ├── adapters.ts                   # Console / env adapters for @ragnarok/core interfaces

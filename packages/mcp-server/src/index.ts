@@ -48,7 +48,7 @@ import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner } from "./tools";
 import { createToolRuntime, drainToolRuntimeThenMemory } from "./toolRuntime";
-import { startupFailureHint } from "./startupHint";
+import { reportStartupFailure } from "./startupHint";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -268,12 +268,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error("Fatal error starting MCP server:", error);
-  // A stdio client shows the operator nothing but this stream, so a startup
-  // refusal that has a concrete next action names it here.
-  const hint = startupFailureHint(error);
-  if (hint) {
-    console.error(hint);
-  }
+  // A stdio client shows the operator nothing but stderr, so a startup refusal
+  // that has a concrete next action names it there.
+  reportStartupFailure(error);
   process.exitCode = 1;
 });

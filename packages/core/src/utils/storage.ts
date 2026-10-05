@@ -33,14 +33,23 @@ export class UnsupportedStorageError extends Error {
   readonly name = "UnsupportedStorageError";
   constructor(
     public readonly storageDir: string,
+    /** The entries that triggered the refusal, capped; `omittedEntries` counts the rest. */
     public readonly entries: readonly string[] = [],
+    public readonly omittedEntries = 0,
   ) {
     super(
       `RAGnarōk storage at ${storageDir} holds data from an unsupported pre-0.4 build` +
-        `${entries.length > 0 ? ` (found: ${entries.join(", ")})` : ""}. ` +
-        `Move or delete that folder to start a new store.`,
+        `${foundEntries(entries, omittedEntries)}. Move or delete that folder to start a new store.`,
     );
   }
+}
+
+/** " (found: a, b and 3 more)", or nothing when no entry was reported. */
+function foundEntries(entries: readonly string[], omitted: number): string {
+  if (entries.length === 0) {
+    return "";
+  }
+  return ` (found: ${entries.join(", ")}${omitted > 0 ? ` and ${omitted} more` : ""})`;
 }
 
 /**
@@ -243,7 +252,11 @@ async function ensureStorageFormatUnjournaled(storageDir: string): Promise<Stora
 
   const unsupported = await managedEntries(storageDir);
   if (unsupported.length > 0) {
-    throw new UnsupportedStorageError(storageDir, unsupported.slice(0, UNSUPPORTED_ENTRIES_REPORTED));
+    throw new UnsupportedStorageError(
+      storageDir,
+      unsupported.slice(0, UNSUPPORTED_ENTRIES_REPORTED),
+      Math.max(0, unsupported.length - UNSUPPORTED_ENTRIES_REPORTED),
+    );
   }
 
   const marker: StorageFormatMarker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: Date.now() };
