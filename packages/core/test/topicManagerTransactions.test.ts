@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import type { VectorStore } from "@langchain/core/vectorstores";
 import {
+  setLoggerFactory,
   TopicManager,
   VectorStoreFactory,
   VectorStoreLoadError,
@@ -18,6 +19,12 @@ import {
   StorageTransactionCoordinator,
   type StorageTransactionOperation,
 } from "../src/utils/storageTransactionCoordinator";
+import {
+  STORAGE_FORMAT_FILENAME,
+  STORAGE_FORMAT_VERSION,
+  StorageFormatVersionError,
+  UnsupportedStorageError,
+} from "../src/utils/storage";
 import { snapshotTree, writeV03Layout } from "./helpers/v03Layout";
 
 const LOCK_FILENAME = ".ragnarok.lock";
@@ -216,6 +223,57 @@ describe("TopicManager operation-scoped write transactions", function () {
     expect(await snapshotTree(storageDir), "no byte added, removed or rewritten, and no marker stamped").to.deep.equal(
       before,
     );
+  });
+
+  describe("what initialization logs when it fails", function () {
+    /** Run createManagerInTmpDir with a capturing logger; resolves to the error messages logged and the rejection. */
+    async function createCapturingErrors(): Promise<{ logged: string[]; rejection: unknown }> {
+      const logged: string[] = [];
+      const quiet = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
+      setLoggerFactory({ createLogger: () => ({ ...quiet, error: (message: string) => void logged.push(message) }) });
+      try {
+        const rejection = await createManagerInTmpDir().then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
+        return { logged, rejection };
+      } finally {
+        setLoggerFactory({ createLogger: () => quiet });
+      }
+    }
+
+    it("leaves a refused pre-0.4 store to the caller to report, logging nothing itself", async function () {
+      await writeV03Layout(storageDir);
+
+      const { logged, rejection } = await createCapturingErrors();
+
+      expect(rejection).to.be.instanceOf(UnsupportedStorageError);
+      expect(logged).to.not.include("Failed to initialize TopicManager");
+    });
+
+    it("leaves a newer-format store to the caller to report, logging nothing itself", async function () {
+      await fs.writeFile(
+        path.join(storageDir, STORAGE_FORMAT_FILENAME),
+        JSON.stringify({ formatVersion: STORAGE_FORMAT_VERSION + 1 }),
+      );
+
+      const { logged, rejection } = await createCapturingErrors();
+
+      expect(rejection).to.be.instanceOf(StorageFormatVersionError);
+      expect(logged).to.not.include("Failed to initialize TopicManager");
+    });
+
+    it("still logs any other initialization failure", async function () {
+      // A directory where the format marker file belongs: reading it fails with EISDIR, not a typed refusal.
+      await fs.mkdir(path.join(storageDir, STORAGE_FORMAT_FILENAME));
+
+      const { logged, rejection } = await createCapturingErrors();
+
+      expect(rejection).to.be.instanceOf(Error);
+      expect(rejection).to.not.be.instanceOf(UnsupportedStorageError);
+      expect(rejection).to.not.be.instanceOf(StorageFormatVersionError);
+      expect(logged).to.include("Failed to initialize TopicManager");
+    });
   });
 
   it("opens a refused v0.3-shaped store when started with resetStorage, backing the old data up", async function () {

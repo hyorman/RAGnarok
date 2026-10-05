@@ -31,6 +31,8 @@ import {
   resetStorage,
   SHARED_TOPIC_CACHE_DIRNAME,
   STORAGE_RESET_JOURNAL_FILENAME,
+  StorageFormatVersionError,
+  UnsupportedStorageError,
 } from "../utils/storage";
 import { SharedTopicRegistry } from "../sharedTopics/registry";
 import { SharedTopicReadOnlyError } from "../sharedTopics/types";
@@ -375,9 +377,13 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
         embeddingModel: this.topicsIndex?.modelName,
       });
     } catch (error) {
-      this.logger.error("Failed to initialize TopicManager", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // The caller reports these typed refusals (MCP startup report, VS Code
+      // activation log and modal), so logging them here printed them twice.
+      if (!(error instanceof UnsupportedStorageError || error instanceof StorageFormatVersionError)) {
+        this.logger.error("Failed to initialize TopicManager", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       // A rejected factory call gives the caller no manager instance to
       // dispose. Close every resource opened before the failure here so a
       // long-lived extension host can retry without leaked native handles.
