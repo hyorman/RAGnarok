@@ -2759,5 +2759,6 @@ assert.doesNotMatch(architecture, /Transfer and operator token-rotation records/
 execFileSync("node", ["scripts/verify-model-manifest.mjs"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["scripts/check-licenses.mjs"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["scripts/check-secrets.mjs"], { cwd: root, stdio: "inherit" });
+execFileSync("node", ["scripts/test-docs-guards.mjs"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["scripts/check-docs.mjs"], { cwd: root, stdio: "inherit" });
 console.log("Release/package static contracts passed.");

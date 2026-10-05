@@ -694,7 +694,7 @@
     "test:fast": "npm run compile && npm run compile:tests:all && npm run test:core:compiled && npm run test:graph-ui:compiled && npm run test:mcp:compiled",
     "test:pack": "node scripts/pack-smoke.mjs",
     "test:release-static": "node scripts/test-release-static.mjs",
-    "test:docs": "node scripts/check-docs.mjs",
+    "test:docs": "node scripts/test-docs-guards.mjs && node scripts/check-docs.mjs",
     "test:shutdown-soak": "node scripts/shutdown-soak.mjs",
     "verify:models": "node scripts/verify-model-manifest.mjs",
     "sbom:generate": "node scripts/generate-sbom.mjs",
