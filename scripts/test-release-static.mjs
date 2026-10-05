@@ -1298,22 +1298,68 @@ assert.match(nativeProbe, /console\.log\(\s*JSON\.stringify\(/);
 // Contents/MacOS/Electron link, so the extension-host smoke must launch the real binary.
 const testElectronUtil = require("@vscode/test-electron/out/util.js");
 const vscodeDownload = await mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-layout-"));
-const vscodeContents = path.join(vscodeDownload, "Visual Studio Code.app", "Contents");
-await mkdir(path.join(vscodeContents, "MacOS"), { recursive: true });
-await writeFile(path.join(vscodeContents, "MacOS", "Code"), "");
-await writeFile(
-  path.join(vscodeContents, "Info.plist"),
-  "<plist><dict><key>CFBundleExecutable</key><string>Code</string></dict></plist>",
-);
-assert.equal(
-  testElectronUtil.downloadDirToExecutablePath(vscodeDownload, "darwin-arm64"),
-  path.join(vscodeContents, "MacOS", "Code"),
-);
-await rm(vscodeDownload, { recursive: true, force: true });
+try {
+  const vscodeContents = path.join(vscodeDownload, "Visual Studio Code.app", "Contents");
+  await mkdir(path.join(vscodeContents, "MacOS"), { recursive: true });
+  await writeFile(path.join(vscodeContents, "MacOS", "Code"), "");
+  await writeFile(
+    path.join(vscodeContents, "Info.plist"),
+    "<plist><dict><key>CFBundleExecutable</key><string>Code</string></dict></plist>",
+  );
+  assert.equal(
+    testElectronUtil.downloadDirToExecutablePath(vscodeDownload, "darwin-arm64"),
+    path.join(vscodeContents, "MacOS", "Code"),
+  );
+} finally {
+  // Removed even when the assertion fails, so a failing run leaves no temp tree behind.
+  await rm(vscodeDownload, { recursive: true, force: true });
+}
 // Node refuses to spawn a .cmd file without a shell (CVE-2024-27980), and the Windows
 // VS Code CLI is code.cmd: every CLI call goes through runCli.
-assert.match(vsixSmoke, /const viaShell = process\.platform === "win32" && \/\\\.cmd\$\/i\.test\(code\);/);
-assert.doesNotMatch(vsixSmoke, /runArgs\(/, "vsix-smoke must reach the VS Code CLI only through runCli");
+assert.match(vsixSmoke, /import \{ cmdLine, needsShell, smokeSummary \} from "\.\/vsix-smoke-lib\.mjs";/);
+assert.match(vsixSmoke, /const viaShell = needsShell\(code\);/);
+assert.match(vsixSmoke, /execSync\(cmdLine\(\[code, \.\.\.baseArgs, \.\.\.args\]\), options\)/);
+// Every child process vsix-smoke starts, by its first argument: where.exe, the native probe, and the
+// VS Code CLI only through runCli (once with a shell, once without). A new direct CLI call adds an entry.
+assert.deepEqual(
+  [...vsixSmoke.matchAll(/\b(execFileSync|execSync|execFile|exec|spawnSync|spawn)\(\s*([^,)]+)/g)]
+    .map((call) => `${call[1]}(${call[2].trim()}`)
+    .sort(),
+  ['execFileSync("where.exe"', "execFileSync(code", "execFileSync(process.execPath", "execSync(cmdLine([code"],
+  "vsix-smoke must reach the VS Code CLI only through runCli",
+);
+const vsixSmokeLib = await import("./vsix-smoke-lib.mjs");
+for (const [cli, platform, expected] of [
+  ["C:\\VS Code\\bin\\code.cmd", "win32", true],
+  ["code.CMD", "win32", true],
+  ["C:\\tools\\code.bat", "win32", true],
+  ["C:\\VS Code\\Code.exe", "win32", false],
+  ["code.cmd", "linux", false],
+]) {
+  assert.equal(vsixSmokeLib.needsShell(cli, platform), expected, `needsShell(${cli}, ${platform})`);
+}
+assert.equal(
+  vsixSmokeLib.cmdLine(["C:\\VS Code\\bin\\code.cmd", "--install-extension", "C:\\a b\\x.vsix"]),
+  '"C:\\VS Code\\bin\\code.cmd" "--install-extension" "C:\\a b\\x.vsix"',
+);
+// cmd.exe expands %VAR% even inside double quotes and has no escape for it there; a quote or a line
+// break would end the argument. Such a value is refused, never passed through altered.
+for (const unsafe of ["C:\\%TEMP%\\x.vsix", 'C:\\a"b', "C:\\a\nb", "C:\\a\rb"]) {
+  assert.throws(() => vsixSmokeLib.cmdLine(["code.cmd", unsafe]), /cannot pass .* through cmd\.exe/);
+}
+assert.equal(
+  vsixSmokeLib.smokeSummary("hyorman.ragnarok@0.4.1", "1.140.0", "1.140.0"),
+  "Installed, activated, and create/query/delete smoked hyorman.ragnarok@0.4.1 on VS Code 1.140.0.",
+);
+assert.equal(
+  vsixSmokeLib.smokeSummary("hyorman.ragnarok@0.4.1", "1.140.0", "1.138.0"),
+  "Installed, activated, and create/query/delete smoked hyorman.ragnarok@0.4.1 on VS Code 1.140.0 " +
+    "(installed with the 1.138.0 CLI).",
+);
+// The success line names the VS Code that ran the extension host, which the host reports itself.
+assert.match(vsixSmoke, /RAGNAROK_SMOKE_HOST_REPORT: hostReport/);
+assert.match(vsixSmoke, /smokeSummary\(`\$\{pkg\.publisher\}\.\$\{pkg\.name\}@\$\{pkg\.version\}`, hostVersion, version\)/);
+assert.match(extensionHostSmoke, /JSON\.stringify\(\{ vscodeVersion: vscode\.version \}\)/);
 // cmd.exe expands %~dp0 to the current directory, not the batch file's, when a quoted
 // code.cmd was found through PATH, so a bare name is resolved to an absolute path
 // (where.exe is an .exe, no shell) before runCli quotes it.
