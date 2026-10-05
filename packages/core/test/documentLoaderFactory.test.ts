@@ -77,6 +77,26 @@ describe("DocumentLoaderFactory", function () {
         fs.rmSync(directory, { recursive: true, force: true });
       }
     });
+
+    it("reads an unknown extension as text and warns that it did", async function () {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ragnarok-unknown-extension-"));
+      const local = new DocumentLoaderFactory();
+      const warnings: Array<[string, unknown]> = [];
+      (local as any).logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        error: () => undefined,
+        warn: (message: string, context: unknown) => warnings.push([message, context]),
+      };
+      try {
+        const filePath = path.join(directory, "notes.rst");
+        fs.writeFileSync(filePath, "Body text.");
+        expect((await local.loadDocument({ filePath })).fileType).to.equal("text");
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+      expect(warnings).to.deep.include(["Unknown file extension, treating as text", { ext: ".rst" }]);
+    });
   });
 
   describe("isSupported", function () {

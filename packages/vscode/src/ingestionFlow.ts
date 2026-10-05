@@ -180,7 +180,10 @@ export function supportedDocumentFilters(): Record<string, string[]> {
     "Supported Documents": withoutDots(DocumentLoaderFactory.getSupportedExtensions()),
   };
   for (const [fileType, label] of Object.entries(FILTER_LABELS) as Array<[LocalFileType, string]>) {
-    filters[label] = withoutDots(byType[fileType]);
+    // A type with no extensions would be an empty, useless group in the dialog.
+    if (byType[fileType].length > 0) {
+      filters[label] = withoutDots(byType[fileType]);
+    }
   }
   return filters;
 }

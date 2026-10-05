@@ -138,6 +138,22 @@ describe("ingestion flow", function () {
     expect(supportedDocumentFilters().Markdown).to.deep.equal(["md", "markdown", "mdx"]);
   });
 
+  it("offers no group for a labelled type that has no extensions", function () {
+    sinon.stub(DocumentLoaderFactory, "getSupportedExtensionsByType").returns({
+      pdf: [".pdf"],
+      markdown: [],
+      html: [".html", ".htm"],
+      text: [".txt"],
+    });
+    expect(Object.keys(supportedDocumentFilters())).to.deep.equal([
+      "All Files",
+      "Supported Documents",
+      "PDF",
+      "HTML",
+      "Text",
+    ]);
+  });
+
   it("reports progress, announces the new totals and refreshes the tree", async function () {
     const reports: Array<{ message?: string; increment?: number }> = [];
     sinon
