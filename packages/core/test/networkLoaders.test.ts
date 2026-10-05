@@ -4,9 +4,11 @@
  */
 
 import { expect } from "chai";
+import * as fs from "fs";
 import { createServer } from "http";
-import type { Server } from "http";
+import type { IncomingHttpHeaders, Server } from "http";
 import type { AddressInfo } from "net";
+import * as path from "path";
 import * as sinon from "sinon";
 import { WebDocumentLoader, GithubDocumentLoader } from "../src/index";
 import type { LoaderOptions } from "../src/index";
@@ -420,9 +422,13 @@ describe("GithubDocumentLoader", function () {
   });
 });
 
-/** Starts a local HTTP server on 127.0.0.1 (ephemeral port) answering 200 text/html with `body`. */
-async function startLocalHtmlServer(body: string): Promise<{ server: Server; port: number }> {
-  const server = createServer((_req, res) => {
+/** Starts a local HTTP server on 127.0.0.1 (ephemeral port) answering 200 text/html with `body`; `onRequest` sees each request's headers. */
+async function startLocalHtmlServer(
+  body: string,
+  onRequest?: (headers: IncomingHttpHeaders) => void,
+): Promise<{ server: Server; port: number }> {
+  const server = createServer((req, res) => {
+    onRequest?.(req.headers);
     res.writeHead(200, { "content-type": "text/html" });
     res.end(body);
   });
@@ -490,5 +496,28 @@ describe("WebDocumentLoader pinned DNS lookup", function () {
       lookup("any.example.test", {}, (_err: unknown, address: string) => seen.push(address));
     }
     expect(seen).to.deep.equal(["93.184.216.34", "93.184.216.35", "93.184.216.34"]);
+  });
+});
+
+describe("WebDocumentLoader request identity", function () {
+  it("names core's own package version in its User-Agent", async function () {
+    // Read from packages/core/package.json by path (dist-test/test/ is two levels below it), not
+    // through the code under test, so a hard-coded version cannot pass.
+    const corePackage = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "package.json"), "utf8"));
+    let userAgent: string | undefined;
+    const { server, port } = await startLocalHtmlServer("<html><body>ok</body></html>", (headers) => {
+      userAgent = headers["user-agent"];
+    });
+    try {
+      const response: Response = await (new WebDocumentLoader() as any).fetchResponse(
+        new URL(`http://identity.example.test:${port}/`),
+        AbortSignal.timeout(5_000),
+        [{ address: "127.0.0.1", family: 4 }],
+      );
+      expect(response.status).to.equal(200);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    expect(userAgent).to.equal(`RAGnarok/${corePackage.version}`);
   });
 });

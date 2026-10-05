@@ -78,3 +78,11 @@ export type LLMProviderName = keyof typeof PROVIDER_DEFAULT_MODELS;
 
 /** Public GitHub's host. Its API is api.github.com; a GitHub Enterprise host serves /api/v3. */
 export const GITHUB_HOST = "github.com";
+
+/**
+ * @ragnarok/core's own version, from its package.json. Required by package name, so
+ * one specifier resolves from dist/, from the compiled tests and in the MCP image
+ * (node_modules/@ragnarok/core), and esbuild inlines the JSON into the VS Code bundle.
+ */
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- a JSON import of ../package.json would sit outside tsc's rootDir (src); a literal require() is what esbuild inlines
+export const CORE_VERSION: string = (require("@ragnarok/core/package.json") as { version: string }).version;
