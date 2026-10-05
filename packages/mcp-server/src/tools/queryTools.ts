@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { executeQueryTool } from "@ragnarok/core";
+import { executeQueryTool, RetrievalStrategy, TOOL_LIMITS } from "@ragnarok/core";
 import { MCP_LIMITS, type ToolContext } from "./shared";
 
 export function registerQueryTools(ctx: ToolContext): void {
@@ -10,9 +10,15 @@ export function registerQueryTools(ctx: ToolContext): void {
     z.object({
       topic: z.string().trim().min(1).max(MCP_LIMITS.topicName).describe("The name of the topic to search within"),
       query: z.string().trim().min(1).max(MCP_LIMITS.query).describe("The search query or question"),
-      topK: z.number().int().min(1).max(20).optional().describe("Number of top results to return (default: 10)"),
+      topK: z
+        .number()
+        .int()
+        .min(1)
+        .max(TOOL_LIMITS.queryTopK)
+        .optional()
+        .describe("Number of top results to return (default: 10)"),
       retrievalStrategy: z
-        .enum(["vector", "hybrid", "bm25"])
+        .enum(RetrievalStrategy)
         .optional()
         .describe(
           "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). Optional - uses configured value if not provided.",

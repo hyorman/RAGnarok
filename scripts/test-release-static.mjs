@@ -1216,7 +1216,8 @@ const mcpToolRuntime = await read("packages/mcp-server/src/toolRuntime.ts");
 // Shutdown stays bounded by the hard-exit timer. It first drains admitted tool
 // calls so they can enter memory coordination, then closes memory admission and
 // drains it before releasing native handles.
-assert.match(mcpIndex, /const drainBudgetMs = config\.shutdownDrainMs \?\? 10_000/);
+assert.match(mcpIndex, /const drainBudgetMs = config\.shutdownDrainMs \?\? MCP_DEFAULTS\.SHUTDOWN_DRAIN_MS/);
+assert.match(await read("packages/mcp-server/src/defaults.ts"), /SHUTDOWN_DRAIN_MS: 10_000,/);
 assert.match(mcpIndex, /setTimeout\(\(\) => process\.exit\(1\), drainBudgetMs \+ 5_000\)/);
 assert.match(mcpIndex, /await drainToolRuntimeThenMemory\(toolRuntime, memoryCoordinator\)/);
 assert.match(

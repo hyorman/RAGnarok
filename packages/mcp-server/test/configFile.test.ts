@@ -4,7 +4,9 @@ import * as os from "os";
 import * as path from "path";
 import { FILE_KEYS, buildDefaultsBlock, ensureConfigFile, readConfigFile, CONFIG_FILE_NAME } from "../src/configFile";
 import { loadConfig } from "../src/config";
-import { STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
+import { MCP_DEFAULTS } from "../src/defaults";
+import { MCP_LIMITS } from "../src/tools";
+import { DEFAULTS, STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
 
 describe("config file key table", () => {
   it("declares exactly the 24 file-settable keys", () => {
@@ -304,6 +306,20 @@ describe("$defaults accuracy", () => {
   });
 
   it("documents exportDir as a placeholder because its default is storage-relative", () => {
-    assert.equal(loadConfig().exportDir, path.join(tmpStorage, "exports"));
+    assert.equal(loadConfig().exportDir, path.join(tmpStorage, MCP_DEFAULTS.EXPORT_DIRNAME));
+  });
+
+  it("falls back to core's shared defaults and to MCP_DEFAULTS for its own settings", () => {
+    const config = loadConfig();
+    assert.equal(config.embeddingModel, DEFAULTS.EMBEDDING_MODEL);
+    assert.equal(config.rerankerModel, DEFAULTS.RERANKER_MODEL);
+    assert.equal(config.chunkSize, DEFAULTS.CHUNK_SIZE);
+    assert.equal(config.maxResidentModels, DEFAULTS.MAX_RESIDENT_MODELS);
+    assert.equal(config.topK, MCP_DEFAULTS.TOP_K);
+    assert.equal(config.llmRequestTimeoutMs, MCP_DEFAULTS.LLM_REQUEST_TIMEOUT_MS);
+    assert.equal(config.shutdownDrainMs, MCP_DEFAULTS.SHUTDOWN_DRAIN_MS);
+    assert.equal(config.maxResponseBytes, MCP_DEFAULTS.MAX_RESPONSE_BYTES);
+    assert.equal(MCP_LIMITS.responseBytes, MCP_DEFAULTS.MAX_RESPONSE_BYTES);
+    assert.deepEqual(config.githubHosts, [...MCP_DEFAULTS.GITHUB_HOSTS]);
   });
 });

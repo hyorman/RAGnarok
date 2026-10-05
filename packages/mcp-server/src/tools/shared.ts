@@ -7,18 +7,20 @@ import {
   MemoryStore,
   MemoryService,
   GraphVisualizationService,
+  TOOL_LIMITS,
 } from "@ragnarok/core";
 import type { McpConfig } from "../config";
+import { MCP_DEFAULTS } from "../defaults";
 import type { ToolRuntime } from "../toolRuntime";
 
 export type MutationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
 
 export const MCP_LIMITS = Object.freeze({
-  topicName: 200,
-  query: 20_000,
+  topicName: TOOL_LIMITS.topicName,
+  query: TOOL_LIMITS.query,
   path: 4_096,
   url: 2_048,
-  responseBytes: 1_048_576,
+  responseBytes: MCP_DEFAULTS.MAX_RESPONSE_BYTES,
 });
 
 // Re-serializes JSON text content and mirrors it as structuredContent so

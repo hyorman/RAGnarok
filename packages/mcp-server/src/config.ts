@@ -9,7 +9,9 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { z } from "zod";
+import { DEFAULTS, RetrievalStrategy } from "@ragnarok/core";
 import { CONFIG_FILE_NAME, readConfigFile } from "./configFile";
+import { MCP_DEFAULTS } from "./defaults";
 
 let cachedVersion: string | null = null;
 
@@ -87,7 +89,7 @@ const configSchema = z
     chunkSize: z.number().int().min(50).max(20000),
     chunkOverlap: z.number().int().min(0).max(10000),
     topK: z.number().int().min(1).max(50),
-    retrievalStrategy: z.enum(["vector", "hybrid", "bm25"]),
+    retrievalStrategy: z.enum(RetrievalStrategy),
     maxIterations: z.number().int().min(1).max(10),
     confidenceThreshold: z.number().min(0).max(1),
     logLevel: z.enum(["debug", "info", "warn", "error"]),
@@ -127,7 +129,7 @@ const configSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["embeddingBaseUrl"],
-        message: 'config.json: "embedding.baseUrl" is required when "embedding.provider" is not huggingface',
+        message: `${CONFIG_FILE_NAME}: "embedding.baseUrl" is required when "embedding.provider" is not huggingface`,
       });
     }
     if (cfg.chunkOverlap >= cfg.chunkSize) {
@@ -172,38 +174,40 @@ export function loadConfig(): McpConfig {
     // path.resolve("") is the process cwd, so a stray empty entry would
     // silently widen the allowlist to the whole cwd.
     allowedPaths: (file.allowedPaths ?? []).map((p) => p.trim()).filter((p) => p.length > 0),
-    embeddingModel: file.embeddingModel || "Xenova/all-MiniLM-L6-v2",
-    chunkSize: file.chunkSize ?? 1000,
-    chunkOverlap: file.chunkOverlap ?? 200,
-    topK: file.topK ?? 10,
-    retrievalStrategy: file.retrievalStrategy || "hybrid",
-    maxIterations: file.maxIterations ?? 3,
-    confidenceThreshold: file.confidenceThreshold ?? 0.7,
-    logLevel: file.logLevel || "info",
-    llmProvider: file.llmProvider || "none",
+    embeddingModel: file.embeddingModel || DEFAULTS.EMBEDDING_MODEL,
+    chunkSize: file.chunkSize ?? DEFAULTS.CHUNK_SIZE,
+    chunkOverlap: file.chunkOverlap ?? DEFAULTS.CHUNK_OVERLAP,
+    topK: file.topK ?? MCP_DEFAULTS.TOP_K,
+    retrievalStrategy: file.retrievalStrategy || DEFAULTS.RETRIEVAL_STRATEGY,
+    maxIterations: file.maxIterations ?? DEFAULTS.MAX_ITERATIONS,
+    confidenceThreshold: file.confidenceThreshold ?? DEFAULTS.CONFIDENCE_THRESHOLD,
+    logLevel: file.logLevel || DEFAULTS.LOG_LEVEL,
+    llmProvider: file.llmProvider || MCP_DEFAULTS.LLM_PROVIDER,
     llmApiKey: process.env.RAGNAROK_LLM_API_KEY || "",
     llmModel: file.llmModel || "",
     // No default here: each provider applies its own (Ollama falls back to
     // http://localhost:11434). A global Ollama default silently routed
     // OpenAI/Anthropic requests to localhost.
     llmBaseUrl: file.llmBaseUrl || "",
-    embeddingProvider: file.embeddingProvider || "huggingface",
+    embeddingProvider: file.embeddingProvider || MCP_DEFAULTS.EMBEDDING_PROVIDER,
     embeddingBaseUrl: file.embeddingBaseUrl || "",
     embeddingApiKey: process.env.RAGNAROK_EMBEDDING_API_KEY || "",
-    maxResidentModels: file.maxResidentModels ?? 2,
-    shutdownDrainMs: file.shutdownDrainMs ?? 10000,
-    llmRequestTimeoutMs: file.llmRequestTimeoutMs ?? 30000,
-    maxResponseBytes: file.maxResponseBytes ?? 1048576,
-    rerankerModel: file.rerankerModel || "Xenova/ms-marco-MiniLM-L-6-v2",
-    rerankerMaxCandidates: file.rerankerMaxCandidates ?? 40,
-    rerankerCandidateMultiplier: file.rerankerCandidateMultiplier ?? 4,
-    exportDir: file.exportDir || path.join(storageDir, "exports"),
+    maxResidentModels: file.maxResidentModels ?? DEFAULTS.MAX_RESIDENT_MODELS,
+    shutdownDrainMs: file.shutdownDrainMs ?? MCP_DEFAULTS.SHUTDOWN_DRAIN_MS,
+    llmRequestTimeoutMs: file.llmRequestTimeoutMs ?? MCP_DEFAULTS.LLM_REQUEST_TIMEOUT_MS,
+    maxResponseBytes: file.maxResponseBytes ?? MCP_DEFAULTS.MAX_RESPONSE_BYTES,
+    rerankerModel: file.rerankerModel || DEFAULTS.RERANKER_MODEL,
+    rerankerMaxCandidates: file.rerankerMaxCandidates ?? DEFAULTS.RERANKER_MAX_CANDIDATES,
+    rerankerCandidateMultiplier: file.rerankerCandidateMultiplier ?? DEFAULTS.RERANKER_CANDIDATE_MULTIPLIER,
+    exportDir: file.exportDir || path.join(storageDir, MCP_DEFAULTS.EXPORT_DIRNAME),
     commonDatabasePath: file.commonDatabasePath || "",
     // An empty security.githubHosts is a deliberate "no hosts" rather than an
     // absent setting, and configSchema's .min(1) rejects it loudly. Lower-case
     // every entry: tools/ingestTools.ts matches against parsed.hostname.toLowerCase(), so a
     // mixed-case row could never match.
-    githubHosts: (file.githubHosts ?? ["github.com"]).map((host) => host.trim().toLowerCase()).filter(Boolean),
+    githubHosts: (file.githubHosts ?? [...MCP_DEFAULTS.GITHUB_HOSTS])
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
     githubToken: process.env.RAGNAROK_GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || "",
     resetStorage:
       process.argv.includes("--reset-storage") ||

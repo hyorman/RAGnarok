@@ -131,6 +131,7 @@ src/
 ├── startupHint.ts                # Fatal startup report; next-action hint for a refused storage
 ├── config.ts                     # McpConfig type and loadConfig()
 ├── configFile.ts                 # <storageDir>/config.json — key table, schema, generation
+├── defaults.ts                   # MCP_DEFAULTS — defaults of the MCP-only settings
 ├── adapters.ts                   # Console / env adapters for @ragnarok/core interfaces
 ├── llmProviders.ts               # OpenAI, Anthropic, Ollama LLM providers
 ├── memoryToolAdapter.ts          # rag_memory / rag_reset_memory input and result shaping

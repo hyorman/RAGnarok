@@ -8,6 +8,12 @@
 
 import { ILLMProvider, ILLMModel, ILLMMessage, Logger, PROVIDER_DEFAULT_MODELS } from "@ragnarok/core";
 import { McpConfig } from "./config";
+import { MCP_DEFAULTS } from "./defaults";
+
+/** How long a hosted provider's availability probe result is reused. */
+const REMOTE_AVAILABILITY_TTL_MS = 10_000;
+/** Ollama runs on this machine, so its probe is cheap and repeated sooner. */
+const LOCAL_AVAILABILITY_TTL_MS = 3_000;
 
 // The SDKs are loaded with `await import(...)`, which resolves their ESM typings; name the same ones here.
 type OpenAIClient = InstanceType<typeof import("openai", { with: { "resolution-mode": "import" } }).default>;
@@ -251,9 +257,9 @@ export class OpenAILLMProvider extends SdkLLMProvider<OpenAIClient> {
     private apiKey: string,
     defaultModel: string,
     private baseUrl?: string,
-    requestTimeoutMs = 30_000,
+    requestTimeoutMs: number = MCP_DEFAULTS.LLM_REQUEST_TIMEOUT_MS,
   ) {
-    super("OpenAI", defaultModel, requestTimeoutMs, 10_000);
+    super("OpenAI", defaultModel, requestTimeoutMs, REMOTE_AVAILABILITY_TTL_MS);
   }
 
   protected async createClient(): Promise<OpenAIClient> {
@@ -332,9 +338,9 @@ export class AnthropicLLMProvider extends SdkLLMProvider<AnthropicClient> {
     private apiKey: string,
     defaultModel: string,
     private baseUrl?: string,
-    requestTimeoutMs = 30_000,
+    requestTimeoutMs: number = MCP_DEFAULTS.LLM_REQUEST_TIMEOUT_MS,
   ) {
-    super("Anthropic", defaultModel, requestTimeoutMs, 10_000);
+    super("Anthropic", defaultModel, requestTimeoutMs, REMOTE_AVAILABILITY_TTL_MS);
   }
 
   protected async createClient(): Promise<AnthropicClient> {
@@ -364,9 +370,9 @@ export class OllamaLLMProvider extends SdkLLMProvider<OpenAIClient> {
   constructor(
     private baseUrl: string,
     defaultModel: string,
-    requestTimeoutMs = 30_000,
+    requestTimeoutMs: number = MCP_DEFAULTS.LLM_REQUEST_TIMEOUT_MS,
   ) {
-    super("Ollama", defaultModel, requestTimeoutMs, 3_000);
+    super("Ollama", defaultModel, requestTimeoutMs, LOCAL_AVAILABILITY_TTL_MS);
   }
 
   protected async createClient(): Promise<OpenAIClient> {
