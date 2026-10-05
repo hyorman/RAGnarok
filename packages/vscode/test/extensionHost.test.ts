@@ -274,6 +274,60 @@ describe("real VS Code extension host activation", function () {
     expect((reveal?.[1][0] as vscode.Uri | undefined)?.fsPath).to.equal(context.globalStorageUri.fsPath);
   });
 
+  /** Activate with a topic manager that fails with `failure`; return the arguments of every showErrorMessage call. */
+  async function errorMessagesForActivationFailure(failure: unknown): Promise<unknown[][]> {
+    const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-activation-refusal-"));
+    const executeCommand = sinon.stub(vscode.commands, "executeCommand").resolves(undefined as never);
+    const showErrorMessage = sinon.stub(vscode.window, "showErrorMessage").resolves(undefined as never);
+    const serviceFactory = {
+      createEmbeddingService: () => ({ registerBackend: sinon.spy(), dispose: async () => undefined }),
+      createTopicManager: async () => {
+        throw failure;
+      },
+      createMemoryStore: () => ({ dispose: async () => undefined }),
+      createMemoryCoordinator: () => ({ stopAdmission: () => undefined, drain: async () => undefined }),
+      createMemoryService: () => ({ execute: sinon.stub(), reset: sinon.stub() }),
+      createGraphVisualizationService: () => ({ generate: sinon.stub() }),
+    };
+    const context = {
+      globalStorageUri: vscode.Uri.file(storageDir),
+      extensionUri: vscode.Uri.file("/extension"),
+      subscriptions: [],
+    };
+    try {
+      let caught: unknown;
+      await activateWithServiceFactory(context as any, serviceFactory as any).catch((error: unknown) => {
+        caught = error;
+      });
+      expect(caught, "activation must fail with the topic manager's error").to.equal(failure);
+      return showErrorMessage.getCalls().map((call) => call.args as unknown[]);
+    } finally {
+      executeCommand.restore();
+      showErrorMessage.restore();
+      await fs.rm(storageDir, { recursive: true, force: true });
+    }
+  }
+
+  it("shows the refusal modal with no detail when the refusal names no entries", async function () {
+    const calls = await errorMessagesForActivationFailure(new UnsupportedStorageError("/unused"));
+    expect(calls).to.have.length(1);
+    const options = calls[0][1] as vscode.MessageOptions;
+    expect(options.modal).to.equal(true);
+    expect(options.detail, "an empty detail line would read 'Found in that folder: '").to.equal(undefined);
+  });
+
+  it("shows no refusal modal for any other failure, even one named like the refusal", async function () {
+    const impostor = Object.assign(new Error("pre-0.4 data"), {
+      name: "UnsupportedStorageError",
+      entries: ["database"],
+    });
+    for (const failure of [new Error("storage could not be opened"), impostor]) {
+      const calls = await errorMessagesForActivationFailure(failure);
+      const modals = calls.filter(([, options]) => (options as vscode.MessageOptions | undefined)?.modal === true);
+      expect(modals, `${failure.name}: ${failure.message}`).to.deep.equal([]);
+    }
+  });
+
   it("offers an opt-in native create/query/delete installed-artifact smoke", async function () {
     if (process.env.RAGNAROK_RUN_INSTALLED_SMOKE !== "1") {
       this.skip();
