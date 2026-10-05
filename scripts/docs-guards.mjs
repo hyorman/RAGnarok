@@ -25,10 +25,16 @@ function unwrappable(line) {
   return /^\s*(?:>\s*)*\|/.test(line) || /^#/.test(line) || /^\s{0,3}\[[^\]]+\]:\s/.test(line);
 }
 
-/** The overflow is one unbreakable token (a URL, a long path): everything before its last space fits. */
+/**
+ * The overflow is one unbreakable token: everything before the last space fits, and that last token is
+ * a URL or path (it holds "/") or is itself wider than the print width. Prose a few columns over is not.
+ */
 function overflowIsOneToken(line, printWidth) {
-  const lastSpace = line.trimEnd().lastIndexOf(" ");
-  return displayWidth(line.slice(0, Math.max(lastSpace, 0))) <= printWidth;
+  const trimmed = line.trimEnd();
+  const lastSpace = trimmed.lastIndexOf(" ");
+  const token = trimmed.slice(lastSpace + 1);
+  const fits = displayWidth(trimmed.slice(0, Math.max(lastSpace, 0))) <= printWidth;
+  return fits && (token.includes("/") || displayWidth(token) > printWidth);
 }
 
 /**
@@ -99,7 +105,7 @@ export function isSourceFile(name) {
 }
 
 const REJECTION_VERBS =
-  /\b(?:reject|refus|abort|error|invalid|crash)\w*|\bfail(?:s|ed|ing|ure)?\b|\bexit(?:s|ed|ing)?\s+(?:with\s+(?:code\s+)?[1-9]|[1-9]\b|non-?zero)/gi;
+  /\b(?:reject|refus|abort|error|invalid|crash)\w*|\bfail(?:s|ed|ing|ure)?\b|\bexit(?:s|ed|ing)?\s+(?:with\s+(?:(?:exit\s+)?(?:code|status)\s+)?[1-9]|[1-9]\b|non-?zero)/gi;
 const NEGATION = /\b(?:no|not|never|nothing|neither|nor|cannot|without|rather than|instead of|as opposed to)\b|n't\b/i;
 // "rejected by nothing", "refused nowhere": the negation follows the verb.
 const NEGATED_AFTER = /^\w*\s+(?:by\s+(?:nothing|none|no\b)|nowhere\b|never\b)/i;
