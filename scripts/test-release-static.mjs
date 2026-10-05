@@ -1953,7 +1953,10 @@ assert.equal(vscodeMinimumSmokeStep.env?.VSCODE_VERSION, "1.105.0", "vscode-mini
 const coreSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:core:compiled");
 assert.equal(coreSuiteStep?.["timeout-minutes"], 15);
 assert.equal(coreSuiteStep?.env?.RAGNAROK_REPORT_ACTIVE_RESOURCES, "1");
-assert.match(await read("packages/core/test/setup.ts"), /export const mochaHooks/);
+assert.match(
+  await read("packages/core/test/setup.ts"),
+  /export const mochaHooks: Mocha\.RootHookObject = suiteHooks\(process\.env, process\.platform\);/,
+);
 // The MCP and soak steps follow the core step on the same leg and have never run on Windows CI, so
 // a hang there must also fail at 15 minutes and, for the MCP suite, name its handles.
 const mcpSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:mcp:compiled");
@@ -1989,18 +1992,36 @@ assert.throws(
   () => soak.iterationTimeoutMs(0, soak.SOAK_BUDGET_MS, 18),
   /shutdown soak exceeded its 12-minute budget before iteration 18/,
 );
-assert.match(await read("packages/mcp-server/test/setup.ts"), /export const mochaHooks/);
-// On Windows the core suite finishes but a native addon thread keeps the process alive, so both
-// suites end themselves after a 10 s grace there. The exit carries Mocha's own code (no argument,
-// never 0), and the timer is unref'd so a suite that exits on its own never reaches it.
-for (const setupFile of ["packages/core/test/setup.ts", "packages/mcp-server/test/setup.ts"]) {
-  const setupSource = await read(setupFile);
-  assert.match(setupSource, /process\.platform === "win32"/, `${setupFile} applies the grace exit on Windows`);
-  assert.match(setupSource, /RAGNAROK_TEST_FORCE_EXIT_GRACE/, `${setupFile} has the test-only grace-exit switch`);
-  assert.match(setupSource, /\.unref\(\)/, `${setupFile} unrefs its timers`);
-  assert.match(setupSource, /process\.exit\(\)/, `${setupFile} exits with Mocha's own code`);
-  assert.doesNotMatch(setupSource, /process\.exit\(0\)/, `${setupFile} must not hard-code a passing exit code`);
-}
+assert.match(
+  await read("packages/mcp-server/test/setup.ts"),
+  /export const mochaHooks: Mocha\.RootHookObject = suiteHooks\(process\.env, process\.platform\);/,
+);
+// Both suites install one diagnostics helper, copied byte for byte (neither package can import the
+// other's tests). On Windows the core suite finishes but a native addon thread keeps the process alive,
+// so both suites end themselves after a 10 s grace there. The exit carries Mocha's own code (no
+// argument, never 0), the timer is unref'd so a suite that exits on its own never reaches it, and every
+// line is written synchronously so a Windows pipe cannot drop it at the exit.
+const coreDiagnostics = await read("packages/core/test/helpers/suiteDiagnostics.ts");
+assert.equal(
+  await read("packages/mcp-server/test/helpers/suiteDiagnostics.ts"),
+  coreDiagnostics,
+  "the core and MCP suite diagnostics helpers must be identical",
+);
+assert.match(coreDiagnostics, /platform === "win32"/, "the grace exit applies on Windows");
+assert.match(coreDiagnostics, /env\.RAGNAROK_TEST_FORCE_EXIT_GRACE === "1"/, "the test-only grace-exit switch");
+assert.match(coreDiagnostics, /env\.RAGNAROK_REPORT_ACTIVE_RESOURCES === "1"/, "the report is on only for exactly 1");
+assert.match(coreDiagnostics, /\.unref\(\)/, "the diagnostics timers are unref'd");
+assert.match(coreDiagnostics, /^\s*process\.exit\(\);$/m, "the grace exit uses Mocha's own exit code");
+assert.doesNotMatch(coreDiagnostics, /process\.exit\(0\)/, "the grace exit must not hard-code a passing exit code");
+assert.match(coreDiagnostics, /fs\.writeSync\(2,/, "diagnostic lines are written synchronously");
+assert.doesNotMatch(coreDiagnostics, /console\.(?:error|log)\(/, "no diagnostic line goes through an async stream");
+assert.doesNotMatch(coreDiagnostics, /note in the plan/, "the forced-exit line must point at something in the repo");
+assert.match(coreDiagnostics, /new Worker\(/, "a stall watchdog outside the main event loop names a blocked test");
+assert.doesNotMatch(
+  workflow,
+  /A run that has not exited by 15\s*\n\s*# has hung/,
+  "the native-leg comment must describe the Windows grace exit",
+);
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
