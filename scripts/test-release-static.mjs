@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import * as auditPolicyModule from "./audit-policy.mjs";
 import { BENCHMARK_USER_AGENT, downloadWithRetry } from "./benchmark-download.mjs";
 import * as releaseStaticPolicy from "./release-static-policy.mjs";
-import { withContainerdSnapshotter } from "./use-containerd-image-store.mjs";
+import { parseDaemonConfig, withContainerdSnapshotter } from "./use-containerd-image-store.mjs";
 
 const { evaluateAuditReport, normalizeLocalTarballAuditRanges } = auditPolicyModule;
 const { assertDevOnlyDependency } = releaseStaticPolicy;
@@ -1990,6 +1990,18 @@ for (const [jobName, dockerCommand] of [
     switchIndex < dockerIndex,
     `${jobName} must switch to the containerd image store before its first ${dockerCommand}`,
   );
+  // A conditional or failure-tolerant switch would let the Docker step run on the classic store.
+  assert.equal(jobSteps[switchIndex].if, undefined, `${jobName}'s containerd switch must not be conditional`);
+  assert.equal(
+    jobSteps[switchIndex]["continue-on-error"],
+    undefined,
+    `${jobName}'s containerd switch must not be allowed to fail`,
+  );
+  assert.equal(
+    workflowDocument.jobs[jobName]["continue-on-error"],
+    undefined,
+    `${jobName} must not be allowed to fail around its containerd switch`,
+  );
 }
 const ociBuildStep = workflowDocument.jobs["artifact-build"].steps.find((step) =>
   String(step.run ?? "").includes("type=oci,dest=ragnarok-mcp.oci.tar"),
@@ -2027,6 +2039,27 @@ assert.deepEqual(
   withContainerdConfig,
   withContainerdConfigBefore,
   "withContainerdSnapshotter must not mutate its input",
+);
+const nestedFeaturesConfig = { features: { buildkit: true } };
+withContainerdSnapshotter(nestedFeaturesConfig);
+assert.deepEqual(
+  nestedFeaturesConfig,
+  { features: { buildkit: true } },
+  "withContainerdSnapshotter must not mutate a nested features object either",
+);
+// An empty daemon.json (some images ship one) is no settings, not a parse failure.
+assert.deepEqual(parseDaemonConfig(""), {});
+assert.deepEqual(parseDaemonConfig("  \n"), {});
+assert.deepEqual(parseDaemonConfig('{"features":{"buildkit":true}}'), { features: { buildkit: true } });
+for (const notAnObject of ["[]", "null", "1"]) {
+  assert.throws(() => parseDaemonConfig(notAnObject), /must hold a JSON object/, `daemon.json ${notAnObject}`);
+}
+assert.throws(() => parseDaemonConfig("{"), SyntaxError);
+const containerdScript = await read("scripts/use-containerd-image-store.mjs");
+assert.match(
+  containerdScript,
+  /\["info", "--format", "\{\{json \.DriverStatus\}\}"\], \{[^}]*\btimeout: DOCKER_INFO_TIMEOUT_MS\b/,
+  "each docker info call in the readiness poll must have its own timeout",
 );
 const benchmarkSteps = workflowDocument.jobs.benchmarks.steps;
 const candidateDownloadIndex = benchmarkSteps.findIndex(

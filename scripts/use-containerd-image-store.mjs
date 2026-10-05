@@ -1,6 +1,18 @@
-// GitHub's ubuntu runners ship Docker with the classic image store, which cannot `docker load` an
-// OCI layout and re-encodes manifests on `docker push`. The release image pipeline needs the
-// containerd image store (as Docker Desktop and Colima use), so the Docker jobs switch to it first.
+// Switches a GitHub Actions Linux runner's Docker daemon to the containerd image store, for the jobs
+// that build, load or push the release image as an OCI archive.
+//
+// Why: the runners ship the classic image store. Its `docker` buildx driver cannot export OCI, its
+// `docker load` needs a manifest.json that an OCI layout lacks, and `docker push` re-encodes
+// manifests, so the pushed digest would differ from the archived one. Docker Desktop and Colima
+// already use the containerd store, which the release pipeline was developed on.
+//
+// What it does: merges `features.containerd-snapshotter: true` into /etc/docker/daemon.json, keeping
+// every other setting (an empty file counts as none), restarts Docker, polls `docker info` (each call
+// timed out on its own) for up to 30 s, and fails unless the io.containerd.snapshotter.v1 driver is
+// active.
+//
+// Safety: it rewrites a system file and restarts a daemon, so it refuses to run anywhere but a GitHub
+// Actions Linux runner. The release static tests import only its pure helpers.
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -10,15 +22,27 @@ const DAEMON_CONFIG = "/etc/docker/daemon.json";
 const CONTAINERD_DRIVER = "io.containerd.snapshotter.v1";
 const READY_TIMEOUT_MS = 30_000;
 const READY_POLL_MS = 1_000;
+// A daemon still restarting can hold `docker info` open; each call gives up so the poll keeps its deadline.
+const DOCKER_INFO_TIMEOUT_MS = 5_000;
 
 export function withContainerdSnapshotter(config) {
   return { ...config, features: { ...config.features, "containerd-snapshotter": true } };
 }
 
+/** The daemon config's settings. An empty file is no settings; anything but a JSON object is refused. */
+export function parseDaemonConfig(text) {
+  if (text.trim() === "") return {};
+  const parsed = JSON.parse(text);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${DAEMON_CONFIG} must hold a JSON object; refusing to rewrite it`);
+  }
+  return parsed;
+}
+
 function readDaemonConfig() {
   // A missing file means Docker runs on its defaults.
   if (spawnSync("sudo", ["test", "-f", DAEMON_CONFIG]).status !== 0) return {};
-  return JSON.parse(execFileSync("sudo", ["cat", DAEMON_CONFIG], { encoding: "utf8" }));
+  return parseDaemonConfig(execFileSync("sudo", ["cat", DAEMON_CONFIG], { encoding: "utf8" }));
 }
 
 async function driverStatus() {
@@ -28,6 +52,7 @@ async function driverStatus() {
       return execFileSync("docker", ["info", "--format", "{{json .DriverStatus}}"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: DOCKER_INFO_TIMEOUT_MS,
       });
     } catch (error) {
       if (Date.now() >= deadline) throw error;
