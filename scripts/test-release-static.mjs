@@ -1960,6 +1960,28 @@ assert.ok(
   soakStep?.["timeout-minutes"] <= 15,
   "the native leg's shutdown soak step needs a timeout of 15 minutes or less",
 );
+// The soak gives up inside its own budget, a minute short of the step limit, so its message (which
+// names the iteration) reports a stall instead of the runner's kill.
+assert.match(
+  await read("scripts/shutdown-soak.mjs"),
+  /if \(process\.argv\[1\] && import\.meta\.url === pathToFileURL\(path\.resolve\(process\.argv\[1\]\)\)\.href\)/,
+  "the soak must run only when executed directly, so these tests can import its budget",
+);
+const soak = await import("./shutdown-soak.mjs");
+assert.ok(
+  soak.SOAK_BUDGET_MS + 60_000 <= soakStep["timeout-minutes"] * 60_000,
+  `the soak budget (${soak.SOAK_BUDGET_MS} ms) must end at least a minute before the CI step limit`,
+);
+assert.equal(soak.iterationTimeoutMs(0, 0, 1), soak.ITERATION_TIMEOUT_MS);
+assert.equal(
+  soak.iterationTimeoutMs(0, soak.SOAK_BUDGET_MS - 20_000, 17),
+  20_000,
+  "the last iterations get what is left",
+);
+assert.throws(
+  () => soak.iterationTimeoutMs(0, soak.SOAK_BUDGET_MS, 18),
+  /shutdown soak exceeded its 12-minute budget before iteration 18/,
+);
 assert.match(await read("packages/mcp-server/test/setup.ts"), /export const mochaHooks/);
 // On Windows the core suite finishes but a native addon thread keeps the process alive, so both
 // suites end themselves after a 10 s grace there. The exit carries Mocha's own code (no argument,
