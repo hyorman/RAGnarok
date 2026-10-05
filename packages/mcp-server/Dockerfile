@@ -64,6 +64,7 @@ RUN npm ci --omit=dev --omit=peer --ignore-scripts --libc=glibc \
     find node_modules/@huggingface/transformers/dist -type f \
       ! -name transformers.node.mjs ! -name transformers.node.cjs -delete && \
     test -f node_modules/@huggingface/transformers/dist/transformers.node.mjs && \
+    test -f node_modules/@huggingface/transformers/dist/transformers.node.cjs && \
     find node_modules packages/core/node_modules packages/mcp-server/node_modules \
       -type f \( -name '*.map' -o -name '*.d.ts' \) -delete
 

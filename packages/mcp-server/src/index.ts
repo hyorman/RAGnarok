@@ -38,17 +38,19 @@ import {
   createSharedTopicSources,
   createEmbeddingServices,
   createMemoryServices,
+  EXTENSION,
 } from "@ragnarok/core";
 import type { RemoteEmbeddingFormat } from "@ragnarok/core";
 import { loadConfig, getServerVersion } from "./config";
-import { ensureConfigFile } from "./configFile";
+import { CONFIG_FILE_NAME, ensureConfigFile } from "./configFile";
+import { MCP_DEFAULTS } from "./defaults";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "./adapters";
 import { createLLMProvider, isUsableLLMProvider } from "./llmProviders";
 import { registerTools } from "./tools";
 import { registerGraphUiResource } from "./uiResource";
 import type { MutationRunner } from "./tools";
 import { createToolRuntime, drainToolRuntimeThenMemory } from "./toolRuntime";
-import { startupFailureHint } from "./startupHint";
+import { reportStartupFailure } from "./startupHint";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -85,7 +87,9 @@ async function main(): Promise<void> {
   let remoteEmbeddingOptions: ConstructorParameters<typeof RemoteEmbeddingBackend>[0] | undefined;
   if (config.embeddingProvider !== "huggingface") {
     if (!config.embeddingBaseUrl) {
-      throw new Error('config.json: "embedding.baseUrl" is required when "embedding.provider" is not huggingface');
+      throw new Error(
+        `${CONFIG_FILE_NAME}: "embedding.baseUrl" is required when "embedding.provider" is not huggingface`,
+      );
     }
     remoteEmbeddingOptions = {
       baseUrl: config.embeddingBaseUrl,
@@ -151,7 +155,7 @@ async function main(): Promise<void> {
     embeddingService,
     llmProvider: isUsableLLMProvider(llmProvider) ? llmProvider : undefined,
     workingDir,
-    markdownPath: path.join(config.storageDir, "memories.md"),
+    markdownPath: path.join(config.storageDir, EXTENSION.MEMORIES_MARKDOWN_FILENAME),
   });
   const {
     coordinator: memoryCoordinator,
@@ -202,7 +206,7 @@ async function main(): Promise<void> {
   const createMcpServer = (): McpServer => {
     const server = new McpServer(
       {
-        name: "ragnarok",
+        name: EXTENSION.ID,
         version: getServerVersion(),
       },
       { instructions },
@@ -241,7 +245,7 @@ async function main(): Promise<void> {
     }
     shuttingDown = true;
     logger.info(`Received ${signal} — shutting down`);
-    const drainBudgetMs = config.shutdownDrainMs ?? 10_000;
+    const drainBudgetMs = config.shutdownDrainMs ?? MCP_DEFAULTS.SHUTDOWN_DRAIN_MS;
     const hardExit = setTimeout(() => process.exit(1), drainBudgetMs + 5_000);
 
     try {
@@ -268,12 +272,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error("Fatal error starting MCP server:", error);
-  // A stdio client shows the operator nothing but this stream, so a startup
-  // refusal that has a concrete next action names it here.
-  const hint = startupFailureHint(error);
-  if (hint) {
-    console.error(hint);
-  }
+  // A stdio client shows the operator nothing but stderr, so a startup refusal
+  // that has a concrete next action names it there.
+  reportStartupFailure(error);
   process.exitCode = 1;
 });

@@ -517,7 +517,7 @@ describe("runtime payload parity", function () {
     expect(withoutContext).to.not.have.property("agenticMetadata");
   });
 
-  it("keeps the shared executor's success payload invariant while still forwarding workspaceContext", async function () {
+  it("keeps the shared executor's success payload invariant while forwarding workspaceContext", async function () {
     // The executor returns the service payload verbatim and adds no decoration
     // of its own — but the optional workspaceContext an options object would
     // hide from the compiler must still reach the service, so assert the
@@ -549,7 +549,7 @@ describe("runtime payload parity", function () {
     expect(executeQuery.secondCall.args[2], "the request signal, by identity").to.equal(signal);
   });
 
-  it("routes MCP's registered rag_query handler through the shared executor with no workspace context", async function () {
+  it("routes MCP's rag_query handler through the shared executor with no workspace context", async function () {
     // Drives the handler the MCP SDK actually calls, not the executor directly:
     // editor state is VS Code's alone, so MCP must supply no workspaceContext,
     // and the payload the client sees must be the executor's verbatim.

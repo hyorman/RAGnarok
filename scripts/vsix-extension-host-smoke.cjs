@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const vscode = require("vscode");
 
 async function run() {
@@ -25,6 +26,11 @@ async function run() {
   const expected = { topicCreated: true, queryExecuted: true, topicDeleted: true };
   if (JSON.stringify(result) !== JSON.stringify(expected)) {
     throw new Error(`Installed RAGnarōk create/query/delete smoke failed: ${JSON.stringify(result)}`);
+  }
+  // vsix-smoke.mjs names this version in its success line: the host may not be its CLI's build.
+  const reportPath = process.env.RAGNAROK_SMOKE_HOST_REPORT;
+  if (reportPath) {
+    fs.writeFileSync(reportPath, JSON.stringify({ vscodeVersion: vscode.version }));
   }
   console.log(`Installed extension-host smoke passed: ${JSON.stringify(result)}`);
 }

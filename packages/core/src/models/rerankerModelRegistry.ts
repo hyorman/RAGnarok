@@ -6,6 +6,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { DEFAULTS } from "../constants.js";
 import { Logger } from "../logger.js";
 import { findAssetsModelsDir, isModelDirectory } from "./findAssetsModelsDir.js";
 
@@ -26,7 +27,7 @@ export class RerankerModelRegistry {
    * Ordered by recommended default first.
    */
   static readonly CURATED_MODELS: string[] = [
-    "Xenova/ms-marco-MiniLM-L-6-v2", // Default — 23 MB, fast, good accuracy
+    DEFAULTS.RERANKER_MODEL, // Default — 23 MB, fast, good accuracy
     "Xenova/ms-marco-MiniLM-L-12-v2", // 33 MB, better accuracy, slower
     "Xenova/ms-marco-TinyBERT-L-2-v2", // ~11 MB, fastest, lower accuracy
     "cross-encoder/ms-marco-MiniLM-L-6-v2", // Original HF namespace

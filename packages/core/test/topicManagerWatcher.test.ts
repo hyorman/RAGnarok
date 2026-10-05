@@ -1,8 +1,16 @@
 import { expect } from "chai";
+import fsSync from "fs";
 import * as fs from "fs/promises";
+import sinon from "sinon";
 import * as os from "os";
 import * as path from "path";
-import { TopicManager, type IConfigProvider, type INotifier, type StorageExternalChange } from "../src/index";
+import {
+  setLoggerFactory,
+  TopicManager,
+  type IConfigProvider,
+  type INotifier,
+  type StorageExternalChange,
+} from "../src/index";
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
 import type { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
 
@@ -225,9 +233,34 @@ describe("TopicManager external-change watcher", function () {
     expect(events).to.have.length(0);
   });
 
+  it("logs a storage watch that cannot start once, as a start failure", async function () {
+    this.timeout(10_000);
+    const warnings: string[] = [];
+    const quiet = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
+    setLoggerFactory({ createLogger: () => ({ ...quiet, warn: (message: string) => void warnings.push(message) }) });
+    const watch = sinon
+      .stub(fsSync, "watch")
+      .throws(Object.assign(new Error("EMFILE: too many open files, watch"), { code: "EMFILE" }));
+    try {
+      await createManagerInTmpDir();
+    } finally {
+      watch.restore();
+      setLoggerFactory({ createLogger: () => quiet });
+    }
+    expect(warnings.filter((message) => /\bwatch/i.test(message))).to.deep.equal([
+      "Unable to watch the storage directory for external changes; freshness relies on refresh() until a watch is established",
+    ]);
+  });
+
   describe("storage-unavailable log reason", function () {
-    /** The `reason` the manager logs when it announces that storage became unavailable, given the marker files present. */
-    async function reasonFor(markerFiles: string[]): Promise<unknown> {
+    /**
+     * What the manager logs and emits when it announces that storage became unavailable, given the marker files
+     * present. `breakProbe` points the marker probe at a path lstat rejects with a non-ENOENT error.
+     */
+    async function announce(
+      markerFiles: string[],
+      options: { breakProbe?: boolean } = {},
+    ): Promise<{ reason: unknown; events: string[] }> {
       const created = await createManagerInTmpDir();
       for (const name of markerFiles) {
         await fs.writeFile(path.join(storageDir, name), "{}");
@@ -239,27 +272,51 @@ describe("TopicManager external-change watcher", function () {
         error: () => undefined,
         warn: (message: string, context?: { reason?: unknown }) => warnings.push({ message, context }),
       };
-
-      await (created as any).announceUnavailability();
-
-      return warnings.find((warning) => warning.message.startsWith("Storage became unavailable"))?.context?.reason;
+      const events: string[] = [];
+      const subscription = created.onExternalChange((change) => events.push(change.kind));
+      const realStorageDir = (created as any).storageDir;
+      if (options.breakProbe) {
+        // A NUL byte makes lstat reject with ERR_INVALID_ARG_VALUE: an error that is not ENOENT.
+        (created as any).storageDir = path.join(storageDir, "unreadable\0markers");
+      }
+      try {
+        await (created as any).announceUnavailability();
+      } finally {
+        (created as any).storageDir = realStorageDir;
+        subscription.dispose();
+      }
+      const reason = warnings.find((warning) => warning.message.startsWith("Storage became unavailable"))?.context
+        ?.reason;
+      return { reason, events };
     }
 
-    it("blames an unreachable directory when no marker file is present", async function () {
-      expect(await reasonFor([])).to.equal("the storage directory is unreachable");
+    it("blames an unreachable directory when no marker file is present, and emits storage-unavailable", async function () {
+      expect(await announce([])).to.deep.equal({
+        reason: "the storage directory is unreachable",
+        events: ["storage-unavailable"],
+      });
     });
 
-    it("blames a foreign write lease, not a reset, when only the lock file is present", async function () {
-      expect(await reasonFor([LOCK_FILENAME])).to.equal("another process holds the storage write lease");
+    it("reports a lock file without claiming a live holder it cannot know about", async function () {
+      expect((await announce([LOCK_FILENAME])).reason).to.equal(
+        "a storage lock file is present (another process may be writing, or one exited without removing it)",
+      );
     });
 
     it("blames a reset when the reset journal is present", async function () {
-      expect(await reasonFor([RESET_JOURNAL_FILENAME])).to.equal(RESET_REASON);
+      expect((await announce([RESET_JOURNAL_FILENAME])).reason).to.equal(RESET_REASON);
     });
 
     it("blames a reset when the reset journal and the lock file are both present", async function () {
       // A reset holds the write lease for its whole duration, so this is the common reset case.
-      expect(await reasonFor([RESET_JOURNAL_FILENAME, LOCK_FILENAME])).to.equal(RESET_REASON);
+      expect((await announce([RESET_JOURNAL_FILENAME, LOCK_FILENAME])).reason).to.equal(RESET_REASON);
+    });
+
+    it("still announces when the marker probe fails with an error other than ENOENT", async function () {
+      expect(await announce([LOCK_FILENAME], { breakProbe: true })).to.deep.equal({
+        reason: "the storage directory is unreachable",
+        events: ["storage-unavailable"],
+      });
     });
   });
 });

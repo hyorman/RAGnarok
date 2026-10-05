@@ -32,7 +32,7 @@ export class ModelRegistry {
 
   static readonly CURATED_MODELS = [
     // Xenova/ namespace — pre-converted ONNX models (most reliable)
-    "Xenova/all-MiniLM-L6-v2", // 384-dim, 23 MB – fast & popular
+    DEFAULTS.EMBEDDING_MODEL, // the default (entry 0 is the fallback) — 384-dim, 23 MB, fast & popular
     "Xenova/all-MiniLM-L12-v2", // 384-dim, 33 MB – more accurate
     "Xenova/paraphrase-MiniLM-L6-v2", // 384-dim, 23 MB – paraphrasing
     "Xenova/multi-qa-MiniLM-L6-cos-v1", // 384-dim, 23 MB – QA / retrieval

@@ -13,10 +13,11 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { createHash, randomUUID } from "crypto";
+import { EXTENSION } from "../constants";
 import type { ILogger } from "../interfaces";
 import type { Document as TopicDocument, ExportedTopicData } from "../utils/types";
 import { atomicWriteJson } from "../utils/storage";
-import { validateAndStageTopicArchive } from "../utils/topicArchive";
+import { TOPIC_ARCHIVE_ENTRIES, validateAndStageTopicArchive } from "../utils/topicArchive";
 import type { ResolvedSharedTopic } from "./types";
 
 export const ENTRIES_FILENAME = "entries.json";
@@ -156,9 +157,9 @@ export class SharedArchiveCache {
       return false;
     }
     const dir = this.unpackDir(entry);
-    const required = [path.join(dir, "topic.json")];
+    const required = [path.join(dir, TOPIC_ARCHIVE_ENTRIES.TOPIC)];
     if (entry.hasTable) {
-      required.push(path.join(dir, "lancedb", `${entry.sharedId}.lance`));
+      required.push(path.join(dir, EXTENSION.LANCEDB_DIR, `${entry.sharedId}.lance`));
     }
     if (entry.hasVectorMetadata) {
       required.push(path.join(dir, `vector-${entry.sharedId}-metadata.json`));
@@ -206,7 +207,7 @@ export class SharedArchiveCache {
       const content = staged.contentDir;
       const topic = { ...staged.exportData.topic, id: sharedId };
       const documents = staged.exportData.documents.map((document) => ({ ...document, topicId: sharedId }));
-      await atomicWriteJson(path.join(content, "topic.json"), {
+      await atomicWriteJson(path.join(content, TOPIC_ARCHIVE_ENTRIES.TOPIC), {
         ...staged.exportData,
         topic,
         documents,
@@ -228,8 +229,8 @@ export class SharedArchiveCache {
         hasVectorMetadata = false;
       }
 
-      const nativeTable = path.join(content, "lancedb", `${nativeId}.lance`);
-      const sharedTable = path.join(content, "lancedb", `${sharedId}.lance`);
+      const nativeTable = path.join(content, EXTENSION.LANCEDB_DIR, `${nativeId}.lance`);
+      const sharedTable = path.join(content, EXTENSION.LANCEDB_DIR, `${sharedId}.lance`);
       let hasTable = true;
       try {
         await fs.rename(nativeTable, sharedTable);

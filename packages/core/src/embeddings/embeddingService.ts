@@ -13,7 +13,7 @@
  */
 
 import { EventEmitter } from "events";
-import { CONFIG } from "../constants";
+import { CONFIG, DEFAULTS } from "../constants";
 import { Logger } from "../logger";
 import { IConfigProvider, INotifier } from "../interfaces";
 import { EmbeddingBackend, EmbeddingBackendType, EmbeddingFingerprint } from "./embeddingBackend";
@@ -21,6 +21,9 @@ import { ModelRegistry, AvailableModel } from "../models/modelRegistry.js";
 import { cosineSimilarity as langchainCosineSimilarity } from "@langchain/core/utils/math";
 import { Mutex } from "async-mutex";
 import { AsyncLocalStorage } from "async_hooks";
+
+/** Text embedded once to learn a backend's dimension when it does not report one. */
+export const EMBEDDING_FINGERPRINT_PROBE_TEXT = "RAGnarok embedding fingerprint probe";
 
 // Re-export for consumers that imported AvailableModel from here
 export type { AvailableModel } from "../models/modelRegistry.js";
@@ -109,7 +112,7 @@ export class EmbeddingService {
   // ---------------------------------------------------------------------------
 
   private async resolveBackend(): Promise<string> {
-    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
 
     if (setting !== "auto") {
       this.logger.info(`Embedding backend forced to "${setting}" by configuration`);
@@ -354,7 +357,7 @@ export class EmbeddingService {
     return this.withActiveBackend(async (backend) => {
       let dimension = backend.getDimension();
       if (!dimension) {
-        dimension = (await backend.embed("RAGnarok embedding fingerprint probe", signal)).length;
+        dimension = (await backend.embed(EMBEDDING_FINGERPRINT_PROBE_TEXT, signal)).length;
       }
       const details = backend.getFingerprintInfo?.() ?? {};
       return {
@@ -380,7 +383,7 @@ export class EmbeddingService {
         await this.selectBackendTransactional(backendType, modelName);
         return;
       } catch (backendError: any) {
-        const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+        const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
         if (setting !== "auto" || this.registeredBackends.length === 0) {
           throw backendError;
         }
@@ -395,7 +398,7 @@ export class EmbeddingService {
     try {
       await this.ensureBackend();
     } catch (backendError: any) {
-      const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+      const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
       if (setting !== "auto") {
         throw backendError;
       }
@@ -652,7 +655,7 @@ export class EmbeddingService {
   // ---------------------------------------------------------------------------
 
   private async shouldFallback(_error: any): Promise<boolean> {
-    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
     return setting === "auto";
   }
 

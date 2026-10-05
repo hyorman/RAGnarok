@@ -71,6 +71,10 @@ console.log("Installing tarballs into clean consumer...");
 // through Transformers is valid here too. The consumer has no direct Transformers
 // dependency, so the override names core's exact version instead of a $ reference.
 const coreManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "packages", "core", "package.json"), "utf8"));
+const coreTransformers = coreManifest.dependencies?.["@huggingface/transformers"];
+if (!coreTransformers) {
+  fail("packages/core must list @huggingface/transformers in dependencies: the consumer's peer override names it");
+}
 fs.writeFileSync(
   path.join(consumerDir, "package.json"),
   JSON.stringify({
@@ -78,7 +82,7 @@ fs.writeFileSync(
     private: true,
     version: "1.0.0",
     overrides: {
-      "@langchain/community": { "@huggingface/transformers": coreManifest.dependencies["@huggingface/transformers"] },
+      "@langchain/community": { "@huggingface/transformers": coreTransformers },
     },
   }),
 );

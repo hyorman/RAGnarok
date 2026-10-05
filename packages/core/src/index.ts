@@ -21,7 +21,7 @@ export { LogLevel } from "./interfaces";
 export { Logger, setLoggerFactory, sanitizeErrorMessage } from "./logger";
 
 // Constants
-export { EXTENSION, CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS } from "./constants";
+export { EXTENSION, CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS, GITHUB_HOST, TOP_K_MAX } from "./constants";
 export type { LLMProviderName } from "./constants";
 
 // Types
@@ -84,7 +84,11 @@ export {
 export type { VectorStoreConfig, VectorStoreMetadata } from "./stores/vectorStoreFactory";
 
 // Graph visualization types
-export { projectMemoryGraphVisualization, reduceGraphVisualizationDocument } from "./visualization/graphVisualization";
+export {
+  GRAPH_VISUALIZATION_MAX_NODES,
+  projectMemoryGraphVisualization,
+  reduceGraphVisualizationDocument,
+} from "./visualization/graphVisualization";
 export type {
   JsonValue,
   GraphVisualizationSource,
@@ -152,6 +156,7 @@ export {
   GitBranchDetector,
   DUPLICATE_SIMILARITY_THRESHOLD,
   DEFAULT_TOP_K,
+  DEFAULT_LIST_LIMIT,
   MEMORY_TABLE_PREFIX,
   DECAY_LAMBDA,
   MIN_CONFIDENCE_THRESHOLD,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TOOL_LIMITS } from "@ragnarok/core";
+import { GRAPH_VISUALIZATION_MAX_NODES, TOOL_LIMITS } from "@ragnarok/core";
 import { GRAPH_RESOURCE_URI } from "../uiResource";
 import { invokeMemoryResetTool, invokeMemoryTool } from "../memoryToolAdapter";
 import { invokeGraphVisualizationTool } from "../graphVisualizationAdapter";
@@ -10,15 +10,15 @@ const graphVisualizationInput = z.discriminatedUnion("memoryScope", [
     .object({
       source: z.literal("memory"),
       memoryScope: z.literal("workspace"),
-      maxNodes: z.number().int().min(1).max(2_000).optional(),
+      maxNodes: z.number().int().min(1).max(GRAPH_VISUALIZATION_MAX_NODES).optional(),
     })
     .strict(),
   z
     .object({
       source: z.literal("memory"),
       memoryScope: z.literal("branch"),
-      branch: z.string().trim().min(1).max(255),
-      maxNodes: z.number().int().min(1).max(2_000).optional(),
+      branch: z.string().trim().min(1).max(TOOL_LIMITS.branch),
+      maxNodes: z.number().int().min(1).max(GRAPH_VISUALIZATION_MAX_NODES).optional(),
     })
     .strict(),
 ]);
@@ -51,7 +51,7 @@ export function buildMemoryInputSchema() {
       .number()
       .int()
       .min(1)
-      .max(50)
+      .max(TOOL_LIMITS.memoryTopK)
       .optional()
       .describe("Number of results to return (default: 10, for 'recall' action)"),
     includeEntities: z
@@ -69,7 +69,7 @@ export function buildMemoryInputSchema() {
       .number()
       .int()
       .min(1)
-      .max(3650)
+      .max(TOOL_LIMITS.memoryDays)
       .optional()
       .describe("Forget memories older than N days (for 'forget' action)"),
     expired: z
@@ -94,7 +94,7 @@ export function buildMemoryInputSchema() {
       .max(TOOL_LIMITS.tags)
       .optional()
       .describe("Tags to attach to memory (for 'store' action)"),
-    ttlDays: z.number().positive().max(3650).optional().describe("Optional memory TTL in days"),
+    ttlDays: z.number().positive().max(TOOL_LIMITS.memoryDays).optional().describe("Optional memory TTL in days"),
     includeAuto: z.boolean().optional().describe("Include reserved auto-generated memories"),
     reinforce: z.boolean().optional().describe("Update access counters during recall (writer sessions only)"),
     ids: z
@@ -106,7 +106,7 @@ export function buildMemoryInputSchema() {
       .number()
       .int()
       .min(1)
-      .max(500)
+      .max(TOOL_LIMITS.memoryListLimit)
       .optional()
       .describe("Max entries to return (for 'list' action, default: 50)"),
   });

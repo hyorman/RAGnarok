@@ -103,7 +103,10 @@ export interface IngestionRequest {
   /** What was added, for the log and the success message ("Documents", "Web page", …). */
   label: string;
   loaderOptions: NonNullable<Parameters<TopicManager["addDocuments"]>[2]>["loaderOptions"];
-  /** Fraction of the progress bar the whole ingest fills, split evenly across the sources. */
+  /**
+   * Fraction of the progress bar the whole ingest fills at most, split evenly across the sources. A source that
+   * stops part-way fills less than its part.
+   */
   progressShare: number;
   /** Reported before ingestion starts, for sources with a slow first step (a repository listing). */
   initialProgress?: { message: string; increment: number };
@@ -112,7 +115,10 @@ export interface IngestionRequest {
 /**
  * `Progress.report` takes increments, but the pipeline reports where it is: 0 to 100 through the stages of one
  * source, starting again at 0 for the next. This reports how far the pipeline moved since its last report, scaled so
- * that all the sources together fill `share` of the bar.
+ * that all the sources together fill at most `share` of the bar.
+ *
+ * It relies on the pipeline's progress for one source never going down (true of documentPipeline today): a drop is
+ * read as the start of the next source, so a source that went backwards would be counted twice.
  */
 function pipelineProgressReporter(
   progress: vscode.Progress<{ message?: string; increment?: number }>,
@@ -180,7 +186,10 @@ export function supportedDocumentFilters(): Record<string, string[]> {
     "Supported Documents": withoutDots(DocumentLoaderFactory.getSupportedExtensions()),
   };
   for (const [fileType, label] of Object.entries(FILTER_LABELS) as Array<[LocalFileType, string]>) {
-    filters[label] = withoutDots(byType[fileType]);
+    // A type with no extensions would be an empty, useless group in the dialog.
+    if (byType[fileType].length > 0) {
+      filters[label] = withoutDots(byType[fileType]);
+    }
   }
   return filters;
 }

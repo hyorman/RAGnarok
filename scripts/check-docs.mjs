@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  RELEASE_TOOLING_VARIABLES,
+  fencedBlockUnder,
+  isSourceFile,
+  overWidthLines,
+  removedVariableGuard,
+  sentencesOf,
+  stripComments,
+} from "./docs-guards.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const canonical = [
@@ -72,22 +81,21 @@ for (const relative of canonical) {
 // lines) is hard-wrapped near 80 columns. Prettier's default `proseWrap:
 // "preserve"` never rewraps, so a paragraph pasted in as one long line stays
 // one and nothing else flags it. Hold the wrapped guides to the repo's print
-// width; tables, headings and fenced blocks cannot wrap and are exempt.
+// width, in display columns. What wrapping cannot shorten is exempt: tables, headings,
+// reference definitions, fenced and indented code, and a line whose overflow
+// is one unbreakable token such as a URL (see docs-guards.mjs).
 const { printWidth } = JSON.parse(await readFile(path.join(root, ".prettierrc.json"), "utf8"));
+const widthOffenders = [];
 for (const relative of canonical.filter((file) => file !== "README.md")) {
-  let fenced = false;
-  for (const [index, line] of (await readFile(path.join(root, relative), "utf8")).split("\n").entries()) {
-    if (/^\s*```/.test(line)) {
-      fenced = !fenced;
-    } else if (!fenced && !/^(?:#|\s*\|)/.test(line)) {
-      const width = [...line].length;
-      assert.ok(
-        width <= printWidth,
-        `${relative}:${index + 1} is ${width} characters, past the ${printWidth}-column print width; wrap prose near 80`,
-      );
-    }
+  for (const { line, width } of overWidthLines(await readFile(path.join(root, relative), "utf8"), printWidth)) {
+    widthOffenders.push(`${relative}:${line} is ${width} columns`);
   }
 }
+assert.deepEqual(
+  widthOffenders,
+  [],
+  `past the ${printWidth}-column print width; wrap prose near 80:\n${widthOffenders.join("\n")}`,
+);
 
 // A `file.ts:N` citation rots the first time the file is split, so each one
 // must name a source file that exists and a line the file still has. Prefer
@@ -99,7 +107,7 @@ async function sourceFilesByBasename() {
       const absolute = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         await walk(absolute);
-      } else if (entry.name.endsWith(".ts")) {
+      } else if (isSourceFile(entry.name)) {
         byName.set(entry.name, [...(byName.get(entry.name) ?? []), absolute]);
       }
     }
@@ -113,9 +121,10 @@ async function sourceFilesByBasename() {
   return byName;
 }
 const sourceFiles = await sourceFilesByBasename();
-const sourceText = (await Promise.all([...sourceFiles.values()].flat().map((file) => readFile(file, "utf8")))).join(
-  "\n",
-);
+// Code only: a variable named in a comment is not one the sources read.
+const sourceText = (
+  await Promise.all([...sourceFiles.values()].flat().map(async (file) => stripComments(await readFile(file, "utf8"))))
+).join("\n");
 for (const relative of canonical) {
   const contents = await readFile(path.join(root, relative), "utf8");
   for (const match of contents.matchAll(/\b([A-Za-z0-9_-]+\.ts):(\d+)(?:-(\d+))?/g)) {
@@ -180,7 +189,7 @@ async function typeScriptFilesUnder(directory, prefix) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const relative = `${prefix}/${entry.name}`;
     if (entry.isDirectory()) found.push(...(await typeScriptFilesUnder(path.join(directory, entry.name), relative)));
-    else if (entry.name.endsWith(".ts")) found.push(relative);
+    else if (isSourceFile(entry.name)) found.push(relative);
   }
   return found;
 }
@@ -190,7 +199,7 @@ for (const pkg of ["core", "mcp-server", "vscode"]) {
   const src = path.join(root, "packages", pkg, "src");
   const required = new Set();
   for (const entry of await readdir(src, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith(".ts")) required.add(entry.name);
+    if (entry.isFile() && isSourceFile(entry.name)) required.add(entry.name);
     if (entry.isDirectory()) {
       assert.ok(directories.has(entry.name), `${relative} Module Layout must list the ${entry.name}/ directory`);
     }
@@ -230,6 +239,17 @@ const mcp = await readFile(path.join(root, "packages/mcp-server/README.md"), "ut
 assert.doesNotMatch(mcp, /Existing branch-era storage .* intentionally not migrated/);
 // The stdio server has no roles, so the guide must not resurrect a role matrix.
 assert.doesNotMatch(mcp, /Shared reader|Shared curator|Shared admin/);
+
+// retrieval.topK refuses startup above core's TOP_K_MAX, so the guide states that bound.
+const topKMax = /export const TOP_K_MAX = (\d+);/.exec(
+  await readFile(path.join(root, "packages/core/src/constants.ts"), "utf8"),
+)?.[1];
+assert.ok(topKMax, "core constants must define TOP_K_MAX");
+assert.match(
+  mcp,
+  new RegExp(`\\| \`retrieval\\.topK\` +\\|[^|]*\\|[^|]*\\(1–${topKMax}\\)`),
+  `the retrieval.topK row must state its 1–${topKMax} range`,
+);
 // The settings that moved into config.json must be documented by their key.
 // Asserting on the old variable names would pin the guide to a configuration
 // mechanism the server no longer has.
@@ -247,12 +267,14 @@ const sourceVariables = environmentVariables(sourceText);
 for (const variable of sourceVariables) {
   assert.match(mcp, wholeToken(variable), `MCP guide must document ${variable}`);
 }
-const releaseToolingVariables = new Set(["RAGNAROK_RELEASE_ARTIFACT_DIR"]);
 for (const relative of canonical) {
   for (const variable of environmentVariables(await readFile(path.join(root, relative), "utf8"))) {
+    const toolingDoc = RELEASE_TOOLING_VARIABLES.get(variable);
     assert.ok(
-      sourceVariables.has(variable) || releaseToolingVariables.has(variable),
-      `${relative} names ${variable}, which nothing reads`,
+      sourceVariables.has(variable) || toolingDoc === relative,
+      toolingDoc
+        ? `${relative} names the release-tooling variable ${variable}, which only ${toolingDoc} documents`
+        : `${relative} names ${variable}, which nothing reads`,
     );
   }
 }
@@ -345,12 +367,15 @@ assert.match(
 );
 // contributes.languageModelTools is generated, so a contributor who hand-edits
 // package.json meets the drift check's failure before its cause. The command
-// list that sends contributors to `npm run` must name both scripts, and each
-// must exist.
+// list that sends contributors to `npm run` must name both scripts inside the
+// Build & Test Commands block itself (a mention elsewhere in the README is not
+// the list they copy from), and each script must exist.
+const buildCommands = fencedBlockUnder(readme, "### Build & Test Commands");
+assert.ok(buildCommands, 'README.md must keep a fenced block under "### Build & Test Commands"');
 for (const script of ["tools:manifest", "tools:manifest:check"]) {
   assert.ok(manifest.scripts[script], `package.json must define the ${script} script`);
   assert.match(
-    readme,
+    buildCommands,
     new RegExp(`npm run ${escapeRegExp(script)}(?![\\w:])`),
     `README.md Build & Test Commands must name npm run ${script}`,
   );
@@ -396,6 +421,11 @@ for (const [name, contents] of [
   assert.match(contents, /no\s+cross-host data sharing/i, `${name} must document host storage isolation`);
 }
 assert.match(release, /media\/memoryGraph\.js/);
+assert.match(
+  release,
+  phrase("containerd image store"),
+  "docs/RELEASE.md must say that publishing the Docker image needs the containerd image store",
+);
 assert.match(release, /media\/memoryGraph\.css/);
 const copilotInstructions = await readFile(path.join(root, ".github/copilot-instructions.md"), "utf8");
 assert.doesNotMatch(
@@ -409,13 +439,9 @@ assert.doesNotMatch(architecture, /v0\.7 implementation/, "ARCHITECTURE.md must 
 // the server rejects, refuses, aborts or errors on one describes a guard that
 // does not exist (the MCP guide used to list one, and SECURITY.md promised one).
 // The removed names are the ones the Docker gate checks the image bakes none of;
-// that list is read, not copied. A sentence is about them when it names one, says
-// "removed ... variable/transport", or pairs "network listener" with a variable.
-// A sentence that opens with a pointer ("They are rejected", "Setting one aborts
-// ...") is about them when the sentence before it was; "Setting one of the keys"
-// or "Setting one key" is about configuration keys, not a pointer. A rejection
-// verb that is negated ("does not reject", "so they are not rejected", "nothing
-// rejects them", "ignored rather than rejected") is the true claim and is allowed.
+// that list is read, not copied. The sentence rules (what is "about" them, which
+// verbs claim a rejection, how a negation covers a verb) live in docs-guards.mjs
+// and are held to fixtures in test-docs-guards.mjs.
 const dockerGate = await readFile(path.join(root, "scripts/docker-gate.mjs"), "utf8");
 const removedList = /const removedEnvVars = \[([^\]]*)\]/.exec(dockerGate)?.[1] ?? "";
 const removedVariables = [...removedList.matchAll(/"(RAGNAROK_[A-Z0-9_]+)"/g)].map((match) => match[1]);
@@ -423,33 +449,12 @@ assert.ok(
   removedVariables.includes("RAGNAROK_PORT") && removedVariables.includes("RAGNAROK_DEPLOYMENT_MODE"),
   "scripts/docker-gate.mjs must keep listing the removed HTTP-transport variables in removedEnvVars",
 );
-const namesRemovedVariable = new RegExp(`\\b(?:${removedVariables.join("|")})\\b`);
-const aboutRemovedVariables = (sentence) =>
-  namesRemovedVariable.test(sentence) ||
-  /\bremoved[- ](?:(?:HTTP|transport|environment|network)[- ])*(?:transport|variables?|listener)/i.test(sentence) ||
-  (/\bnetwork listener\b/i.test(sentence) && /\b(?:variables?|settings?|removed|transport)\b/i.test(sentence));
-const rejectionVerbs =
-  /\b(?:reject|refus|abort|error|invalid|terminat|crash)\w*|\bfail(?:s|ed|ing|ure)?\b|\bexit(?:s|ed|ing)?\b/gi;
-const negation = /\b(?:no|not|never|nothing|neither|nor|cannot|without|rather than|instead of|as opposed to)\b|n't\b/i;
-const claimsRejection = (sentence) =>
-  [...sentence.matchAll(rejectionVerbs)].some(
-    (verb) =>
-      !negation.test(
-        sentence
-          .slice(0, verb.index)
-          .split(/[;:]|\b(?:and|but|so|yet|then)\b/)
-          .pop(),
-      ),
-  );
+const removedVariableSentences = removedVariableGuard(removedVariables);
 for (const relative of canonical) {
-  const sentences = (await readFile(path.join(root, relative), "utf8")).replace(/\s+/g, " ").split(/(?<=[.!?])\s/);
+  const sentences = sentencesOf(await readFile(path.join(root, relative), "utf8"));
   sentences.forEach((sentence, index) => {
-    const continuesPrevious =
-      /^(?:they|these|those|such|each|this|doing so|setting (?:one|any one|any of them))\b(?!\s+(?:of the\b.*?\bkeys?\b|keys?\b))/i.test(
-        sentence,
-      ) && aboutRemovedVariables(sentences[index - 1] ?? "");
     assert.ok(
-      !((aboutRemovedVariables(sentence) || continuesPrevious) && claimsRejection(sentence)),
+      !removedVariableSentences.flags(sentence, sentences[index - 1] ?? ""),
       `${relative} says removed HTTP-transport variables are rejected or cause an error, but nothing reads or rejects them: "${sentence.slice(0, 80)}"`,
     );
   });

@@ -31,16 +31,19 @@ import {
   resetStorage,
   SHARED_TOPIC_CACHE_DIRNAME,
   STORAGE_RESET_JOURNAL_FILENAME,
+  StorageFormatVersionError,
+  UnsupportedStorageError,
 } from "../utils/storage";
 import { SharedTopicRegistry } from "../sharedTopics/registry";
 import { SharedTopicReadOnlyError } from "../sharedTopics/types";
 import type { SharedTopicSource } from "../sharedTopics/types";
-import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
+import { acquireOperationLease, DEFAULT_LEASE_WAIT_MS, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
-import { StorageDirectoryWatcher } from "../utils/storageDirectoryWatcher";
+import { StorageDirectoryWatcher, STORAGE_WATCH_DEBOUNCE_MS } from "../utils/storageDirectoryWatcher";
 import { isFiniteNumber, isRecord } from "../utils/typeGuards";
 import {
   StorageTransactionCoordinator,
+  TRANSACTIONS_DIRNAME,
   type StorageTransactionOperation,
 } from "../utils/storageTransactionCoordinator";
 import { randomUUID } from "crypto";
@@ -375,9 +378,13 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
         embeddingModel: this.topicsIndex?.modelName,
       });
     } catch (error) {
-      this.logger.error("Failed to initialize TopicManager", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // The caller reports these typed refusals (MCP startup report, VS Code
+      // activation log and modal), so logging them here printed them twice.
+      if (!(error instanceof UnsupportedStorageError || error instanceof StorageFormatVersionError)) {
+        this.logger.error("Failed to initialize TopicManager", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       // A rejected factory call gives the caller no manager instance to
       // dispose. Close every resource opened before the failure here so a
       // long-lived extension host can retry without leaked native handles.
@@ -534,7 +541,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
       delete nextTopicsIndex.topics[topicId];
       const preparedIndex = path.join(this.paths.databaseDir(), `.delete-${topicId}-${randomUUID()}.json`);
       await atomicWriteJson(preparedIndex, nextTopicsIndex);
-      const lancedbDir = path.join(this.paths.databaseDir(), "lancedb");
+      const lancedbDir = path.join(this.paths.databaseDir(), EXTENSION.LANCEDB_DIR);
       const operations: StorageTransactionOperation[] = [
         { type: "replace", source: preparedIndex, destination: this.paths.topicsIndexPath() },
         { type: "delete", destination: this.paths.topicDocumentsPath(topicId) },
@@ -1763,7 +1770,10 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
   // directory disappearing emits `storage-unavailable` and is retried until it
   // returns. Mechanics live in StorageDirectoryWatcher.
 
-  /** Start the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
+  /**
+   * Start the directory watch. Failure to construct it degrades to no watcher;
+   * freshness then comes only from refresh().
+   */
   private startExternalChangeWatcher(): void {
     if (this.watcherStopped) {
       return;
@@ -1771,12 +1781,15 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
     this.externalWatcher ??= new StorageDirectoryWatcher({
       directory: this.paths.databaseDir(),
       accepts: (name) => name === EXTENSION.TOPICS_INDEX_FILENAME || /^topic-.*-documents\.json$/.test(name),
-      debounceMs: 250,
+      debounceMs: STORAGE_WATCH_DEBOUNCE_MS,
       onChange: () => this.handleDebouncedChange(),
-      onError: (error) =>
-        this.logger.warn("Storage directory watch reported an error", {
-          error: error instanceof Error ? error.message : String(error),
-        }),
+      onError: (error, phase) =>
+        this.logger.warn(
+          phase === "start"
+            ? "Unable to watch the storage directory for external changes; freshness relies on refresh() until a watch is established"
+            : "The storage directory watch failed; external-change tracking will retry until the directory is back",
+          { error: error instanceof Error ? error.message : String(error) },
+        ),
       outage: {
         pollMs: 2_000,
         retryMs: 2_000,
@@ -1785,9 +1798,8 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
         onRecovered: () => this.recoverFromOutage(),
       },
     });
-    if (!this.externalWatcher.start()) {
-      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()");
-    }
+    // A construction failure is reported (once) through onError above.
+    this.externalWatcher.start();
   }
 
   private stopExternalChangeWatcher(): void {
@@ -1881,8 +1893,10 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
    * Diagnostic only: which marker file is present does not change the retry
    * behaviour (either way storage is unavailable and gets retried), it only
    * names the likely cause in the log line. A reset journal means a reset is
-   * running in another window; a lock file alone means another process holds
-   * an ordinary write lease; neither means storage is genuinely gone.
+   * running in another window. A lock file alone may be another process's
+   * ordinary write lease, or one a crashed process left behind: the file
+   * cannot tell which, so the reason claims neither. With no marker, storage
+   * is genuinely gone. A probe that fails leaves the default reason.
    */
   private async announceUnavailability(): Promise<void> {
     let reason = "the storage directory is unreachable";
@@ -1890,7 +1904,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
       if (await pathExists(path.join(this.storageDir, STORAGE_RESET_JOURNAL_FILENAME))) {
         reason = "a reset appears to be in progress in another window";
       } else if (await pathExists(path.join(this.storageDir, STORAGE_LOCK_FILENAME))) {
-        reason = "another process holds the storage write lease";
+        reason = "a storage lock file is present (another process may be writing, or one exited without removing it)";
       }
     } catch {
       // Best-effort diagnostic only; never let this block the notification.
@@ -2061,7 +2075,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
     options?: { waitMs?: number },
   ): Promise<T> {
     return this.storageMutationMutex.runExclusive(async () => {
-      const lease = await acquireOperationLease(this.storageDir, { waitMs: options?.waitMs ?? 5_000 });
+      const lease = await acquireOperationLease(this.storageDir, { waitMs: options?.waitMs ?? DEFAULT_LEASE_WAIT_MS });
       const previousLease = this.activeLease;
       const previousCoordinator = this.activeCoordinator;
       this.activeLease = lease;
@@ -2089,7 +2103,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
 
   /** Take an operation lease for a single startup write, then give it back. */
   private async withOperationLease<T>(operation: () => Promise<T>): Promise<T> {
-    const lease = await acquireOperationLease(this.storageDir, { waitMs: 5_000 });
+    const lease = await acquireOperationLease(this.storageDir, { waitMs: DEFAULT_LEASE_WAIT_MS });
     const previousLease = this.activeLease;
     this.activeLease = lease;
     try {
@@ -2149,7 +2163,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
     // A crashed transaction leaves its WAL, or an orphaned staging directory,
     // under the coordinator root.
     try {
-      const staged = await fs.readdir(path.join(this.paths.databaseDir(), ".transactions"));
+      const staged = await fs.readdir(path.join(this.paths.databaseDir(), TRANSACTIONS_DIRNAME));
       return staged.length > 0;
     } catch (error) {
       if (errnoCode(error) === "ENOENT") {

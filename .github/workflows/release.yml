@@ -40,6 +40,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run compile
+      - run: npm run tools:manifest:check
       - run: npm run lint
       - run: npm run format:check
       - run: npm run test:release-static
@@ -98,8 +99,10 @@ jobs:
       - run: npm ci
       - run: npm run compile
       - run: npm run compile:tests:all
-      # The suite takes about 3 minutes on Windows. A run that has not exited by 15
-      # has hung, and the report names the handles that kept it alive.
+      # The suite takes about 3 minutes on Windows, where the grace exit in
+      # test/helpers/suiteDiagnostics.ts ends a run that native handles keep alive.
+      # A run still going at 15 minutes has hung: the stall watchdog names a test
+      # that blocked the event loop, and the report names the handles left open.
       - run: npm run test:core:compiled
         timeout-minutes: 15
         env:

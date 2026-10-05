@@ -7,7 +7,7 @@ import * as sinon from "sinon";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { CONFIG, setLoggerFactory, ILoggerFactory } from "@ragnarok/core";
+import { CONFIG, setLoggerFactory, ILoggerFactory, TOP_K_MAX } from "@ragnarok/core";
 import { loadConfig } from "../src/config";
 import { EnvConfigProvider, ConsoleLoggerFactory, ConsoleNotifier } from "../src/adapters";
 
@@ -189,6 +189,15 @@ describe("MCP Server", () => {
       writeConfig({ embedding: { model: "custom/model-v2" } });
       const config = loadConfig();
       expect(config.embeddingModel).to.equal("custom/model-v2");
+    });
+
+    it("refuses a retrieval.topK above the shared ceiling at startup, and accepts the ceiling", () => {
+      // rag_query rejects any topK above TOP_K_MAX, so a larger configured default would
+      // start cleanly and then fail every query that does not pass its own topK.
+      writeConfig({ retrieval: { topK: TOP_K_MAX + 1 } });
+      expect(() => loadConfig()).to.throw(/topK/);
+      writeConfig({ retrieval: { topK: TOP_K_MAX } });
+      expect(loadConfig().topK).to.equal(TOP_K_MAX);
     });
 
     it("should reject a non-numeric ingestion.chunkSize at startup", () => {
@@ -521,8 +530,8 @@ describe("MCP Server", () => {
     });
 
     it("uses the file value when env does not set the key", () => {
-      writeConfig({ retrieval: { topK: 42 } });
-      expect(loadConfig().topK).to.equal(42);
+      writeConfig({ retrieval: { topK: 17 } });
+      expect(loadConfig().topK).to.equal(17);
     });
 
     it("ignores an environment variable for a file-owned setting", () => {
@@ -535,8 +544,8 @@ describe("MCP Server", () => {
     it("still lets the file set that same key", () => {
       // Guards the obvious wrong fix: deleting the read AND the file lookup.
       process.env.RAGNAROK_TOP_K = "5";
-      writeConfig({ retrieval: { topK: 42 } });
-      expect(loadConfig().topK).to.equal(42);
+      writeConfig({ retrieval: { topK: 17 } });
+      expect(loadConfig().topK).to.equal(17);
     });
 
     it("uses the CURRENT default for an absent key even when $defaults records an older one", () => {
@@ -561,7 +570,7 @@ describe("MCP Server", () => {
     });
 
     it("keeps env-only settings out of the file's reach", () => {
-      writeConfig({ retrieval: { topK: 42 } });
+      writeConfig({ retrieval: { topK: 17 } });
       process.env.RAGNAROK_LLM_API_KEY = "from-env";
       expect(loadConfig().llmApiKey).to.equal("from-env");
     });

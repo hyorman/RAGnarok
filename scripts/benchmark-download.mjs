@@ -8,12 +8,16 @@ const sleepFor = (milliseconds) => new Promise((resolve) => setTimeout(resolve, 
 
 const isRetryableStatus = (status) => status === 429 || status >= 500;
 
-// Retry-After is either a number of seconds or an HTTP date (a date already past waits zero). A header
-// that is neither falls back to exponential backoff, so a malformed value cannot stall or spin the loop.
+// Retry-After is either a whole number of seconds or an HTTP date in IMF-fixdate form, the one a server
+// must send (a date already past waits zero). Anything else falls back to exponential backoff, so a
+// malformed value cannot stall or spin the loop; V8's Date.parse alone would read "1.5" as a 2001 date.
+const IMF_FIXDATE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 function retryAfterMs(header, now) {
   if (header === null) return undefined;
   const value = header.trim();
   if (/^\d+$/.test(value)) return Number(value) * 1000;
+  if (!IMF_FIXDATE.test(value)) return undefined;
   const date = Date.parse(value);
   return Number.isNaN(date) ? undefined : Math.max(0, date - now());
 }
@@ -21,11 +25,20 @@ function retryAfterMs(header, now) {
 /**
  * Fetch `url` and return its body as a Buffer. HTTP 429, any 5xx status and network errors are retried
  * until `attempts` tries have been made; the wait honours Retry-After and otherwise backs off from one
- * second, doubling, and never exceeds `maxDelayMs`. Any other non-OK status throws at once.
+ * second, doubling, and never exceeds `maxDelayMs`. Any other non-OK status throws at once. Each attempt
+ * gets its own `timeoutMs`.
  */
 export async function downloadWithRetry(
   url,
-  { fetchImpl = fetch, sleep = sleepFor, attempts = 6, maxDelayMs = 60_000, now = Date.now, onRetry } = {},
+  {
+    fetchImpl = fetch,
+    sleep = sleepFor,
+    attempts = 6,
+    maxDelayMs = 60_000,
+    timeoutMs = 120_000,
+    now = Date.now,
+    onRetry,
+  } = {},
 ) {
   for (let attempt = 1; ; attempt++) {
     let response;
@@ -33,7 +46,7 @@ export async function downloadWithRetry(
     try {
       response = await fetchImpl(url, {
         redirect: "follow",
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: { "user-agent": BENCHMARK_USER_AGENT },
       });
       if (response.ok) return Buffer.from(await response.arrayBuffer());
@@ -51,7 +64,8 @@ export async function downloadWithRetry(
       if (!isRetryableStatus(response.status)) throw new Error(`Benchmark download ${url} ${reason}`);
     }
     if (attempt >= attempts) {
-      throw new Error(`Benchmark download ${url} ${reason} after ${attempts} attempts`, { cause: failure });
+      const tries = `${attempts} attempt${attempts === 1 ? "" : "s"}`;
+      throw new Error(`Benchmark download ${url} ${reason} after ${tries}`, { cause: failure });
     }
 
     const requested = failure === undefined ? retryAfterMs(response.headers.get("retry-after"), now) : undefined;

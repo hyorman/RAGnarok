@@ -22,6 +22,7 @@ import { CONFIG, DEFAULTS } from "../constants";
 import { RAGQueryParams, RAGQueryResult, RetrievalStrategy } from "../utils/types";
 import type { Reranker } from "../rerankers/reranker";
 import { TopicEmptyError } from "./topicEmptyError";
+import { TOOL_LIMITS } from "../tools/toolContracts";
 
 // Re-exported so the long-standing `agents/ragQueryService` import path keeps working.
 export { TopicEmptyError };
@@ -136,8 +137,8 @@ export class RAGQueryService {
 
     // 4. Build agent options: params → config (platforms own their defaults)
     const topK = params.topK ?? this.config.get<number>(CONFIG.TOP_K, 0);
-    if (topK < 1 || topK > 20 || !Number.isInteger(topK)) {
-      throw new Error(`Invalid topK value: ${topK}. Must be an integer between 1 and 20.`);
+    if (topK < 1 || topK > TOOL_LIMITS.queryTopK || !Number.isInteger(topK)) {
+      throw new Error(`Invalid topK value: ${topK}. Must be an integer between 1 and ${TOOL_LIMITS.queryTopK}.`);
     }
 
     const maxIterations = this.config.get<number>(CONFIG.MAX_ITERATIONS, 0);

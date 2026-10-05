@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cmdLine, needsShell, smokeSummary } from "./vsix-smoke-lib.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let vsix = path.resolve(process.argv[2] ?? "");
@@ -53,10 +54,10 @@ try {
       reuseMachineInstall: true,
     });
   }
-  // Node refuses to spawn a .cmd file without a shell (CVE-2024-27980), and the
-  // Windows VS Code CLI is code.cmd. Every argument is a path or flag this script
-  // built, so quoting each one is all cmd.exe needs.
-  const viaShell = process.platform === "win32" && /\.cmd$/i.test(code);
+  // Node refuses to spawn a batch file (.cmd or .bat) without a shell (CVE-2024-27980),
+  // and the Windows VS Code CLI is code.cmd. cmdLine quotes every argument and refuses
+  // the characters cmd.exe would still act on inside quotes.
+  const viaShell = needsShell(code);
   // cmd.exe expands %~dp0 to the current directory, not the batch file's own, when a
   // quoted batch file was found through PATH (code.cmd opens "%~dp0..\Code.exe"), so a
   // bare name is resolved to its absolute path first. where.exe is an .exe: no shell.
@@ -76,7 +77,7 @@ try {
   }
   const runCli = (args, options) =>
     viaShell
-      ? execSync([code, ...baseArgs, ...args].map((value) => `"${value}"`).join(" "), options)
+      ? execSync(cmdLine([code, ...baseArgs, ...args]), options)
       : execFileSync(code, [...baseArgs, ...args], options);
   const version = runCli(["--version"], { encoding: "utf8" }).split(/\r?\n/)[0];
   if (!atLeast(version, minimum)) throw new Error(`VS Code ${version} is below declared minimum ${minimum}`);
@@ -123,6 +124,9 @@ try {
   // This invokes the internal create/query/delete hook and fails on activation,
   // command registration, native initialization, query, or cleanup errors.
   const vscodeTest = await import("@vscode/test-electron");
+  // runTests downloads its own build when VSCODE_VERSION is unset, so the host may not be the CLI's
+  // version: the host writes the version it ran here.
+  const hostReport = path.join(profile, "host-report.json");
   // When invoked from a VS Code extension host (including Codex), this
   // variable is inherited and would make the Electron binary run as plain
   // Node instead of starting an isolated extension host.
@@ -137,6 +141,7 @@ try {
         ...process.env,
         RAGNAROK_RUN_INSTALLED_SMOKE: "1",
         RAGNAROK_EXPECTED_EXTENSION_PATH: extensionDir,
+        RAGNAROK_SMOKE_HOST_REPORT: hostReport,
       },
       launchArgs: [
         workspace,
@@ -156,9 +161,8 @@ try {
       process.env.ELECTRON_RUN_AS_NODE = inheritedElectronRunAsNode;
     }
   }
-  console.log(
-    `Installed, activated, and create/query/delete smoked ${pkg.publisher}.${pkg.name}@${pkg.version} on VS Code ${version}.`,
-  );
+  const { vscodeVersion: hostVersion } = JSON.parse(await readFile(hostReport, "utf8"));
+  console.log(smokeSummary(`${pkg.publisher}.${pkg.name}@${pkg.version}`, hostVersion, version));
 } finally {
   // Node retries EBUSY, EMFILE, ENFILE, ENOTEMPTY and EPERM, which covers a VS Code
   // process that is slow to exit and still holds files under the profile.

@@ -128,9 +128,10 @@ storage.
 ```
 src/
 ├── index.ts                      # Entry point — adapters, core services, stdio transport
-├── startupHint.ts                # Next-action hint printed after a refused storage startup
+├── startupHint.ts                # Fatal startup report; next-action hint for a refused storage
 ├── config.ts                     # McpConfig type and loadConfig()
 ├── configFile.ts                 # <storageDir>/config.json — key table, schema, generation
+├── defaults.ts                   # MCP_DEFAULTS — defaults of the MCP-only settings
 ├── adapters.ts                   # Console / env adapters for @ragnarok/core interfaces
 ├── llmProviders.ts               # OpenAI, Anthropic, Ollama LLM providers
 ├── memoryToolAdapter.ts          # rag_memory / rag_reset_memory input and result shaping
@@ -266,7 +267,7 @@ environment variable for any of them.
 | `embedding.maxResidentModels`   | `2`                             | Maximum embedding models held in memory at once (minimum `1`)                                                                     |
 | `ingestion.chunkSize`           | `1000`                          | Document chunk size (characters)                                                                                                  |
 | `ingestion.chunkOverlap`        | `200`                           | Overlap between chunks                                                                                                            |
-| `retrieval.topK`                | `10`                            | Default number of results per query                                                                                               |
+| `retrieval.topK`                | `10`                            | Default number of results per query (1–20)                                                                                        |
 | `retrieval.strategy`            | `hybrid`                        | Default retrieval strategy                                                                                                        |
 | `retrieval.maxIterations`       | `3`                             | Max agentic refinement iterations                                                                                                 |
 | `retrieval.confidenceThreshold` | `0.7`                           | Confidence threshold for early stopping                                                                                           |

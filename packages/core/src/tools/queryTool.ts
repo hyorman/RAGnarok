@@ -1,9 +1,8 @@
 import type { RAGQueryService } from "../agents/ragQueryService";
-// Imported from the leaf module, not from ragQueryService: this is the only value
-// import in the tools module, so routing it through the service would drag the whole
-// agent stack into anyone importing the contracts.
+// Imported from the leaf module, not from ragQueryService: routing it through the
+// service would drag the whole agent stack into anyone importing the contracts.
 import { TopicEmptyError } from "../agents/topicEmptyError";
-import type { RAGQueryResult, RetrievalStrategy } from "../utils/types";
+import { RetrievalStrategy, type RAGQueryResult } from "../utils/types";
 import { TOOL_LIMITS } from "./toolContracts";
 
 export interface QueryToolInput {
@@ -65,10 +64,12 @@ export async function executeQueryTool(
   const topic = requiredString(input.topic, "topic", TOOL_LIMITS.topicName);
   const query = requiredString(input.query, "query", TOOL_LIMITS.query);
 
-  if (input.topK !== undefined && (!Number.isInteger(input.topK) || input.topK < 1 || input.topK > 20)) {
-    throw new QueryInputError("Query tool 'topK' must be an integer between 1 and 20");
+  const maxTopK = TOOL_LIMITS.queryTopK;
+  if (input.topK !== undefined && (!Number.isInteger(input.topK) || input.topK < 1 || input.topK > maxTopK)) {
+    throw new QueryInputError(`Query tool 'topK' must be an integer between 1 and ${maxTopK}`);
   }
-  if (input.retrievalStrategy !== undefined && !["vector", "hybrid", "bm25"].includes(input.retrievalStrategy)) {
+  const strategies: readonly string[] = Object.values(RetrievalStrategy);
+  if (input.retrievalStrategy !== undefined && !strategies.includes(input.retrievalStrategy)) {
     throw new QueryInputError("Query tool 'retrievalStrategy' must be 'vector', 'hybrid', or 'bm25'");
   }
 

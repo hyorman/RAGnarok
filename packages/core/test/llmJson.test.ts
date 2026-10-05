@@ -42,6 +42,9 @@ describe("LLM JSON helper", function () {
     expect(extractJsonObject('[{"a":1},{"b":2}]')).to.deep.equal([{ a: 1 }, { b: 2 }]);
     expect(extractJsonObject("[1]")).to.deep.equal([1]);
     expect(extractJsonObject("[]")).to.deep.equal([]);
+    // Only a lone plain object is unwrapped: not a nested array, and not null.
+    expect(extractJsonObject('[[{"a":1}]]')).to.deep.equal([[{ a: 1 }]]);
+    expect(extractJsonObject("[null]")).to.deep.equal([null]);
   });
 
   it("throws when there is no object", function () {

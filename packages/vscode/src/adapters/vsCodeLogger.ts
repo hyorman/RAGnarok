@@ -4,7 +4,7 @@
  */
 
 import * as vscode from "vscode";
-import { ILogger, ILoggerFactory, LogLevel, CONFIG } from "@ragnarok/core";
+import { ILogger, ILoggerFactory, LogLevel, CONFIG, DEFAULTS, EXTENSION } from "@ragnarok/core";
 import { VSCODE_CONFIG } from "../constants";
 
 class VsCodeLogger implements ILogger {
@@ -13,7 +13,7 @@ class VsCodeLogger implements ILogger {
 
   constructor(private context: string) {
     if (!VsCodeLogger.outputChannel) {
-      VsCodeLogger.outputChannel = vscode.window.createOutputChannel("RAGnarōk");
+      VsCodeLogger.outputChannel = vscode.window.createOutputChannel(EXTENSION.DISPLAY_NAME);
       VsCodeLogger.refreshLogLevel();
     }
   }
@@ -24,7 +24,7 @@ class VsCodeLogger implements ILogger {
 
   public static getConfiguredLogLevel(): LogLevel {
     const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
-    const levelStr = config.get<string>(CONFIG.LOG_LEVEL, "info").toLowerCase();
+    const levelStr = config.get<string>(CONFIG.LOG_LEVEL, DEFAULTS.LOG_LEVEL).toLowerCase();
     switch (levelStr) {
       case "debug":
         return LogLevel.DEBUG;

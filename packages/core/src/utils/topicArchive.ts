@@ -5,6 +5,9 @@ import AdmZip from "adm-zip";
 import type { Document, ExportedTopicData, Topic } from "./types";
 import { isFiniteNumber, isRecord } from "./typeGuards";
 
+/** The fixed member names of a .rag archive; unpacked shared-topic content uses the same names. */
+export const TOPIC_ARCHIVE_ENTRIES = Object.freeze({ MANIFEST: "manifest.json", TOPIC: "topic.json" });
+
 export const TOPIC_ARCHIVE_FORMAT_VERSION = "2.0";
 
 export const TOPIC_ARCHIVE_LIMITS = {
@@ -121,7 +124,7 @@ function validateManifest(value: unknown): TopicArchiveManifest {
     }
     const safePath = validateTopicArchivePath(candidate.path);
     const folded = safePath.normalize("NFC").toLowerCase();
-    if (safePath === "manifest.json" || seen.has(safePath)) {
+    if (safePath === TOPIC_ARCHIVE_ENTRIES.MANIFEST || seen.has(safePath)) {
       throw new Error(`Invalid archive manifest: duplicate or reserved path (${safePath})`);
     }
     if (seenFolded.has(folded)) {
@@ -243,7 +246,7 @@ function validateExportedTopicData(value: unknown): ExportedTopicData {
 }
 
 function validateAllowedPayloadPath(entryPath: string, topicId: string): void {
-  if (entryPath === "topic.json" || entryPath === `vector-${topicId}-metadata.json`) {
+  if (entryPath === TOPIC_ARCHIVE_ENTRIES.TOPIC || entryPath === `vector-${topicId}-metadata.json`) {
     return;
   }
   const allowedTables = new Set([`${topicId}.lance`]);
@@ -324,18 +327,18 @@ export async function validateAndStageTopicArchive(
     }
   }
 
-  const manifestEntry = entriesByName.get("manifest.json");
+  const manifestEntry = entriesByName.get(TOPIC_ARCHIVE_ENTRIES.MANIFEST);
   if (!manifestEntry || manifestEntry.isDirectory) {
-    throw new Error("Invalid archive: manifest.json not found");
+    throw new Error(`Invalid archive: ${TOPIC_ARCHIVE_ENTRIES.MANIFEST} not found`);
   }
   if (Number(manifestEntry.header.size) > TOPIC_ARCHIVE_LIMITS.maxManifestBytes) {
     throw new Error("Invalid archive: manifest exceeds size limit");
   }
-  const manifest = validateManifest(parseJson(manifestEntry.getData(), "manifest.json"));
+  const manifest = validateManifest(parseJson(manifestEntry.getData(), TOPIC_ARCHIVE_ENTRIES.MANIFEST));
 
   const archiveFiles = new Set(
     entries
-      .filter((entry) => !entry.isDirectory && entry.entryName !== "manifest.json")
+      .filter((entry) => !entry.isDirectory && entry.entryName !== TOPIC_ARCHIVE_ENTRIES.MANIFEST)
       .map((entry) => entry.entryName),
   );
   const declaredFiles = new Set(manifest.files.map((file) => file.path));
@@ -350,9 +353,9 @@ export async function validateAndStageTopicArchive(
     }
   }
 
-  const topicManifest = manifest.files.find((file) => file.path === "topic.json");
+  const topicManifest = manifest.files.find((file) => file.path === TOPIC_ARCHIVE_ENTRIES.TOPIC);
   if (!topicManifest) {
-    throw new Error("Invalid archive: topic.json must be listed in manifest");
+    throw new Error(`Invalid archive: ${TOPIC_ARCHIVE_ENTRIES.TOPIC} must be listed in manifest`);
   }
 
   const contentDir = path.join(stagingRoot, "content");
@@ -366,8 +369,8 @@ export async function validateAndStageTopicArchive(
     if (bytes.byteLength !== expected.size || createHash("sha256").update(bytes).digest("hex") !== expected.sha256) {
       throw new Error(`Invalid archive: checksum mismatch (${expected.path})`);
     }
-    if (expected.path === "topic.json") {
-      exportData = validateExportedTopicData(parseJson(bytes, "topic.json"));
+    if (expected.path === TOPIC_ARCHIVE_ENTRIES.TOPIC) {
+      exportData = validateExportedTopicData(parseJson(bytes, TOPIC_ARCHIVE_ENTRIES.TOPIC));
     }
     const targetPath = path.join(contentDir, ...expected.path.split("/"));
     await fs.mkdir(path.dirname(targetPath), { recursive: true });

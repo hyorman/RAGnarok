@@ -10,7 +10,7 @@ export { TopicTool, type TopicToolPayload } from "./topicTool";
 export { vscodeToolRegistrationHost, type LanguageModelToolRegistrationHost } from "./toolRegistrationHost";
 export { VscodeLmBackend } from "./vscodeLmBackend";
 export { WorkspaceContextProvider } from "./workspaceContext";
-export { COMMANDS, TOOLS, VIEWS, VSCODE_CONFIG } from "./constants";
+export { COMMANDS, TOOLS, VIEWS, VSCODE_CONFIG, VSCODE_DEFAULTS } from "./constants";
 export { resolveMemoryHostContext, type MemoryHostContextHost } from "./memoryHostContext";
 export { registerMemoryTools, type RegisterMemoryToolsOptions } from "./memoryTools";
 export {

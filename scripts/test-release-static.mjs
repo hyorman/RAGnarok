@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import * as auditPolicyModule from "./audit-policy.mjs";
 import { BENCHMARK_USER_AGENT, downloadWithRetry } from "./benchmark-download.mjs";
 import * as releaseStaticPolicy from "./release-static-policy.mjs";
-import { withContainerdSnapshotter } from "./use-containerd-image-store.mjs";
+import { parseDaemonConfig, withContainerdSnapshotter } from "./use-containerd-image-store.mjs";
 
 const { evaluateAuditReport, normalizeLocalTarballAuditRanges } = auditPolicyModule;
 const { assertDevOnlyDependency } = releaseStaticPolicy;
@@ -225,12 +225,26 @@ const historicAllowed = historicExceptionsPolicy.auditExceptions.map(({ advisory
 assert.deepEqual(
   evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, productionInstalledTree),
   { allowed: historicAllowed, rejected: [] },
+  "with each approved via version installed, both historic exceptions apply",
 );
-const upgradedViaTree = structuredClone(productionInstalledTree);
-upgradedViaTree.dependencies["@ragnarok/mcp-server"].dependencies["@ragnarok/core"].dependencies[
-  "@huggingface/transformers"
-].version = "3.8.2";
-assert.deepEqual(evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, upgradedViaTree), {
+/** A copy of `tree` with every installed `name`, wherever it sits, at `version`. */
+function withInstalledVersion(tree, name, version) {
+  const copy = structuredClone(tree);
+  let found = 0;
+  const visit = (node) => {
+    for (const [dependencyName, dependency] of Object.entries(node.dependencies ?? {})) {
+      if (dependencyName === name) {
+        dependency.version = version;
+        found += 1;
+      }
+      visit(dependency);
+    }
+  };
+  visit(copy);
+  assert.ok(found > 0, `${name} is not in the fixture tree`);
+  return copy;
+}
+const sharpExceptionVoided = {
   allowed: [historicAllowed[0]],
   rejected: [
     {
@@ -240,7 +254,35 @@ assert.deepEqual(evaluateAuditReport(productionAuditReport, historicExceptionsPo
       reason: "Approved via version is not installed",
     },
   ],
-});
+};
+const upgradedViaTree = withInstalledVersion(productionInstalledTree, "@huggingface/transformers", "3.8.2");
+assert.deepEqual(
+  evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, upgradedViaTree),
+  sharpExceptionVoided,
+  "an upgraded via package voids the exception approved for its old version",
+);
+// The approved version must be installed as the via package itself: another package at that version proves nothing.
+const viaVersionElsewhereTree = structuredClone(upgradedViaTree);
+viaVersionElsewhereTree.dependencies["unrelated-package"] = { version: "3.8.1" };
+assert.deepEqual(
+  evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, viaVersionElsewhereTree),
+  sharpExceptionVoided,
+  "a via version installed under another package's name does not satisfy the exception",
+);
+// Without an installed tree no approved via version can be confirmed, so no exception applies.
+assert.deepEqual(
+  evaluateAuditReport(productionAuditReport, historicExceptionsPolicy, auditNow, undefined),
+  {
+    allowed: [],
+    rejected: historicExceptionsPolicy.auditExceptions.map(({ advisory, dependency, range }) => ({
+      advisory,
+      dependency,
+      range,
+      reason: "Approved via version is not installed",
+    })),
+  },
+  "an evaluation without an installed tree confirms no exception",
+);
 
 const localTarballAuditReport = structuredClone(productionAuditReport);
 localTarballAuditReport.vulnerabilities["@ragnarok/core"].range = "";
@@ -790,19 +832,52 @@ assert.doesNotMatch(packSmoke, /npm audit --omit=dev --audit-level=moderate/);
 // so `npm ls` through Transformers (which both audit gates run for an exception approved via
 // Transformers, and vsce runs in VSIX staging) does not exit 1.
 assert.equal(pkg.overrides["@langchain/community"]["@huggingface/transformers"], "$@huggingface/transformers");
-const transformersLs = spawnSync("npm", ["ls", "@huggingface/transformers", "--omit=dev", "--all", "--json"], {
-  cwd: root,
-  encoding: "utf8",
-});
+/** npm's result, run from the repository root. npm that cannot start, or is killed, fails here with the reason. */
+function npmSync(args, options = {}) {
+  const run = spawnSync("npm", args, { cwd: root, encoding: "utf8", ...options });
+  if (run.error) throw new Error(`npm ${args.join(" ")} could not start: ${run.error.message}`, { cause: run.error });
+  if (run.signal) throw new Error(`npm ${args.join(" ")} was killed by ${run.signal}`);
+  return run;
+}
+// npm that cannot start (no npm on PATH) must fail with that reason, not a TypeError on a missing stderr.
+const pathWithoutNpm = await mkdtemp(path.join(os.tmpdir(), "ragnarok-no-npm-"));
+try {
+  assert.throws(
+    () => npmSync(["--version"], { env: { ...process.env, PATH: pathWithoutNpm } }),
+    /npm --version could not start: spawnSync npm ENOENT/,
+  );
+} finally {
+  await rm(pathWithoutNpm, { recursive: true, force: true });
+}
+// vsce's `npm list` in VSIX staging fails on any invalid optional peer of @langchain/community the tree
+// installs, not only Transformers, so `npm ls` covers each of them.
+const lockForPeers = JSON.parse(await read("package-lock.json"));
+const communityPeerMeta = lockForPeers.packages["node_modules/@langchain/community"].peerDependenciesMeta ?? {};
+const installedCommunityOptionalPeers = Object.entries(communityPeerMeta)
+  .filter(([name, meta]) => meta.optional && lockForPeers.packages[`node_modules/${name}`])
+  .map(([name]) => name)
+  .sort();
+assert.deepEqual(
+  installedCommunityOptionalPeers,
+  ["@huggingface/transformers", "@lancedb/lancedb", "cheerio", "ignore", "pdf-parse"],
+  "the installed optional peers of @langchain/community changed: confirm npm ls still covers each",
+);
+const optionalPeersLs = npmSync(["ls", ...installedCommunityOptionalPeers, "--omit=dev", "--all", "--json"]);
 assert.equal(
-  transformersLs.status,
+  optionalPeersLs.status,
   0,
-  `npm ls @huggingface/transformers must be valid: ${transformersLs.stderr.trim()}`,
+  `npm ls of @langchain/community's installed optional peers must be valid: ${optionalPeersLs.stderr.trim()}`,
 );
 assert.match(
   packSmoke,
-  /overrides: \{\s*"@langchain\/community": \{ "@huggingface\/transformers": coreManifest\.dependencies\["@huggingface\/transformers"\] \}/,
+  /overrides: \{\s*"@langchain\/community": \{ "@huggingface\/transformers": coreTransformers \}/,
   "the pack-smoke consumer must carry the root's Transformers peer override",
+);
+// JSON.stringify drops an undefined value, so a missing core dependency would silently become `{}`.
+assert.match(
+  packSmoke,
+  /const coreTransformers = coreManifest\.dependencies\?\.\["@huggingface\/transformers"\];\s*if \(!coreTransformers\) \{\s*fail\(/,
+  "pack-smoke must refuse a core manifest without its Transformers dependency",
 );
 assert.match(packSmoke, /proc\.stdin\.end\(\)/, "packed stdio smoke must request graceful EOF shutdown");
 assert.match(
@@ -908,12 +983,32 @@ for (const name of ["coreTarball", "mcpTarball", "vsix", "dockerImage"]) {
     `${name} size evidence must be re-measured when @huggingface/transformers changes`,
   );
 }
-assert.ok(policy.budgetEvidence.coreTarball.bytes <= policy.budgets.coreTarballCompressedBytes);
-assert.ok(policy.budgetEvidence.mcpTarball.bytes <= policy.budgets.mcpTarballCompressedBytes);
-assert.ok(policy.budgetEvidence.vsix.maximumCompressedBytes <= policy.budgets.vsixCompressedBytes);
-assert.ok(policy.budgetEvidence.vsix.maximumUnpackedBytes <= policy.budgets.vsixUnpackedBytes);
-assert.ok(policy.vsixTargets.includes(policy.budgetEvidence.vsix.maximumTarget));
-assert.ok(policy.budgetEvidence.dockerImage.bytes <= policy.budgets.dockerImageBytes);
+const overBudget = (what, measured, budgetName) =>
+  `${what} evidence (${measured} bytes) exceeds ${budgetName} (${policy.budgets[budgetName]} bytes)`;
+assert.ok(
+  policy.budgetEvidence.coreTarball.bytes <= policy.budgets.coreTarballCompressedBytes,
+  overBudget("core tarball", policy.budgetEvidence.coreTarball.bytes, "coreTarballCompressedBytes"),
+);
+assert.ok(
+  policy.budgetEvidence.mcpTarball.bytes <= policy.budgets.mcpTarballCompressedBytes,
+  overBudget("MCP tarball", policy.budgetEvidence.mcpTarball.bytes, "mcpTarballCompressedBytes"),
+);
+assert.ok(
+  policy.budgetEvidence.vsix.maximumCompressedBytes <= policy.budgets.vsixCompressedBytes,
+  overBudget("largest packed VSIX", policy.budgetEvidence.vsix.maximumCompressedBytes, "vsixCompressedBytes"),
+);
+assert.ok(
+  policy.budgetEvidence.vsix.maximumUnpackedBytes <= policy.budgets.vsixUnpackedBytes,
+  overBudget("largest unpacked VSIX", policy.budgetEvidence.vsix.maximumUnpackedBytes, "vsixUnpackedBytes"),
+);
+assert.ok(
+  policy.vsixTargets.includes(policy.budgetEvidence.vsix.maximumTarget),
+  `the largest VSIX's target ${policy.budgetEvidence.vsix.maximumTarget} is not one of vsixTargets`,
+);
+assert.ok(
+  policy.budgetEvidence.dockerImage.bytes <= policy.budgets.dockerImageBytes,
+  overBudget("Docker image", policy.budgetEvidence.dockerImage.bytes, "dockerImageBytes"),
+);
 // The release image is built and published from the amd64 CI runner.
 assert.equal(policy.budgetEvidence.dockerImage.architecture, "amd64");
 for (const [name, command] of Object.entries(pkg.scripts).filter(([name]) => name.startsWith("publish:"))) {
@@ -1121,7 +1216,8 @@ const mcpToolRuntime = await read("packages/mcp-server/src/toolRuntime.ts");
 // Shutdown stays bounded by the hard-exit timer. It first drains admitted tool
 // calls so they can enter memory coordination, then closes memory admission and
 // drains it before releasing native handles.
-assert.match(mcpIndex, /const drainBudgetMs = config\.shutdownDrainMs \?\? 10_000/);
+assert.match(mcpIndex, /const drainBudgetMs = config\.shutdownDrainMs \?\? MCP_DEFAULTS\.SHUTDOWN_DRAIN_MS/);
+assert.match(await read("packages/mcp-server/src/defaults.ts"), /SHUTDOWN_DRAIN_MS: 10_000,/);
 assert.match(mcpIndex, /setTimeout\(\(\) => process\.exit\(1\), drainBudgetMs \+ 5_000\)/);
 assert.match(mcpIndex, /await drainToolRuntimeThenMemory\(toolRuntime, memoryCoordinator\)/);
 assert.match(
@@ -1176,6 +1272,13 @@ for (const file of executableMcpFiles) {
 const builder = await read("scripts/build-vsix.js");
 const vscodeIgnore = await read(".vscodeignore");
 assert.match(vscodeIgnore, /!node_modules\/binary-extensions\/\*\*/);
+// pdf-parse depends on pdfjs-dist. npm nests it under pdf-parse today (that package's allowlist line
+// covers it), but a dedupe would hoist it to the root, so the root line stays while the dependency does.
+assert.ok(
+  JSON.parse(await read("package-lock.json")).packages["node_modules/pdf-parse"]?.dependencies?.["pdfjs-dist"],
+  "pdf-parse no longer depends on pdfjs-dist: drop the !node_modules/pdfjs-dist/** line from .vscodeignore",
+);
+assert.match(vscodeIgnore, /^!node_modules\/pdfjs-dist\/\*\*$/m, "the VSIX must allowlist a hoisted pdfjs-dist");
 for (const archiveDependency of ["adm-zip", "yazl", "buffer-crc32"]) {
   assert.match(
     vscodeIgnore,
@@ -1298,22 +1401,71 @@ assert.match(nativeProbe, /console\.log\(\s*JSON\.stringify\(/);
 // Contents/MacOS/Electron link, so the extension-host smoke must launch the real binary.
 const testElectronUtil = require("@vscode/test-electron/out/util.js");
 const vscodeDownload = await mkdtemp(path.join(os.tmpdir(), "ragnarok-vscode-layout-"));
-const vscodeContents = path.join(vscodeDownload, "Visual Studio Code.app", "Contents");
-await mkdir(path.join(vscodeContents, "MacOS"), { recursive: true });
-await writeFile(path.join(vscodeContents, "MacOS", "Code"), "");
-await writeFile(
-  path.join(vscodeContents, "Info.plist"),
-  "<plist><dict><key>CFBundleExecutable</key><string>Code</string></dict></plist>",
-);
-assert.equal(
-  testElectronUtil.downloadDirToExecutablePath(vscodeDownload, "darwin-arm64"),
-  path.join(vscodeContents, "MacOS", "Code"),
-);
-await rm(vscodeDownload, { recursive: true, force: true });
+try {
+  const vscodeContents = path.join(vscodeDownload, "Visual Studio Code.app", "Contents");
+  await mkdir(path.join(vscodeContents, "MacOS"), { recursive: true });
+  await writeFile(path.join(vscodeContents, "MacOS", "Code"), "");
+  await writeFile(
+    path.join(vscodeContents, "Info.plist"),
+    "<plist><dict><key>CFBundleExecutable</key><string>Code</string></dict></plist>",
+  );
+  assert.equal(
+    testElectronUtil.downloadDirToExecutablePath(vscodeDownload, "darwin-arm64"),
+    path.join(vscodeContents, "MacOS", "Code"),
+  );
+} finally {
+  // Removed even when the assertion fails, so a failing run leaves no temp tree behind.
+  await rm(vscodeDownload, { recursive: true, force: true });
+}
 // Node refuses to spawn a .cmd file without a shell (CVE-2024-27980), and the Windows
 // VS Code CLI is code.cmd: every CLI call goes through runCli.
-assert.match(vsixSmoke, /const viaShell = process\.platform === "win32" && \/\\\.cmd\$\/i\.test\(code\);/);
-assert.doesNotMatch(vsixSmoke, /runArgs\(/, "vsix-smoke must reach the VS Code CLI only through runCli");
+assert.match(vsixSmoke, /import \{ cmdLine, needsShell, smokeSummary \} from "\.\/vsix-smoke-lib\.mjs";/);
+assert.match(vsixSmoke, /const viaShell = needsShell\(code\);/);
+assert.match(vsixSmoke, /execSync\(cmdLine\(\[code, \.\.\.baseArgs, \.\.\.args\]\), options\)/);
+// Every child process vsix-smoke starts, by its first argument: where.exe, the native probe, and the
+// VS Code CLI only through runCli (once with a shell, once without). A new direct CLI call adds an entry.
+assert.deepEqual(
+  [...vsixSmoke.matchAll(/\b(execFileSync|execSync|execFile|exec|spawnSync|spawn)\(\s*([^,)]+)/g)]
+    .map((call) => `${call[1]}(${call[2].trim()}`)
+    .sort(),
+  ['execFileSync("where.exe"', "execFileSync(code", "execFileSync(process.execPath", "execSync(cmdLine([code"],
+  "vsix-smoke must reach the VS Code CLI only through runCli",
+);
+const vsixSmokeLib = await import("./vsix-smoke-lib.mjs");
+for (const [cli, platform, expected] of [
+  ["C:\\VS Code\\bin\\code.cmd", "win32", true],
+  ["code.CMD", "win32", true],
+  ["C:\\tools\\code.bat", "win32", true],
+  ["C:\\VS Code\\Code.exe", "win32", false],
+  ["code.cmd", "linux", false],
+]) {
+  assert.equal(vsixSmokeLib.needsShell(cli, platform), expected, `needsShell(${cli}, ${platform})`);
+}
+assert.equal(
+  vsixSmokeLib.cmdLine(["C:\\VS Code\\bin\\code.cmd", "--install-extension", "C:\\a b\\x.vsix"]),
+  '"C:\\VS Code\\bin\\code.cmd" "--install-extension" "C:\\a b\\x.vsix"',
+);
+// cmd.exe expands %VAR% even inside double quotes and has no escape for it there; a quote or a line
+// break would end the argument. Such a value is refused, never passed through altered.
+for (const unsafe of ["C:\\%TEMP%\\x.vsix", 'C:\\a"b', "C:\\a\nb", "C:\\a\rb"]) {
+  assert.throws(() => vsixSmokeLib.cmdLine(["code.cmd", unsafe]), /cannot pass .* through cmd\.exe/);
+}
+assert.equal(
+  vsixSmokeLib.smokeSummary("hyorman.ragnarok@0.4.1", "1.140.0", "1.140.0"),
+  "Installed, activated, and create/query/delete smoked hyorman.ragnarok@0.4.1 on VS Code 1.140.0.",
+);
+assert.equal(
+  vsixSmokeLib.smokeSummary("hyorman.ragnarok@0.4.1", "1.140.0", "1.138.0"),
+  "Installed, activated, and create/query/delete smoked hyorman.ragnarok@0.4.1 on VS Code 1.140.0 " +
+    "(installed with the 1.138.0 CLI).",
+);
+// The success line names the VS Code that ran the extension host, which the host reports itself.
+assert.match(vsixSmoke, /RAGNAROK_SMOKE_HOST_REPORT: hostReport/);
+assert.match(
+  vsixSmoke,
+  /smokeSummary\(`\$\{pkg\.publisher\}\.\$\{pkg\.name\}@\$\{pkg\.version\}`, hostVersion, version\)/,
+);
+assert.match(extensionHostSmoke, /JSON\.stringify\(\{ vscodeVersion: vscode\.version \}\)/);
 // cmd.exe expands %~dp0 to the current directory, not the batch file's, when a quoted
 // code.cmd was found through PATH, so a bare name is resolved to an absolute path
 // (where.exe is an .exe, no shell) before runCli quotes it.
@@ -1479,6 +1631,19 @@ const windowsSharpTree = await sharpFixture();
 await writePackage(windowsSharpTree, "@img/sharp-win32-x64", { version: "0.35.5" });
 packaging.verifySharpNativesMatchTransformers(windowsSharpTree, win32X64Target);
 await rm(path.dirname(windowsSharpTree), { recursive: true, force: true });
+// The allowlist decides where the shipped chain ends. A native that the last shipped package still
+// declares (a future Windows Sharp that declares a libvips package, a target the allowlist does not
+// know) would be pruned from the VSIX and Sharp would fail to load at run time.
+const unendedChainTree = await sharpFixture();
+await writePackage(unendedChainTree, "@img/sharp-win32-x64", {
+  version: "0.35.5",
+  optionalDependencies: { "@img/sharp-libvips-win32-x64": "1.3.4" },
+});
+assert.throws(
+  () => packaging.verifySharpNativesMatchTransformers(unendedChainTree, win32X64Target),
+  /@img\/sharp-win32-x64 declares @img\/sharp-libvips-win32-x64, but no shipped native package config covers it for win32-x64/,
+);
+await rm(path.dirname(unendedChainTree), { recursive: true, force: true });
 // Every Sharp native that ships is declared by the package before it in the chain; an
 // undeclared one is not what Sharp loads, so the build must not accept it on presence alone.
 const undeclaredLibvipsTree = await sharpFixture({ declareLibvips: false });
@@ -1583,11 +1748,37 @@ assert.match(dockerfile, /onnxruntime-web/);
 // Core loads Transformers with import() (dist/transformers.node.mjs); dist/transformers.node.cjs
 // is the package's require/main entry. The image keeps exactly those two dist files.
 assert.doesNotMatch(dockerfile, /jsep\.wasm/, "Transformers 4 ships no jsep.wasm; a prune line for it is dead");
-assert.match(
-  dockerfile,
-  /find node_modules\/@huggingface\/transformers\/dist -type f \\\n\s+! -name transformers\.node\.mjs ! -name transformers\.node\.cjs -delete/,
+// The pin reads a CRLF checkout (core.autocrlf on Windows) as well as an LF one.
+const transformersPrune =
+  /find node_modules\/@huggingface\/transformers\/dist -type f \\\r?\n\s+! -name transformers\.node\.mjs ! -name transformers\.node\.cjs -delete/;
+for (const [endings, text] of [
+  ["LF", dockerfile],
+  ["CRLF", dockerfile.replaceAll("\n", "\r\n")],
+]) {
+  assert.match(text, transformersPrune, `the Transformers dist prune pin must read a ${endings} Dockerfile`);
+}
+// Both kept entries are checked after the prune, so an over-prune fails the image build itself.
+for (const entry of ["transformers.node.mjs", "transformers.node.cjs"]) {
+  assert.match(
+    dockerfile,
+    new RegExp(`test -f node_modules/@huggingface/transformers/dist/${entry.replaceAll(".", "\\.")}`),
+    `the image build must check that ${entry} survived the prune`,
+  );
+}
+const { spawnOutcome } = await import("./spawn-outcome.mjs");
+assert.equal(spawnOutcome(spawnSync(process.execPath, ["-e", "process.exitCode = 3"]), 1000), "exit 3");
+assert.equal(
+  spawnOutcome(spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], { timeout: 100 }), 100),
+  "timed out after 100 ms",
 );
-assert.match(dockerfile, /test -f node_modules\/@huggingface\/transformers\/dist\/transformers\.node\.mjs/);
+assert.equal(
+  spawnOutcome(spawnSync(process.execPath, ["-e", "process.kill(process.pid, 'SIGKILL')"]), 1000),
+  "killed by SIGKILL",
+);
+assert.equal(
+  spawnOutcome(spawnSync("ragnarok-no-such-command"), 1000),
+  "could not start: spawnSync ragnarok-no-such-command ENOENT",
+);
 const transformersManifest = JSON.parse(await read("node_modules/@huggingface/transformers/package.json"));
 assert.equal(transformersManifest.exports.node.import.default, "./dist/transformers.node.mjs");
 assert.equal(transformersManifest.exports.node.require.default, "./dist/transformers.node.cjs");
@@ -1646,6 +1837,10 @@ for (const contract of [
   // The gate calls it right after the image contract, so an over-pruned Transformers fails first.
   /await assertImageContract\(\);\s*\n\s*assertTransformersLoads\(\);/,
   /transformers-ok/,
+  // A timed-out or killed Transformers check names what happened instead of "(exit null)".
+  /spawnOutcome\(result, TRANSFORMERS_CHECK_TIMEOUT_MS\)/,
+  // The second server's tools get the same surface check as the first's, not only a count.
+  /assertToolSurface\(tools, "Second server"\)/,
   /assertRuntimeHardening/,
   /closeCleanly/,
   /ExposedPorts/,
@@ -1653,6 +1848,7 @@ for (const contract of [
 ]) {
   assert.match(dockerGate, contract, `Docker stdio gate must assert ${contract}`);
 }
+assert.doesNotMatch(dockerGate, /containerLogs/, "docker-gate must not keep the unused containerLogs helper");
 assert.doesNotMatch(
   dockerGate,
   /remained running instead of failing fast/,
@@ -1679,6 +1875,13 @@ for (const use of workflow.matchAll(/uses:\s*([^\s]+)/g)) {
   assert.match(use[1], /@[a-f0-9]{40}$/i, `Unpinned action: ${use[1]}`);
 }
 assert.match(workflow, /cancel-in-progress: true/);
+// The tool-manifest drift check runs in CI, after compile builds the core dist the generator imports.
+const staticCheckRuns = workflowDocument.jobs["static-checks"].steps.map((step) => step.run);
+assert.ok(
+  staticCheckRuns.includes("npm run compile") &&
+    staticCheckRuns.indexOf("npm run tools:manifest:check") > staticCheckRuns.indexOf("npm run compile"),
+  "static-checks must run npm run tools:manifest:check after npm run compile",
+);
 assert.match(workflow, /permissions:\s*\n\s*contents: read/);
 assert.match(workflow, /npm run bench:acquire[\s\S]*npm run bench:release/);
 assert.match(workflow, /vscode-tests:[\s\S]*xvfb-run -a npm test/);
@@ -1751,7 +1954,10 @@ assert.equal(vscodeMinimumSmokeStep.env?.VSCODE_VERSION, "1.105.0", "vscode-mini
 const coreSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:core:compiled");
 assert.equal(coreSuiteStep?.["timeout-minutes"], 15);
 assert.equal(coreSuiteStep?.env?.RAGNAROK_REPORT_ACTIVE_RESOURCES, "1");
-assert.match(await read("packages/core/test/setup.ts"), /export const mochaHooks/);
+assert.match(
+  await read("packages/core/test/setup.ts"),
+  /export const mochaHooks: Mocha\.RootHookObject = suiteHooks\(process\.env, process\.platform\);/,
+);
 // The MCP and soak steps follow the core step on the same leg and have never run on Windows CI, so
 // a hang there must also fail at 15 minutes and, for the MCP suite, name its handles.
 const mcpSuiteStep = workflowDocument.jobs.native.steps.find((step) => step.run === "npm run test:mcp:compiled");
@@ -1765,18 +1971,77 @@ assert.ok(
   soakStep?.["timeout-minutes"] <= 15,
   "the native leg's shutdown soak step needs a timeout of 15 minutes or less",
 );
-assert.match(await read("packages/mcp-server/test/setup.ts"), /export const mochaHooks/);
-// On Windows the core suite finishes but a native addon thread keeps the process alive, so both
-// suites end themselves after a 10 s grace there. The exit carries Mocha's own code (no argument,
-// never 0), and the timer is unref'd so a suite that exits on its own never reaches it.
-for (const setupFile of ["packages/core/test/setup.ts", "packages/mcp-server/test/setup.ts"]) {
-  const setupSource = await read(setupFile);
-  assert.match(setupSource, /process\.platform === "win32"/, `${setupFile} applies the grace exit on Windows`);
-  assert.match(setupSource, /RAGNAROK_TEST_FORCE_EXIT_GRACE/, `${setupFile} has the test-only grace-exit switch`);
-  assert.match(setupSource, /\.unref\(\)/, `${setupFile} unrefs its timers`);
-  assert.match(setupSource, /process\.exit\(\)/, `${setupFile} exits with Mocha's own code`);
-  assert.doesNotMatch(setupSource, /process\.exit\(0\)/, `${setupFile} must not hard-code a passing exit code`);
-}
+// The soak gives up inside its own budget, a minute short of the step limit, so its message (which
+// names the iteration) reports a stall instead of the runner's kill.
+// The soak runs unconditionally: a main guard that misfired (a symlinked checkout, an odd Windows
+// path form) would make it do nothing and exit 0. Its budget helpers live in a library with no side
+// effects, so these tests import that and never the script.
+const soakScript = await read("scripts/shutdown-soak.mjs");
+assert.doesNotMatch(
+  soakScript,
+  /process\.argv\[1\]|import\.meta\.url\s*===/,
+  "the soak must not guard its main() on how it was invoked",
+);
+assert.match(soakScript, /^await main\(\);$/m, "the soak must run main() unconditionally");
+assert.match(
+  soakScript,
+  /import \{[^}]*\} from "\.\/shutdown-soak-lib\.mjs";/,
+  "the soak must take its budget helpers from its library",
+);
+const soakLibSource = await read("scripts/shutdown-soak-lib.mjs");
+assert.deepEqual(
+  soakLibSource
+    .split("\n")
+    .filter((line) => /^[A-Za-z]/.test(line) && !/^(export (const|function) |\}|\/\/)/.test(line)),
+  [],
+  "the soak library may hold only exported constants and functions, nothing that runs on import",
+);
+assert.doesNotMatch(soakLibSource, /^(await|import) /m, "the soak library must not import or await anything");
+const soak = await import("./shutdown-soak-lib.mjs");
+assert.ok(
+  soak.SOAK_BUDGET_MS + 60_000 <= soakStep["timeout-minutes"] * 60_000,
+  `the soak budget (${soak.SOAK_BUDGET_MS} ms) must end at least a minute before the CI step limit`,
+);
+assert.equal(soak.iterationTimeoutMs(0, 0, 1), soak.ITERATION_TIMEOUT_MS);
+assert.equal(
+  soak.iterationTimeoutMs(0, soak.SOAK_BUDGET_MS - 20_000, 17),
+  20_000,
+  "the last iterations get what is left",
+);
+assert.throws(
+  () => soak.iterationTimeoutMs(0, soak.SOAK_BUDGET_MS, 18),
+  /shutdown soak exceeded its 12-minute budget before iteration 18/,
+);
+assert.match(
+  await read("packages/mcp-server/test/setup.ts"),
+  /export const mochaHooks: Mocha\.RootHookObject = suiteHooks\(process\.env, process\.platform\);/,
+);
+// Both suites install one diagnostics helper, copied byte for byte (neither package can import the
+// other's tests). On Windows the core suite finishes but a native addon thread keeps the process alive,
+// so both suites end themselves after a 10 s grace there. The exit carries Mocha's own code (no
+// argument, never 0), the timer is unref'd so a suite that exits on its own never reaches it, and every
+// line is written synchronously so a Windows pipe cannot drop it at the exit.
+const coreDiagnostics = await read("packages/core/test/helpers/suiteDiagnostics.ts");
+assert.equal(
+  await read("packages/mcp-server/test/helpers/suiteDiagnostics.ts"),
+  coreDiagnostics,
+  "the core and MCP suite diagnostics helpers must be identical",
+);
+assert.match(coreDiagnostics, /platform === "win32"/, "the grace exit applies on Windows");
+assert.match(coreDiagnostics, /env\.RAGNAROK_TEST_FORCE_EXIT_GRACE === "1"/, "the test-only grace-exit switch");
+assert.match(coreDiagnostics, /env\.RAGNAROK_REPORT_ACTIVE_RESOURCES === "1"/, "the report is on only for exactly 1");
+assert.match(coreDiagnostics, /\.unref\(\)/, "the diagnostics timers are unref'd");
+assert.match(coreDiagnostics, /^\s*process\.exit\(\);$/m, "the grace exit uses Mocha's own exit code");
+assert.doesNotMatch(coreDiagnostics, /process\.exit\(0\)/, "the grace exit must not hard-code a passing exit code");
+assert.match(coreDiagnostics, /fs\.writeSync\(2,/, "diagnostic lines are written synchronously");
+assert.doesNotMatch(coreDiagnostics, /console\.(?:error|log)\(/, "no diagnostic line goes through an async stream");
+assert.doesNotMatch(coreDiagnostics, /note in the plan/, "the forced-exit line must point at something in the repo");
+assert.match(coreDiagnostics, /new Worker\(/, "a stall watchdog outside the main event loop names a blocked test");
+assert.doesNotMatch(
+  workflow,
+  /A run that has not exited by 15\s*\n\s*# has hung/,
+  "the native-leg comment must describe the Windows grace exit",
+);
 const artifactBuildNeeds = workflowDocument.jobs["artifact-build"].needs;
 assert.ok(!artifactBuildNeeds.includes("benchmarks"), "artifact-build must not depend on its benchmark consumer");
 assert.equal(workflowDocument.jobs.benchmarks.needs, "artifact-build");
@@ -1797,6 +2062,18 @@ for (const [jobName, dockerCommand] of [
   assert.ok(
     switchIndex < dockerIndex,
     `${jobName} must switch to the containerd image store before its first ${dockerCommand}`,
+  );
+  // A conditional or failure-tolerant switch would let the Docker step run on the classic store.
+  assert.equal(jobSteps[switchIndex].if, undefined, `${jobName}'s containerd switch must not be conditional`);
+  assert.equal(
+    jobSteps[switchIndex]["continue-on-error"],
+    undefined,
+    `${jobName}'s containerd switch must not be allowed to fail`,
+  );
+  assert.equal(
+    workflowDocument.jobs[jobName]["continue-on-error"],
+    undefined,
+    `${jobName} must not be allowed to fail around its containerd switch`,
   );
 }
 const ociBuildStep = workflowDocument.jobs["artifact-build"].steps.find((step) =>
@@ -1835,6 +2112,27 @@ assert.deepEqual(
   withContainerdConfig,
   withContainerdConfigBefore,
   "withContainerdSnapshotter must not mutate its input",
+);
+const nestedFeaturesConfig = { features: { buildkit: true } };
+withContainerdSnapshotter(nestedFeaturesConfig);
+assert.deepEqual(
+  nestedFeaturesConfig,
+  { features: { buildkit: true } },
+  "withContainerdSnapshotter must not mutate a nested features object either",
+);
+// An empty daemon.json (some images ship one) is no settings, not a parse failure.
+assert.deepEqual(parseDaemonConfig(""), {});
+assert.deepEqual(parseDaemonConfig("  \n"), {});
+assert.deepEqual(parseDaemonConfig('{"features":{"buildkit":true}}'), { features: { buildkit: true } });
+for (const notAnObject of ["[]", "null", "1"]) {
+  assert.throws(() => parseDaemonConfig(notAnObject), /must hold a JSON object/, `daemon.json ${notAnObject}`);
+}
+assert.throws(() => parseDaemonConfig("{"), SyntaxError);
+const containerdScript = await read("scripts/use-containerd-image-store.mjs");
+assert.match(
+  containerdScript,
+  /\["info", "--format", "\{\{json \.DriverStatus\}\}"\], \{[^}]*\btimeout: DOCKER_INFO_TIMEOUT_MS\b/,
+  "each docker info call in the readiness poll must have its own timeout",
 );
 const benchmarkSteps = workflowDocument.jobs.benchmarks.steps;
 const candidateDownloadIndex = benchmarkSteps.findIndex(
@@ -2208,10 +2506,15 @@ const packageVsixSource =
   builder.match(/function packageVsix\(stagingDir, targetPlatform\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
 assert.ok(packageVsixSource, "packageVsix must be locatable in build-vsix.js");
 assert.match(packageVsixSource, /vsixFileName\(/, "packageVsix names the file with vsixFileName");
+assert.deepEqual(
+  packaging.vscePackageArgs({ name: "ragnarok", version: "0.4.1" }, "linux-x64"),
+  ["package", "--target", "linux-x64", "--out", "ragnarok-0.4.1-linux-x64.vsix"],
+  "vsce packages the target under the name every release consumer finds it by",
+);
 assert.match(
   packageVsixSource,
-  /\["package", "--target", targetPlatform\.target, "--out", \w+\]/,
-  "packageVsix passes vsce --out with the computed name",
+  /vscePackageArgs\(manifest, targetPlatform\.target\)/,
+  "packageVsix passes vsce the arguments vscePackageArgs builds",
 );
 assert.doesNotMatch(
   packageVsixSource,
@@ -2362,6 +2665,89 @@ assert.ok(identifiedCall.init.signal instanceof AbortSignal, "every attempt has 
 assert.equal(identifiedCall.init.headers["user-agent"], BENCHMARK_USER_AGENT);
 assert.match(BENCHMARK_USER_AGENT, /^RAGnarok-release-benchmark\/0\.4 \(https:\/\/github\.com\/hyorman\/RAGnarok\)$/);
 
+// V8's Date.parse reads "1.5" and "-5" as dates in 2001, which made them zero-millisecond waits.
+assert.deepEqual((await retryAfterDate("1.5")).delays, [1000], "a fractional Retry-After is not a date");
+assert.deepEqual((await retryAfterDate("-5")).delays, [1000], "a negative Retry-After is not a date");
+// A fixdate-shaped value that names no real moment parses to NaN, which must back off, not spin.
+assert.deepEqual(
+  (await retryAfterDate("Sun, 99 Oct 2026 12:00:07 GMT")).delays,
+  [1000],
+  "a day that does not exist backs off",
+);
+assert.deepEqual(
+  (await retryAfterDate("Sun, 04 Oct 2026 25:61:61 GMT")).delays,
+  [1000],
+  "a time that does not exist backs off",
+);
+assert.deepEqual(
+  (await retryAfterDate("Sunday, 04-Oct-26 12:00:07 GMT")).delays,
+  [1000],
+  "only the IMF-fixdate form a server must send is read as a date",
+);
+
+// onRetry hears every retry with the wait that follows it, and nothing after the last attempt.
+const retryEvents = [];
+await recordedDownload([reply(503), reply(429, { "retry-after": "3" }), reply(200)], {
+  onRetry: (event) => retryEvents.push(event),
+});
+assert.deepEqual(retryEvents, [
+  { url: downloadUrl, reason: "returned 503", attempt: 1, attempts: 6, delayMs: 1000 },
+  { url: downloadUrl, reason: "returned 429", attempt: 2, attempts: 6, delayMs: 3000 },
+]);
+const lastAttemptEvents = [];
+await recordedDownload([reply(503)], { attempts: 2, onRetry: (event) => lastAttemptEvents.push(event.attempt) });
+assert.deepEqual(lastAttemptEvents, [1], "no retry is announced after the last attempt");
+
+// A refused response's body is cancelled, so its socket is released before the wait.
+let cancelledBodies = 0;
+const cancellable = (status) => () =>
+  new Response(
+    new ReadableStream({
+      cancel() {
+        cancelledBodies += 1;
+      },
+    }),
+    { status },
+  );
+await recordedDownload([cancellable(503), cancellable(429), reply(200)]);
+assert.equal(cancelledBodies, 2, "each retried response's body is cancelled");
+await recordedDownload([cancellable(404)]);
+assert.equal(cancelledBodies, 3, "a final refusal's body is cancelled too");
+
+// Each attempt has its own timeout: a fresh signal, live when the attempt starts, that fires after timeoutMs.
+const timedAttempts = [];
+const hangingFetch = async (_url, init) => {
+  timedAttempts.push({ signal: init.signal, abortedAtStart: init.signal.aborted });
+  return new Promise((_resolve, reject) => {
+    // AbortSignal.timeout's timer is unref'd; this one keeps the process alive until it fires.
+    const keepAlive = setTimeout(() => reject(new Error("the attempt timeout never fired")), 5_000);
+    init.signal.addEventListener("abort", () => {
+      clearTimeout(keepAlive);
+      reject(init.signal.reason);
+    });
+  });
+};
+const timedOut = await downloadWithRetry(downloadUrl, {
+  fetchImpl: hangingFetch,
+  sleep: async () => {},
+  attempts: 2,
+  timeoutMs: 20,
+}).then(
+  () => undefined,
+  (error) => error,
+);
+assert.deepEqual(
+  timedAttempts.map((attempt) => attempt.abortedAtStart),
+  [false, false],
+  "the second attempt starts with a live signal",
+);
+assert.notEqual(timedAttempts[0].signal, timedAttempts[1].signal, "each attempt gets its own signal");
+assert.equal(timedOut?.cause?.name, "TimeoutError", "the attempt was ended by its timeout");
+assert.match(timedOut?.message ?? "", /aborted due to timeout after 2 attempts$/);
+
+const singleAttempt = await recordedDownload([reply(429)], { attempts: 1 });
+assert.equal(singleAttempt.error?.message, `Benchmark download ${downloadUrl} returned 429 after 1 attempt`);
+
 const acquireCorpora = await read("scripts/acquire-benchmark-corpora.mjs");
 assert.match(acquireCorpora, /import \{ downloadWithRetry \} from "\.\/benchmark-download\.mjs"/);
 assert.doesNotMatch(
@@ -2421,5 +2807,6 @@ assert.doesNotMatch(architecture, /Transfer and operator token-rotation records/
 execFileSync("node", ["scripts/verify-model-manifest.mjs"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["scripts/check-licenses.mjs"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["scripts/check-secrets.mjs"], { cwd: root, stdio: "inherit" });
+execFileSync("node", ["scripts/test-docs-guards.mjs"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["scripts/check-docs.mjs"], { cwd: root, stdio: "inherit" });
 console.log("Release/package static contracts passed.");

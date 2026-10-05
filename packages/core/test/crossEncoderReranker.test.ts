@@ -5,7 +5,7 @@
 
 import { expect } from "chai";
 import sinon from "sinon";
-import { CrossEncoderReranker } from "../src/index";
+import { CrossEncoderReranker, DEFAULTS } from "../src/index";
 import type { ScoredDocument } from "../src/index";
 import { sigmoid } from "../src/rerankers/reranker";
 import { Document as LangChainDocument } from "@langchain/core/documents";
@@ -109,7 +109,7 @@ describe("CrossEncoderReranker", function () {
   describe("constructor", () => {
     it("should use default model name", () => {
       const r = new CrossEncoderReranker();
-      expect((r as any).modelName).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
+      expect((r as any).modelName).to.equal(DEFAULTS.RERANKER_MODEL);
       r.dispose();
     });
 
@@ -561,7 +561,7 @@ describe("CrossEncoderReranker", function () {
         initialize.restore();
       }
       expect(failed).to.equal(true);
-      expect(r.getCurrentModel()).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
+      expect(r.getCurrentModel()).to.equal(DEFAULTS.RERANKER_MODEL);
       expect((r as any).model).to.equal(workingModel);
       expect((r as any).tokenizer).to.equal(workingTokenizer);
       await r.dispose();
@@ -575,7 +575,7 @@ describe("CrossEncoderReranker", function () {
       } catch {
         // Expected — model loading fails
       }
-      expect(r.getCurrentModel()).to.equal("Xenova/ms-marco-MiniLM-L-6-v2");
+      expect(r.getCurrentModel()).to.equal(DEFAULTS.RERANKER_MODEL);
       r.dispose();
     });
 

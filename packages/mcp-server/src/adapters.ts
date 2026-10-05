@@ -3,7 +3,7 @@
  * Maps @ragnarok/core interfaces to console/environment-based implementations
  */
 
-import { IConfigProvider, ILogger, ILoggerFactory, INotifier, CONFIG } from "@ragnarok/core";
+import { IConfigProvider, ILogger, ILoggerFactory, INotifier, CONFIG, DEFAULTS } from "@ragnarok/core";
 import { McpConfig } from "./config";
 
 /**
@@ -22,7 +22,7 @@ export class EnvConfigProvider implements IConfigProvider {
       [CONFIG.CONFIDENCE_THRESHOLD]: this.mcpConfig.confidenceThreshold,
       [CONFIG.LOG_LEVEL]: this.mcpConfig.logLevel,
       [CONFIG.EMBEDDING_BACKEND]: this.mcpConfig.embeddingProvider !== "huggingface" ? "remote" : "huggingface",
-      [CONFIG.LOCAL_MODEL_PATH]: "",
+      [CONFIG.LOCAL_MODEL_PATH]: DEFAULTS.LOCAL_MODEL_PATH,
       [CONFIG.LLM_MODEL]: this.mcpConfig.llmModel,
       [CONFIG.GAP_SCORE_THRESHOLD]: 0.3,
       [CONFIG.COMMON_DATABASE_PATH]: this.mcpConfig.commonDatabasePath,

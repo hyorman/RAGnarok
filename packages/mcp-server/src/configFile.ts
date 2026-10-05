@@ -1,9 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
 import { z } from "zod";
+import { DEFAULTS, RetrievalStrategy, STORAGE_CONFIG_FILENAME } from "@ragnarok/core";
 import type { McpConfig } from "./config";
+import { MCP_DEFAULTS } from "./defaults";
 
-export const CONFIG_FILE_NAME = "config.json";
+/** The settings file in the storage directory; core exempts the same name from format gating and resets. */
+export const CONFIG_FILE_NAME = STORAGE_CONFIG_FILENAME;
 
 /** McpConfig fields that may be set from the config file. */
 export type FileField =
@@ -48,58 +51,103 @@ export interface FileKey {
 const positiveInt = z.number().int().positive();
 
 export const FILE_KEYS: readonly FileKey[] = [
-  { path: ["embedding", "provider"], field: "embeddingProvider", schema: z.string(), shown: "huggingface" },
-  { path: ["embedding", "model"], field: "embeddingModel", schema: z.string(), shown: "Xenova/all-MiniLM-L6-v2" },
+  {
+    path: ["embedding", "provider"],
+    field: "embeddingProvider",
+    schema: z.string(),
+    shown: MCP_DEFAULTS.EMBEDDING_PROVIDER,
+  },
+  { path: ["embedding", "model"], field: "embeddingModel", schema: z.string(), shown: DEFAULTS.EMBEDDING_MODEL },
   { path: ["embedding", "baseUrl"], field: "embeddingBaseUrl", schema: z.string(), shown: "" },
-  { path: ["embedding", "maxResidentModels"], field: "maxResidentModels", schema: z.number().int().min(1), shown: 2 },
+  {
+    path: ["embedding", "maxResidentModels"],
+    field: "maxResidentModels",
+    schema: z.number().int().min(1),
+    shown: DEFAULTS.MAX_RESIDENT_MODELS,
+  },
 
-  { path: ["llm", "provider"], field: "llmProvider", schema: z.string(), shown: "none" },
+  { path: ["llm", "provider"], field: "llmProvider", schema: z.string(), shown: MCP_DEFAULTS.LLM_PROVIDER },
   { path: ["llm", "model"], field: "llmModel", schema: z.string(), shown: "" },
   { path: ["llm", "baseUrl"], field: "llmBaseUrl", schema: z.string(), shown: "" },
-  { path: ["llm", "requestTimeoutMs"], field: "llmRequestTimeoutMs", schema: positiveInt, shown: 30000 },
+  {
+    path: ["llm", "requestTimeoutMs"],
+    field: "llmRequestTimeoutMs",
+    schema: positiveInt,
+    shown: MCP_DEFAULTS.LLM_REQUEST_TIMEOUT_MS,
+  },
 
   {
     path: ["retrieval", "strategy"],
     field: "retrievalStrategy",
-    schema: z.enum(["vector", "hybrid", "bm25"]),
-    shown: "hybrid",
+    schema: z.enum(RetrievalStrategy),
+    shown: DEFAULTS.RETRIEVAL_STRATEGY,
   },
-  { path: ["retrieval", "topK"], field: "topK", schema: positiveInt, shown: 10 },
-  { path: ["retrieval", "maxIterations"], field: "maxIterations", schema: positiveInt, shown: 3 },
+  { path: ["retrieval", "topK"], field: "topK", schema: positiveInt, shown: MCP_DEFAULTS.TOP_K },
+  { path: ["retrieval", "maxIterations"], field: "maxIterations", schema: positiveInt, shown: DEFAULTS.MAX_ITERATIONS },
   {
     path: ["retrieval", "confidenceThreshold"],
     field: "confidenceThreshold",
     schema: z.number().min(0).max(1),
-    shown: 0.7,
+    shown: DEFAULTS.CONFIDENCE_THRESHOLD,
   },
 
   {
     path: ["reranker", "model"],
     field: "rerankerModel",
     schema: z.string(),
-    shown: "Xenova/ms-marco-MiniLM-L-6-v2",
+    shown: DEFAULTS.RERANKER_MODEL,
   },
-  { path: ["reranker", "maxCandidates"], field: "rerankerMaxCandidates", schema: positiveInt, shown: 40 },
+  {
+    path: ["reranker", "maxCandidates"],
+    field: "rerankerMaxCandidates",
+    schema: positiveInt,
+    shown: DEFAULTS.RERANKER_MAX_CANDIDATES,
+  },
   {
     path: ["reranker", "candidateMultiplier"],
     field: "rerankerCandidateMultiplier",
     schema: positiveInt,
-    shown: 4,
+    shown: DEFAULTS.RERANKER_CANDIDATE_MULTIPLIER,
   },
 
-  { path: ["ingestion", "chunkSize"], field: "chunkSize", schema: positiveInt, shown: 1000 },
-  { path: ["ingestion", "chunkOverlap"], field: "chunkOverlap", schema: z.number().int().min(0), shown: 200 },
+  { path: ["ingestion", "chunkSize"], field: "chunkSize", schema: positiveInt, shown: DEFAULTS.CHUNK_SIZE },
+  {
+    path: ["ingestion", "chunkOverlap"],
+    field: "chunkOverlap",
+    schema: z.number().int().min(0),
+    shown: DEFAULTS.CHUNK_OVERLAP,
+  },
 
   { path: ["security", "allowedPaths"], field: "allowedPaths", schema: z.array(z.string()), shown: [] },
-  { path: ["security", "githubHosts"], field: "githubHosts", schema: z.array(z.string()), shown: ["github.com"] },
+  {
+    path: ["security", "githubHosts"],
+    field: "githubHosts",
+    schema: z.array(z.string()),
+    shown: [...MCP_DEFAULTS.GITHUB_HOSTS],
+  },
 
-  { path: ["storage", "exportDir"], field: "exportDir", schema: z.string(), shown: "<storageDir>/exports" },
+  {
+    path: ["storage", "exportDir"],
+    field: "exportDir",
+    schema: z.string(),
+    shown: `<storageDir>/${MCP_DEFAULTS.EXPORT_DIRNAME}`,
+  },
   { path: ["storage", "commonDatabasePath"], field: "commonDatabasePath", schema: z.string(), shown: "" },
 
-  { path: ["limits", "maxResponseBytes"], field: "maxResponseBytes", schema: positiveInt, shown: 1048576 },
-  { path: ["limits", "shutdownDrainMs"], field: "shutdownDrainMs", schema: positiveInt, shown: 10000 },
+  {
+    path: ["limits", "maxResponseBytes"],
+    field: "maxResponseBytes",
+    schema: positiveInt,
+    shown: MCP_DEFAULTS.MAX_RESPONSE_BYTES,
+  },
+  {
+    path: ["limits", "shutdownDrainMs"],
+    field: "shutdownDrainMs",
+    schema: positiveInt,
+    shown: MCP_DEFAULTS.SHUTDOWN_DRAIN_MS,
+  },
 
-  { path: ["logging", "level"], field: "logLevel", schema: z.string(), shown: "info" },
+  { path: ["logging", "level"], field: "logLevel", schema: z.string(), shown: DEFAULTS.LOG_LEVEL },
 ];
 
 /** Nested schema, derived from the table. `.strict()` makes unknown keys fatal. */

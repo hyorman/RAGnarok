@@ -20,6 +20,8 @@ import {
   createEmbeddingServices,
   createMemoryServices,
   UnsupportedStorageError,
+  DEFAULTS,
+  EXTENSION,
 } from "@ragnarok/core";
 import { VsCodeLoggerFactory } from "./adapters/vsCodeLogger";
 import { VsCodeConfigProvider } from "./adapters/vsCodeConfigProvider";
@@ -149,7 +151,7 @@ async function setActivationFailed(failed: boolean): Promise<void> {
  * folder, with what was found in it as the detail, and a way to reveal it.
  */
 function showUnsupportedStorageModal(storageDir: string, error: UnsupportedStorageError): void {
-  const detail = error.entries.length > 0 ? `Found in that folder: ${error.entries.join(", ")}` : undefined;
+  const detail = error.foundSummary ? `Found in that folder: ${error.foundSummary}` : undefined;
   void vscode.window
     .showErrorMessage(
       `RAGnarōk cannot open its storage: ${storageDir} holds data from an unsupported pre-0.4 build. Move or delete that folder, then reload the window.`,
@@ -265,8 +267,8 @@ export async function activateWithServiceFactory(
     const { embeddingService, embeddingRegistry } = createEmbeddingServices({
       config: configProvider,
       notifier,
-      // Mirrors McpConfig.maxResidentModels' default; VS Code has no setting for it.
-      maxResidentLocal: 2,
+      // The same default as MCP's embedding.maxResidentModels; VS Code has no setting for it.
+      maxResidentLocal: DEFAULTS.MAX_RESIDENT_MODELS,
       createService: (options) => serviceFactory.createEmbeddingService(options),
       // VS Code LM first; HuggingFace last, so it is the fallback.
       createBackends: () => [
@@ -307,7 +309,7 @@ export async function activateWithServiceFactory(
       storageDir,
       embeddingService,
       llmProvider,
-      markdownPath: vscode.Uri.joinPath(context.globalStorageUri, "memories.md").fsPath,
+      markdownPath: vscode.Uri.joinPath(context.globalStorageUri, EXTENSION.MEMORIES_MARKDOWN_FILENAME).fsPath,
     });
     lifecycle.setResources({ memoryStore });
     const {

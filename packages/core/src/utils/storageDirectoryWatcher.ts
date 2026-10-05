@@ -1,5 +1,11 @@
 import * as fsSync from "fs";
 
+/** Quiet period both storage-dir watchers (topics, memory) wait before reporting a change. */
+export const STORAGE_WATCH_DEBOUNCE_MS = 250;
+
+/** Where a watch error came from: `fs.watch` construction (`start`) or a live watch handle (`watch`). */
+export type StorageWatchErrorPhase = "start" | "watch";
+
 export interface StorageDirectoryWatcherOptions {
   /** Watch the directory, never a file: atomic rename-over writes silence an inode-following file watch. */
   directory: string;
@@ -9,12 +15,14 @@ export interface StorageDirectoryWatcherOptions {
   /** Debounced handler. Return "rearm" to run again after another debounce period. */
   onChange(): void | "rearm" | Promise<void | "rearm">;
   /**
-   * A watch error, reported before it is handled. Without an outage policy the
-   * watch is then closed and `start()` may be called again; with one, the
-   * error enters the outage path. Also receives the error when `fs.watch`
-   * cannot be constructed, once per run of failed `start()` calls.
+   * A watch error, reported before it is handled. `phase` is "start" when
+   * `fs.watch` could not be constructed (once per run of failed `start()`
+   * calls, outage retries included) and "watch" when a live watch failed.
+   * Without an outage policy a "watch" error closes the watch and `start()`
+   * may be called again; with one, it enters the outage path. A callback that
+   * throws is ignored: a host's reporting must never stop recovery.
    */
-  onError?(error: unknown): void;
+  onError?(error: unknown, phase: StorageWatchErrorPhase): void;
   /** Poll for a vanished directory (macOS FSEvents does not report one) and retry until it returns. */
   outage?: {
     pollMs: number;
@@ -58,14 +66,14 @@ export class StorageDirectoryWatcher {
     } catch (error) {
       if (!this.startFailureReported) {
         this.startFailureReported = true;
-        this.options.onError?.(error);
+        this.reportError(error, "start");
       }
       return false;
     }
     this.startFailureReported = false;
     handle.unref?.();
     handle.on("error", (error) => {
-      this.options.onError?.(error);
+      this.reportError(error, "watch");
       if (this.options.outage) {
         this.reportOutage();
       } else {
@@ -102,6 +110,15 @@ export class StorageDirectoryWatcher {
       this.retryTimer = null;
     }
     this.closeHandle();
+  }
+
+  /** Hand an error to the host. A throwing callback is swallowed: it must not skip the outage path or the retry. */
+  private reportError(error: unknown, phase: StorageWatchErrorPhase): void {
+    try {
+      this.options.onError?.(error, phase);
+    } catch {
+      // The host's reporting failed; recovery does not depend on it.
+    }
   }
 
   private onRawEvent(filename: string | Buffer | null): void {

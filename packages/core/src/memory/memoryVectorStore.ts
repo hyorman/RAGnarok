@@ -27,6 +27,9 @@ import { atomicWriteJson } from "../utils/storage";
 import { cosineSimilarity } from "../utils/vectorMath";
 import { MemoryEntry, MemoryGraphData, MemoryScope, MEMORY_TABLE_PREFIX } from "./types";
 
+/** Table handles a store keeps open before it closes the least recently opened one. */
+export const DEFAULT_MAX_OPEN_MEMORY_TABLES = 32;
+
 export class MemoryVectorStore {
   private logger = new Logger("MemoryVectorStore");
   // Memoized connection: reconnecting per operation would cost a single
@@ -41,8 +44,13 @@ export class MemoryVectorStore {
 
   constructor(
     private lanceDbUri: string,
-    private readonly maxOpenTables: number = 32,
-  ) {}
+    private readonly maxOpenTables: number = DEFAULT_MAX_OPEN_MEMORY_TABLES,
+  ) {
+    // A cap below 1 would close every table the moment it is opened.
+    if (!Number.isInteger(maxOpenTables) || maxOpenTables < 1) {
+      throw new RangeError(`maxOpenTables must be a positive integer; got ${maxOpenTables}`);
+    }
+  }
 
   private getDb(): ReturnType<typeof connect> {
     this.dbPromise ??= connect(this.lanceDbUri).then((db) => {

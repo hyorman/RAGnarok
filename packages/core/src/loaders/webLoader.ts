@@ -5,12 +5,14 @@ import { BlockList, isIP } from "net";
 import type { LookupFunction } from "net";
 import { load as loadHtml } from "cheerio";
 import { Document as LangChainDocument } from "@langchain/core/documents";
+import { CORE_VERSION } from "../constants";
 import { Logger } from "../logger";
 import { DocumentLoader, LoaderOptions } from "./types";
 
 const MAX_REDIRECTS = 5;
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
+const USER_AGENT = `RAGnarok/${CORE_VERSION}`;
 const blockedIpv6 = new BlockList();
 blockedIpv6.addSubnet("::", 128, "ipv6");
 blockedIpv6.addSubnet("::1", 128, "ipv6");
@@ -117,11 +119,24 @@ export class WebDocumentLoader implements DocumentLoader {
       const eligible = requestedFamily
         ? addresses.filter(({ address, family }) => (family ?? isIP(address)) === requestedFamily)
         : addresses;
-      const selected = eligible[cursor++ % eligible.length];
-      if (!selected) {
+      if (eligible.length === 0) {
         callback(Object.assign(new Error("No validated address for requested family"), { code: "ENOTFOUND" }), "", 0);
         return;
       }
+      if (options?.all) {
+        // Node 20+ (autoSelectFamily) asks for every address and expects an array. Node's
+        // LookupFunction callback type is the single-address form only, so cast narrowly.
+        const answerAll = callback as unknown as (
+          err: null,
+          addresses: Array<{ address: string; family: number }>,
+        ) => void;
+        answerAll(
+          null,
+          eligible.map(({ address, family }) => ({ address, family: family ?? isIP(address) })),
+        );
+        return;
+      }
+      const selected = eligible[cursor++ % eligible.length];
       callback(null, selected.address, selected.family ?? isIP(selected.address));
     };
   }
@@ -140,7 +155,7 @@ export class WebDocumentLoader implements DocumentLoader {
           method: "GET",
           signal,
           lookup: this.createPinnedLookup(addresses),
-          headers: { "User-Agent": "RAGnarok/0.4.0", Accept: "text/html,text/plain;q=0.9" },
+          headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain;q=0.9" },
         },
         (response) => {
           const declared = Number(response.headers["content-length"] ?? 0);

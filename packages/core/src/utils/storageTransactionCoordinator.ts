@@ -3,6 +3,9 @@ import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 
+/** The coordinator's write-ahead logs and staging, under the directory it coordinates. */
+export const TRANSACTIONS_DIRNAME = ".transactions";
+
 export type StorageTransactionOperation =
   | { type: "replace"; source: string; destination: string }
   | { type: "delete"; destination: string };
@@ -63,7 +66,7 @@ export class StorageTransactionCoordinator {
     private readonly fence: StorageTransactionFence,
   ) {
     this.storageRoot = path.resolve(storageRoot);
-    this.root = path.join(this.storageRoot, ".transactions");
+    this.root = path.join(this.storageRoot, TRANSACTIONS_DIRNAME);
   }
 
   async initialize(): Promise<void> {

@@ -138,6 +138,22 @@ describe("ingestion flow", function () {
     expect(supportedDocumentFilters().Markdown).to.deep.equal(["md", "markdown", "mdx"]);
   });
 
+  it("offers no group for a labelled type that has no extensions", function () {
+    sinon.stub(DocumentLoaderFactory, "getSupportedExtensionsByType").returns({
+      pdf: [".pdf"],
+      markdown: [],
+      html: [".html", ".htm"],
+      text: [".txt"],
+    });
+    expect(Object.keys(supportedDocumentFilters())).to.deep.equal([
+      "All Files",
+      "Supported Documents",
+      "PDF",
+      "HTML",
+      "Text",
+    ]);
+  });
+
   it("reports progress, announces the new totals and refreshes the tree", async function () {
     const reports: Array<{ message?: string; increment?: number }> = [];
     sinon
@@ -195,7 +211,7 @@ describe("ingestion flow", function () {
     expect(moved[PIPELINE_STAGES.length]).to.equal(0);
   });
 
-  // Review Focus 1: a bad file among good ones stops its pipeline part-way; the next source starts again at 0.
+  // A bad file among good ones stops its pipeline part-way; the next source starts again at 0.
   it("never overfills the bar when a source stops part-way", async function () {
     const reports: Report[] = [];
     sinon
@@ -228,7 +244,8 @@ describe("ingestion flow", function () {
     );
     const moved = increments(reports);
     expect(moved.every((value) => value >= 0)).to.equal(true);
-    expect(total(moved)).to.be.at.most(100 + 1e-9);
+    // Half the bar per source: the first stopped at 50 of its 100 (25), the second finished (50).
+    expect(total(moved)).to.be.closeTo(75, 1e-9);
     expect(reports[reports.length - 1]).to.deep.equal({ message: "Complete!" });
   });
 
@@ -257,7 +274,7 @@ describe("ingestion flow", function () {
         },
         topic("t1"),
         ["/a.md"],
-        { title: "t", label: "Documents", loaderOptions: {}, progressShare: 0.01 },
+        { title: "t", label: "Documents", loaderOptions: {}, progressShare: 1 },
         controller.signal,
       );
     } catch (caught) {

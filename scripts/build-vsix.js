@@ -553,6 +553,18 @@ function verifySharpNativesMatchTransformers(nodeModules, targetPlatform) {
     console.log(`  ✓ ${name}@${installed} is the copy Transformers' Sharp loads`);
     resolverDir = nativeDir;
   }
+  // The allowlist decides where the shipped chain ends. A native the last shipped package still
+  // declares would be pruned from the VSIX, and Sharp would fail to load it at run time.
+  const last = readPackageJson(resolverDir);
+  const unshipped = Object.keys(last.optionalDependencies ?? {}).filter((dependency) =>
+    dependency.startsWith("@img/sharp-"),
+  );
+  if (unshipped.length > 0) {
+    throw new Error(
+      `${last.name} declares ${unshipped.join(", ")}, but no shipped native package config covers it for ` +
+        `${targetPlatform.target}; the Sharp chain must end where PLATFORM_PACKAGE_CONFIGS says`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -668,14 +680,13 @@ function pruneBloat(stagingDir, targetPlatform) {
 }
 
 function prunePlatformNativePackages(rootNodeModules, targetPlatform) {
+  const shipped = nativePackageConfigsFor(targetPlatform);
   let removed = 0;
   for (const nodeModules of findNodeModulesDirectories(rootNodeModules)) {
     for (const config of PLATFORM_PACKAGE_CONFIGS) {
       const scopeDir = path.join(nodeModules, config.scope);
       if (!fs.existsSync(scopeDir)) continue;
-      const keep = nativePackageConfigsFor(targetPlatform).includes(config)
-        ? expectedNativePackageName(config, targetPlatform).split("/")[1]
-        : null;
+      const keep = shipped.includes(config) ? expectedNativePackageName(config, targetPlatform).split("/")[1] : null;
       for (const name of fs.readdirSync(scopeDir)) {
         if (getNativePackageConfig(`${config.scope}/${name}`) !== config) continue;
         // Keep the target package wherever npm placed it: Transformers' nested
@@ -1044,6 +1055,11 @@ function vsixFileName(manifest, target) {
   return `${manifest.name}-${manifest.version}-${target}.vsix`;
 }
 
+/** vsce's arguments for one target: the target, and the file name every release consumer finds it by. */
+function vscePackageArgs(manifest, target) {
+  return ["package", "--target", target, "--out", vsixFileName(manifest, target)];
+}
+
 function packageVsix(stagingDir, targetPlatform) {
   console.log("\nPackaging VSIX...");
 
@@ -1054,14 +1070,10 @@ function packageVsix(stagingDir, targetPlatform) {
   const vsixName = vsixFileName(manifest, targetPlatform.target);
 
   // Use the root project's vsce binary
-  runNodeScript(
-    resolveDependencyBin("@vscode/vsce", "vsce"),
-    ["package", "--target", targetPlatform.target, "--out", vsixName],
-    {
-      cwd: stagingDir,
-      stdio: "inherit",
-    },
-  );
+  runNodeScript(resolveDependencyBin("@vscode/vsce", "vsce"), vscePackageArgs(manifest, targetPlatform.target), {
+    cwd: stagingDir,
+    stdio: "inherit",
+  });
 
   // Copy the file that was asked for, and only that one, to the repository root
   const src = path.join(stagingDir, vsixName);
@@ -1149,6 +1161,7 @@ if (require.main === module) {
     verifyIntegrity,
     verifyNativePackages,
     verifySharpNativesMatchTransformers,
+    vscePackageArgs,
     vsixFileName,
   };
 }

@@ -31,15 +31,23 @@ export class StorageFormatVersionError extends Error {
  */
 export class UnsupportedStorageError extends Error {
   readonly name = "UnsupportedStorageError";
+  /** "a, b and 3 more", or undefined when no entry was reported. */
+  readonly foundSummary: string | undefined;
   constructor(
     public readonly storageDir: string,
+    /** The entries that triggered the refusal, capped; `omittedEntries` counts the rest. */
     public readonly entries: readonly string[] = [],
+    public readonly omittedEntries = 0,
   ) {
+    const foundSummary =
+      entries.length > 0
+        ? `${entries.join(", ")}${omittedEntries > 0 ? ` and ${omittedEntries} more` : ""}`
+        : undefined;
     super(
       `RAGnarōk storage at ${storageDir} holds data from an unsupported pre-0.4 build` +
-        `${entries.length > 0 ? ` (found: ${entries.join(", ")})` : ""}. ` +
-        `Move or delete that folder to start a new store.`,
+        `${foundSummary === undefined ? "" : ` (found: ${foundSummary})`}. Move or delete that folder to start a new store.`,
     );
+    this.foundSummary = foundSummary;
   }
 }
 
@@ -78,6 +86,9 @@ const FILESYSTEM_CLUTTER_ENTRIES: ReadonlySet<string> = new Set([
 /** How many triggering entries the refusal names, so a large legacy tree does not flood the message. */
 const UNSUPPORTED_ENTRIES_REPORTED = 5;
 
+/** Prefix of the timestamped folder resetStorage moves old content into. */
+export const STORAGE_BACKUP_DIR_PREFIX = "backup-v1-";
+
 /**
  * Infrastructure files, never version-gated or backed up. config.json is
  * generated on first run before format validation (gating it would refuse every
@@ -91,7 +102,7 @@ function isInfrastructureEntry(entry: string): boolean {
     entry === STORAGE_RESET_JOURNAL_FILENAME ||
     entry === SHARED_TOPIC_CACHE_DIRNAME ||
     FILESYSTEM_CLUTTER_ENTRIES.has(entry) ||
-    entry.startsWith("backup-v1-")
+    entry.startsWith(STORAGE_BACKUP_DIR_PREFIX)
   );
 }
 
@@ -243,7 +254,11 @@ async function ensureStorageFormatUnjournaled(storageDir: string): Promise<Stora
 
   const unsupported = await managedEntries(storageDir);
   if (unsupported.length > 0) {
-    throw new UnsupportedStorageError(storageDir, unsupported.slice(0, UNSUPPORTED_ENTRIES_REPORTED));
+    throw new UnsupportedStorageError(
+      storageDir,
+      unsupported.slice(0, UNSUPPORTED_ENTRIES_REPORTED),
+      Math.max(0, unsupported.length - UNSUPPORTED_ENTRIES_REPORTED),
+    );
   }
 
   const marker: StorageFormatMarker = { formatVersion: STORAGE_FORMAT_VERSION, initializedAt: Date.now() };
@@ -257,7 +272,9 @@ export async function resetStorage(storageDir: string): Promise<string | null> {
   const entries = (await fs.readdir(storageDir)).filter((entry) => !isInfrastructureEntry(entry));
   const journalPath = resetJournalPath(storageDir);
   const backupDir =
-    entries.length === 0 ? null : path.join(storageDir, `backup-v1-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+    entries.length === 0
+      ? null
+      : path.join(storageDir, `${STORAGE_BACKUP_DIR_PREFIX}${new Date().toISOString().replace(/[:.]/g, "-")}`);
 
   // A valid v2 marker is kept in the journal so a fully rolled-back transient
   // failure can reinstate it and clear the journal instead of leaving a

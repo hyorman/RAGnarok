@@ -1,6 +1,8 @@
 import { expect } from "chai";
 import * as sinon from "sinon";
 import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_TOP_K,
   MemoryOperationCoordinator,
   MemoryService,
   MemoryServiceError,
@@ -173,7 +175,7 @@ describe("MemoryService", function () {
           query: "what",
           scope: undefined,
           branch: "feature/shared-memory",
-          topK: 10,
+          topK: DEFAULT_TOP_K,
           includeEntities: true,
         }),
     ).to.equal(true);
@@ -233,7 +235,7 @@ describe("MemoryService", function () {
     });
     expect(
       store.list.calledOnce &&
-        store.list.calledWithMatch({ scope: undefined, branch: "feature/shared-memory", limit: 50 }),
+        store.list.calledWithMatch({ scope: undefined, branch: "feature/shared-memory", limit: DEFAULT_LIST_LIMIT }),
     ).to.equal(true);
   });
 
@@ -452,7 +454,7 @@ describe("MemoryService", function () {
         query: "fact",
         scope: "branch",
         branch: "feature/shared-memory",
-        topK: 10,
+        topK: DEFAULT_TOP_K,
         includeEntities: false,
         signal: undefined,
       }),
@@ -466,7 +468,7 @@ describe("MemoryService", function () {
       store.list.calledOnceWithExactly({
         scope: "branch",
         branch: "feature/shared-memory",
-        limit: 50,
+        limit: DEFAULT_LIST_LIMIT,
       }),
     ).to.equal(true);
   });
@@ -497,13 +499,17 @@ describe("MemoryService", function () {
   it("keeps unscoped list valid when branch context is unavailable", async function () {
     await service.execute({ action: "list" }, { workingDir: "/workspace", branchContext: { state: "unavailable" } });
 
-    expect(store.list.calledOnceWithExactly({ scope: undefined, branch: undefined, limit: 50 })).to.equal(true);
+    expect(
+      store.list.calledOnceWithExactly({ scope: undefined, branch: undefined, limit: DEFAULT_LIST_LIMIT }),
+    ).to.equal(true);
   });
 
   it("keeps unscoped list valid when branch context is ambiguous", async function () {
     await service.execute({ action: "list" }, { workingDir: "/workspace", branchContext: { state: "ambiguous" } });
 
-    expect(store.list.calledOnceWithExactly({ scope: undefined, branch: undefined, limit: 50 })).to.equal(true);
+    expect(
+      store.list.calledOnceWithExactly({ scope: undefined, branch: undefined, limit: DEFAULT_LIST_LIMIT }),
+    ).to.equal(true);
   });
 
   it("treats a forget branch as branch scope", async function () {

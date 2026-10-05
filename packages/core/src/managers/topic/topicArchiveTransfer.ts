@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "crypto";
 import type { Mutex } from "async-mutex";
 import type { EmbeddingService } from "../../embeddings/embeddingService";
 import type { Logger } from "../../logger";
+import { EXTENSION } from "../../constants";
 import { atomicWriteJson } from "../../utils/storage";
 import type { StorageLockHandle } from "../../utils/storageLock";
 import type {
@@ -13,6 +14,7 @@ import type {
   StorageTransactionOperation,
 } from "../../utils/storageTransactionCoordinator";
 import {
+  TOPIC_ARCHIVE_ENTRIES,
   TOPIC_ARCHIVE_FORMAT_VERSION,
   TOPIC_ARCHIVE_LIMITS,
   type TopicArchiveManifestFile,
@@ -158,7 +160,7 @@ export class TopicArchiveTransfer {
       for (const file of snapshot.files) {
         zip.addFile(file.stagedPath, file.manifest.path);
       }
-      zip.addBuffer(Buffer.from(manifestContents, "utf8"), "manifest.json");
+      zip.addBuffer(Buffer.from(manifestContents, "utf8"), TOPIC_ARCHIVE_ENTRIES.MANIFEST);
       zip.end();
 
       await archivePromise;
@@ -368,12 +370,12 @@ export class TopicArchiveTransfer {
       ) {
         throw new Error("Topic is too large to export: archive payload exceeds size limit");
       }
-      const stagedTopicPath = path.join(attemptDir, "topic.json");
+      const stagedTopicPath = path.join(attemptDir, TOPIC_ARCHIVE_ENTRIES.TOPIC);
       await fs.writeFile(stagedTopicPath, topicBytes, { flag: "wx", mode: 0o600 });
       files.push({
         stagedPath: stagedTopicPath,
         manifest: {
-          path: "topic.json",
+          path: TOPIC_ARCHIVE_ENTRIES.TOPIC,
           size: topicBytes.byteLength,
           sha256: createHash("sha256").update(topicBytes).digest("hex"),
         },
@@ -428,7 +430,7 @@ export class TopicArchiveTransfer {
         metadataIdentity === metadataAfter &&
         this.archiveSourceInventoriesEqual(sourcesBefore, sourcesAfter) &&
         files.every((file) => {
-          if (file.manifest.path === "topic.json") {
+          if (file.manifest.path === TOPIC_ARCHIVE_ENTRIES.TOPIC) {
             return true;
           }
           const source = sourcesAfter.find((candidate) => candidate.archivePath === file.manifest.path);
@@ -447,7 +449,7 @@ export class TopicArchiveTransfer {
     const databaseDir = this.host.paths.databaseDir();
     const sources: ArchiveSourceFile[] = [];
     for (const tableName of [topicId]) {
-      const tableDir = path.join(databaseDir, "lancedb", `${tableName}.lance`);
+      const tableDir = path.join(databaseDir, EXTENSION.LANCEDB_DIR, `${tableName}.lance`);
       let tableStat: fsSync.Stats;
       try {
         tableStat = await fs.lstat(tableDir);
@@ -465,7 +467,7 @@ export class TopicArchiveTransfer {
         const relativePath = path.relative(tableDir, filePath).replace(/\\/g, "/");
         sources.push({
           sourcePath: filePath,
-          archivePath: `lancedb/${tableName}.lance/${relativePath}`,
+          archivePath: `${EXTENSION.LANCEDB_DIR}/${tableName}.lance/${relativePath}`,
           size: stat.size,
           mtimeMs: stat.mtimeMs,
           ctimeMs: stat.ctimeMs,
@@ -553,12 +555,12 @@ export class TopicArchiveTransfer {
     const operations: StorageTransactionOperation[] = [];
     const tableMappings = [{ oldName: commit.originalTopicId, newName: commit.newTopicId }];
     for (const mapping of tableMappings) {
-      const source = path.join(commit.contentDir, "lancedb", `${mapping.oldName}.lance`);
+      const source = path.join(commit.contentDir, EXTENSION.LANCEDB_DIR, `${mapping.oldName}.lance`);
       if (await pathExists(source)) {
         operations.push({
           type: "replace",
           source,
-          destination: path.join(databaseDir, "lancedb", `${mapping.newName}.lance`),
+          destination: path.join(databaseDir, EXTENSION.LANCEDB_DIR, `${mapping.newName}.lance`),
         });
       }
     }

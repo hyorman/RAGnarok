@@ -36,6 +36,9 @@ const FollowUpReplySchema = z.object({ subQueries: z.array(z.unknown()) });
 /** Maximum combined query length (chars) for heuristic follow-ups */
 const MAX_FOLLOW_UP_QUERY_LENGTH = 200;
 
+/** Results per follow-up sub-query when the options carry no (or a zero) topK. */
+const DEFAULT_FOLLOW_UP_TOP_K = 10;
+
 export interface SubQueryGap {
   /** The sub-query that produced poor or no results */
   subQuery: SubQuery;
@@ -307,7 +310,7 @@ Respond with JSON:
         .map((sq) => ({
           query: sq.query.trim(),
           reasoning: String(sq.reasoning || "LLM-generated follow-up"),
-          topK: typeof sq.topK === "number" ? sq.topK : options.topK || 10,
+          topK: typeof sq.topK === "number" ? sq.topK : options.topK || DEFAULT_FOLLOW_UP_TOP_K,
         }));
 
       if (validSubQueries.length === 0) {
@@ -365,7 +368,7 @@ Respond with JSON:
         primaryQueries.push({
           query: primaryQuery,
           reasoning: `Broadened from "${original}" which returned no results`,
-          topK: options.topK || 10,
+          topK: options.topK || DEFAULT_FOLLOW_UP_TOP_K,
         });
         gapTargetMap?.set(primaryQuery, original);
 
@@ -378,7 +381,7 @@ Respond with JSON:
         secondaryQueries.push({
           query: cappedCombined,
           reasoning: `Combined gap query with original context`,
-          topK: Math.ceil((options.topK || 10) / 2),
+          topK: Math.ceil((options.topK || DEFAULT_FOLLOW_UP_TOP_K) / 2),
         });
         gapTargetMap?.set(cappedCombined, original);
       } else if (gap.reason === "low_score") {
@@ -386,7 +389,7 @@ Respond with JSON:
         primaryQueries.push({
           query: rephrased,
           reasoning: `Rephrased from "${original}" which had low scores (avg: ${gap.avgScore.toFixed(2)})`,
-          topK: options.topK || 10,
+          topK: options.topK || DEFAULT_FOLLOW_UP_TOP_K,
         });
         gapTargetMap?.set(rephrased, original);
       } else if (gap.reason === "coverage_imbalance") {
@@ -395,7 +398,7 @@ Respond with JSON:
         primaryQueries.push({
           query,
           reasoning: `Broadened "${original}" with context terms due to coverage imbalance`,
-          topK: options.topK || 10,
+          topK: options.topK || DEFAULT_FOLLOW_UP_TOP_K,
         });
         gapTargetMap?.set(query, original);
       }

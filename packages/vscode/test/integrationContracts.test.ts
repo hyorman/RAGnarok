@@ -3,13 +3,25 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import mockVscode from "../test-harness/setup";
 import {
+  CONFIG,
+  DEFAULTS,
+  PROVIDER_DEFAULT_MODELS,
   RetrievalStrategy,
   RAG_MEMORY_INPUT_SCHEMA,
   RAG_QUERY_INPUT_SCHEMA,
   RAG_TOPIC_READ_INPUT_SCHEMA,
   TOOL_LIMITS,
+  TOP_K_MAX,
 } from "@ragnarok/core";
-import { COMMANDS, VIEWS, wireExternalStorageChangeRefresh, TOOLS, TopicTreeItem } from "@ragnarok/vscode";
+import {
+  COMMANDS,
+  VIEWS,
+  VSCODE_CONFIG,
+  VSCODE_DEFAULTS,
+  wireExternalStorageChangeRefresh,
+  TOOLS,
+  TopicTreeItem,
+} from "@ragnarok/vscode";
 
 describe("VS Code contribution and tree contracts", function () {
   it("keeps native memory tool manifests aligned with runtime names and MCP limits", async function () {
@@ -114,6 +126,33 @@ describe("VS Code contribution and tree contracts", function () {
     const toolNames = manifest.contributes.languageModelTools.map((tool: any) => tool.name);
     expect(toolNames).to.deep.equal(["ragQuery", "ragMemory", "ragTopic"]);
     expect(toolNames).to.not.include(COMMANDS.RESET_MEMORY);
+  });
+
+  it("defaults each setting in the manifest to the value the code falls back to", async function () {
+    const manifest = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+    const settings = manifest.contributes.configuration.properties;
+    const fallbacks: Array<[string, unknown]> = [
+      [CONFIG.LOCAL_MODEL_PATH, DEFAULTS.LOCAL_MODEL_PATH],
+      [CONFIG.TOP_K, VSCODE_DEFAULTS.TOP_K],
+      [CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND],
+      [CONFIG.CHUNK_SIZE, DEFAULTS.CHUNK_SIZE],
+      [CONFIG.CHUNK_OVERLAP, DEFAULTS.CHUNK_OVERLAP],
+      [CONFIG.LOG_LEVEL, DEFAULTS.LOG_LEVEL],
+      [CONFIG.RETRIEVAL_STRATEGY, DEFAULTS.RETRIEVAL_STRATEGY],
+      [CONFIG.MAX_ITERATIONS, DEFAULTS.MAX_ITERATIONS],
+      [CONFIG.CONFIDENCE_THRESHOLD, DEFAULTS.CONFIDENCE_THRESHOLD],
+      [CONFIG.LLM_MODEL, PROVIDER_DEFAULT_MODELS.openai],
+      [CONFIG.RERANKER_MODEL, DEFAULTS.RERANKER_MODEL],
+      [CONFIG.RERANKER_MAX_CANDIDATES, DEFAULTS.RERANKER_MAX_CANDIDATES],
+      [CONFIG.RERANKER_CANDIDATE_MULTIPLIER, DEFAULTS.RERANKER_CANDIDATE_MULTIPLIER],
+      [VSCODE_CONFIG.INCLUDE_WORKSPACE, VSCODE_DEFAULTS.INCLUDE_WORKSPACE_CONTEXT],
+    ];
+    for (const [key, fallback] of fallbacks) {
+      const setting = `${VSCODE_CONFIG.ROOT}.${key}`;
+      expect(settings[setting]?.default, setting).to.equal(fallback);
+    }
+    const topK = `${VSCODE_CONFIG.ROOT}.${CONFIG.TOP_K}`;
+    expect(settings[topK].maximum, `${topK} maximum`).to.equal(TOP_K_MAX);
   });
 
   it("declares the same three retrieval strategies in settings, LM tool schema, and tree labels", async function () {
