@@ -13,6 +13,7 @@ describe("tool contracts", function () {
     expect(TOOL_LIMITS).to.deep.equal({
       topicName: 200,
       query: 20_000,
+      queryTopK: 20,
       memoryQuery: 10_000,
       memoryContent: 50_000,
       memoryId: 1_000,
@@ -20,7 +21,19 @@ describe("tool contracts", function () {
       tag: 100,
       tags: 20,
       ids: 500,
+      memoryTopK: 50,
+      memoryDays: 3650,
+      memoryListLimit: 500,
     });
+  });
+
+  it("reads every numeric bound of the query and memory schemas from TOOL_LIMITS", function () {
+    const memory = RAG_MEMORY_INPUT_SCHEMA.properties;
+    expect(RAG_QUERY_INPUT_SCHEMA.properties.topK.maximum).to.equal(TOOL_LIMITS.queryTopK);
+    expect(memory.topK.maximum).to.equal(TOOL_LIMITS.memoryTopK);
+    expect(memory.olderThan.maximum).to.equal(TOOL_LIMITS.memoryDays);
+    expect(memory.ttlDays.maximum).to.equal(TOOL_LIMITS.memoryDays);
+    expect(memory.limit.maximum).to.equal(TOOL_LIMITS.memoryListLimit);
   });
 
   it("bounds rag_query inputs", function () {

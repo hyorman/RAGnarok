@@ -1,8 +1,11 @@
 import type { MemoryEntity, MemoryRelationship } from "../memory/types";
 
 const DEFAULT_MAX_NODES = 500;
-const MAX_NODES = 2_000;
+/** The largest maxNodes a request may ask for; the MCP tool schema reads it too. */
+export const GRAPH_VISUALIZATION_MAX_NODES = 2_000;
 const MAX_EDGES = 10_000;
+/** The document schema id; graph-ui keeps a copy, which its typed test fixtures pin to this literal type. */
+export const GRAPH_VISUALIZATION_SCHEMA = "ragnarok.graph.visualization.v1";
 const GROUP_PALETTE = [
   "#7c3aed",
   "#2563eb",
@@ -88,7 +91,7 @@ export interface GraphVisualizationGroup {
 type TruncationReason = "maxNodes" | "maxEdges" | "responseBytes";
 
 export interface GraphVisualizationDocument {
-  schema: "ragnarok.graph.visualization.v1";
+  schema: typeof GRAPH_VISUALIZATION_SCHEMA;
   source: GraphVisualizationSource;
   nodes: GraphVisualizationNode[];
   edges: GraphVisualizationEdge[];
@@ -123,8 +126,8 @@ interface ProjectedRelationship {
 
 function validateMaxNodes(value: number | undefined): number {
   const normalized = value ?? DEFAULT_MAX_NODES;
-  if (!Number.isInteger(normalized) || normalized < 1 || normalized > MAX_NODES) {
-    throw new RangeError(`maxNodes must be an integer between 1 and ${MAX_NODES}`);
+  if (!Number.isInteger(normalized) || normalized < 1 || normalized > GRAPH_VISUALIZATION_MAX_NODES) {
+    throw new RangeError(`maxNodes must be an integer between 1 and ${GRAPH_VISUALIZATION_MAX_NODES}`);
   }
   return normalized;
 }
@@ -425,7 +428,7 @@ function projectGraphVisualization(
   }
 
   return {
-    schema: "ragnarok.graph.visualization.v1",
+    schema: GRAPH_VISUALIZATION_SCHEMA,
     source,
     nodes,
     edges,

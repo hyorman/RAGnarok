@@ -84,7 +84,11 @@ export {
 export type { VectorStoreConfig, VectorStoreMetadata } from "./stores/vectorStoreFactory";
 
 // Graph visualization types
-export { projectMemoryGraphVisualization, reduceGraphVisualizationDocument } from "./visualization/graphVisualization";
+export {
+  GRAPH_VISUALIZATION_MAX_NODES,
+  projectMemoryGraphVisualization,
+  reduceGraphVisualizationDocument,
+} from "./visualization/graphVisualization";
 export type {
   JsonValue,
   GraphVisualizationSource,

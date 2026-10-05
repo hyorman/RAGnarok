@@ -7,6 +7,8 @@
  * are asserted equivalent by a contract test.
  */
 
+import { RetrievalStrategy } from "../utils/types";
+
 export interface JsonSchemaProperty {
   type: "string" | "number" | "integer" | "boolean" | "array";
   description?: string;
@@ -27,13 +29,15 @@ export interface JsonSchemaObject {
 }
 
 /**
- * topicName and query must agree with the MCP server's MCP_LIMITS
- * (packages/mcp-server/src/tools/shared.ts); the memory bounds mirror
- * validateCommonInput in ../memory/memoryService.ts.
+ * Input bounds both hosts enforce: the JSON schemas below, the MCP server's Zod
+ * schemas (whose MCP_LIMITS takes topicName and query from here),
+ * executeQueryTool and MemoryService.validateCommonInput.
  */
 export const TOOL_LIMITS = Object.freeze({
   topicName: 200,
   query: 20_000,
+  /** rag_query's topK ceiling. */
+  queryTopK: 20,
   memoryQuery: 10_000,
   memoryContent: 50_000,
   memoryId: 1_000,
@@ -41,6 +45,12 @@ export const TOOL_LIMITS = Object.freeze({
   tag: 100,
   tags: 20,
   ids: 500,
+  /** rag_memory recall's topK ceiling. */
+  memoryTopK: 50,
+  /** Ceiling on olderThan and ttlDays: ten years. */
+  memoryDays: 3650,
+  /** rag_memory list's limit ceiling. */
+  memoryListLimit: 500,
 });
 
 export const RAG_QUERY_INPUT_SCHEMA: JsonSchemaObject = {
@@ -63,12 +73,12 @@ export const RAG_QUERY_INPUT_SCHEMA: JsonSchemaObject = {
     topK: {
       type: "integer",
       minimum: 1,
-      maximum: 20,
+      maximum: TOOL_LIMITS.queryTopK,
       description: "Number of top results to return. Optional - uses the configured value when omitted.",
     },
     retrievalStrategy: {
       type: "string",
-      enum: ["vector", "hybrid", "bm25"],
+      enum: Object.values(RetrievalStrategy),
       description:
         "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). " +
         "Optional - uses the configured value when omitted.",
@@ -97,7 +107,12 @@ export const RAG_MEMORY_INPUT_SCHEMA: JsonSchemaObject = {
       maxLength: TOOL_LIMITS.memoryQuery,
       description: "Search query (required for 'recall')",
     },
-    topK: { type: "integer", minimum: 1, maximum: 50, description: "Maximum memories to recall (default 10)" },
+    topK: {
+      type: "integer",
+      minimum: 1,
+      maximum: TOOL_LIMITS.memoryTopK,
+      description: "Maximum memories to recall (default 10)",
+    },
     includeEntities: { type: "boolean", description: "Include extracted entities in recall results" },
     id: {
       type: "string",
@@ -105,7 +120,12 @@ export const RAG_MEMORY_INPUT_SCHEMA: JsonSchemaObject = {
       maxLength: TOOL_LIMITS.memoryId,
       description: "Memory id (used by 'forget', 'history', and 'promote')",
     },
-    olderThan: { type: "integer", minimum: 1, maximum: 3650, description: "Forget memories older than N days" },
+    olderThan: {
+      type: "integer",
+      minimum: 1,
+      maximum: TOOL_LIMITS.memoryDays,
+      description: "Forget memories older than N days",
+    },
     expired: { type: "boolean", description: "Forget expired memories" },
     scope: { type: "string", enum: ["workspace", "branch"], description: "Memory scope" },
     branch: {
@@ -120,7 +140,12 @@ export const RAG_MEMORY_INPUT_SCHEMA: JsonSchemaObject = {
       items: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.tag },
       description: "Tags to attach when storing",
     },
-    ttlDays: { type: "number", exclusiveMinimum: 0, maximum: 3650, description: "Time to live in days" },
+    ttlDays: {
+      type: "number",
+      exclusiveMinimum: 0,
+      maximum: TOOL_LIMITS.memoryDays,
+      description: "Time to live in days",
+    },
     includeAuto: { type: "boolean", description: "Include reserved automatic memories" },
     reinforce: { type: "boolean", description: "Reinforce recalled memories (turns recall into a mutation)" },
     ids: {
@@ -129,7 +154,12 @@ export const RAG_MEMORY_INPUT_SCHEMA: JsonSchemaObject = {
       items: { type: "string", minLength: 1, maxLength: TOOL_LIMITS.memoryId },
       description: "Memory ids to promote",
     },
-    limit: { type: "integer", minimum: 1, maximum: 500, description: "Maximum memories to list (default 50)" },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: TOOL_LIMITS.memoryListLimit,
+      description: "Maximum memories to list (default 50)",
+    },
   },
   required: ["action"],
 };

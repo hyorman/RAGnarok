@@ -18,6 +18,7 @@ import type {
 } from "./memoryServiceTypes";
 import { MemoryStore } from "./memoryStore";
 import { StorageBusyError } from "../utils/storageLock";
+import { TOOL_LIMITS } from "../tools/toolContracts";
 import type { MemoryScope } from "./types";
 
 type StoreInput = Extract<MemoryOperationInput, { action: "store" }>;
@@ -455,19 +456,19 @@ export class MemoryService {
    */
   private validateCommonInput(input: MemoryOperationInput): void {
     const record = input as Record<string, unknown>;
-    this.optionalInteger(record.topK, "topK", 1, 50);
-    this.optionalInteger(record.limit, "limit", 1, 500);
-    this.optionalInteger(record.olderThan, "olderThan", 1, 3650);
-    this.optionalNumber(record.ttlDays, "ttlDays", 0, 3650);
+    this.optionalInteger(record.topK, "topK", 1, TOOL_LIMITS.memoryTopK);
+    this.optionalInteger(record.limit, "limit", 1, TOOL_LIMITS.memoryListLimit);
+    this.optionalInteger(record.olderThan, "olderThan", 1, TOOL_LIMITS.memoryDays);
+    this.optionalNumber(record.ttlDays, "ttlDays", 0, TOOL_LIMITS.memoryDays);
     for (const field of ["includeEntities", "includeAuto", "reinforce", "expired"]) {
       this.optionalBoolean(record[field], field);
     }
-    this.optionalBoundedString(record.content, "content", 50_000);
-    this.optionalBoundedString(record.query, "query", 10_000);
-    this.optionalBoundedString(record.id, "id", 1_000);
-    this.optionalBoundedString(record.branch, "branch", 255);
-    this.optionalStringArray(record.tags, "tags", 20, 100);
-    this.optionalStringArray(record.ids, "ids", 500, 1_000);
+    this.optionalBoundedString(record.content, "content", TOOL_LIMITS.memoryContent);
+    this.optionalBoundedString(record.query, "query", TOOL_LIMITS.memoryQuery);
+    this.optionalBoundedString(record.id, "id", TOOL_LIMITS.memoryId);
+    this.optionalBoundedString(record.branch, "branch", TOOL_LIMITS.branch);
+    this.optionalStringArray(record.tags, "tags", TOOL_LIMITS.tags, TOOL_LIMITS.tag);
+    this.optionalStringArray(record.ids, "ids", TOOL_LIMITS.ids, TOOL_LIMITS.memoryId);
   }
 
   private optionalInteger(value: unknown, field: string, min: number, max: number): void {
