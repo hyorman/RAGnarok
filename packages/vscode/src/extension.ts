@@ -151,7 +151,7 @@ async function setActivationFailed(failed: boolean): Promise<void> {
  * folder, with what was found in it as the detail, and a way to reveal it.
  */
 function showUnsupportedStorageModal(storageDir: string, error: UnsupportedStorageError): void {
-  const detail = error.entries.length > 0 ? `Found in that folder: ${error.entries.join(", ")}` : undefined;
+  const detail = error.foundSummary ? `Found in that folder: ${error.foundSummary}` : undefined;
   void vscode.window
     .showErrorMessage(
       `RAGnarōk cannot open its storage: ${storageDir} holds data from an unsupported pre-0.4 build. Move or delete that folder, then reload the window.`,

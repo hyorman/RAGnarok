@@ -316,6 +316,14 @@ describe("real VS Code extension host activation", function () {
     expect(options.detail, "an empty detail line would read 'Found in that folder: '").to.equal(undefined);
   });
 
+  it("shows the refusal modal's detail with how many entries it left out", async function () {
+    const calls = await errorMessagesForActivationFailure(
+      new UnsupportedStorageError("/unused", ["a", "b", "c", "d", "e"], 2),
+    );
+    expect(calls).to.have.length(1);
+    expect((calls[0][1] as vscode.MessageOptions).detail).to.equal("Found in that folder: a, b, c, d, e and 2 more");
+  });
+
   it("shows no refusal modal for any other failure, even one named like the refusal", async function () {
     const impostor = Object.assign(new Error("pre-0.4 data"), {
       name: "UnsupportedStorageError",

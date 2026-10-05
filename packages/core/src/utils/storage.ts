@@ -31,25 +31,24 @@ export class StorageFormatVersionError extends Error {
  */
 export class UnsupportedStorageError extends Error {
   readonly name = "UnsupportedStorageError";
+  /** "a, b and 3 more", or undefined when no entry was reported. */
+  readonly foundSummary: string | undefined;
   constructor(
     public readonly storageDir: string,
     /** The entries that triggered the refusal, capped; `omittedEntries` counts the rest. */
     public readonly entries: readonly string[] = [],
     public readonly omittedEntries = 0,
   ) {
+    const foundSummary =
+      entries.length > 0
+        ? `${entries.join(", ")}${omittedEntries > 0 ? ` and ${omittedEntries} more` : ""}`
+        : undefined;
     super(
       `RAGnarōk storage at ${storageDir} holds data from an unsupported pre-0.4 build` +
-        `${foundEntries(entries, omittedEntries)}. Move or delete that folder to start a new store.`,
+        `${foundSummary === undefined ? "" : ` (found: ${foundSummary})`}. Move or delete that folder to start a new store.`,
     );
+    this.foundSummary = foundSummary;
   }
-}
-
-/** " (found: a, b and 3 more)", or nothing when no entry was reported. */
-function foundEntries(entries: readonly string[], omitted: number): string {
-  if (entries.length === 0) {
-    return "";
-  }
-  return ` (found: ${entries.join(", ")}${omitted > 0 ? ` and ${omitted} more` : ""})`;
 }
 
 /**

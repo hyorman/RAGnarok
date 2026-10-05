@@ -101,6 +101,7 @@ describe("storage format v2", () => {
     expect(unsupported.entries).to.deep.equal(["a", "b", "c", "d", "e"]);
     expect(unsupported.omittedEntries).to.equal(2);
     expect(unsupported.message).to.include("(found: a, b, c, d, e and 2 more).");
+    expect(unsupported.foundSummary).to.equal("a, b, c, d, e and 2 more");
   });
 
   it("adds nothing to the list when exactly five entries triggered the refusal", async () => {
@@ -115,6 +116,13 @@ describe("storage format v2", () => {
 
     expect(error.omittedEntries).to.equal(0);
     expect(error.message).to.include("(found: a, b, c, d, e).");
+    expect(error.foundSummary).to.equal("a, b, c, d, e");
+  });
+
+  it("has no found summary when no entry was reported", () => {
+    const error = new UnsupportedStorageError("/data");
+    expect(error.foundSummary).to.equal(undefined);
+    expect(error.message).to.not.include("found:");
   });
 
   it("ignores the storage lock file when judging whether a directory holds data", async () => {
