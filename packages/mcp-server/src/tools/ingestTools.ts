@@ -3,6 +3,7 @@ import path from "node:path";
 import { type CallToolResult, type ServerContext } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { McpConfig } from "../config";
+import { CONFIG_FILE_NAME } from "../configFile";
 import { MCP_LIMITS, type ToolContext } from "./shared";
 
 const ingestInput = z.discriminatedUnion("source", [
@@ -82,7 +83,8 @@ export function createPathGuard(config: McpConfig | undefined): (filePath: strin
     const contained = roots.some((root) => real === root || real.startsWith(root + path.sep));
     if (!contained) {
       throw new Error(
-        `Path not allowed: ${filePath}. Allowed roots: ${roots.join(", ") || "(none)"} — set "security.allowedPaths" in config.json to widen access.`,
+        `Path not allowed: ${filePath}. Allowed roots: ${roots.join(", ") || "(none)"} — ` +
+          `set "security.allowedPaths" in ${CONFIG_FILE_NAME} to widen access.`,
       );
     }
     return real;

@@ -51,7 +51,8 @@ export const RAG_QUERY_INPUT_SCHEMA: JsonSchemaObject = {
       minLength: 1,
       maxLength: TOOL_LIMITS.topicName,
       description:
-        "The name of the topic to search within. If no exact match is found, the most semantically similar topic is used.",
+        "The name of the topic to search within. If no exact match is found, " +
+        "the most semantically similar topic is used.",
     },
     query: {
       type: "string",
@@ -69,7 +70,8 @@ export const RAG_QUERY_INPUT_SCHEMA: JsonSchemaObject = {
       type: "string",
       enum: ["vector", "hybrid", "bm25"],
       description:
-        "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). Optional - uses the configured value when omitted.",
+        "Retrieval strategy: 'vector' (semantic only), 'hybrid' (semantic + keyword), or 'bm25' (keyword only). " +
+        "Optional - uses the configured value when omitted.",
     },
   },
   required: ["topic", "query"],

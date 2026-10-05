@@ -9,7 +9,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { z } from "zod";
-import { readConfigFile } from "./configFile";
+import { CONFIG_FILE_NAME, readConfigFile } from "./configFile";
 
 let cachedVersion: string | null = null;
 
@@ -134,7 +134,9 @@ const configSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["chunkOverlap"],
-        message: `config.json: "ingestion.chunkOverlap" (${cfg.chunkOverlap}) must be smaller than "ingestion.chunkSize" (${cfg.chunkSize})`,
+        message:
+          `${CONFIG_FILE_NAME}: "ingestion.chunkOverlap" (${cfg.chunkOverlap}) must be smaller than ` +
+          `"ingestion.chunkSize" (${cfg.chunkSize})`,
       });
     }
     for (const [field, rawUrl] of [
