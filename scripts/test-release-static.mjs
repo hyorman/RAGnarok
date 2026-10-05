@@ -1460,7 +1460,10 @@ assert.equal(
 );
 // The success line names the VS Code that ran the extension host, which the host reports itself.
 assert.match(vsixSmoke, /RAGNAROK_SMOKE_HOST_REPORT: hostReport/);
-assert.match(vsixSmoke, /smokeSummary\(`\$\{pkg\.publisher\}\.\$\{pkg\.name\}@\$\{pkg\.version\}`, hostVersion, version\)/);
+assert.match(
+  vsixSmoke,
+  /smokeSummary\(`\$\{pkg\.publisher\}\.\$\{pkg\.name\}@\$\{pkg\.version\}`, hostVersion, version\)/,
+);
 assert.match(extensionHostSmoke, /JSON\.stringify\(\{ vscodeVersion: vscode\.version \}\)/);
 // cmd.exe expands %~dp0 to the current directory, not the batch file's, when a quoted
 // code.cmd was found through PATH, so a bare name is resolved to an absolute path
@@ -2595,6 +2598,17 @@ assert.match(BENCHMARK_USER_AGENT, /^RAGnarok-release-benchmark\/0\.4 \(https:\/
 // V8's Date.parse reads "1.5" and "-5" as dates in 2001, which made them zero-millisecond waits.
 assert.deepEqual((await retryAfterDate("1.5")).delays, [1000], "a fractional Retry-After is not a date");
 assert.deepEqual((await retryAfterDate("-5")).delays, [1000], "a negative Retry-After is not a date");
+// A fixdate-shaped value that names no real moment parses to NaN, which must back off, not spin.
+assert.deepEqual(
+  (await retryAfterDate("Sun, 99 Oct 2026 12:00:07 GMT")).delays,
+  [1000],
+  "a day that does not exist backs off",
+);
+assert.deepEqual(
+  (await retryAfterDate("Sun, 04 Oct 2026 25:61:61 GMT")).delays,
+  [1000],
+  "a time that does not exist backs off",
+);
 assert.deepEqual(
   (await retryAfterDate("Sunday, 04-Oct-26 12:00:07 GMT")).delays,
   [1000],
