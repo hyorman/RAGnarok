@@ -107,6 +107,20 @@ describe("EmbeddingBackend Abstraction", function () {
       expect((error as Error).message).to.include("not available");
     });
 
+    it("refuses to embed when the LM API is gone after a successful initialize()", async () => {
+      const backend = createBackend("test-model-001");
+      await backend.initialize();
+      // Not reachable through the public API (lmApi is fixed at construction); this drives requireLmApi's guard.
+      (backend as unknown as { lmApi: undefined }).lmApi = undefined;
+      const error = await backend.embed("text").then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect((error as Error).message).to.equal(
+        "VS Code LM embedding failed: The VS Code LM embeddings API is not available",
+      );
+    });
+
     it("should return false when no models are registered", async () => {
       const backend = createBackend(undefined, { models: [] });
       expect(await backend.isAvailable()).to.be.false;

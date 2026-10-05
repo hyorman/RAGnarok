@@ -207,7 +207,9 @@ export class VscodeLmBackend implements EmbeddingBackend {
     }
 
     try {
-      // A string input resolves to a single result, which the declared union cannot express.
+      // A string input resolves to a single result: the proposal's overload
+      // `computeEmbeddings(embeddingsModel: string, input: string, token?): Thenable<Embedding>`,
+      // which LmEmbeddingsApi's one union signature cannot express.
       const result = (await this.requireLmApi().computeEmbeddings(this.getResolvedModelId(), text)) as EmbeddingResult;
       signal?.throwIfAborted();
 
@@ -335,7 +337,9 @@ export class VscodeLmBackend implements EmbeddingBackend {
     for (let attempt = 0; attempt <= VscodeLmBackend.MAX_RETRIES; attempt++) {
       signal?.throwIfAborted();
       try {
-        // An array input resolves to an array of results, which the declared union cannot express.
+        // An array input resolves to an array of results: the proposal's overload
+        // `computeEmbeddings(embeddingsModel: string, input: string[], token?): Thenable<Embedding[]>`,
+        // which LmEmbeddingsApi's one union signature cannot express.
         const results = (await this.requireLmApi().computeEmbeddings(
           this.getResolvedModelId(),
           batchTexts,
