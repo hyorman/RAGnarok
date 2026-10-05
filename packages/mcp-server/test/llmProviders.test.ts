@@ -412,11 +412,64 @@ describe("LLM Providers", function () {
 
     it("reports a client that cannot be created as no model and unavailable, never as a throw", async function () {
       for (const { name, provider } of providers()) {
-        (provider as any).getClient = async () => {
+        // The real getClient runs: only the SDK construction underneath it fails.
+        (provider as any).client = null;
+        (provider as any).createClient = async () => {
           throw new Error("sdk failed to load");
         };
         expect(await provider.selectModel(), name).to.equal(null);
         expect(await provider.isAvailable(), name).to.equal(false);
+      }
+    });
+
+    it("tries again after a client creation failed instead of caching the failure", async function () {
+      for (const { name, provider } of providers()) {
+        (provider as any).client = null;
+        let creations = 0;
+        (provider as any).createClient = async () => {
+          creations += 1;
+          if (creations === 1) {
+            throw new Error("sdk failed to load");
+          }
+          return fakeClient();
+        };
+        expect(await provider.selectModel(), `${name}: a failed creation is no model`).to.equal(null);
+        expect(await provider.selectModel(), `${name}: the next call creates the client`).to.not.equal(null);
+        expect(creations, name).to.equal(2);
+        expect(await provider.isAvailable(), name).to.equal(true);
+      }
+    });
+
+    it("treats an Anthropic SDK without models.list as available", async function () {
+      const provider = new AnthropicLLMProvider("key", "claude-test");
+      (provider as any).client = { messages: {} };
+      expect(await provider.isAvailable()).to.equal(true);
+    });
+
+    it("aborts a probe and a request that outlive the provider's requestTimeoutMs", async function () {
+      this.timeout(2000);
+      /** Never answers; rejects with the abort reason once its signal fires, as the SDKs do. */
+      const hang = (signal: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+      const hangingClient = {
+        models: { list: (...args: unknown[]) => hang((args[args.length - 1] as { signal: AbortSignal }).signal) },
+        chat: { completions: { create: (_params: unknown, options: { signal: AbortSignal }) => hang(options.signal) } },
+        messages: { stream: (_params: unknown, options: { signal: AbortSignal }) => hang(options.signal) },
+      };
+      for (const provider of [
+        new OpenAILLMProvider("key", "gpt-4o-mini", undefined, 50),
+        new AnthropicLLMProvider("key", "claude-test", undefined, 50),
+        new OllamaLLMProvider("http://localhost:11434", "llama3", 50),
+      ]) {
+        const name = provider.constructor.name;
+        (provider as any).client = hangingClient;
+        expect(await provider.isAvailable(), `${name}: a probe past the deadline is unavailable`).to.equal(false);
+        const model = await provider.selectModel();
+        let error: unknown;
+        await model!.sendRequest([{ role: "user", content: "q" }]).catch((caught: unknown) => {
+          error = caught;
+        });
+        expect((error as Error | undefined)?.message, name).to.equal("LLM request timed out after 50ms");
       }
     });
 
