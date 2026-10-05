@@ -1,8 +1,16 @@
 import { expect } from "chai";
+import fsSync from "fs";
 import * as fs from "fs/promises";
+import sinon from "sinon";
 import * as os from "os";
 import * as path from "path";
-import { TopicManager, type IConfigProvider, type INotifier, type StorageExternalChange } from "../src/index";
+import {
+  setLoggerFactory,
+  TopicManager,
+  type IConfigProvider,
+  type INotifier,
+  type StorageExternalChange,
+} from "../src/index";
 import type { EmbeddingService } from "../src/embeddings/embeddingService";
 import type { EmbeddingServiceRegistry } from "../src/embeddings/embeddingServiceRegistry";
 
@@ -223,6 +231,25 @@ describe("TopicManager external-change watcher", function () {
     // watcherStopped check instead of reloading and republishing state.
     expect((created as any).topicsIndex).to.equal(null);
     expect(events).to.have.length(0);
+  });
+
+  it("logs a storage watch that cannot start once, as a start failure", async function () {
+    this.timeout(10_000);
+    const warnings: string[] = [];
+    const quiet = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
+    setLoggerFactory({ createLogger: () => ({ ...quiet, warn: (message: string) => void warnings.push(message) }) });
+    const watch = sinon
+      .stub(fsSync, "watch")
+      .throws(Object.assign(new Error("EMFILE: too many open files, watch"), { code: "EMFILE" }));
+    try {
+      await createManagerInTmpDir();
+    } finally {
+      watch.restore();
+      setLoggerFactory({ createLogger: () => quiet });
+    }
+    expect(warnings.filter((message) => /\bwatch/i.test(message))).to.deep.equal([
+      "Unable to watch the storage directory for external changes; freshness relies on refresh() until a watch is established",
+    ]);
   });
 
   describe("storage-unavailable log reason", function () {

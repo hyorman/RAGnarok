@@ -207,6 +207,24 @@ describe("StorageDirectoryWatcher", function () {
     expect(errors, "a failure after a success is a new run").to.deep.equal([emfile, enospc]);
   });
 
+  it("tells a construction failure from a failed live watch", async () => {
+    const watches = instrumentWatch();
+    const phases: string[] = [];
+    watcher = new StorageDirectoryWatcher({
+      directory: dir,
+      accepts: () => true,
+      debounceMs: 50,
+      onChange: () => undefined,
+      onError: (_error, phase) => phases.push(phase),
+    });
+    watches.failWith(systemError("EMFILE"));
+    expect(watcher.start()).to.equal(false);
+    watches.failWith(null);
+    expect(watcher.start()).to.equal(true);
+    watches.handles[0].emit("error", systemError("EIO"));
+    expect(phases).to.deep.equal(["start", "watch"]);
+  });
+
   it("reports one construction failure per outage streak and keeps exactly one retry timer pending", async () => {
     const clock = sinon.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const watches = instrumentWatch();

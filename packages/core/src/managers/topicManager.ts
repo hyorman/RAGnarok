@@ -1763,7 +1763,10 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
   // directory disappearing emits `storage-unavailable` and is retried until it
   // returns. Mechanics live in StorageDirectoryWatcher.
 
-  /** Start the directory watch. Failure to construct it degrades to no watcher; freshness then comes only from refresh(). */
+  /**
+   * Start the directory watch. Failure to construct it degrades to no watcher;
+   * freshness then comes only from refresh().
+   */
   private startExternalChangeWatcher(): void {
     if (this.watcherStopped) {
       return;
@@ -1773,10 +1776,13 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
       accepts: (name) => name === EXTENSION.TOPICS_INDEX_FILENAME || /^topic-.*-documents\.json$/.test(name),
       debounceMs: 250,
       onChange: () => this.handleDebouncedChange(),
-      onError: (error) =>
-        this.logger.warn("Storage directory watch reported an error", {
-          error: error instanceof Error ? error.message : String(error),
-        }),
+      onError: (error, phase) =>
+        this.logger.warn(
+          phase === "start"
+            ? "Unable to watch the storage directory for external changes; freshness relies on refresh() until a watch is established"
+            : "The storage directory watch failed; external-change tracking will retry until the directory is back",
+          { error: error instanceof Error ? error.message : String(error) },
+        ),
       outage: {
         pollMs: 2_000,
         retryMs: 2_000,
@@ -1785,9 +1791,8 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
         onRecovered: () => this.recoverFromOutage(),
       },
     });
-    if (!this.externalWatcher.start()) {
-      this.logger.warn("Unable to watch the storage directory for external changes; freshness will rely on refresh()");
-    }
+    // A construction failure is reported (once) through onError above.
+    this.externalWatcher.start();
   }
 
   private stopExternalChangeWatcher(): void {
