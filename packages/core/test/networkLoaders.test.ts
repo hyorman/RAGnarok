@@ -4,6 +4,9 @@
  */
 
 import { expect } from "chai";
+import { createServer } from "http";
+import type { Server } from "http";
+import type { AddressInfo } from "net";
 import * as sinon from "sinon";
 import { WebDocumentLoader, GithubDocumentLoader } from "../src/index";
 import type { LoaderOptions } from "../src/index";
@@ -414,5 +417,78 @@ describe("GithubDocumentLoader", function () {
       // Verify fetch was called (GithubRepoLoader tried to make API calls)
       expect(fetchStub.called).to.be.true;
     });
+  });
+});
+
+/** Starts a local HTTP server on 127.0.0.1 (ephemeral port) answering 200 text/html with `body`. */
+async function startLocalHtmlServer(body: string): Promise<{ server: Server; port: number }> {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { server, port: (server.address() as AddressInfo).port };
+}
+
+describe("WebDocumentLoader pinned DNS lookup", function () {
+  this.timeout(15000);
+
+  type Pinned = Array<{ address: string; family?: number }>;
+  const loader = new WebDocumentLoader();
+  const pinnedLookup = (addresses: Pinned) => (loader as any).createPinnedLookup(addresses);
+  let server: Server | undefined;
+
+  afterEach(async function () {
+    if (server) {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    }
+  });
+
+  it("connects to a host-name URL through the pinned lookup", async function () {
+    const started = await startLocalHtmlServer("<html><body>pinned ok</body></html>");
+    server = started.server;
+    const response: Response = await (loader as any).fetchResponse(
+      new URL(`http://pinned.example.test:${started.port}/`),
+      AbortSignal.timeout(5000),
+      [{ address: "127.0.0.1", family: 4 }],
+    );
+    expect(response.status).to.equal(200);
+    expect(await response.text()).to.contain("pinned ok");
+  });
+
+  it("answers all-address lookups with only the validated addresses", function (done) {
+    const pinned: Pinned = [{ address: "93.184.216.34", family: 4 }, { address: "2606:2800:220:1::1" }];
+    pinnedLookup(pinned)("any.example.test", { all: true }, (err: unknown, result: unknown) => {
+      expect(err).to.equal(null);
+      expect(result).to.deep.equal([
+        { address: "93.184.216.34", family: 4 },
+        { address: "2606:2800:220:1::1", family: 6 },
+      ]);
+      done();
+    });
+  });
+
+  it("reports ENOTFOUND for an all-address lookup with no address of the requested family", function (done) {
+    pinnedLookup([{ address: "93.184.216.34", family: 4 }])(
+      "any.example.test",
+      { all: true, family: 6 },
+      (err: NodeJS.ErrnoException | null) => {
+        expect(err?.code).to.equal("ENOTFOUND");
+        done();
+      },
+    );
+  });
+
+  it("keeps the single-address round-robin when all is not requested", function () {
+    const lookup = pinnedLookup([
+      { address: "93.184.216.34", family: 4 },
+      { address: "93.184.216.35", family: 4 },
+    ]);
+    const seen: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      lookup("any.example.test", {}, (_err: unknown, address: string) => seen.push(address));
+    }
+    expect(seen).to.deep.equal(["93.184.216.34", "93.184.216.35", "93.184.216.34"]);
   });
 });

@@ -117,11 +117,24 @@ export class WebDocumentLoader implements DocumentLoader {
       const eligible = requestedFamily
         ? addresses.filter(({ address, family }) => (family ?? isIP(address)) === requestedFamily)
         : addresses;
-      const selected = eligible[cursor++ % eligible.length];
-      if (!selected) {
+      if (eligible.length === 0) {
         callback(Object.assign(new Error("No validated address for requested family"), { code: "ENOTFOUND" }), "", 0);
         return;
       }
+      if (options?.all) {
+        // Node 20+ (autoSelectFamily) asks for every address and expects an array. Node's
+        // LookupFunction callback type is the single-address form only, so cast narrowly.
+        const answerAll = callback as unknown as (
+          err: null,
+          addresses: Array<{ address: string; family: number }>,
+        ) => void;
+        answerAll(
+          null,
+          eligible.map(({ address, family }) => ({ address, family: family ?? isIP(address) })),
+        );
+        return;
+      }
+      const selected = eligible[cursor++ % eligible.length];
       callback(null, selected.address, selected.family ?? isIP(selected.address));
     };
   }
