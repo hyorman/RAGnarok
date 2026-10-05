@@ -2559,6 +2559,78 @@ assert.ok(identifiedCall.init.signal instanceof AbortSignal, "every attempt has 
 assert.equal(identifiedCall.init.headers["user-agent"], BENCHMARK_USER_AGENT);
 assert.match(BENCHMARK_USER_AGENT, /^RAGnarok-release-benchmark\/0\.4 \(https:\/\/github\.com\/hyorman\/RAGnarok\)$/);
 
+// V8's Date.parse reads "1.5" and "-5" as dates in 2001, which made them zero-millisecond waits.
+assert.deepEqual((await retryAfterDate("1.5")).delays, [1000], "a fractional Retry-After is not a date");
+assert.deepEqual((await retryAfterDate("-5")).delays, [1000], "a negative Retry-After is not a date");
+assert.deepEqual(
+  (await retryAfterDate("Sunday, 04-Oct-26 12:00:07 GMT")).delays,
+  [1000],
+  "only the IMF-fixdate form a server must send is read as a date",
+);
+
+// onRetry hears every retry with the wait that follows it, and nothing after the last attempt.
+const retryEvents = [];
+await recordedDownload([reply(503), reply(429, { "retry-after": "3" }), reply(200)], {
+  onRetry: (event) => retryEvents.push(event),
+});
+assert.deepEqual(retryEvents, [
+  { url: downloadUrl, reason: "returned 503", attempt: 1, attempts: 6, delayMs: 1000 },
+  { url: downloadUrl, reason: "returned 429", attempt: 2, attempts: 6, delayMs: 3000 },
+]);
+const lastAttemptEvents = [];
+await recordedDownload([reply(503)], { attempts: 2, onRetry: (event) => lastAttemptEvents.push(event.attempt) });
+assert.deepEqual(lastAttemptEvents, [1], "no retry is announced after the last attempt");
+
+// A refused response's body is cancelled, so its socket is released before the wait.
+let cancelledBodies = 0;
+const cancellable = (status) => () =>
+  new Response(
+    new ReadableStream({
+      cancel() {
+        cancelledBodies += 1;
+      },
+    }),
+    { status },
+  );
+await recordedDownload([cancellable(503), cancellable(429), reply(200)]);
+assert.equal(cancelledBodies, 2, "each retried response's body is cancelled");
+await recordedDownload([cancellable(404)]);
+assert.equal(cancelledBodies, 3, "a final refusal's body is cancelled too");
+
+// Each attempt has its own timeout: a fresh signal, live when the attempt starts, that fires after timeoutMs.
+const timedAttempts = [];
+const hangingFetch = async (_url, init) => {
+  timedAttempts.push({ signal: init.signal, abortedAtStart: init.signal.aborted });
+  return new Promise((_resolve, reject) => {
+    // AbortSignal.timeout's timer is unref'd; this one keeps the process alive until it fires.
+    const keepAlive = setTimeout(() => reject(new Error("the attempt timeout never fired")), 5_000);
+    init.signal.addEventListener("abort", () => {
+      clearTimeout(keepAlive);
+      reject(init.signal.reason);
+    });
+  });
+};
+const timedOut = await downloadWithRetry(downloadUrl, {
+  fetchImpl: hangingFetch,
+  sleep: async () => {},
+  attempts: 2,
+  timeoutMs: 20,
+}).then(
+  () => undefined,
+  (error) => error,
+);
+assert.deepEqual(
+  timedAttempts.map((attempt) => attempt.abortedAtStart),
+  [false, false],
+  "the second attempt starts with a live signal",
+);
+assert.notEqual(timedAttempts[0].signal, timedAttempts[1].signal, "each attempt gets its own signal");
+assert.equal(timedOut?.cause?.name, "TimeoutError", "the attempt was ended by its timeout");
+assert.match(timedOut?.message ?? "", /aborted due to timeout after 2 attempts$/);
+
+const singleAttempt = await recordedDownload([reply(429)], { attempts: 1 });
+assert.equal(singleAttempt.error?.message, `Benchmark download ${downloadUrl} returned 429 after 1 attempt`);
+
 const acquireCorpora = await read("scripts/acquire-benchmark-corpora.mjs");
 assert.match(acquireCorpora, /import \{ downloadWithRetry \} from "\.\/benchmark-download\.mjs"/);
 assert.doesNotMatch(
