@@ -16,7 +16,7 @@ import {
   executeQueryTool,
   QueryToolPayload,
 } from "@ragnarok/core";
-import { TOOLS, VSCODE_CONFIG } from "./constants";
+import { TOOLS, VSCODE_CONFIG, VSCODE_DEFAULTS } from "./constants";
 import { WorkspaceContextProvider } from "./workspaceContext";
 
 const logger = new Logger("RAGTool");
@@ -148,7 +148,10 @@ export class RAGTool {
       signal.throwIfAborted();
 
       // Optionally inject workspace context when LLM refinement is plausible
-      const includeWorkspace = this.config.get<boolean>(VSCODE_CONFIG.INCLUDE_WORKSPACE, true);
+      const includeWorkspace = this.config.get<boolean>(
+        VSCODE_CONFIG.INCLUDE_WORKSPACE,
+        VSCODE_DEFAULTS.INCLUDE_WORKSPACE_CONTEXT,
+      );
       const canUseWorkspaceContext =
         includeWorkspace && params.query.trim().includes(" ") && (await this.llmProvider.isAvailable());
 
@@ -158,7 +161,7 @@ export class RAGTool {
           includeSelection: true,
           includeActiveFile: true,
           includeWorkspace: true,
-          maxCodeLength: 1000,
+          maxCodeLength: VSCODE_DEFAULTS.WORKSPACE_CONTEXT_MAX_CODE_LENGTH,
         });
         workspaceContext = JSON.stringify(wsContext, null, 2);
         signal.throwIfAborted();

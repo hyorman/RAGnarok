@@ -5,7 +5,15 @@
  */
 
 import * as vscode from "vscode";
-import { CONFIG, EmbeddingService, Logger, MemoryStore, TopicManager, createSharedTopicSources } from "@ragnarok/core";
+import {
+  CONFIG,
+  DEFAULTS,
+  EmbeddingService,
+  Logger,
+  MemoryStore,
+  TopicManager,
+  createSharedTopicSources,
+} from "@ragnarok/core";
 import { VscodeLmBackend } from "./vscodeLmBackend";
 import { VSCODE_CONFIG } from "./constants";
 import { ExtensionLifecycle } from "./extensionLifecycle";
@@ -55,8 +63,8 @@ export function registerConfigurationHandler(deps: ConfigurationHandlerDeps): vs
   const { lifecycle, embeddingService, memoryStore, topicManager, refreshViews } = deps;
 
   const initialConfig = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
-  let committedLocalModelPath = initialConfig.get<string>(CONFIG.LOCAL_MODEL_PATH, "");
-  let committedEmbeddingBackend = initialConfig.get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
+  let committedLocalModelPath = initialConfig.get<string>(CONFIG.LOCAL_MODEL_PATH, DEFAULTS.LOCAL_MODEL_PATH);
+  let committedEmbeddingBackend = initialConfig.get<string>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
   let committedVscodeModel = initialConfig.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
 
   /**
@@ -113,7 +121,7 @@ export function registerConfigurationHandler(deps: ConfigurationHandlerDeps): vs
       commit: () => {
         committedLocalModelPath = vscode.workspace
           .getConfiguration(VSCODE_CONFIG.ROOT)
-          .get<string>(CONFIG.LOCAL_MODEL_PATH, "");
+          .get<string>(CONFIG.LOCAL_MODEL_PATH, DEFAULTS.LOCAL_MODEL_PATH);
       },
       rollback: async () => {
         await vscode.workspace
@@ -165,7 +173,7 @@ export function registerConfigurationHandler(deps: ConfigurationHandlerDeps): vs
         const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
         const requestedModel = config.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
         const requested = await resolveRequestedBackend(
-          config.get<string>(CONFIG.EMBEDDING_BACKEND, "auto"),
+          config.get<string>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND),
           requestedModel,
         );
         return {
@@ -175,7 +183,7 @@ export function registerConfigurationHandler(deps: ConfigurationHandlerDeps): vs
       },
       commit: () => {
         const config = vscode.workspace.getConfiguration(VSCODE_CONFIG.ROOT);
-        committedEmbeddingBackend = config.get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
+        committedEmbeddingBackend = config.get<string>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
         committedVscodeModel = config.get<string>(VSCODE_CONFIG.EMBEDDING_VSCODE_MODEL_ID, "");
       },
       rollback: async () => {

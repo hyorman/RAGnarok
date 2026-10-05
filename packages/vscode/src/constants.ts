@@ -2,6 +2,8 @@
  * VS Code-specific constants - extends core constants
  */
 
+import { EXTENSION } from "@ragnarok/core";
+
 // Re-export everything from core
 export { CONFIG, DEFAULTS } from "@ragnarok/core";
 
@@ -10,11 +12,19 @@ export { CONFIG, DEFAULTS } from "@ragnarok/core";
  */
 export const VSCODE_CONFIG = {
   /** VS Code settings section prefix for `vscode.workspace.getConfiguration()` */
-  ROOT: "ragnarok",
+  ROOT: EXTENSION.ID,
   /** Whether to include workspace context in RAG queries */
   INCLUDE_WORKSPACE: "includeWorkspaceContext",
   /** VS Code language-model embedding model id */
   EMBEDDING_VSCODE_MODEL_ID: "embeddingVscodeModelId",
+} as const;
+
+/** Defaults of the extension-only settings and options; the shared ones are core's DEFAULTS. */
+export const VSCODE_DEFAULTS = {
+  /** Equals the manifest default of `ragnarok.includeWorkspaceContext`. */
+  INCLUDE_WORKSPACE_CONTEXT: true,
+  /** Characters of selected or active-file code a workspace context carries. */
+  WORKSPACE_CONTEXT_MAX_CODE_LENGTH: 1000,
 } as const;
 
 /**

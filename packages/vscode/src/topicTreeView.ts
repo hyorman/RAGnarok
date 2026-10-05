@@ -19,7 +19,7 @@ import {
   CrossEncoderReranker,
 } from "@ragnarok/core";
 import type { LmEmbeddingsApi } from "./vscodeLmBackend";
-import { COMMANDS, TREE_CONFIG_KEY, CONTEXT, VSCODE_CONFIG } from "./constants";
+import { COMMANDS, TREE_CONFIG_KEY, CONTEXT, VSCODE_CONFIG, VSCODE_DEFAULTS } from "./constants";
 
 const logger = new Logger("TopicTreeView");
 
@@ -453,7 +453,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     const currentModel = this.embeddingService.getCurrentModel();
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.EMBEDDING_MODEL, value: currentModel }, "config-item"));
 
-    const backend = config.get<string>(CONFIG.EMBEDDING_BACKEND, "auto");
+    const backend = config.get<string>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
     const activeBackend = this.embeddingService.getActiveBackendType?.() ?? backend;
     items.push(
       new TopicTreeItem(
@@ -468,30 +468,33 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     const rerankerModel = config.get<string>(CONFIG.RERANKER_MODEL) ?? DEFAULTS.RERANKER_MODEL;
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RERANKER_MODEL, value: rerankerModel }, "config-item"));
 
-    const strategy = config.get<string>(CONFIG.RETRIEVAL_STRATEGY, "hybrid");
+    const strategy = config.get<string>(CONFIG.RETRIEVAL_STRATEGY, DEFAULTS.RETRIEVAL_STRATEGY);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RETRIEVAL_STRATEGY, value: strategy }, "config-item"));
 
     const topK = config.get<number>(CONFIG.TOP_K, 10);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.TOP_K, value: topK }, "config-item"));
 
-    const chunkSize = config.get<number>(CONFIG.CHUNK_SIZE, 1000);
+    const chunkSize = config.get<number>(CONFIG.CHUNK_SIZE, DEFAULTS.CHUNK_SIZE);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.CHUNK_SIZE, value: chunkSize }, "config-item"));
 
-    const chunkOverlap = config.get<number>(CONFIG.CHUNK_OVERLAP, 200);
+    const chunkOverlap = config.get<number>(CONFIG.CHUNK_OVERLAP, DEFAULTS.CHUNK_OVERLAP);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.CHUNK_OVERLAP, value: chunkOverlap }, "config-item"));
 
     const llmModel = config.get<string>(CONFIG.LLM_MODEL, PROVIDER_DEFAULT_MODELS.openai);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.LLM_MODEL, value: llmModel }, "config-item"));
 
-    const includeWorkspace = config.get<boolean>(VSCODE_CONFIG.INCLUDE_WORKSPACE, true);
+    const includeWorkspace = config.get<boolean>(
+      VSCODE_CONFIG.INCLUDE_WORKSPACE,
+      VSCODE_DEFAULTS.INCLUDE_WORKSPACE_CONTEXT,
+    );
     items.push(
       new TopicTreeItem({ key: TREE_CONFIG_KEY.INCLUDE_WORKSPACE_CONTEXT, value: includeWorkspace }, "config-item"),
     );
 
-    const maxIterations = config.get<number>(CONFIG.MAX_ITERATIONS, 3);
+    const maxIterations = config.get<number>(CONFIG.MAX_ITERATIONS, DEFAULTS.MAX_ITERATIONS);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.MAX_ITERATIONS, value: maxIterations }, "config-item"));
 
-    const threshold = config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, 0.7);
+    const threshold = config.get<number>(CONFIG.CONFIDENCE_THRESHOLD, DEFAULTS.CONFIDENCE_THRESHOLD);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.CONFIDENCE_THRESHOLD, value: threshold }, "config-item"));
 
     return items;

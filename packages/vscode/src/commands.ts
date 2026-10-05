@@ -14,6 +14,7 @@ import {
   Topic,
   MemoryStore,
   createSharedTopicSources,
+  GITHUB_HOST,
 } from "@ragnarok/core";
 import { TopicTreeDataProvider, ConfigTreeDataProvider } from "./topicTreeView";
 import { COMMANDS, CONFIG, VSCODE_CONFIG } from "./constants";
@@ -764,7 +765,7 @@ export class CommandHandler {
       // Detect GitHub repository URLs and route to the GitHub ingestion flow
       const parsed = new URL(trimmedUrl);
       const host = parsed.hostname.toLowerCase();
-      const isGitHubHost = host === "github.com" || host.endsWith(".github.com");
+      const isGitHubHost = host === GITHUB_HOST || host.endsWith(`.${GITHUB_HOST}`);
       const hasRepoPath = /^\/[\w-]+\/[\w.-]+/.test(parsed.pathname);
       const hasToken = await this.tokenManager.getToken(host);
 

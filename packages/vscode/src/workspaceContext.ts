@@ -4,6 +4,7 @@
  */
 
 import * as vscode from "vscode";
+import { VSCODE_DEFAULTS } from "./constants";
 
 export interface WorkspaceContext {
   // Selected code in editor
@@ -50,7 +51,7 @@ export class WorkspaceContextProvider {
       includeSelection: true,
       includeActiveFile: true,
       includeWorkspace: true,
-      maxCodeLength: 1000,
+      maxCodeLength: VSCODE_DEFAULTS.WORKSPACE_CONTEXT_MAX_CODE_LENGTH,
       ...options,
     };
 
