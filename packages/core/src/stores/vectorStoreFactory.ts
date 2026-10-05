@@ -24,6 +24,7 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import { TransformersEmbeddings } from "../embeddings/langchainEmbeddings";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { hasRemoteEndpoint, type EmbeddingServiceRegistry } from "../embeddings/embeddingServiceRegistry";
+import { EXTENSION } from "../constants";
 import { Logger } from "../logger";
 import { atomicWriteJson, STORAGE_FORMAT_VERSION } from "../utils/storage";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
@@ -147,7 +148,7 @@ export class VectorStoreFactory {
     this.storageDir = storageDir;
     this.embeddingModel = embeddingModel;
     this.embeddingService = embeddingService;
-    this.lanceDbUri = path.join(storageDir, "lancedb");
+    this.lanceDbUri = path.join(storageDir, EXTENSION.LANCEDB_DIR);
     this.logger.info("VectorStoreFactory initialized", { storageDir, embeddingModel, lanceDbUri: this.lanceDbUri });
   }
 
@@ -269,7 +270,7 @@ export class VectorStoreFactory {
   public async loadStore(topicId: string, customStorageDir?: string): Promise<VectorStore | null> {
     this.logger.info("Loading vector store", { topicId, customStorageDir: customStorageDir || "default" });
 
-    const targetLanceDbUri = customStorageDir ? path.join(customStorageDir, "lancedb") : this.lanceDbUri;
+    const targetLanceDbUri = customStorageDir ? path.join(customStorageDir, EXTENSION.LANCEDB_DIR) : this.lanceDbUri;
     const cacheKey = `${targetLanceDbUri}::${topicId}`;
     const cachedStore = this.storeCache.get(cacheKey);
     if (cachedStore) {
@@ -718,7 +719,7 @@ export class VectorStoreFactory {
     this.logger.info("Fetching all documents via table scan", { topicId, limit });
 
     try {
-      const targetUri = customStorageDir ? path.join(customStorageDir, "lancedb") : this.lanceDbUri;
+      const targetUri = customStorageDir ? path.join(customStorageDir, EXTENSION.LANCEDB_DIR) : this.lanceDbUri;
 
       const db = await this.getConnection(targetUri);
       const tableNames = await db.tableNames();
@@ -920,7 +921,7 @@ export class VectorStoreFactory {
    * through.
    */
   public async closeConnection(storeDir: string): Promise<void> {
-    const uri = path.join(storeDir, "lancedb");
+    const uri = path.join(storeDir, EXTENSION.LANCEDB_DIR);
 
     const tables = this.tables.get(uri);
     if (tables) {

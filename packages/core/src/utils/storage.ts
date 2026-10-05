@@ -87,6 +87,9 @@ const FILESYSTEM_CLUTTER_ENTRIES: ReadonlySet<string> = new Set([
 /** How many triggering entries the refusal names, so a large legacy tree does not flood the message. */
 const UNSUPPORTED_ENTRIES_REPORTED = 5;
 
+/** Prefix of the timestamped folder resetStorage moves old content into. */
+export const STORAGE_BACKUP_DIR_PREFIX = "backup-v1-";
+
 /**
  * Infrastructure files, never version-gated or backed up. config.json is
  * generated on first run before format validation (gating it would refuse every
@@ -100,7 +103,7 @@ function isInfrastructureEntry(entry: string): boolean {
     entry === STORAGE_RESET_JOURNAL_FILENAME ||
     entry === SHARED_TOPIC_CACHE_DIRNAME ||
     FILESYSTEM_CLUTTER_ENTRIES.has(entry) ||
-    entry.startsWith("backup-v1-")
+    entry.startsWith(STORAGE_BACKUP_DIR_PREFIX)
   );
 }
 
@@ -270,7 +273,9 @@ export async function resetStorage(storageDir: string): Promise<string | null> {
   const entries = (await fs.readdir(storageDir)).filter((entry) => !isInfrastructureEntry(entry));
   const journalPath = resetJournalPath(storageDir);
   const backupDir =
-    entries.length === 0 ? null : path.join(storageDir, `backup-v1-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+    entries.length === 0
+      ? null
+      : path.join(storageDir, `${STORAGE_BACKUP_DIR_PREFIX}${new Date().toISOString().replace(/[:.]/g, "-")}`);
 
   // A valid v2 marker is kept in the journal so a fully rolled-back transient
   // failure can reinstate it and clear the journal instead of leaving a

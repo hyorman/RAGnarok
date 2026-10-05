@@ -37,12 +37,13 @@ import {
 import { SharedTopicRegistry } from "../sharedTopics/registry";
 import { SharedTopicReadOnlyError } from "../sharedTopics/types";
 import type { SharedTopicSource } from "../sharedTopics/types";
-import { acquireOperationLease, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
+import { acquireOperationLease, DEFAULT_LEASE_WAIT_MS, STORAGE_LOCK_FILENAME } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
-import { StorageDirectoryWatcher } from "../utils/storageDirectoryWatcher";
+import { StorageDirectoryWatcher, STORAGE_WATCH_DEBOUNCE_MS } from "../utils/storageDirectoryWatcher";
 import { isFiniteNumber, isRecord } from "../utils/typeGuards";
 import {
   StorageTransactionCoordinator,
+  TRANSACTIONS_DIRNAME,
   type StorageTransactionOperation,
 } from "../utils/storageTransactionCoordinator";
 import { randomUUID } from "crypto";
@@ -540,7 +541,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
       delete nextTopicsIndex.topics[topicId];
       const preparedIndex = path.join(this.paths.databaseDir(), `.delete-${topicId}-${randomUUID()}.json`);
       await atomicWriteJson(preparedIndex, nextTopicsIndex);
-      const lancedbDir = path.join(this.paths.databaseDir(), "lancedb");
+      const lancedbDir = path.join(this.paths.databaseDir(), EXTENSION.LANCEDB_DIR);
       const operations: StorageTransactionOperation[] = [
         { type: "replace", source: preparedIndex, destination: this.paths.topicsIndexPath() },
         { type: "delete", destination: this.paths.topicDocumentsPath(topicId) },
@@ -1780,7 +1781,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
     this.externalWatcher ??= new StorageDirectoryWatcher({
       directory: this.paths.databaseDir(),
       accepts: (name) => name === EXTENSION.TOPICS_INDEX_FILENAME || /^topic-.*-documents\.json$/.test(name),
-      debounceMs: 250,
+      debounceMs: STORAGE_WATCH_DEBOUNCE_MS,
       onChange: () => this.handleDebouncedChange(),
       onError: (error, phase) =>
         this.logger.warn(
@@ -2074,7 +2075,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
     options?: { waitMs?: number },
   ): Promise<T> {
     return this.storageMutationMutex.runExclusive(async () => {
-      const lease = await acquireOperationLease(this.storageDir, { waitMs: options?.waitMs ?? 5_000 });
+      const lease = await acquireOperationLease(this.storageDir, { waitMs: options?.waitMs ?? DEFAULT_LEASE_WAIT_MS });
       const previousLease = this.activeLease;
       const previousCoordinator = this.activeCoordinator;
       this.activeLease = lease;
@@ -2102,7 +2103,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
 
   /** Take an operation lease for a single startup write, then give it back. */
   private async withOperationLease<T>(operation: () => Promise<T>): Promise<T> {
-    const lease = await acquireOperationLease(this.storageDir, { waitMs: 5_000 });
+    const lease = await acquireOperationLease(this.storageDir, { waitMs: DEFAULT_LEASE_WAIT_MS });
     const previousLease = this.activeLease;
     this.activeLease = lease;
     try {
@@ -2162,7 +2163,7 @@ export class TopicManager implements TopicArchiveHost, TopicJournalHost, TopicVe
     // A crashed transaction leaves its WAL, or an orphaned staging directory,
     // under the coordinator root.
     try {
-      const staged = await fs.readdir(path.join(this.paths.databaseDir(), ".transactions"));
+      const staged = await fs.readdir(path.join(this.paths.databaseDir(), TRANSACTIONS_DIRNAME));
       return staged.length > 0;
     } catch (error) {
       if (errnoCode(error) === "ENOENT") {

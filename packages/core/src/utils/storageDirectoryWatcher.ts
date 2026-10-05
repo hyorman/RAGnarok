@@ -1,5 +1,8 @@
 import * as fsSync from "fs";
 
+/** Quiet period both storage-dir watchers (topics, memory) wait before reporting a change. */
+export const STORAGE_WATCH_DEBOUNCE_MS = 250;
+
 /** Where a watch error came from: `fs.watch` construction (`start`) or a live watch handle (`watch`). */
 export type StorageWatchErrorPhase = "start" | "watch";
 

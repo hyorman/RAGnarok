@@ -13,7 +13,7 @@ import * as crypto from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { Mutex } from "async-mutex";
-import { EmbeddingService } from "../embeddings/embeddingService";
+import { EMBEDDING_FINGERPRINT_PROBE_TEXT, EmbeddingService } from "../embeddings/embeddingService";
 import { ILLMProvider } from "../interfaces";
 import { Logger } from "../logger";
 import { EXTENSION } from "../constants";
@@ -41,17 +41,16 @@ import { MemoryDecayEngine } from "./memoryDecayEngine";
 import { MemoryScopeLinker } from "./memoryScopeLinker";
 import { cosineSimilarity } from "../utils/vectorMath";
 import { atomicWriteFile, atomicWriteJson, ensureStorageFormat, inspectStorage } from "../utils/storage";
-import { acquireOperationLease, StorageBusyError } from "../utils/storageLock";
+import { acquireOperationLease, DEFAULT_LEASE_WAIT_MS, StorageBusyError } from "../utils/storageLock";
 import type { StorageLockHandle } from "../utils/storageLock";
-import { StorageDirectoryWatcher } from "../utils/storageDirectoryWatcher";
+import { StorageDirectoryWatcher, STORAGE_WATCH_DEBOUNCE_MS } from "../utils/storageDirectoryWatcher";
 import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 /** The two storage-dir files whose replacement signals a foreign memory write. */
 const MEMORY_MANIFEST_FILENAME = "memory-manifest.json";
 const MEMORIES_MARKDOWN_FILENAME = EXTENSION.MEMORIES_MARKDOWN_FILENAME;
-const MEMORY_WATCH_DEBOUNCE_MS = 250;
 /** How long a mutation waits for a foreign writer before reporting StorageBusyError. */
-const MUTATION_LEASE_WAIT_MS = 5_000;
+const MUTATION_LEASE_WAIT_MS = DEFAULT_LEASE_WAIT_MS;
 /**
  * Deferred writers (markdown regeneration, reinforcement persistence) are
  * best-effort: they try-lock rather than wait, and back off with doubled
@@ -772,7 +771,7 @@ export class MemoryStore {
               providerFormat: "unknown",
               model: "unknown",
               revision: "unknown",
-              dimension: (await this.embeddingService.embed("RAGnarok embedding fingerprint probe")).length,
+              dimension: (await this.embeddingService.embed(EMBEDDING_FINGERPRINT_PROBE_TEXT)).length,
               endpointHash: "unknown",
             };
       let stored: EmbeddingFingerprint | undefined;
@@ -1231,7 +1230,7 @@ export class MemoryStore {
     this.storageWatcher ??= new StorageDirectoryWatcher({
       directory: this.storageDir,
       accepts: (name) => name === MEMORY_MANIFEST_FILENAME || name === MEMORIES_MARKDOWN_FILENAME,
-      debounceMs: MEMORY_WATCH_DEBOUNCE_MS,
+      debounceMs: STORAGE_WATCH_DEBOUNCE_MS,
       // Our own mutation holds optimistic in-memory state it has not persisted
       // yet: re-arm rather than drop the signal.
       onChange: () => (this.holdsMutationLease ? "rearm" : this.invalidateAllCaches()),

@@ -22,6 +22,9 @@ import { cosineSimilarity as langchainCosineSimilarity } from "@langchain/core/u
 import { Mutex } from "async-mutex";
 import { AsyncLocalStorage } from "async_hooks";
 
+/** Text embedded once to learn a backend's dimension when it does not report one. */
+export const EMBEDDING_FINGERPRINT_PROBE_TEXT = "RAGnarok embedding fingerprint probe";
+
 // Re-export for consumers that imported AvailableModel from here
 export type { AvailableModel } from "../models/modelRegistry.js";
 
@@ -354,7 +357,7 @@ export class EmbeddingService {
     return this.withActiveBackend(async (backend) => {
       let dimension = backend.getDimension();
       if (!dimension) {
-        dimension = (await backend.embed("RAGnarok embedding fingerprint probe", signal)).length;
+        dimension = (await backend.embed(EMBEDDING_FINGERPRINT_PROBE_TEXT, signal)).length;
       }
       const details = backend.getFingerprintInfo?.() ?? {};
       return {

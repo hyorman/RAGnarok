@@ -11,6 +11,8 @@ export const EXTENSION = {
   ID: "ragnarok",
   DISPLAY_NAME: "RAGnarōk",
   DATABASE_DIR: "database",
+  /** LanceDB's directory inside the database dir and inside unpacked shared-topic content. */
+  LANCEDB_DIR: "lancedb",
   TOPICS_INDEX_FILENAME: "topics.json",
   /** The human-readable memory export each host writes into its storage directory. */
   MEMORIES_MARKDOWN_FILENAME: "memories.md",

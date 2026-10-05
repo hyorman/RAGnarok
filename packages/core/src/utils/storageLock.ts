@@ -83,7 +83,8 @@ export interface OperationLeaseOptions {
   heartbeatMs?: number;
 }
 
-const DEFAULT_WAIT_MS = 5000;
+/** How long acquireOperationLease waits for a live foreign holder unless told otherwise. */
+export const DEFAULT_LEASE_WAIT_MS = 5_000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 
 interface InternalLock {
@@ -617,7 +618,7 @@ export async function acquireOperationLease(
   options?: OperationLeaseOptions,
 ): Promise<StorageLockHandle> {
   const wait: WaitPolicy = {
-    waitMs: options?.waitMs ?? DEFAULT_WAIT_MS,
+    waitMs: options?.waitMs ?? DEFAULT_LEASE_WAIT_MS,
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
   };
   return acquireLease(storageDir, { staleMs: options?.staleMs, heartbeatMs: options?.heartbeatMs }, wait);
