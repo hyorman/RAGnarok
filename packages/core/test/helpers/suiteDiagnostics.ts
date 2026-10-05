@@ -38,6 +38,8 @@ export interface StallReport {
 }
 
 export interface StallWatchdog {
+  /** Resolves once the worker thread is running and listening. */
+  ready: Promise<void>;
   /** Names the test now running, for a report. */
   testStarted(title: string): void;
   stop(): Promise<void>;
@@ -61,9 +63,10 @@ setInterval(() => {
     if (workerData.writeToStderr) {
       fs.writeSync(2, "Main thread blocked for " + (blockedMs / 1000).toFixed(1) + " s; last test started: " + test + "\\n");
     }
-    parentPort.postMessage({ test, blockedMs });
+    parentPort.postMessage({ kind: "stall", test, blockedMs });
   }
 }, Math.max(10, Math.floor(workerData.stallMs / 4)));
+parentPort.postMessage({ kind: "ready" });
 `;
 
 /**
@@ -84,10 +87,19 @@ export function startStallWatchdog(options: {
     workerData: { stallMs: options.stallMs, writeToStderr: options.writeToStderr ?? true },
   });
   worker.unref();
-  worker.on("message", (report: StallReport) => options.onStall?.(report));
+  const ready = new Promise<void>((resolve) => {
+    worker.on("message", (message: { kind: "ready" } | ({ kind: "stall" } & StallReport)) => {
+      if (message.kind === "ready") {
+        resolve();
+      } else {
+        options.onStall?.({ test: message.test, blockedMs: message.blockedMs });
+      }
+    });
+  });
   const heartbeat = setInterval(() => worker.postMessage({ kind: "heartbeat" }), options.heartbeatMs);
   heartbeat.unref();
   return {
+    ready,
     testStarted: (title) => worker.postMessage({ kind: "test", title }),
     stop: async () => {
       clearInterval(heartbeat);

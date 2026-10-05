@@ -29,7 +29,7 @@ describe("suite diagnostics", function () {
     });
     const watchdog = startStallWatchdog({ stallMs: 300, heartbeatMs: 50, onStall: resolveStall, writeToStderr: false });
     try {
-      await new Promise((resolve) => setTimeout(resolve, 100)); // let the worker start
+      await watchdog.ready;
       watchdog.testStarted("probe blocks the event loop");
       const end = Date.now() + 1000;
       while (Date.now() < end) {
