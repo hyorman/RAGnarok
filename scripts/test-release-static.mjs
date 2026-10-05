@@ -1479,6 +1479,19 @@ const windowsSharpTree = await sharpFixture();
 await writePackage(windowsSharpTree, "@img/sharp-win32-x64", { version: "0.35.5" });
 packaging.verifySharpNativesMatchTransformers(windowsSharpTree, win32X64Target);
 await rm(path.dirname(windowsSharpTree), { recursive: true, force: true });
+// The allowlist decides where the shipped chain ends. A native that the last shipped package still
+// declares (a future Windows Sharp that declares a libvips package, a target the allowlist does not
+// know) would be pruned from the VSIX and Sharp would fail to load at run time.
+const unendedChainTree = await sharpFixture();
+await writePackage(unendedChainTree, "@img/sharp-win32-x64", {
+  version: "0.35.5",
+  optionalDependencies: { "@img/sharp-libvips-win32-x64": "1.3.4" },
+});
+assert.throws(
+  () => packaging.verifySharpNativesMatchTransformers(unendedChainTree, win32X64Target),
+  /@img\/sharp-win32-x64 declares @img\/sharp-libvips-win32-x64, but no shipped native package config covers it for win32-x64/,
+);
+await rm(path.dirname(unendedChainTree), { recursive: true, force: true });
 // Every Sharp native that ships is declared by the package before it in the chain; an
 // undeclared one is not what Sharp loads, so the build must not accept it on presence alone.
 const undeclaredLibvipsTree = await sharpFixture({ declareLibvips: false });
@@ -2208,10 +2221,15 @@ const packageVsixSource =
   builder.match(/function packageVsix\(stagingDir, targetPlatform\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
 assert.ok(packageVsixSource, "packageVsix must be locatable in build-vsix.js");
 assert.match(packageVsixSource, /vsixFileName\(/, "packageVsix names the file with vsixFileName");
+assert.deepEqual(
+  packaging.vscePackageArgs({ name: "ragnarok", version: "0.4.1" }, "linux-x64"),
+  ["package", "--target", "linux-x64", "--out", "ragnarok-0.4.1-linux-x64.vsix"],
+  "vsce packages the target under the name every release consumer finds it by",
+);
 assert.match(
   packageVsixSource,
-  /\["package", "--target", targetPlatform\.target, "--out", \w+\]/,
-  "packageVsix passes vsce --out with the computed name",
+  /vscePackageArgs\(manifest, targetPlatform\.target\)/,
+  "packageVsix passes vsce the arguments vscePackageArgs builds",
 );
 assert.doesNotMatch(
   packageVsixSource,
