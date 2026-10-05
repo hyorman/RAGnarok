@@ -68,6 +68,8 @@ Respond with ONLY a JSON object:
 
 /** How long one extraction request may take before the extractor gives up and returns nothing. */
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 15_000;
+/** The largest delay AbortSignal.timeout and setTimeout accept. */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 export class MemoryEntityExtractor {
   private logger = new Logger("MemoryEntityExtractor");
@@ -75,7 +77,12 @@ export class MemoryEntityExtractor {
   constructor(
     private llmProvider: ILLMProvider,
     private readonly timeoutMs: number = DEFAULT_EXTRACTION_TIMEOUT_MS,
-  ) {}
+  ) {
+    // AbortSignal.timeout throws on any other value, which extract() would swallow into an empty result.
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
+      throw new RangeError(`timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}; got ${timeoutMs}`);
+    }
+  }
 
   async extract(text: string, signal?: AbortSignal): Promise<ExtractionResult> {
     try {

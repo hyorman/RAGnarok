@@ -205,6 +205,16 @@ describe("MemoryEntityExtractor", function () {
       expect(result.relationships).to.have.length(0);
     });
 
+    it("refuses a timeout AbortSignal.timeout cannot take, instead of silently returning nothing", function () {
+      for (const timeoutMs of [0, -5, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
+        expect(
+          () => new MemoryEntityExtractor(createMockLLMProvider(validResponse), timeoutMs),
+          `timeout ${timeoutMs}`,
+        ).to.throw(RangeError, /timeoutMs/);
+      }
+      expect(() => new MemoryEntityExtractor(createMockLLMProvider(validResponse), 1)).to.not.throw();
+    });
+
     it("should propagate caller cancellation instead of degrading it", async function () {
       const extractor = new MemoryEntityExtractor(createSlowLLMProvider(30_000));
       const controller = new AbortController();

@@ -591,6 +591,17 @@ describe("MemoryVectorStore atomic scope recovery", function () {
     await bounded.dispose();
     await fs.rm(directory, { recursive: true, force: true });
   });
+
+  it("refuses a table-handle cap that would close every table it opens", function () {
+    // The constructor opens nothing, so no directory is needed.
+    for (const cap of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => new MemoryVectorStore(path.join(os.tmpdir(), "memory-cap-unused"), cap), `cap ${cap}`).to.throw(
+        RangeError,
+        /maxOpenTables/,
+      );
+    }
+    expect(() => new MemoryVectorStore(path.join(os.tmpdir(), "memory-cap-unused"), 1)).to.not.throw();
+  });
 });
 
 describe("MemoryVectorStore writer-only journal recovery", function () {
