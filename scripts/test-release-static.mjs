@@ -1973,12 +1973,31 @@ assert.ok(
 );
 // The soak gives up inside its own budget, a minute short of the step limit, so its message (which
 // names the iteration) reports a stall instead of the runner's kill.
-assert.match(
-  await read("scripts/shutdown-soak.mjs"),
-  /if \(process\.argv\[1\] && import\.meta\.url === pathToFileURL\(path\.resolve\(process\.argv\[1\]\)\)\.href\)/,
-  "the soak must run only when executed directly, so these tests can import its budget",
+// The soak runs unconditionally: a main guard that misfired (a symlinked checkout, an odd Windows
+// path form) would make it do nothing and exit 0. Its budget helpers live in a library with no side
+// effects, so these tests import that and never the script.
+const soakScript = await read("scripts/shutdown-soak.mjs");
+assert.doesNotMatch(
+  soakScript,
+  /process\.argv\[1\]|import\.meta\.url\s*===/,
+  "the soak must not guard its main() on how it was invoked",
 );
-const soak = await import("./shutdown-soak.mjs");
+assert.match(soakScript, /^await main\(\);$/m, "the soak must run main() unconditionally");
+assert.match(
+  soakScript,
+  /import \{[^}]*\} from "\.\/shutdown-soak-lib\.mjs";/,
+  "the soak must take its budget helpers from its library",
+);
+const soakLibSource = await read("scripts/shutdown-soak-lib.mjs");
+assert.deepEqual(
+  soakLibSource
+    .split("\n")
+    .filter((line) => /^[A-Za-z]/.test(line) && !/^(export (const|function) |\}|\/\/)/.test(line)),
+  [],
+  "the soak library may hold only exported constants and functions, nothing that runs on import",
+);
+assert.doesNotMatch(soakLibSource, /^(await|import) /m, "the soak library must not import or await anything");
+const soak = await import("./shutdown-soak-lib.mjs");
 assert.ok(
   soak.SOAK_BUDGET_MS + 60_000 <= soakStep["timeout-minutes"] * 60_000,
   `the soak budget (${soak.SOAK_BUDGET_MS} ms) must end at least a minute before the CI step limit`,
