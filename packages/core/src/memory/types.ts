@@ -226,6 +226,8 @@ export interface DecayStatus {
 
 export const DUPLICATE_SIMILARITY_THRESHOLD = 0.92;
 export const DEFAULT_TOP_K = 10;
+/** Entries a list returns when the caller gives no limit. */
+export const DEFAULT_LIST_LIMIT = 50;
 export const MEMORY_TABLE_PREFIX = "_memory";
 
 /** Decay rate (higher = faster decay) */

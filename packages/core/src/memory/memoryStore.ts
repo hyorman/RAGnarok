@@ -30,6 +30,7 @@ import {
   DecayStatus,
   ScopeLink,
   DUPLICATE_SIMILARITY_THRESHOLD,
+  DEFAULT_LIST_LIMIT,
   DEFAULT_TOP_K,
 } from "./types";
 import { MemoryVectorStore } from "./memoryVectorStore";
@@ -540,7 +541,7 @@ export class MemoryStore {
     includeSuperseded?: boolean;
     includeAuto?: boolean;
   }): Promise<MemoryEntry[]> {
-    const limit = options?.limit ?? 50;
+    const limit = options?.limit ?? DEFAULT_LIST_LIMIT;
     const includeSuperseded = options?.includeSuperseded ?? false;
     const results: MemoryEntry[] = [];
 

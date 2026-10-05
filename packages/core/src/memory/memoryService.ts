@@ -19,7 +19,7 @@ import type {
 import { MemoryStore } from "./memoryStore";
 import { StorageBusyError } from "../utils/storageLock";
 import { TOOL_LIMITS } from "../tools/toolContracts";
-import type { MemoryScope } from "./types";
+import { DEFAULT_LIST_LIMIT, DEFAULT_TOP_K, type MemoryScope } from "./types";
 
 type StoreInput = Extract<MemoryOperationInput, { action: "store" }>;
 type RecallInput = Extract<MemoryOperationInput, { action: "recall" }>;
@@ -156,7 +156,7 @@ export class MemoryService {
         query: input.query,
         scope,
         branch,
-        topK: input.topK ?? 10,
+        topK: input.topK ?? DEFAULT_TOP_K,
         includeEntities: input.includeEntities ?? false,
         ...(input.includeAuto ? { includeAuto: true } : {}),
         ...(input.reinforce !== undefined ? { reinforce: input.reinforce } : {}),
@@ -229,7 +229,7 @@ export class MemoryService {
       const entries = await this.store.list({
         scope,
         branch,
-        limit: input.limit ?? 50,
+        limit: input.limit ?? DEFAULT_LIST_LIMIT,
         ...(input.includeAuto ? { includeAuto: true } : {}),
       });
       return {
