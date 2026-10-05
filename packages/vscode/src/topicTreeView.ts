@@ -17,6 +17,7 @@ import {
   RetrievalStrategy,
   RerankerModelRegistry,
   CrossEncoderReranker,
+  TOP_K_MAX,
 } from "@ragnarok/core";
 import type { LmEmbeddingsApi } from "./vscodeLmBackend";
 import { COMMANDS, TREE_CONFIG_KEY, CONTEXT, VSCODE_CONFIG, VSCODE_DEFAULTS } from "./constants";
@@ -471,7 +472,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
     const strategy = config.get<string>(CONFIG.RETRIEVAL_STRATEGY, DEFAULTS.RETRIEVAL_STRATEGY);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.RETRIEVAL_STRATEGY, value: strategy }, "config-item"));
 
-    const topK = config.get<number>(CONFIG.TOP_K, 10);
+    const topK = config.get<number>(CONFIG.TOP_K, VSCODE_DEFAULTS.TOP_K);
     items.push(new TopicTreeItem({ key: TREE_CONFIG_KEY.TOP_K, value: topK }, "config-item"));
 
     const chunkSize = config.get<number>(CONFIG.CHUNK_SIZE, DEFAULTS.CHUNK_SIZE);
@@ -917,7 +918,7 @@ export class ConfigTreeDataProvider implements vscode.TreeDataProvider<TopicTree
         settingKey: CONFIG.TOP_K,
         type: "number",
         min: 1,
-        max: 20,
+        max: TOP_K_MAX,
         step: 1,
         label: "Top K Results",
       },

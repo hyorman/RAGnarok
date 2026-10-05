@@ -7,6 +7,7 @@ import {
   toolErrorPayload,
   isToolErrorPayload,
 } from "../src/tools/index";
+import { TOP_K_MAX } from "../src/constants";
 
 describe("tool contracts", function () {
   it("pins the literal limit values both hosts are generated from", function () {
@@ -34,6 +35,11 @@ describe("tool contracts", function () {
     expect(memory.olderThan.maximum).to.equal(TOOL_LIMITS.memoryDays);
     expect(memory.ttlDays.maximum).to.equal(TOOL_LIMITS.memoryDays);
     expect(memory.limit.maximum).to.equal(TOOL_LIMITS.memoryListLimit);
+  });
+
+  it("bounds rag_query's topK by the one ceiling every host enforces", function () {
+    expect(TOOL_LIMITS.queryTopK).to.equal(TOP_K_MAX);
+    expect(RAG_QUERY_INPUT_SCHEMA.properties.topK.maximum).to.equal(TOP_K_MAX);
   });
 
   it("bounds rag_query inputs", function () {

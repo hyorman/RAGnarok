@@ -80,6 +80,13 @@ export type LLMProviderName = keyof typeof PROVIDER_DEFAULT_MODELS;
 export const GITHUB_HOST = "github.com";
 
 /**
+ * The largest topK any host accepts: the `ragnarok.topK` setting's maximum, MCP's
+ * retrieval.topK ceiling and rag_query's bound (TOOL_LIMITS.queryTopK). Each host keeps
+ * its own default below it: VS Code 5, MCP 10.
+ */
+export const TOP_K_MAX = 20;
+
+/**
  * @ragnarok/core's own version, from its package.json. Required by package name, so
  * one specifier resolves from dist/, from the compiled tests and in the MCP image
  * (node_modules/@ragnarok/core), and esbuild inlines the JSON into the VS Code bundle.

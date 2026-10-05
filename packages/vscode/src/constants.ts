@@ -21,6 +21,8 @@ export const VSCODE_CONFIG = {
 
 /** Defaults of the extension-only settings and options; the shared ones are core's DEFAULTS. */
 export const VSCODE_DEFAULTS = {
+  /** Equals the manifest default of `ragnarok.topK`; MCP's own default is MCP_DEFAULTS.TOP_K. */
+  TOP_K: 5,
   /** Equals the manifest default of `ragnarok.includeWorkspaceContext`. */
   INCLUDE_WORKSPACE_CONTEXT: true,
   /** Characters of selected or active-file code a workspace context carries. */

@@ -7,6 +7,7 @@
  * are asserted equivalent by a contract test.
  */
 
+import { TOP_K_MAX } from "../constants";
 import { RetrievalStrategy } from "../utils/types";
 
 export interface JsonSchemaProperty {
@@ -36,8 +37,8 @@ export interface JsonSchemaObject {
 export const TOOL_LIMITS = Object.freeze({
   topicName: 200,
   query: 20_000,
-  /** rag_query's topK ceiling. */
-  queryTopK: 20,
+  /** rag_query's topK ceiling, the one every host enforces. */
+  queryTopK: TOP_K_MAX,
   memoryQuery: 10_000,
   memoryContent: 50_000,
   memoryId: 1_000,

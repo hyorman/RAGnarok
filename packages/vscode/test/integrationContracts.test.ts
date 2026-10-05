@@ -11,6 +11,7 @@ import {
   RAG_QUERY_INPUT_SCHEMA,
   RAG_TOPIC_READ_INPUT_SCHEMA,
   TOOL_LIMITS,
+  TOP_K_MAX,
 } from "@ragnarok/core";
 import {
   COMMANDS,
@@ -132,6 +133,7 @@ describe("VS Code contribution and tree contracts", function () {
     const settings = manifest.contributes.configuration.properties;
     const fallbacks: Array<[string, unknown]> = [
       [CONFIG.LOCAL_MODEL_PATH, DEFAULTS.LOCAL_MODEL_PATH],
+      [CONFIG.TOP_K, VSCODE_DEFAULTS.TOP_K],
       [CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND],
       [CONFIG.CHUNK_SIZE, DEFAULTS.CHUNK_SIZE],
       [CONFIG.CHUNK_OVERLAP, DEFAULTS.CHUNK_OVERLAP],
@@ -149,6 +151,8 @@ describe("VS Code contribution and tree contracts", function () {
       const setting = `${VSCODE_CONFIG.ROOT}.${key}`;
       expect(settings[setting]?.default, setting).to.equal(fallback);
     }
+    const topK = `${VSCODE_CONFIG.ROOT}.${CONFIG.TOP_K}`;
+    expect(settings[topK].maximum, `${topK} maximum`).to.equal(TOP_K_MAX);
   });
 
   it("declares the same three retrieval strategies in settings, LM tool schema, and tree labels", async function () {

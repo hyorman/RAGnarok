@@ -21,7 +21,7 @@ export { LogLevel } from "./interfaces";
 export { Logger, setLoggerFactory, sanitizeErrorMessage } from "./logger";
 
 // Constants
-export { EXTENSION, CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS, GITHUB_HOST } from "./constants";
+export { EXTENSION, CONFIG, DEFAULTS, PROVIDER_DEFAULT_MODELS, GITHUB_HOST, TOP_K_MAX } from "./constants";
 export type { LLMProviderName } from "./constants";
 
 // Types

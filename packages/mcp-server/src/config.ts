@@ -9,7 +9,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { z } from "zod";
-import { DEFAULTS, RetrievalStrategy } from "@ragnarok/core";
+import { DEFAULTS, RetrievalStrategy, TOP_K_MAX } from "@ragnarok/core";
 import { CONFIG_FILE_NAME, readConfigFile } from "./configFile";
 import { MCP_DEFAULTS } from "./defaults";
 
@@ -88,7 +88,7 @@ const configSchema = z
     embeddingModel: z.string().min(1),
     chunkSize: z.number().int().min(50).max(20000),
     chunkOverlap: z.number().int().min(0).max(10000),
-    topK: z.number().int().min(1).max(50),
+    topK: z.number().int().min(1).max(TOP_K_MAX),
     retrievalStrategy: z.enum(RetrievalStrategy),
     maxIterations: z.number().int().min(1).max(10),
     confidenceThreshold: z.number().min(0).max(1),
