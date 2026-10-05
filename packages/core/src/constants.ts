@@ -2,6 +2,8 @@
  * Core constants for RAGnarōk (portable, no VS Code dependency)
  */
 
+import { RetrievalStrategy } from "./utils/types";
+
 /**
  * Extension identifiers
  */
@@ -10,6 +12,8 @@ export const EXTENSION = {
   DISPLAY_NAME: "RAGnarōk",
   DATABASE_DIR: "database",
   TOPICS_INDEX_FILENAME: "topics.json",
+  /** The human-readable memory export each host writes into its storage directory. */
+  MEMORIES_MARKDOWN_FILENAME: "memories.md",
 } as const;
 
 /**
@@ -48,6 +52,18 @@ export const DEFAULTS = {
   // leaving the reranker able only to reorder results it could not improve.
   RERANKER_MAX_CANDIDATES: 40,
   RERANKER_CANDIDATE_MULTIPLIER: 4,
+  // Each value below equals the VS Code manifest's default for the setting and,
+  // where MCP has the setting, its config.json default. topK is deliberately
+  // absent: the VS Code setting defaults to 5 and MCP's to 10.
+  CHUNK_SIZE: 1000,
+  CHUNK_OVERLAP: 200,
+  RETRIEVAL_STRATEGY: RetrievalStrategy.HYBRID,
+  MAX_ITERATIONS: 3,
+  CONFIDENCE_THRESHOLD: 0.7,
+  LOG_LEVEL: "info",
+  EMBEDDING_BACKEND: "auto",
+  /** Weight-bearing embedding models kept resident at once (MCP: embedding.maxResidentModels). */
+  MAX_RESIDENT_MODELS: 2,
 } as const;
 
 /** Single source of truth for per-provider default model ids. */
@@ -57,3 +73,6 @@ export const PROVIDER_DEFAULT_MODELS = {
   ollama: "llama3",
 } as const;
 export type LLMProviderName = keyof typeof PROVIDER_DEFAULT_MODELS;
+
+/** Public GitHub's host. Its API is api.github.com; a GitHub Enterprise host serves /api/v3. */
+export const GITHUB_HOST = "github.com";

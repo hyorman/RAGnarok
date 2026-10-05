@@ -5,6 +5,7 @@
 
 import { Document as LangChainDocument } from "@langchain/core/documents";
 import { GithubRepoLoader } from "@langchain/community/document_loaders/web/github";
+import { GITHUB_HOST } from "../constants";
 import { Logger } from "../logger";
 import { DocumentLoader, LoaderOptions } from "./types";
 
@@ -25,7 +26,7 @@ export class GithubDocumentLoader implements DocumentLoader {
       const urlObj = new URL(repoUrl);
       const baseUrl = `${urlObj.protocol}//${urlObj.host}`;
 
-      const apiUrl = urlObj.host === "github.com" ? "https://api.github.com" : `${baseUrl}/api/v3`;
+      const apiUrl = urlObj.host === GITHUB_HOST ? "https://api.github.com" : `${baseUrl}/api/v3`;
 
       this.logger.debug("GitHub configuration", {
         baseUrl,

@@ -13,7 +13,7 @@ import { Document as LangChainDocument } from "@langchain/core/documents";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { MarkdownTextSplitter } from "@langchain/textsplitters";
 import { Logger } from "../logger";
-import { CONFIG } from "../constants";
+import { CONFIG, DEFAULTS } from "../constants";
 
 export interface ChunkingOptions {
   /** Target chunk size in characters */
@@ -73,8 +73,9 @@ export class SemanticChunker {
     this.logger = new Logger("SemanticChunker");
 
     // Load configuration
-    this.defaultChunkSize = config?.get<number>(CONFIG.CHUNK_SIZE, 1000) ?? 1000;
-    this.defaultChunkOverlap = config?.get<number>(CONFIG.CHUNK_OVERLAP, 200) ?? 200;
+    this.defaultChunkSize = config?.get<number>(CONFIG.CHUNK_SIZE, DEFAULTS.CHUNK_SIZE) ?? DEFAULTS.CHUNK_SIZE;
+    this.defaultChunkOverlap =
+      config?.get<number>(CONFIG.CHUNK_OVERLAP, DEFAULTS.CHUNK_OVERLAP) ?? DEFAULTS.CHUNK_OVERLAP;
 
     this.logger.info("SemanticChunker initialized", {
       defaultChunkSize: this.defaultChunkSize,

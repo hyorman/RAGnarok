@@ -16,6 +16,7 @@ import { Mutex } from "async-mutex";
 import { EmbeddingService } from "../embeddings/embeddingService";
 import { ILLMProvider } from "../interfaces";
 import { Logger } from "../logger";
+import { EXTENSION } from "../constants";
 import {
   MemoryEntry,
   MemoryEntity,
@@ -47,7 +48,7 @@ import type { EmbeddingFingerprint } from "../embeddings/embeddingBackend";
 
 /** The two storage-dir files whose replacement signals a foreign memory write. */
 const MEMORY_MANIFEST_FILENAME = "memory-manifest.json";
-const MEMORIES_MARKDOWN_FILENAME = "memories.md";
+const MEMORIES_MARKDOWN_FILENAME = EXTENSION.MEMORIES_MARKDOWN_FILENAME;
 const MEMORY_WATCH_DEBOUNCE_MS = 250;
 /** How long a mutation waits for a foreign writer before reporting StorageBusyError. */
 const MUTATION_LEASE_WAIT_MS = 5_000;

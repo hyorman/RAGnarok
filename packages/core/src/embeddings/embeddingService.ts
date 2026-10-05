@@ -13,7 +13,7 @@
  */
 
 import { EventEmitter } from "events";
-import { CONFIG } from "../constants";
+import { CONFIG, DEFAULTS } from "../constants";
 import { Logger } from "../logger";
 import { IConfigProvider, INotifier } from "../interfaces";
 import { EmbeddingBackend, EmbeddingBackendType, EmbeddingFingerprint } from "./embeddingBackend";
@@ -109,7 +109,7 @@ export class EmbeddingService {
   // ---------------------------------------------------------------------------
 
   private async resolveBackend(): Promise<string> {
-    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
 
     if (setting !== "auto") {
       this.logger.info(`Embedding backend forced to "${setting}" by configuration`);
@@ -380,7 +380,7 @@ export class EmbeddingService {
         await this.selectBackendTransactional(backendType, modelName);
         return;
       } catch (backendError: any) {
-        const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+        const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
         if (setting !== "auto" || this.registeredBackends.length === 0) {
           throw backendError;
         }
@@ -395,7 +395,7 @@ export class EmbeddingService {
     try {
       await this.ensureBackend();
     } catch (backendError: any) {
-      const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+      const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
       if (setting !== "auto") {
         throw backendError;
       }
@@ -652,7 +652,7 @@ export class EmbeddingService {
   // ---------------------------------------------------------------------------
 
   private async shouldFallback(_error: any): Promise<boolean> {
-    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, "auto");
+    const setting = this.config.get<EmbeddingBackendType>(CONFIG.EMBEDDING_BACKEND, DEFAULTS.EMBEDDING_BACKEND);
     return setting === "auto";
   }
 
